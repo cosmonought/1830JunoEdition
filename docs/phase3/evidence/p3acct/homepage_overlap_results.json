@@ -1,0 +1,299 @@
+{
+ "before-signedin": {
+  "cases": 216,
+  "overlapping": 40,
+  "failing_cases": [
+   {
+    "scale": 0.63,
+    "width": 1920,
+    "height": 900,
+    "doorsBottom": 765,
+    "firstListTop": 666
+   },
+   {
+    "scale": 0.63,
+    "width": 1920,
+    "height": 768,
+    "doorsBottom": 765,
+    "firstListTop": 568
+   },
+   {
+    "scale": 0.63,
+    "width": 1920,
+    "height": 700,
+    "doorsBottom": 765,
+    "firstListTop": 518
+   },
+   {
+    "scale": 0.63,
+    "width": 1920,
+    "height": 600,
+    "doorsBottom": 765,
+    "firstListTop": 444
+   },
+   {
+    "scale": 0.63,
+    "width": 1440,
+    "height": 768,
+    "doorsBottom": 577,
+    "firstListTop": 568
+   },
+   {
+    "scale": 0.63,
+    "width": 1440,
+    "height": 700,
+    "doorsBottom": 577,
+    "firstListTop": 518
+   },
+   {
+    "scale": 0.63,
+    "width": 1440,
+    "height": 600,
+    "doorsBottom": 577,
+    "firstListTop": 444
+   },
+   {
+    "scale": 0.63,
+    "width": 1440,
+    "height": 500,
+    "doorsBottom": 577,
+    "firstListTop": 370
+   },
+   {
+    "scale": 0.63,
+    "width": 1366,
+    "height": 700,
+    "doorsBottom": 549,
+    "firstListTop": 518
+   },
+   {
+    "scale": 0.63,
+    "width": 1366,
+    "height": 600,
+    "doorsBottom": 549,
+    "firstListTop": 444
+   },
+   {
+    "scale": 0.63,
+    "width": 1366,
+    "height": 500,
+    "doorsBottom": 549,
+    "firstListTop": 370
+   },
+   {
+    "scale": 0.63,
+    "width": 1280,
+    "height": 600,
+    "doorsBottom": 515,
+    "firstListTop": 444
+   },
+   {
+    "scale": 0.63,
+    "width": 1280,
+    "height": 500,
+    "doorsBottom": 515,
+    "firstListTop": 370
+   },
+   {
+    "scale": 0.63,
+    "width": 1024,
+    "height": 500,
+    "doorsBottom": 415,
+    "firstListTop": 370
+   },
+   {
+    "scale": 1,
+    "width": 1920,
+    "height": 900,
+    "doorsBottom": 773,
+    "firstListTop": 666
+   },
+   {
+    "scale": 1,
+    "width": 1920,
+    "height": 768,
+    "doorsBottom": 773,
+    "firstListTop": 568
+   },
+   {
+    "scale": 1,
+    "width": 1920,
+    "height": 700,
+    "doorsBottom": 773,
+    "firstListTop": 520
+   },
+   {
+    "scale": 1,
+    "width": 1920,
+    "height": 600,
+    "doorsBottom": 773,
+    "firstListTop": 520
+   },
+   {
+    "scale": 1,
+    "width": 1920,
+    "height": 500,
+    "doorsBottom": 773,
+    "firstListTop": 500
+   },
+   {
+    "scale": 1,
+    "width": 1440,
+    "height": 768,
+    "doorsBottom": 586,
+    "firstListTop": 568
+   },
+   {
+    "scale": 1,
+    "width": 1440,
+    "height": 700,
+    "doorsBottom": 586,
+    "firstListTop": 520
+   },
+   {
+    "scale": 1,
+    "width": 1440,
+    "height": 600,
+    "doorsBottom": 586,
+    "firstListTop": 520
+   },
+   {
+    "scale": 1,
+    "width": 1440,
+    "height": 500,
+    "doorsBottom": 586,
+    "firstListTop": 500
+   },
+   {
+    "scale": 1,
+    "width": 1366,
+    "height": 700,
+    "doorsBottom": 557,
+    "firstListTop": 520
+   },
+   {
+    "scale": 1,
+    "width": 1366,
+    "height": 600,
+    "doorsBottom": 557,
+    "firstListTop": 520
+   },
+   {
+    "scale": 1,
+    "width": 1366,
+    "height": 500,
+    "doorsBottom": 557,
+    "firstListTop": 500
+   },
+   {
+    "scale": 1,
+    "width": 1280,
+    "height": 700,
+    "doorsBottom": 523,
+    "firstListTop": 520
+   },
+   {
+    "scale": 1,
+    "width": 1280,
+    "height": 600,
+    "doorsBottom": 523,
+    "firstListTop": 520
+   },
+   {
+    "scale": 1,
+    "width": 1280,
+    "height": 500,
+    "doorsBottom": 523,
+    "firstListTop": 500
+   },
+   {
+    "scale": 1.25,
+    "width": 1920,
+    "height": 900,
+    "doorsBottom": 779,
+    "firstListTop": 666
+   },
+   {
+    "scale": 1.25,
+    "width": 1920,
+    "height": 768,
+    "doorsBottom": 779,
+    "firstListTop": 650
+   },
+   {
+    "scale": 1.25,
+    "width": 1920,
+    "height": 700,
+    "doorsBottom": 779,
+    "firstListTop": 650
+   },
+   {
+    "scale": 1.25,
+    "width": 1920,
+    "height": 600,
+    "doorsBottom": 779,
+    "firstListTop": 600
+   },
+   {
+    "scale": 1.25,
+    "width": 1920,
+    "height": 500,
+    "doorsBottom": 779,
+    "firstListTop": 500
+   },
+   {
+    "scale": 1.25,
+    "width": 1440,
+    "height": 500,
+    "doorsBottom": 592,
+    "firstListTop": 500
+   },
+   {
+    "scale": 1.25,
+    "width": 1366,
+    "height": 500,
+    "doorsBottom": 563,
+    "firstListTop": 500
+   },
+   {
+    "scale": 1.25,
+    "width": 1280,
+    "height": 500,
+    "doorsBottom": 529,
+    "firstListTop": 500
+   },
+   {
+    "scale": 1.25,
+    "width": 320,
+    "height": 1080,
+    "doorsBottom": 820,
+    "firstListTop": 799
+   },
+   {
+    "scale": 1.25,
+    "width": 320,
+    "height": 900,
+    "doorsBottom": 694,
+    "firstListTop": 666
+   },
+   {
+    "scale": 1.25,
+    "width": 320,
+    "height": 500,
+    "doorsBottom": 414,
+    "firstListTop": 500
+   }
+  ]
+ },
+ "after-signedin": {
+  "cases": 216,
+  "overlapping": 0,
+  "failing_cases": []
+ },
+ "after-signedout": {
+  "cases": 216,
+  "overlapping": 0,
+  "failing_cases": []
+ },
+ "_about": "P3-ACCT homepage overlap: production bundles (REACT_APP_GAME_SERVER_URL=ws://game.test/gs, mocked bootstrap + rooms frame, 6 public tables) in Chromium 141 (Playwright), widths 1920..320 x heights 1080..500 x text sizes 63/100/125%. 'before' = b8d5246, 'after' = this slice. A case fails when a door (Host/Join) intersects any list element, the account corner or the title, or the page scrolls sideways. Script: homepage_overlap_layout.mjs (args: build dir, out dir, signed-in|signed-out, tag)."
+}

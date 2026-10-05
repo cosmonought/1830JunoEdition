@@ -27,6 +27,7 @@ import { disputeConfirmSentence, disputeRecordLines, type SettlementActionKind }
 import type { MoneyServices } from "../../money/moneySession";
 import { useMoneyTable } from "../../money/useMoneyTable";
 import { buttonStyle, moneyStyles as styles } from "./moneyStyles";
+import { TermsLink } from "../InfoPages"; // P3-ACCT (AUD-20.08): every money surface links the Terms
 
 export interface SettlementBandProps {
   room: RoomView;
@@ -139,7 +140,9 @@ export function SettlementBand({ room, log = null, board = null, compact = false
 
   return (
     <section style={styles.band} aria-label="Financial settlement" data-testid="settlement-band">
-      <p style={styles.bandTitle}>Financial settlement · {money.deployment.chainId}</p>
+      <p style={styles.bandTitle}>
+        Financial settlement · {money.deployment.chainId} <TermsLink style={{ fontWeight: 400, marginLeft: "8px" }} testId="settlement-terms-link" />
+      </p>
       <p style={styles.headline} data-testid="settlement-headline">
         {band.headline}
       </p>

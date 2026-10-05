@@ -5,7 +5,8 @@
 // open sockets, the identity limits, the malformed-close cooldown, the startup mode lock (spawned processes), and the
 // ordinary local development flow. Production-mode cases present real cookies and an Origin, as a browser does.
 // LIVE-2E: profiles are mandatory, so a production case that opens a game socket first creates its browser's profile
-// (`POST /gs/api/profile`, testSupport's `profiledCookie`); an unprofiled cookie's upgrade is 403 at step "profile".
+// (`POST /gs/api/profile`, testSupport's `profiledCookie`). P3-ACCT (public first): an unprofiled cookie's upgrade opens
+// a PUBLIC, read-only socket (LIVE-2E refused it 403 at step "profile"); the frame gate refuses everything else.
 // The profile surface itself is `live2eProfiles.test.ts`.
 
 import { describe, test } from "node:test";
@@ -205,7 +206,9 @@ describe("LIVE-2B bootstrap and revoke API", () => {
       const fresh = await bootstrap(port, cookie, '{"fresh":true}');
       assert.equal(fresh.status, 201, "only the explicit fresh path mints a new guest");
       assert.equal(JSON.parse(fresh.body).profile, null, "a fresh browser is unprofiled: the profile stays with its principal");
-      assert.equal((await upgrade(port, { cookie: cookieFrom(fresh) })).status, 403, "and it opens no game socket until it signs in");
+      const publicSocket = await upgrade(port, { cookie: cookieFrom(fresh) });
+      assert.equal(publicSocket.status, 101, "P3-ACCT: it opens only a public, read-only socket until it signs in");
+      publicSocket.socket?.terminate();
     } finally {
       await stopServer(server);
     }
@@ -311,14 +314,17 @@ describe("LIVE-2B upgrade", () => {
       assert.equal((await upgrade(port, { cookie: forged })).status, 401);
       assert.equal((await upgrade(port, { cookie: `${cookie}; ${cookie}` })).status, 401, "a duplicate cookie");
       assert.equal((await upgrade(port, { path: "/gs?dev_claim=p-alice" })).status, 401, "production ignores a dev claim");
-      // LIVE-2E: an authenticated but UNPROFILED browser is refused too (403, step "profile") -- and a dev claim beside
-      // its cookie changes nothing.
+      // P3-ACCT: an authenticated but UNPROFILED browser opens a PUBLIC socket (LIVE-2E refused it 403) -- and a dev
+      // claim beside its cookie changes nothing about who it is.
       const unprofiled = cookieFrom(await bootstrap(port));
-      assert.equal((await upgrade(port, { cookie: unprofiled })).status, 403);
-      assert.equal((await upgrade(port, { path: "/gs?dev_claim=p-alice", cookie: unprofiled })).status, 403);
-      assert.equal(server.upgrades.refused["profile:403"], 2);
-      assert.equal(server.upgrades.accepted, 0);
-      assert.equal(server.socketCounts().total, 0, "no socket was ever made");
+      const publicOne = await upgrade(port, { cookie: unprofiled });
+      assert.equal(publicOne.status, 101);
+      publicOne.socket?.terminate();
+      const withClaim = await upgrade(port, { path: "/gs?dev_claim=p-alice", cookie: unprofiled });
+      assert.equal(withClaim.status, 101);
+      withClaim.socket?.terminate();
+      assert.equal(server.upgrades.refused["profile:403"], undefined);
+      assert.equal(server.upgrades.accepted, 2);
       const ok = await upgrade(port, { cookie });
       assert.equal(ok.status, 101);
       ok.socket?.terminate();
@@ -365,10 +371,10 @@ describe("LIVE-2B upgrade", () => {
     assert.equal(status(decideUpgrade(req("/gs", { origin: PROD_ORIGIN }), gate())), "authenticate:401");
     const created = await identity.bootstrap({ kind: "none" }, false, 0);
     const cookie = (created.kind === "ok" ? created.setCookie ?? "" : "").split(";")[0];
-    // LIVE-2E: authenticated but unprofiled -- the profile step answers, before any cap (even one already full).
-    assert.equal(status(decideUpgrade(req("/gs", { origin: PROD_ORIGIN, cookie }), gate({ counts: { principal: 99, session: 99 } }))), "profile:403");
-    // The provisional cap (6) is defence in depth now -- an unprofiled principal never reaches it -- so it is exercised
-    // here through a gate that answers "has a profile" for a principal that was never activated.
+    // P3-ACCT: authenticated but unprofiled -- no profile step any more: the caps answer (here, full).
+    assert.equal(status(decideUpgrade(req("/gs", { origin: PROD_ORIGIN, cookie }), gate({ counts: { principal: 99, session: 99 } }))), "principal-cap:429");
+    // The provisional cap (6) bounds a signed-out visitor's public sockets (and a never-activated principal's).
+    assert.equal(status(decideUpgrade(req("/gs", { origin: PROD_ORIGIN, cookie }), gate({ counts: { principal: 6 } }))), "principal-cap:429");
     assert.equal(status(decideUpgrade(req("/gs", { origin: PROD_ORIGIN, cookie }), gate({ counts: { principal: 6 }, hasProfile: () => true }))), "principal-cap:429");
     assert.equal(decideUpgrade(req("/gs", { origin: PROD_ORIGIN, cookie }), gate({ counts: { principal: 5 }, hasProfile: () => true })).ok, true);
     // Profiled (which makes the principal durable): the principal's cap is 24, across every device.
@@ -387,11 +393,15 @@ describe("LIVE-2B upgrade", () => {
       limits: { maxSocketsGlobal: 5, maxSocketsPerIp: 4, maxSocketsPerSession: 2, maxSocketsPerPrincipal: 3, maxSocketsPerProvisionalPrincipal: 2 },
     });
     try {
-      // LIVE-2E: a never-profiled guest opens NOTHING -- 403 at the profile step, before its provisional cap.
+      // P3-ACCT: a never-profiled guest opens PUBLIC sockets up to its provisional cap (2 here) -- LIVE-2E refused it 403.
       const guest = cookieFrom(await bootstrap(port));
-      const unprofiled = await upgrade(port, { cookie: guest });
-      assert.equal(unprofiled.status, 403);
-      assert.equal(unprofiled.retryAfter, undefined);
+      const guestSockets = [await upgrade(port, { cookie: guest }), await upgrade(port, { cookie: guest })];
+      assert.deepEqual(guestSockets.map((socket) => socket.status), [101, 101]);
+      const guestCapped = await upgrade(port, { cookie: guest });
+      assert.equal(guestCapped.status, 429, "the provisional cap bounds a signed-out visitor");
+      for (const socket of guestSockets) socket.socket?.terminate();
+      for (let wait = 0; server.socketCounts().total > 0 && wait < 100; wait += 1) await new Promise((resolve) => setTimeout(resolve, 10));
+      assert.equal(server.socketCounts().total, 0, "the guest's sockets are gone before the caps below are counted");
       // One browser (session) holds at most its cap.
       const { cookie: first, recoveryKey } = await profiledBrowser(port, "Ann", PROD_ORIGIN);
       const opened = [await upgrade(port, { cookie: first }), await upgrade(port, { cookie: first })];
@@ -407,7 +417,7 @@ describe("LIVE-2B upgrade", () => {
       opened.push(await upgrade(port, { cookie: device2 }));
       const principalCapped = await upgrade(port, { cookie: device2 });
       assert.equal(principalCapped.status, 429, "the principal holds at most its cap across devices");
-      assert.equal(server.upgrades.refused["principal-cap:429"], 2);
+      assert.equal(server.upgrades.refused["principal-cap:429"], 3, "the guest's provisional cap, the browser's and the principal's");
       // Another player at the same address: the address's cap.
       const other = await profiled(port, "Bea");
       opened.push(await upgrade(port, { cookie: other }));
@@ -859,12 +869,11 @@ describe("LIVE-2B adversarial-review regressions", () => {
     const b = await playerCookie(identity);
     const neighbour = { ...capped, counts: { ...capped.counts, forPrincipal: () => 0 } };
     assert.equal(verdict(decideUpgrade(req({ origin: PROD_ORIGIN, cookie: b }), neighbour)), 101);
-    /* LIVE-2E review I3: an unprofiled browser's refusal (403 at the profile step) IS a failed upgrade, charged like an
-       Origin or authentication refusal -- the client never opens a socket before its profile exists, so only a
-       misbehaving one gets here, and it must not get more tries than a wrong cookie does. */
+    /* P3-ACCT: an unprofiled browser is no longer refused (a public, read-only socket), so it spends nothing of the
+       address's failed-upgrade budget either (LIVE-2E review I3 charged its 403). */
     const unprofiled = await guestCookie(identity);
-    assert.equal(verdict(decideUpgrade(req({ origin: PROD_ORIGIN, cookie: unprofiled }), neighbour)), "profile:403");
-    assert.equal(verdict(decideUpgrade(req({ origin: PROD_ORIGIN, cookie: unprofiled }), neighbour)), "ip:429", "the address's failed budget (1) is spent");
+    assert.equal(verdict(decideUpgrade(req({ origin: PROD_ORIGIN, cookie: unprofiled }), neighbour)), 101);
+    assert.equal(verdict(decideUpgrade(req({ origin: PROD_ORIGIN, cookie: unprofiled }), neighbour)), 101, "nothing was charged");
   });
 
   test("Low/Medium: an IPv6 /48 holds at most ten addresses' worth of sockets", async () => {

@@ -193,6 +193,8 @@ import { roomOp, watchRoom, type RoomLoss } from "./utils/roomLink";
 import { DEV_IDENTITY_BUILD } from "./utils/devIdentity";
 /* LIVE-2E: a create names the host's seat after the profile when nobody chose a name. */
 import { profileNickname } from "./utils/profileApi";
+/* P3-ACCT (public first): the shell's own Host, Join and "Take a seat" ask for an account first, then carry on. */
+import { requireAccount } from "./utils/accountPrompt";
 import {
   JOIN_CODE_EXAMPLE,
   holdNoticeFor,
@@ -13557,7 +13559,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
   const handleRotateCode = useCallback(() => void runRoomOp({ type: "rotate-code" }), [runRoomOp]);
   const handleCancelRoom = useCallback(() => void runRoomOp({ type: "cancel-room" }), [runRoomOp]);
   /** A watcher of a waiting table takes a seat; a seated player gives theirs up and keeps watching. */
-  const handleTakeSeat = useCallback(() => void runRoomOp({ type: "take-seat" }), [runRoomOp]);
+  const handleTakeSeat = useCallback(() => void requireAccount(() => void runRoomOp({ type: "take-seat" }), "Log in or create an account to take a seat."), [runRoomOp]);
   const handleReleaseSeat = useCallback(() => void runRoomOp({ type: "release-seat" }), [runRoomOp]);
 
   /* ==================================================================
@@ -14102,8 +14104,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
             available={isBackendConfigured()}
             error={sandboxRoomError}
             busy={sandboxRoomBusy}
-            onHost={handleHostSandboxRoom}
-            onJoin={handleJoinSandboxRoom}
+            onHost={() => void requireAccount(() => void handleHostSandboxRoom(), "Log in or create an account to host a game.")}
+            onJoin={(raw) => void requireAccount(() => void handleJoinSandboxRoom(raw), "Log in or create an account to join a game.")}
           />
           <button type="button" style={styles.sandboxGateQuiet} onClick={onLeaveGame}>
             Back to the lobby

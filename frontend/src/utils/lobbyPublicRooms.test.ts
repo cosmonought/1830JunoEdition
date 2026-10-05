@@ -408,7 +408,9 @@ describe("the three doors fit the window (design note #1441)", () => {
   it("re-hangs the action row on the viewport at narrow widths, and only there", () => {
     expect(LOBBY).toContain('"--lobby-actions-left": `calc(50% - ${50 / scale}vw + 16px)`');
     expect(LOBBY).toContain('"--lobby-actions-width": `calc(${100 / scale}vw - 32px)`');
-    expect(LOBBY).toContain('<div className="lobby-table-anchor" style={styles.tableAnchor}>');
+    /* P3-ACCT (the homepage overlap): the anchor keeps its class and its authored style; only its `top` is clamped
+       into the window per render (`actionsTopFor`), and the row is measured (`actionsRef`) for the list's place. */
+    expect(LOBBY).toContain('<div className="lobby-table-anchor" ref={actionsRef} style={{ ...styles.tableAnchor, ...actionsTopFor(utilityRowPx, actions.height) }} data-testid="lobby-actions">');
     expect(LOBBY).toContain("left: var(--lobby-actions-left) !important;");
     expect(LOBBY).toContain("width: var(--lobby-actions-width) !important;");
     // The authored desktop position is untouched -- #1131's coordinates still read as written.

@@ -35,6 +35,15 @@
 //                        QUARANTINE key nobody holds (a selector and a digest derived from the restore and the profile, the
 //                        digest of a text far longer than a key, so no key can match it). Either way no selector whose
 //                        outcome is unknown is accepted, and nothing the player asked to end comes back.
+//   USERNAMES (P3-ACCT)  a username is unique. Each is WON by the profile the restored table gives it, else by the
+//                        profile a CONFIRMED event gives it (two different ones: refused), else by the profile of its LAST
+//                        unconfirmed claim (journal order: time, then event id) -- an earlier claimant's write could not
+//                        have committed (the username's uniqueness is checked inside every write). A creation or a
+//                        `credentials-established` whose username another profile won was never committed: not installed.
+//   credentials-established (P3-ACCT)
+//                        a legacy profile's username and password: the confirmed one, else the last, installed on a
+//                        profile that has none (a table profile holding a different one than a confirmed event: refused).
+//   WALLETS (P3-ACCT)    every profile's persisted wallet is CLEARED (not journaled: re-proven on the next money action).
 //
 // THE PROPERTIES (what the tests pin):
 //   deterministic   a function of (the table's identity set, the journal as a SET, the restore id, the replay's fixed
@@ -57,7 +66,7 @@ import { createHash } from "crypto";
 
 import { base32Lower, ID_BYTES } from "./ids";
 import { isSecurityEvent, securityEventBody, securityEventSortKey, type SecurityEvent } from "./securityEvents";
-import type { FullIdentitySnapshot, IdentityChange, IdentityPrecondition, Principal, Profile, RevokeReason, Session, SessionFamily } from "./store";
+import { asSchema2, loginOf, walletOf, type FullIdentitySnapshot, type IdentityChange, type IdentityPrecondition, type Principal, type Profile, type RevokeReason, type Session, type SessionFamily } from "./store";
 
 export class SecurityReplayError extends Error {
   constructor(message: string) {
@@ -118,6 +127,10 @@ export interface ReplayReport {
   readonly links_dropped: number;
   /** Families named by the journal that the restored table never held (created after T): nothing to end. */
   readonly families_unknown_to_table: number;
+  /** P3-ACCT: legacy profiles whose username and password the journal installed. */
+  readonly credentials_installed: number;
+  /** P3-ACCT: profiles whose persisted wallet the restore cleared. */
+  readonly wallets_cleared: number;
 }
 
 export interface ReplayPlan {
@@ -172,6 +185,7 @@ export function quarantineKeyOf(restoreId: string, profileId: string): { readonl
 
 type Rotation = Extract<SecurityEvent, { kind: "recovery-key-rotated" }>;
 type Creation = Extract<SecurityEvent, { kind: "profile-created" }>;
+type Establishment = Extract<SecurityEvent, { kind: "credentials-established" }>;
 
 const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
 const byText = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
@@ -196,7 +210,46 @@ export function planSecurityReplay(input: ReplayInput): ReplayPlan {
 
   const byKind: Record<string, number> = {};
   for (const event of journal.events) byKind[event.kind] = (byKind[event.kind] ?? 0) + 1;
-  const counters = { withdrawn: 0, changes: 0, created: 0, advanced: 0, disabled: 0, familiesClosed: 0, signedOut: 0, links: 0, unknownFamilies: 0, unconfirmed: 0 };
+  const counters = { withdrawn: 0, changes: 0, created: 0, advanced: 0, disabled: 0, familiesClosed: 0, signedOut: 0, links: 0, unknownFamilies: 0, unconfirmed: 0, credentials: 0, wallets: 0 };
+
+  /* ---- P3-ACCT: who wins each username (the header's rule), over the whole journal ---- */
+  const confirmedAnywhere = new Set<string>();
+  {
+    const kindOf = new Map(journal.events.map((event) => [`${event.principal_id}|${event.event_id}`, event.kind] as const));
+    for (const event of journal.events) {
+      if (event.kind === "confirmed" && kindOf.get(`${event.principal_id}|${event.confirms}`) === event.confirmed_kind) confirmedAnywhere.add(`${event.principal_id}|${event.confirms}`);
+    }
+  }
+  const loginClaims = new Map<string, Array<{ readonly profileId: string; readonly confirmed: boolean; readonly order: string; readonly eventId: string }>>();
+  for (const event of journal.events) {
+    const claim =
+      event.kind === "profile-created" ? (() => {
+        const login = loginOf(event.profile);
+        return login === null ? null : { key: login.key, profileId: event.profile.profile_id };
+      })()
+      : event.kind === "credentials-established" ? { key: event.login_key, profileId: event.profile_id }
+      : null;
+    if (claim === null) continue;
+    loginClaims.set(claim.key, [...(loginClaims.get(claim.key) ?? []), { profileId: claim.profileId, confirmed: confirmedAnywhere.has(`${event.principal_id}|${event.event_id}`), order: `${securityEventSortKey(event)}#${event.principal_id}`, eventId: event.event_id }]);
+  }
+  const tableLogins = new Map<string, string>();
+  for (const record of snapshot.profiles) {
+    const login = loginOf(record);
+    if (login !== null) tableLogins.set(login.key, record.profile_id);
+  }
+  const loginWinner = (key: string): string | undefined => {
+    const held = tableLogins.get(key);
+    const claims = loginClaims.get(key) ?? [];
+    const confirmedBy = [...new Set(claims.filter((claim) => claim.confirmed).map((claim) => claim.profileId))];
+    if (held !== undefined) {
+      if (confirmedBy.some((profileId) => profileId !== held)) throw new SecurityReplayError(`a confirmed event gives a username the restored table holds to another profile (${claims.find((claim) => claim.confirmed && claim.profileId !== held)?.eventId})`);
+      return held;
+    }
+    if (confirmedBy.length > 1) throw new SecurityReplayError(`two profiles' confirmed events claim one username (${claims.filter((claim) => claim.confirmed).map((claim) => claim.eventId).join(", ")})`);
+    if (confirmedBy.length === 1) return confirmedBy[0];
+    const last = [...claims].sort((a, b) => byText(a.order, b.order)).pop();
+    return last?.profileId;
+  };
   const out: PrincipalReplay[] = [];
   const reviews: ReviewDraft[] = [];
 
@@ -226,7 +279,13 @@ export function planSecurityReplay(input: ReplayInput): ReplayPlan {
     const creations = events.filter((event): event is Creation => event.kind === "profile-created");
     const confirmedCreations = creations.filter((event) => confirmed.has(event.event_id));
     if (new Set(confirmedCreations.map((event) => event.profile.profile_id)).size > 1) throw new SecurityReplayError(`principal has two confirmed profile creations (${confirmedCreations.map((event) => event.event_id).join(", ")})`);
-    const chosen: Creation | undefined = confirmedCreations[0] ?? creations[creations.length - 1];
+    let chosen: Creation | undefined = confirmedCreations[0] ?? creations[creations.length - 1];
+    /* P3-ACCT: a creation whose username another profile won never committed (a confirmed one losing it is refused). */
+    const chosenLogin = chosen === undefined ? null : loginOf(chosen.profile);
+    if (chosen !== undefined && chosenLogin !== null && tableProfile === undefined && loginWinner(chosenLogin.key) !== chosen.profile.profile_id) {
+      if (confirmed.has(chosen.event_id)) throw new SecurityReplayError(`creation ${chosen.event_id}: its username is another profile's`);
+      chosen = undefined;
+    }
     let principal: Principal | undefined = tablePrincipal;
     let profile: Profile | undefined = tableProfile;
     let created = false;
@@ -338,6 +397,36 @@ export function planSecurityReplay(input: ReplayInput): ReplayPlan {
       keyAdvanced = head !== profile.recovery_selector;
       profile = { ...profile, recovery_selector: head, recovery_hash: digest, recovery_rotated_at: rotatedAt };
     }
+    /* ---- P3-ACCT: a legacy profile's username and password (the header's rule) ---- */
+    const establishments = events.filter((event): event is Establishment => event.kind === "credentials-established");
+    let credentialsInstalled: string | null = null;
+    if (establishments.length > 0) {
+      if (profile === undefined) throw new SecurityReplayError(`credentials ${establishments[0].event_id} name a profile this principal does not have`);
+      const profileId = profile.profile_id;
+      for (const event of establishments) if (event.profile_id !== profileId) throw new SecurityReplayError(`credentials ${event.event_id} name another profile than this principal's`);
+      const confirmedEstablishments = establishments.filter((event) => confirmed.has(event.event_id));
+      if (new Set(confirmedEstablishments.map((event) => `${event.login_key}|${event.password_hash}`)).size > 1) throw new SecurityReplayError(`two different confirmed credentials (${confirmedEstablishments.map((event) => event.event_id).join(", ")})`);
+      const held = loginOf(profile);
+      if (held !== null) {
+        const first = confirmedEstablishments[0];
+        if (first !== undefined && (first.login_key !== held.key || first.password_hash !== held.hash)) throw new SecurityReplayError(`credentials ${first.event_id} are not the ones the profile holds`);
+      } else {
+        const pick = confirmedEstablishments[0] ?? establishments[establishments.length - 1];
+        if (loginWinner(pick.login_key) === profileId) {
+          profile = { ...asSchema2(profile), login_key: pick.login_key, login_name: pick.login_name, password_hash: pick.password_hash, password_set_at: pick.set_at };
+          credentialsInstalled = pick.login_key;
+        } else if (confirmed.has(pick.event_id)) {
+          throw new SecurityReplayError(`credentials ${pick.event_id}: the username is another profile's`);
+        }
+      }
+    }
+    /* ---- P3-ACCT: the persisted wallet is cleared (re-proven on the next money action) ---- */
+    let walletCleared = false;
+    if (profile !== undefined && walletOf(profile) !== null) {
+      profile = { ...profile, wallet_address: null, wallet_verified_at: null };
+      walletCleared = true;
+    }
+
     /* The profile's status: disabled under review. When the journal no longer calls for a review that THIS restore opened
        earlier (a confirmation arrived since), the replay withdraws its own review record and the profile gets back
        exactly the status it had before that review (recorded in the record) -- never more. Any other status stays. */
@@ -380,10 +469,17 @@ export function planSecurityReplay(input: ReplayInput): ReplayPlan {
     if (created && principal !== undefined && profile !== undefined) {
       expect.push(tablePrincipal === undefined ? { kind: "principal-absent", principal_id: principalId } : { kind: "principal-unprofiled", principal_id: principalId });
       expect.push({ kind: "profile-absent", profile_id: profile.profile_id }, { kind: "selector-unused", recovery_selector: profile.recovery_selector });
+      const login = loginOf(profile);
+      if (login !== null) expect.push({ kind: "login-unused", login_key: login.key });
       counters.created += 1;
     } else if (profile !== undefined && tableProfile !== undefined && profile.recovery_selector !== tableProfile.recovery_selector) {
       expect.push({ kind: "profile-selector", profile_id: profile.profile_id, recovery_selector: tableProfile.recovery_selector }, { kind: "selector-unused", recovery_selector: profile.recovery_selector });
     }
+    if (credentialsInstalled !== null && profile !== undefined && !created) {
+      expect.push({ kind: "profile-no-login", profile_id: profile.profile_id }, { kind: "login-unused", login_key: credentialsInstalled });
+    }
+    if (credentialsInstalled !== null) counters.credentials += 1;
+    if (walletCleared) counters.wallets += 1;
     if (keyAdvanced) counters.advanced += 1;
     if (principal !== undefined && !same(principal, tablePrincipal)) {
       change.principals = [principal];
@@ -441,6 +537,8 @@ export function planSecurityReplay(input: ReplayInput): ReplayPlan {
       sessions_signed_out: counters.signedOut,
       links_dropped: counters.links,
       families_unknown_to_table: counters.unknownFamilies,
+      credentials_installed: counters.credentials,
+      wallets_cleared: counters.wallets,
     },
   };
 }

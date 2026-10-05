@@ -10,18 +10,28 @@
 // 201 (a new, temporary session, with its cookie), or 401 `session-ended`. THE COOKIE IS HttpOnly: this file never
 // reads it, never sees its value, and nothing the server returns carries it -- the browser keeps it and sends it.
 //
-// LIVE-2E: PROFILES ARE MANDATORY. A 200/201 also says `profile: {name, otherSessions}` or `profile: null`. "ready"
-// means PROFILED -- the only state in which a link opens a socket (the upgrade refuses anything else). A browser with
-// no profile is "unprofiled": its temporary session can only create, recover or link a profile (`profileApi.ts`), and
-// `ProfileGate` holds the whole app behind that choice. The port answers by name only; no response carries an id.
+// LIVE-2E: a 200/201 also says `profile: {name, otherSessions}` or `profile: null`. "ready" means SIGNED IN (a
+// profiled session). P3-ACCT (owner, 2026-10-05: PUBLIC FIRST): a browser with no account is "unprofiled" -- a
+// visitor. Its temporary session opens sockets too, for the public, read-only surface (the public list, Watch, the
+// rules); every identity-bearing or money action needs an account first (`utils/accountPrompt.ts` asks through
+// `components/AccountDialog.tsx`, then resumes the action). Nothing holds the app behind the bootstrap any more. The port answers by name only; no response
+// carries an id.
+//
+// P3-ACCT: A SIGN-IN REPLACES THE SESSION. Creating an account, logging in, recovering or linking a profile gives this
+// browser a FRESH session (the old one is revoked `replaced`, and its sockets close 4401). While such a request is in
+// flight, a bootstrap waits for it -- so a socket that closed under the old session reconnects with the NEW cookie, not
+// a bootstrap that raced the response. And a bootstrap told `replaced` asks once more after a moment: another tab of
+// this browser may have just signed in, and its new cookie may still be landing in the jar. The wait is bounded: a
+// sign-in that does not answer within `SIGN_IN_TIMEOUT_MS` is given up (review M3).
 //
 // A BROWSER CANNOT SEE WHY A HANDSHAKE FAILED (only 1006), so the links count failed opens: after three in a row --
 // or at once on a 4401 close -- they bootstrap again before their next attempt, which recovers a cookie that was
 // rotated in another tab or lost with a response, then resume their backoff (serverLink 0.5-8 s, roomDocLink 1-10 s).
 //
 // `session-ended` IS TERMINAL FOR THIS PAGE. The links stop, and `SessionEndedNotice` asks the player; only their
-// explicit "Continue" sends `{fresh: true}` (LIVE-2E: which leads to the profile gate, where the recovery key or a
-// device-link code brings the profile back). Nothing here ever does that on its own -- a known session that ended must
+// explicit "Continue" sends `{fresh: true}` (P3-ACCT: a signed-out visitor again, on the public homepage, where Log in
+// -- or, for a profile from before accounts, its recovery key or a device-link code -- brings the account back).
+// Nothing here ever does that on its own -- a known session that ended must
 // never quietly become somebody new (LIVE-2 §4.1).
 //
 // Development-identity builds and tests use the always-ready port: their identity is on the socket URL, and the
@@ -55,6 +65,15 @@ export type SessionApiPath =
   | "profile/reauth"
   /** ESCROW-3A: the creating page received its recovery key (the lost-response rescue closes). */
   | "profile/key-received"
+  /** P3-ACCT: the username/password account (`profileApi.ts`). */
+  | "account/create"
+  | "account/login"
+  | "account/credentials"
+  | "account/me"
+  | "account/forget-wallet"
+  /** P3-ACCT: the factual trust indicators (`trustApi.ts`); no id, username or wallet in any answer. */
+  | "trust/table"
+  | "trust/me"
   /** ESCROW-4: the real-money routes (`utils/../money/moneyApi.ts`); the session's own authority, closed bodies. */
   | "money/config"
   | "money/wallet-challenge"
@@ -90,8 +109,8 @@ export interface SessionPort {
    *  failure the caller retries on its own backoff. "ended" stays "ended". LIVE-2E: "unprofiled" is an answer, not a
    *  failure -- it is kept (no request) until a profile action forces the next bootstrap. */
   ensure(force?: boolean): Promise<SessionState>;
-  /** The player's explicit decision, after `session-ended`, to start this browser over (LIVE-2E: unprofiled, at the
-   *  profile gate). */
+  /** The player's explicit decision, after `session-ended`, to start this browser over (P3-ACCT: a signed-out
+   *  visitor on the public homepage). */
   startFresh(): Promise<SessionState>;
   subscribe(listener: () => void): () => void;
   /** LIVE-2E: POST a closed JSON body to one of the profile routes, on the bootstrap's origin and terms. */
@@ -130,7 +149,7 @@ export function sessionEndpointFor(socketUrl: string): string | null {
   return `${protocol}//${url.host}${prefix}/api/session`;
 }
 
-type FetchLike = (input: string, init: { method: string; credentials: "same-origin"; cache: "no-store"; headers: Record<string, string>; body: string }) => Promise<{
+type FetchLike = (input: string, init: { method: string; credentials: "same-origin"; cache: "no-store"; headers: Record<string, string>; body: string; signal?: AbortSignal }) => Promise<{
   status: number;
   json(): Promise<unknown>;
 }>;
@@ -139,9 +158,22 @@ export interface HttpSessionOptions {
   endpoint: string;
   /** `window.fetch` when absent; a test passes its own. */
   fetch?: FetchLike;
+  /** P3-ACCT: how long a bootstrap told `replaced` waits before asking once more (default 750 ms; tests pass 0). */
+  replacedRetryMs?: number;
+  /** P3-ACCT (review M3): the longest a sign-in request is waited for -- and so the longest it holds this page's
+   *  bootstraps -- before it counts as unreachable (default 30 s). */
+  signInTimeoutMs?: number;
 }
 
-/** LIVE-2E: the account a bootstrap body names -- a name and a count, nothing else -- or `null` (the profile gate). */
+/** P3-ACCT (review M3): a sign-in that never answers is given up after this (the dialog says the server couldn't be
+ *  reached; nothing is resumed). */
+export const SIGN_IN_TIMEOUT_MS = 30_000;
+
+/** P3-ACCT: the routes that REPLACE this browser's session (a sign-in of any kind). While one is in flight, a bootstrap
+ *  waits for it (see the header). */
+export const SESSION_REPLACING_PATHS: ReadonlySet<SessionApiPath> = new Set<SessionApiPath>(["account/create", "account/login", "profile/recover", "profile/link"]);
+
+/** LIVE-2E: the account a bootstrap body names -- a name and a count, nothing else -- or `null` (signed out: a visitor). */
 function accountOf(body: unknown): SessionAccount | null {
   const profile = body !== null && typeof body === "object" ? (body as { profile?: unknown }).profile : null;
   if (profile === null || typeof profile !== "object") return null;
@@ -161,6 +193,10 @@ export function httpSessionPort(options: HttpSessionOptions): SessionPort {
   let account: SessionAccount | null = null;
   let inFlight: Promise<SessionState> | null = null;
   let queued: Promise<SessionState> | null = null;
+  /* P3-ACCT: a sign-in on the wire (it replaces the session): bootstraps wait for its answer. */
+  let replacing: Promise<unknown> | null = null;
+  const replacedRetryMs = options.replacedRetryMs ?? 750;
+  const signInTimeoutMs = options.signInTimeoutMs ?? SIGN_IN_TIMEOUT_MS;
   const listeners = new Set<() => void>();
   const set = (next: SessionState, reason: string | null = null, nextAccount: SessionAccount | null = null) => {
     state = next;
@@ -176,7 +212,9 @@ export function httpSessionPort(options: HttpSessionOptions): SessionPort {
     body: JSON.stringify(body),
   });
 
-  const post = async (fresh: boolean): Promise<SessionState> => {
+  const post = async (fresh: boolean, retried = false): Promise<SessionState> => {
+    /* P3-ACCT: never race a sign-in this page has on the wire -- ask once its answer (and its cookie) is in. */
+    while (replacing !== null) await replacing.catch(() => undefined);
     let response: Awaited<ReturnType<FetchLike>>;
     try {
       response = await request(options.endpoint, init(fresh ? { fresh: true } : {}));
@@ -205,6 +243,12 @@ export function httpSessionPort(options: HttpSessionOptions): SessionPort {
         }
       } catch {
         /* the status says enough */
+      }
+      /* P3-ACCT: `replaced` means this browser signed in -- maybe in ANOTHER tab, whose new cookie can still be landing
+         in the jar when this tab's socket closes. One more ask, after a moment, settles it; the server decides both. */
+      if (reason === "replaced" && !retried && !fresh) {
+        await new Promise((resolve) => setTimeout(resolve, replacedRetryMs));
+        return post(false, true);
       }
       set("ended", reason);
       return "ended";
@@ -261,8 +305,35 @@ export function httpSessionPort(options: HttpSessionOptions): SessionPort {
     },
     async api(path, body) {
       let response: Awaited<ReturnType<FetchLike>>;
+      const replaces = SESSION_REPLACING_PATHS.has(path);
+      /* Review M3: a sign-in is bounded -- aborted (where the browser can) and given up after `signInTimeoutMs`, so it
+         can never hold this page's bootstraps, or the dialog's busy state, for ever. */
+      const abort = replaces && typeof AbortController !== "undefined" ? new AbortController() : null;
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      const call = replaces
+        ? Promise.race([
+            request(`${apiBase}/${path}`, abort === null ? init(body) : { ...init(body), signal: abort.signal }),
+            new Promise<never>((_resolve, reject) => {
+              timer = setTimeout(() => {
+                abort?.abort();
+                reject(new Error("sign-in timed out"));
+              }, signInTimeoutMs);
+            }),
+          ])
+        : request(`${apiBase}/${path}`, init(body));
+      if (replaces) {
+        const held = call.then(
+          () => undefined,
+          () => undefined,
+        );
+        replacing = held;
+        void held.then(() => {
+          if (timer !== null) clearTimeout(timer);
+          if (replacing === held) replacing = null;
+        });
+      }
       try {
-        response = await request(`${apiBase}/${path}`, init(body));
+        response = await call;
       } catch {
         return { kind: "network" };
       }
@@ -318,7 +389,7 @@ export function sessionEndedSentence(reason: string | null): string {
       return "It was replaced by a newer one that this browser never received.";
     /* LIVE-2E */
     case "replaced":
-      return "This browser signed in to a profile, which replaced its earlier session.";
+      return "This browser signed in to an account, which replaced its earlier session.";
     case "signed-out-remotely":
       return "It was signed out from another of your devices.";
     default:

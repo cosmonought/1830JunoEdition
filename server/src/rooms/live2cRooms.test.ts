@@ -756,11 +756,17 @@ describe("LIVE-2C create, join and seats", () => {
     try {
       const cookie = await prodCookie(port);
       assert.equal(identityStore.snapshot().principals.length, 0, "a fresh guest is provisional: nothing durable yet");
-      await assert.rejects(prodSocket(port, cookie), /403/, "and it opens no game socket before it has a profile");
+      /* P3-ACCT (owner, 2026-10-05: public first): a signed-out browser MAY open a socket -- the public, read-only
+         surface -- and doing so writes nothing durable; a room op on it is refused before any record is touched. */
+      const visitor = await prodSocket(port, cookie);
+      const refused = await visitor.op(CREATE());
+      assert.equal(refused.code, "profile-required", "no table before a profile");
+      assert.equal(identityStore.snapshot().principals.length, 0, "a visitor's socket activates nothing");
+      assert.equal(records.records.size, 0);
+      visitor.close();
       identityStore.failNext.push("definite");
       assert.equal((await apiRequest(port, "/gs/api/profile", { cookie, body: { name: "Hana" }, origin: PROD_ORIGIN })).status, 503);
       assert.deepEqual(identityStore.snapshot(), { principals: [], sessions: [], profiles: [], links: [], families: [] }, "a refused creation writes nothing");
-      await assert.rejects(prodSocket(port, cookie), /403/, "nor opens anything");
       assert.equal((await apiRequest(port, "/gs/api/profile", { cookie, body: { name: "Hana" }, origin: PROD_ORIGIN })).status, 201);
       const afterCreate = identityStore.snapshot();
       assert.equal(afterCreate.principals.length, 1, "the profile made the principal durable");

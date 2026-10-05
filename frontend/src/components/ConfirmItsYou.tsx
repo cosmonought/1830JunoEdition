@@ -17,13 +17,20 @@
 //
 // W-16: pasting the root key must not become a reflex a look-alike page can exploit, so the money panel shows which
 // app and which site is asking (`showOrigin`).
+//
+// P3-ACCT: an account with a username asks for its PASSWORD (`POST /gs/api/profile/reauth {password}`); a profile made
+// before accounts asks for its recovery key, as before. Which one is read from the account itself (`account/me`) when
+// the caller doesn't say; a legacy profile that has since set a password may use either. Signing in counts as
+// confirming for its first five minutes (the server's grant), so a player who just logged in is not asked at all.
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 
 import { APP_NAME } from "../config";
-import { profileErrorSentence, reauthenticate } from "../utils/profileApi";
+import { accountDetails, profileErrorSentence, reauthenticate, reauthenticateWithPassword } from "../utils/profileApi";
 import { sessionPort, type SessionPort } from "../utils/sessionBootstrap";
 import { disabledLook, profileStyles as styles } from "./profileStyles";
+
+export type ConfirmMethod = "password" | "recovery-key";
 
 export interface ConfirmItsYouProps {
   /** Completes "…, paste your current recovery key." -- e.g. "To make a new recovery key". */
@@ -40,13 +47,31 @@ export interface ConfirmItsYouProps {
   /** The surrounding surface is busy (Confirm and Back are disabled meanwhile). */
   busy?: boolean;
   onBusyChange?: (busy: boolean) => void;
+  /** P3-ACCT: which secret confirms (absent: read from the account -- a password when it has a username). */
+  method?: ConfirmMethod;
 }
 
-export function ConfirmItsYou({ purpose, port = sessionPort(), onConfirmed, onCancel, cancelLabel = "Back", testIdPrefix = "profile-reauth", showOrigin = false, busy = false, onBusyChange }: ConfirmItsYouProps): JSX.Element {
-  /* The recovery key: this view's state only, cleared the moment it is sent. */
+export function ConfirmItsYou({ purpose, port = sessionPort(), onConfirmed, onCancel, cancelLabel = "Back", testIdPrefix = "profile-reauth", showOrigin = false, busy = false, onBusyChange, method }: ConfirmItsYouProps): JSX.Element {
+  /* The secret: this view's state only, cleared the moment it is sent. */
   const [key, setKey] = useState("");
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /* P3-ACCT: password unless the account says it has none (a legacy profile); `both` lets a legacy profile that has
+     since set a password choose. */
+  const [using, setUsing] = useState<ConfirmMethod>(method ?? "password");
+  const [both, setBoth] = useState(method === undefined);
+  useEffect(() => {
+    if (method !== undefined) return undefined;
+    let live = true;
+    void accountDetails(port).then((answer) => {
+      if (!live || !answer.ok) return;
+      setUsing(answer.account.username === null ? "recovery-key" : "password");
+      setBoth(answer.account.username !== null && answer.account.recoveryKey);
+    });
+    return () => {
+      live = false;
+    };
+  }, [method, port]);
   const blocked = busy || checking;
   const inputId = `${testIdPrefix}-key`;
 
@@ -56,11 +81,11 @@ export function ConfirmItsYou({ purpose, port = sessionPort(), onConfirmed, onCa
     setChecking(true);
     onBusyChange?.(true);
     setError(null);
-    const result = await reauthenticate(typed, port);
+    const result = using === "password" ? await reauthenticateWithPassword(typed, port) : await reauthenticate(typed, port);
     setChecking(false);
     onBusyChange?.(false);
     if (!result.ok) {
-      setError(profileErrorSentence(result, "reauth"));
+      setError(profileErrorSentence(result, using === "password" ? "password" : "reauth"));
       return;
     }
     await onConfirmed(result.expiresAt);
@@ -84,17 +109,17 @@ export function ConfirmItsYou({ purpose, port = sessionPort(), onConfirmed, onCa
       <p style={styles.subheading}>Confirm it’s you</p>
       {showOrigin && origin !== "" ? (
         <p style={styles.label} data-testid={`${testIdPrefix}-origin`}>
-          This is {APP_NAME} at {origin}. Only paste your recovery key into this site.
+          This is {APP_NAME} at {origin}. Only enter your {using === "password" ? "password" : "recovery key"} on this site.
         </p>
       ) : null}
       <label style={styles.label} htmlFor={inputId}>
-        {purpose}, paste your current recovery key. It is checked once and not kept on this device.
+        {using === "password" ? `${purpose}, enter your password. It is checked once and not kept on this device.` : `${purpose}, paste your current recovery key. It is checked once and not kept on this device.`}
       </label>
       <input
         id={inputId}
         type="password"
-        autoComplete="off"
-        style={styles.monoInput}
+        autoComplete={using === "password" ? "current-password" : "off"}
+        style={using === "password" ? styles.input : styles.monoInput}
         value={key}
         spellCheck={false}
         autoCapitalize="off"
@@ -109,6 +134,21 @@ export function ConfirmItsYou({ purpose, port = sessionPort(), onConfirmed, onCa
         {onCancel ? (
           <button type="button" style={disabledLook(styles.secondary, blocked)} disabled={blocked} onClick={onCancel}>
             {cancelLabel}
+          </button>
+        ) : null}
+        {both ? (
+          <button
+            type="button"
+            style={disabledLook(styles.secondary, blocked)}
+            disabled={blocked}
+            onClick={() => {
+              setKey("");
+              setError(null);
+              setUsing(using === "password" ? "recovery-key" : "password");
+            }}
+            data-testid={`${testIdPrefix}-switch`}
+          >
+            {using === "password" ? "Use the recovery key instead" : "Use the password instead"}
           </button>
         ) : null}
       </div>

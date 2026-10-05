@@ -605,6 +605,25 @@ export function createRoomHost(deps: RoomHostDeps) {
     return unavailable;
   }
 
+  /** P3-ACCT (trust indicators): the seats of a table `principalId` may READ (its view, as any watcher would: a private
+   *  table is `null` to an outsider, exactly as a table that does not exist). Server-side only: the principals here
+   *  never leave the server -- the caller turns them into public facts keyed by the seat's public `player_id`. */
+  function readableSeats(gameId: string, principalId: string | null, options: { moneyOnly?: boolean } = {}): ReadonlyArray<{ readonly playerId: string; readonly principalId: string }> | null {
+    const record = peekLoaded(gameId)?.view.record ?? recordIndex.get(gameId) ?? null;
+    if (record === null) return null;
+    /* P3-ACCT (review L4): the trust facts are for deciding whether to sit at a REAL-MONEY table; a free table answers
+       exactly as a missing one (nothing about it, or its players, is said). */
+    if (options.moneyOnly === true && record.money === null) return null;
+    const verdict = authorize("read-view", { record, facts: factsFromRecord(record), principalId: principalId ?? "", now: now(), held: false });
+    if (!verdict.ok) return null;
+    return record.seats.map((seat) => ({ playerId: seat.player_id, principalId: seat.principal_id }));
+  }
+
+  /** P3-ACCT (trust indicators): every table the index knows that `principalId` holds a seat at (server-side only). */
+  function tablesOf(principalId: string): GameRecord[] {
+    return [...recordIndex.values()].filter((record) => seatOf(record, principalId) !== null);
+  }
+
   /** A hold discovery found this run but could not write down (the load honours it as if its file existed). */
   function pendingHoldOf(gameId: string): { code: HoldCode; detail: string } | null {
     return discoveryHolds.get(gameId) ?? null;
@@ -2165,6 +2184,9 @@ export function createRoomHost(deps: RoomHostDeps) {
     boardOf,
     /* ESCROW-4: the port the money layer is built on. */
     moneyPort,
+    /* P3-ACCT: the trust indicators' reads (server-side only). */
+    readableSeats,
+    tablesOf,
     /* ESCROW-3A (brief §6): the money games the index knows (never a replay; the coordinator loads them). */
     financialGameIds: (): string[] => [...recordIndex.values()].filter((record) => settlement.retentionOf(record).kind === "financial").map((record) => record.game_id),
     financialRecords: (): GameRecord[] => [...recordIndex.values()].filter((record) => settlement.retentionOf(record).kind === "financial"),

@@ -17,7 +17,10 @@
 //   4. Origin            exactly one allow-listed Origin                                403
 //   5. authenticate      production: the session cookie; development: the dev
 //                        authenticator (its environment refusals are 403)               401 / 403
-//   5b. profile          LIVE-2E: the principal must have a profile                      403
+//   5b. profile          P3-ACCT (owner, 2026-10-05): NO LONGER A REFUSAL. A signed-out browser (an unprofiled
+//                        principal) opens a socket for the PUBLIC, READ-ONLY surface only -- the public list, a
+//                        public table's view and log (Watch, OD-19); `gameServer.ts` answers every other frame
+//                        `profile-required`, before any game is read. (LIVE-2E refused the upgrade here.)
 //   6. socket caps       12 per session (one browser), 24 per principal (every device), or
 //                        6 for a never-activated one (LIVE-2E)                          429 + Retry-After
 //   7. `handleUpgrade`   by the caller, SYNCHRONOUSLY after this returns ok -- nothing here awaits, so no other
@@ -87,11 +90,12 @@ export interface UpgradeGate {
   counts: SocketCounts;
   now: () => number;
   /** LIVE-2E: whether this principal has a profile (a development principal: its synthetic development profile).
-   *  An unprofiled principal opens no game socket at all. */
+   *  P3-ACCT: an unprofiled principal's socket is a public, read-only one (the frame gate's allow-list). */
   hasProfile: (principalId: string) => boolean;
 }
 
-export type UpgradeStep = "path" | "capacity" | "ip" | "origin" | "authenticate" | "profile" | "principal-cap";
+/** P3-ACCT: no "profile" step -- an unprofiled socket is admitted (public, read-only; refused per frame instead). */
+export type UpgradeStep = "path" | "capacity" | "ip" | "origin" | "authenticate" | "principal-cap";
 
 export type UpgradeDecision =
   /** LIVE-4 (L4-3): `client` is the socket's announcement, parsed once (the legacy wire when it announced nothing). */
@@ -289,18 +293,15 @@ function afterAuthentication(
   auth: { readonly principalId: string; readonly sessionId: string; readonly sessionExpiresAt: number; readonly provisional: boolean; readonly profiled: boolean },
 ): UpgradeDecision {
   const { limits, limiter } = gate;
-  const { now, ip, query, failed } = pre;
+  const { now, ip, query } = pre;
   const { principalId, sessionId, sessionExpiresAt, provisional } = auth;
 
-  /* 5b. LIVE-2E: A PROFILE IS REQUIRED. An unprofiled principal (the temporary one a browser gets from the bootstrap)
-     opens no game socket: no public list, no room, no log, no chat, no presence -- nothing, not even whether a
-     private table exists, is reachable before a profile. 403, charged to the address's failed-upgrade budget like
-     any other refused upgrade (LIVE-2E review I3): the client never opens a socket before its profile exists, so
-     only a misbehaving one ever gets here. */
-  if (!auth.profiled) {
-    limiter.deny("profile-required");
-    return failed(403, "profile", "no profile");
-  }
+  /* 5b. P3-ACCT (owner, 2026-10-05: public first). An unprofiled principal (the temporary one a browser gets from the
+     bootstrap) may open a socket -- for the PUBLIC, READ-ONLY surface only: the public list, and a PUBLIC table's view
+     and log (Watch: read-only always, OD-19). Every other frame (create, join, a seat, a move, chat, presence, "Your
+     tables", any room op) is answered `profile-required` by `gameServer.ts` before any game is looked up, and a
+     private table is `not-found` to it exactly as to any outsider (`roomAuthz.ts`). The caps below still bound it: a
+     never-activated browser has the provisional principal's socket cap. (LIVE-2E refused this upgrade 403.) */
 
   /* 6. PER-SESSION AND PER-PRINCIPAL SOCKETS -- refused without spending the ADDRESS's failed-upgrade budget: one
      player's extra tabs must not lock out everybody behind the same NAT (LIVE-2B adversarial review). LIVE-2E: a

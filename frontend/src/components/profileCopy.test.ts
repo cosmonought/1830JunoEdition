@@ -74,7 +74,7 @@ describe("no player-visible guest or seat-PIN vocabulary (LIVE-2E)", () => {
 
   it("scans the whole production UI", () => {
     expect(files.length).toBeGreaterThan(150);
-    for (const name of [...shellSourcePaths(), "index.tsx", "components/ProfileGate.tsx", "components/ProfileMenu.tsx", "components/SessionEndedNotice.tsx", "utils/roomProtocol.ts"]) {
+    for (const name of [...shellSourcePaths(), "index.tsx", "components/AccountDialog.tsx", "components/ProfileMenu.tsx", "components/SessionEndedNotice.tsx", "utils/roomProtocol.ts"]) {
       expect(files).toContain(path.join(SRC, name));
     }
   });
@@ -116,7 +116,7 @@ describe("no player-visible guest or seat-PIN vocabulary (LIVE-2E)", () => {
   });
 
   it("the profile screens name no id: no principal, profile, session or key selector, and no game id", () => {
-    for (const name of ["components/ProfileGate.tsx", "components/ProfileMenu.tsx", "components/RecoveryKeyReveal.tsx", "components/SessionEndedNotice.tsx"]) {
+    for (const name of ["components/AccountDialog.tsx", "components/ProfileMenu.tsx", "components/RecoveryKeyReveal.tsx", "components/SessionEndedNotice.tsx", "components/TrustFacts.tsx", "components/ConfirmItsYou.tsx"]) {
       for (const { text } of readableText(path.join(SRC, name))) {
         expect([name, text, /\b(?:pr|pf|se|rk)_[0-9a-z]/i.test(text) || /\bg_[0-9a-z]{6,}/i.test(text)]).toEqual([name, text, false]);
       }
@@ -125,7 +125,11 @@ describe("no player-visible guest or seat-PIN vocabulary (LIVE-2E)", () => {
 
   it("the profile screens never read the cookie or keep a credential in storage or a URL", () => {
     for (const name of [
-      "components/ProfileGate.tsx",
+      "components/AccountDialog.tsx",
+      "components/ConfirmItsYou.tsx",
+      "components/TrustFacts.tsx",
+      "utils/accountPrompt.ts",
+      "utils/trustApi.ts",
       "components/ProfileMenu.tsx",
       "components/RecoveryKeyReveal.tsx",
       "components/SessionEndedNotice.tsx",

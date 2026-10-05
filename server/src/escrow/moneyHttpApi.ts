@@ -22,9 +22,10 @@
 // EVERY ROUTE: POST only; an allow-listed Origin; `Content-Type: application/json`; a closed body of at most the API
 // limit (a field the route does not name -- a player id, a creation receipt, anything -- is 400); `no-store`; no CORS. The
 // caller is the request's OWN current, profiled session: its principal decides the seat (a body never names one), and
-// SENSITIVE means that session holds a live "Confirm it's you" grant (`hasSensitiveAuth`, ESCROW-3A) -- nothing else
-// counts (INV-CR: the lost-create-response rescue is never an authority here; no money module mentions it). Budgeted
-// per session, apart from the profile actions. Nothing here logs a body, a signature or an id.
+// SENSITIVE means that session holds a live "Confirm it's you" grant (`hasSensitiveAuth`, ESCROW-3A; P3-ACCT: a recent
+// sign-in makes one) -- the lost-create-response rescue is never an authority here (INV-CR). P3-ACCT: the caller also
+// carries its PROFILE's proven wallet, which authorizes that wallet's own links (`moneyTables.ts` `linkAuthority`).
+// Budgeted per session, apart from the profile actions. Nothing here logs a body, a signature or an id.
 
 import type { IncomingMessage, ServerResponse } from "http";
 
@@ -151,6 +152,7 @@ async function serve(request: IncomingMessage, response: ServerResponse, api: Mo
     recoverySelector: context.recoverySelector,
     principalId: context.principalId,
     sensitive: api.identity.hasSensitiveAuth(read, now),
+    profileWallet: api.identity.profileWallet(context.principalId)?.address ?? null,
     origin,
   };
   const handler = money.routes[route];

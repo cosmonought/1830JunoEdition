@@ -112,6 +112,31 @@ export interface IdentityLimits {
   /** LIVE-2E: link-code issues, recovery-key rotations and "sign out other devices", per SESSION (review H1: a
    *  principal-wide budget let one device starve the owner's others): burst 6, then 30 an hour. */
   profileActionsPerSession: BucketSpec;
+  /** P3-ACCT: username/password sign-in attempts -- right or wrong -- per SESSION (the browser making them): burst 10,
+   *  then 30 an hour. */
+  passwordLoginsPerSession: BucketSpec;
+  /** P3-ACCT: WRONG passwords per IP key (and /48): burst 20, then 60 an hour. Unlike a recovery key's 256 bits, a
+   *  password can be guessed, so once this is spent EVERY password attempt from the address is refused 429 -- before
+   *  any check -- until it refills (a neighbour's typos can delay a sign-in; nobody can keep guessing). */
+  passwordFailuresPerIp: BucketSpec;
+  /** P3-ACCT: WRONG passwords per USERNAME (its canonical key; an unknown username is charged exactly like a known one,
+   *  so the budget says nothing about which exist), from every address together: burst 50, then 100 an hour -- the
+   *  backstop against a distributed guess. (Review M2: deliberately wider than the per-address one below, so a stranger
+   *  who knows a username cannot cheaply lock its owner out of signing in elsewhere; and a signed-in session's own
+   *  "Confirm it's you" never reads it -- `passwordReauthFailuresPerSession`.) */
+  passwordFailuresPerAccount: BucketSpec;
+  /** P3-ACCT (review M2): WRONG passwords per USERNAME from ONE address key: burst 10, then 20 an hour. */
+  passwordFailuresPerAccountAddress: BucketSpec;
+  /** P3-ACCT (review M2): WRONG passwords in "Confirm it's you" per SESSION FAMILY (one signed-in device, its rotated
+   *  cookies included -- re-review N-1): burst 10, then 20 an hour. Nobody else's guesses can block the owner's own
+   *  confirmation. */
+  passwordReauthFailuresPerFamily: BucketSpec;
+  /** P3-ACCT (re-review N-1): WRONG passwords in "Confirm it's you" per ACCOUNT, across all of its signed-in devices:
+   *  burst 20, then 20 an hour -- the backstop that keeps a stolen cookie from guessing the password at the speed it
+   *  can mint new sessions (link codes, rotated cookies). Only the account's own sessions can spend it; an owner kept
+   *  out of "Confirm it's you" by a thief still signs in afresh (a sign-in confirms for its first minutes) and signs the
+   *  other devices out. */
+  passwordReauthFailuresPerAccount: BucketSpec;
   /** LIVE-2E: sockets per SESSION -- one browser or device, all of its tabs (they share the cookie). */
   maxSocketsPerSession: number;
   /** Sockets per principal, across every session (device) that authenticates it. */
@@ -185,6 +210,12 @@ export const DEFAULT_INGRESS_LIMITS: IngressLimits = Object.freeze({
     credentialRedeemsPerIp: { capacity: 10, refillPerSecond: 30 / 3600 },
     credentialRedeemsPerSession: { capacity: 10, refillPerSecond: 30 / 3600 },
     profileActionsPerSession: { capacity: 6, refillPerSecond: 30 / 3600 },
+    passwordLoginsPerSession: { capacity: 10, refillPerSecond: 30 / 3600 },
+    passwordFailuresPerIp: { capacity: 20, refillPerSecond: 60 / 3600 },
+    passwordFailuresPerAccount: { capacity: 50, refillPerSecond: 100 / 3600 },
+    passwordFailuresPerAccountAddress: { capacity: 10, refillPerSecond: 20 / 3600 },
+    passwordReauthFailuresPerFamily: { capacity: 10, refillPerSecond: 20 / 3600 },
+    passwordReauthFailuresPerAccount: { capacity: 20, refillPerSecond: 20 / 3600 },
     /* LIVE-2E: THE CAPS FROM THE CLIENT'S ACTUAL TOPOLOGY. One tab holds at most THREE sockets: the lobby channel
        (the public list and the create/join ops; it closes 1.5 s after nothing listens), one room channel per open
        table (its view, chat and presence share it) and the game-log link -- two while seated at a table, one in the
@@ -273,6 +304,13 @@ export class TokenBucket {
     return wait;
   }
 
+  /** P3-ACCT (review M3): give back a token taken for an attempt that turned out not to count (a RESERVATION: the
+   *  token is taken before the slow check, so concurrent attempts cannot overshoot the budget, and returned after). */
+  give(): void {
+    this.refill();
+    this.tokens = Math.min(this.spec.capacity, this.tokens + 1);
+  }
+
   /** What `take` would answer, without taking. */
   peek(): number {
     this.refill();
@@ -314,6 +352,11 @@ export class KeyedBuckets {
     return this.bucket(key).take();
   }
 
+  /** Return a reserved token (a forgotten -- full -- bucket has nothing to return). */
+  give(key: string): void {
+    this.buckets.get(key)?.give();
+  }
+
   peek(key: string): number {
     const bucket = this.buckets.get(key);
     return bucket === undefined ? 0 : bucket.peek();
@@ -349,6 +392,12 @@ export class IpBuckets {
 
   peek(ip: { key: string; aggregate: string | null }): number {
     return Math.max(this.keyed.peek(ip.key), ip.aggregate === null ? 0 : this.aggregate.peek(ip.aggregate));
+  }
+
+  /** Return what a granted `take` reserved (both buckets). */
+  give(ip: { key: string; aggregate: string | null }): void {
+    this.keyed.give(ip.key);
+    if (ip.aggregate !== null) this.aggregate.give(ip.aggregate);
   }
 
   prune(): void {

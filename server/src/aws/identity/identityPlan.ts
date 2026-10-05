@@ -24,6 +24,10 @@
 // `identityPlan.test` / the DynamoDB differential suite send random changes with NO pre-check and require the store's
 // verdict to be exactly the pure verdict.
 //
+// THE USERNAME UNIQUENESS ITEM (`USER#<login key>`, P3-ACCT). A profile written with a username claims `USER#k` in the
+// same transaction (condition: absent, or already this profile's); a profile's username, once set, never changes or
+// goes (a condition on the profile's own Put). `login-unused` is `USER#k` absent.
+//
 // THE SELECTOR UNIQUENESS ITEM (`SEL#<rk>`, identityItems.ts). Invariant: it is live (`retired_at` NULL) with
 // `profile_id` P exactly when profile P holds that selector. A profile written with selector s claims `SEL#s` (condition:
 // absent, retired, or held by this profile or by one this change moves off s); the selector a changed profile gives up
@@ -63,6 +67,7 @@ import {
   isSecurityRevocation,
   isSession,
   isSessionFamily,
+  loginOf,
   type IdentityChange,
   type IdentityPrecondition,
   type Principal,
@@ -80,6 +85,7 @@ import {
   S,
   selectorItem,
   sessionItem,
+  userItem,
   type Item,
   type ItemClass,
   type ItemKey,
@@ -100,6 +106,8 @@ export type Clause =
   | { readonly op: "eq"; readonly attr: string; readonly value: AttributeValue }
   | { readonly op: "null"; readonly attr: string }
   | { readonly op: "not-null"; readonly attr: string }
+  /** P3-ACCT: the item has no such attribute at all (a schema-1 profile has no `login_key`). */
+  | { readonly op: "attr-absent"; readonly attr: string }
   | { readonly op: "gt"; readonly attr: string; readonly value: AttributeValue }
   | { readonly op: "in"; readonly attr: string; readonly values: readonly AttributeValue[] }
   | { readonly op: "or"; readonly of: readonly Clause[] }
@@ -111,6 +119,7 @@ export const cl = Object.freeze({
   eqS: (attr: string, value: string): Clause => ({ op: "eq", attr, value: S(value) }),
   isNull: (attr: string): Clause => ({ op: "null", attr }),
   notNull: (attr: string): Clause => ({ op: "not-null", attr }),
+  attrAbsent: (attr: string): Clause => ({ op: "attr-absent", attr }),
   gtN: (attr: string, value: number): Clause => ({ op: "gt", attr, value: N(value) }),
   inS: (attr: string, values: readonly string[]): Clause => ({ op: "in", attr, values: values.map(S) }),
   or: (...of: Clause[]): Clause => ({ op: "or", of }),
@@ -153,6 +162,8 @@ class Expression {
         return `attribute_type(${this.name(clause.attr)}, ${this.value(S("NULL"))})`;
       case "not-null":
         return `NOT attribute_type(${this.name(clause.attr)}, ${this.value(S("NULL"))})`;
+      case "attr-absent":
+        return `attribute_not_exists(${this.name(clause.attr)})`;
       case "gt":
         return `${this.name(clause.attr)} > ${this.value(clause.value)}`;
       case "in":
@@ -251,11 +262,15 @@ export function internalProblem(change: IdentityChange): string | null {
     if (bound !== undefined && bound.principal_id !== record.principal_id) return `principal #${at}: a profile principal is not bound to its profile both ways`;
   }
   const claimed = new Set<string>();
+  const logins = new Set<string>();
   for (const [at, record] of [...profiles.values()].entries()) {
     const owner = principals.get(record.principal_id);
     if (owner !== undefined && (owner.kind !== "profile" || owner.account_link !== record.profile_id)) return `profile #${at} is not bound to its principal both ways`;
     if (claimed.has(record.recovery_selector)) return `profile #${at} repeats a recovery selector`;
     claimed.add(record.recovery_selector);
+    const login = loginOf(record);
+    if (login !== null && logins.has(login.key)) return `profile #${at} repeats a username`;
+    if (login !== null) logins.add(login.key);
   }
   return null;
 }
@@ -286,6 +301,16 @@ function preconditionTarget(condition: IdentityPrecondition): { key: ItemKey; cl
       return { key: keys.family(condition.family_id), cls: "family", clause: cl.absent() };
     case "family-open":
       return { key: keys.family(condition.family_id), cls: "family", clause: cl.and(cl.exists(), cl.isNull("revoked_at")) };
+    case "login-unused":
+      return { key: keys.user(condition.login_key), cls: "user", clause: cl.absent() };
+    case "profile-no-login":
+      return { key: keys.profile(condition.profile_id), cls: "profile", clause: cl.and(cl.exists(), cl.or(cl.attrAbsent("login_key"), cl.isNull("login_key"))) };
+    case "profile-wallet":
+      return {
+        key: keys.profile(condition.profile_id),
+        cls: "profile",
+        clause: cl.and(cl.exists(), condition.wallet_address === null ? cl.or(cl.attrAbsent("wallet_address"), cl.isNull("wallet_address")) : cl.eqS("wallet_address", condition.wallet_address)),
+      };
     default:
       throw new Error("identity plan: an unknown precondition (the shape check refuses it first)");
   }
@@ -347,6 +372,11 @@ export function planIdentityChange(change: IdentityChange, view: IdentityPlanVie
     add(target, cl.or(cl.absent(), cl.eqS("principal_id", record.principal_id)), "a profile never moves to another principal");
     const held = view.profileSelector(record.profile_id);
     add(target, held === undefined ? cl.absent() : cl.eqS("recovery_selector", held), "the writer's view of the profile's selector (pinned)");
+    /* P3-ACCT: a username, once set, never changes or goes; a schema-2 record never becomes schema 1. */
+    const login = loginOf(record);
+    const unset = [cl.attrAbsent("login_key"), cl.isNull("login_key")];
+    add(target, cl.or(cl.absent(), ...unset, ...(login === null ? [] : [cl.eqS("login_key", login.key)])), "a profile's username never changes or goes");
+    if (record.schema !== 2) add(target, cl.or(cl.absent(), cl.attrAbsent("login_key")), "a profile never returns to schema 1");
   }
   for (const record of change.families ?? []) {
     const target = spec(keys.family(record.family_id), "family");
@@ -380,6 +410,15 @@ export function planIdentityChange(change: IdentityChange, view: IdentityPlanVie
       write(retired, selectorItem({ recovery_selector: held, profile_id: record.profile_id, retired_at: record.recovery_rotated_at }));
       add(retired, cl.and(cl.eqS("profile_id", record.profile_id), cl.isNull("retired_at")), "the retired selector was this profile's (pinned)");
     }
+  }
+
+  /* ---- P3-ACCT: the username uniqueness items (claimed with the profile that takes the username) ---- */
+  for (const record of change.profiles ?? []) {
+    const login = loginOf(record);
+    if (login === null) continue;
+    const target = spec(keys.user(login.key), "user");
+    write(target, userItem({ login_key: login.key, profile_id: record.profile_id }));
+    add(target, cl.or(cl.absent(), cl.eqS("profile_id", record.profile_id)), "no other profile holds the username");
   }
 
   /* ---- relations to records the change does not carry ---- */
@@ -447,6 +486,8 @@ export function planIdentityChange(change: IdentityChange, view: IdentityPlanVie
     const held = view.profileSelector(record.profile_id);
     if (held !== undefined && specs.get(keyText(keys.selector(held)))?.op === "put") union(profileText, keyText(keys.selector(held)));
     if (principalsInChange.has(record.principal_id)) union(profileText, keyText(keys.principal(record.principal_id)));
+    const login = loginOf(record);
+    if (login !== null) union(profileText, keyText(keys.user(login.key)));
   }
   for (const record of change.principals ?? []) {
     if (record.kind === "profile" && profilesInChange.has(record.account_link as string)) union(keyText(keys.principal(record.principal_id)), keyText(keys.profile(record.account_link as string)));
@@ -469,6 +510,7 @@ export function planIdentityChange(change: IdentityChange, view: IdentityPlanVie
         return [WRITE_ORDER.principal, 0];
       case "profile":
       case "selector":
+      case "user":
         return [WRITE_ORDER.profile, 0];
       case "family":
         return [WRITE_ORDER.family, 0];

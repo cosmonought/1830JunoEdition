@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import type { IdentityChange, IdentityPrecondition, IdentityStore } from "../../identity/store";
 import type { InspectableSigningJournal } from "../../escrow/signingJournal";
 import type { Gate } from "./faults";
-import { anotherSession, identitySet, type IdentitySet } from "./fixtures";
+import { accountProfile, anotherSession, FIXTURE_WALLET, FIXTURE_WALLET_2, identitySet, type IdentitySet } from "./fixtures";
 import { T0, hook, rejection, stalledAt, type CaseContext, type ConformanceCase, type SubjectBase } from "./harness";
 
 /* ================================================================== */
@@ -398,6 +398,46 @@ export const IDENTITY_CASES: readonly ConformanceCase<IdentitySubject>[] = [
         ["a record list holding a non-record", { sessions: [null as unknown as typeof extra] }],
       ];
       for (const [label, change] of cases) await refused(subject, ctx, store, change, label);
+    },
+  },
+  {
+    id: "ID-21",
+    title: "P3-ACCT: a schema-2 profile (username + password hash + wallet) loads back exactly; a username is unique, never changes or goes; login-unused, profile-no-login and profile-wallet each refuse DEFINITE when they do not hold",
+    /* As ID-08: a relation (here, a username's uniqueness and history) refused DEFINITE -- every production store. */
+    needs: ["validates-shape"],
+    async run(subject, ctx) {
+      const store = await subject.open(ctx);
+      await store.load();
+      /* A new ACCOUNT: the profile is created at schema 2 with its username (and claims it). */
+      const a = identitySet(21);
+      const accountA = accountProfile(a, { login: "Brad.Player" });
+      await store.commit({ ...profileCreation(a), expect: [...(profileCreation(a).expect ?? []), { kind: "login-unused", login_key: "brad.player" }], profiles: [accountA] });
+      assert.deepEqual((await store.load()).profiles, [accountA], "the schema-2 record loads back field for field");
+      /* A LEGACY profile (schema 1) of another principal. */
+      const b = identitySet(22);
+      await store.commit(profileCreation(b));
+      /* The same username, any spelling, cannot be taken by another profile: by its precondition, or by the relation. */
+      const taken = accountProfile(b, { login: "BRAD.PLAYER" });
+      await refused(subject, ctx, store, { expect: [{ kind: "login-unused", login_key: "brad.player" }], profiles: [taken] }, "login-unused (another profile holds it)");
+      await refused(subject, ctx, store, { profiles: [taken] }, "a second profile claiming a held username");
+      /* The legacy profile establishes ITS username, once (profile-no-login), and it then never changes or goes. */
+      const establishedB = accountProfile(b, { login: "Second" });
+      await store.commit({ expect: [{ kind: "profile-no-login", profile_id: b.profile.profile_id }, { kind: "login-unused", login_key: "second" }], profiles: [establishedB] });
+      await refused(subject, ctx, store, { expect: [{ kind: "profile-no-login", profile_id: b.profile.profile_id }], profiles: [accountProfile(b, { login: "Third" })] }, "profile-no-login (it has one now)");
+      await refused(subject, ctx, store, { profiles: [accountProfile(b, { login: "Third" })] }, "a username changed");
+      await refused(subject, ctx, store, { profiles: [accountProfile(b, { login: null })] }, "a username dropped");
+      await refused(subject, ctx, store, { profiles: [b.profile] }, "a schema-2 profile returned to schema 1");
+      await refused(subject, ctx, store, { expect: [{ kind: "profile-no-login", profile_id: identitySet(23).profile.profile_id }], profiles: [establishedB] }, "profile-no-login (no such profile)");
+      /* The persisted wallet: a compare-and-swap from none, then from the one it holds. */
+      const withWallet = accountProfile(b, { login: "Second", wallet: FIXTURE_WALLET, at: T0 + 5 });
+      await store.commit({ expect: [{ kind: "profile-wallet", profile_id: b.profile.profile_id, wallet_address: null }], profiles: [withWallet] });
+      await refused(subject, ctx, store, { expect: [{ kind: "profile-wallet", profile_id: b.profile.profile_id, wallet_address: null }], profiles: [accountProfile(b, { login: "Second", wallet: FIXTURE_WALLET_2 })] }, "profile-wallet (it holds a wallet now)");
+      await refused(subject, ctx, store, { expect: [{ kind: "profile-wallet", profile_id: a.profile.profile_id, wallet_address: FIXTURE_WALLET }], profiles: [accountProfile(a, { login: "Brad.Player", wallet: FIXTURE_WALLET_2 })] }, "profile-wallet (another wallet than it holds)");
+      const replaced = accountProfile(b, { login: "Second", wallet: FIXTURE_WALLET_2, at: T0 + 6 });
+      await store.commit({ expect: [{ kind: "profile-wallet", profile_id: b.profile.profile_id, wallet_address: FIXTURE_WALLET }], profiles: [replaced] });
+      const reopened = await (await subject.open(ctx)).load();
+      assert.deepEqual(reopened.profiles.find((profile) => profile.profile_id === b.profile.profile_id), replaced, "a restart loads the replaced wallet and the username");
+      assert.deepEqual(reopened.profiles.find((profile) => profile.profile_id === a.profile.profile_id), accountA);
     },
   },
   {

@@ -46,9 +46,14 @@ import { zoomAwareMediaCss } from "../utils/uiScale";
 // Design note #524: the sandbox lobby lives on this screen now.
 import SandboxRoomBar from "./SandboxRoomBar";
 import { createHostedGame, gameIdOf, joinHostedGame, type RoomSetup } from "../utils/sandboxRoom";
-/* LIVE-2E: the profile chip (link a device, rotate the key, sign out), and the profile's name as the host's seat name. */
+/* LIVE-2E: the profile chip (link a device, rotate the key, sign out), and the profile's name as the host's seat name.
+   P3-ACCT (public first): signed out, the same corner offers Log in and Create account. */
 import { ProfileMenu } from "./ProfileMenu";
 import { profileNickname } from "../utils/profileApi";
+/* P3-ACCT: Host, Join and a listed table's Join ask for an account first, then carry on by themselves. */
+import { requireAccount } from "../utils/accountPrompt";
+import { useSession } from "../utils/useSession";
+import { openInfoPage } from "../utils/infoPages";
 // #1415: the host's setup card -- type, pace, visibility, then the house rules -- before the room exists; and
 // the join card, the code box for an unlisted table.
 import { HostSetupCard } from "./HostSetupCard";
@@ -151,9 +156,29 @@ function sceneSizeFor(scale: number): React.CSSProperties {
    harnesses read it as (`blendIsolation`, `seatPin`) while the one number in it follows the zoom. */
 const HERO_MIN_PX = 520;
 const HERO_SHARE = 74;
-function heroVars(scale: number, utilityRowPx: number): React.CSSProperties {
-  const hero = `min(${100 / scale}vh, max(${HERO_MIN_PX}px, ${HERO_SHARE / scale}vh))`;
+/* ==================================================================
+    PHASE 3 (P3-ACCT): THE HOMEPAGE OVERLAP -- THE LIST STARTS BELOW THE DOORS, WHATEVER THE WINDOW
+   ==================================================================
+   REPORTED: at a constrained width or zoom, the tables list ran over Host / Join and the account buttons.
+   THE CAUSE IS TWO COORDINATE SYSTEMS THAT NEVER MET. The doors are anchored at 70% of the SCENE (#1131) -- and the
+   scene is `cover`, so on a wide or short window it is far taller than the viewport (1072px at 1920 wide, whatever the
+   window's height) -- while the list starts where the HERO ends, `min(100vh, max(520px, 74vh))`: on a 1400x700 window
+   the doors sat at ~550px and the list began at ~520px. A wrapped utility row (the zoom, the account buttons) and a
+   wrapped door row made it worse. Nothing ever asked one about the other.
+   THE FIX ASKS, IN BOTH DIRECTIONS, AND REFLOWS -- NOTHING IS MOVED BY ABSOLUTE COLLISION:
+     1. the doors' anchor is clamped INTO the window: `min(70%, window - half the row - 20px)` -- the photograph's
+        composition (#1131's 70%) wherever the window is tall enough, the window's own foot where it is not -- and
+        never above the title's foot (the title keeps #1354's safe line);
+     2. the row's real bottom is MEASURED (it wraps) and the hero's share of the flow is at least that bottom plus a
+        gap, so the list is laid out below the doors in normal flow even when 1. cannot keep them in the window (a
+        very short one); the picture's window grows with it so the doors never stand on bare ink.
+   `--lobby-hero-window` is the viewport-only hero (what the clamp reads, so the measurement never feeds itself);
+   `--lobby-hero` is the window AND the measured doors. */
+export function heroVars(scale: number, utilityRowPx: number, actionsBottomPx = 0): React.CSSProperties {
+  const heroWindow = `min(${100 / scale}vh, max(${HERO_MIN_PX}px, ${HERO_SHARE / scale}vh))`;
+  const hero = actionsBottomPx > 0 ? `max(${heroWindow}, ${Math.ceil(actionsBottomPx) + ACTIONS_GAP_PX}px)` : heroWindow;
   return {
+    "--lobby-hero-window": heroWindow,
     "--lobby-hero": hero,
     /* Design note #1441: the action row's narrow extent, in the scene's percentages. */
     "--lobby-actions-left": `calc(50% - ${50 / scale}vw + 16px)`,
@@ -162,6 +187,16 @@ function heroVars(scale: number, utilityRowPx: number): React.CSSProperties {
        puts a 16px gap either side of the spacer, so both come off the height it reserves. */
     "--lobby-hero-flow": `max(0px, calc(${hero} - ${utilityRowPx + 32}px))`,
   } as React.CSSProperties;
+}
+/** P3-ACCT: the least space between the doors' foot and the list's head. */
+const ACTIONS_GAP_PX = 24;
+
+/** P3-ACCT: the doors' vertical anchor -- #1131's 70% of the scene, clamped into the hero's window (half the row's
+ *  measured height, `translateY(-50%)`, plus a margin) and never above the title's foot (#1354's line). */
+export function actionsTopFor(utilityRowPx: number, actionsHeightPx: number): React.CSSProperties {
+  const half = Math.ceil(actionsHeightPx / 2);
+  const titleFoot = `max(40%, calc(${WORDMARK_HEIGHT_OF_SCENE} + ${utilityRowPx + 16}px))`;
+  return { top: `max(calc(${titleFoot} + ${half + 12}px), min(70%, calc(var(--lobby-hero-window) - ${half + 20}px)))` };
 }
 
 /* ==================================================================
@@ -209,6 +244,31 @@ export function Lobby({ onEnterSandbox, onWatchSandbox }: LobbyProps) {
     observer.observe(node);
     return () => observer.disconnect();
   }, [uiScale]);
+  /* P3-ACCT (the homepage overlap): the doors' row, measured -- its height (it wraps) for the clamp, and its foot,
+     relative to the page, for the list's place in the flow. Both in layout pixels (#1354's division by the scale). */
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const actionsRef = useRef<HTMLDivElement | null>(null);
+  const [actions, setActions] = useState({ height: 0, bottom: 0 });
+  useEffect(() => {
+    const row = actionsRef.current;
+    const page = rootRef.current;
+    if (!row || !page) return undefined;
+    const measure = () => {
+      const box = row.getBoundingClientRect();
+      const top = page.getBoundingClientRect().top;
+      const next = { height: Math.ceil(box.height / uiScale), bottom: Math.ceil((box.bottom - top) / uiScale) };
+      setActions((was) => (was.height === next.height && was.bottom === next.bottom ? was : next));
+    };
+    measure();
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    observer?.observe(row);
+    observer?.observe(page);
+    window.addEventListener("resize", measure);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [uiScale, utilityRowPx]);
   /* Design note #524: the sandbox room handlers. Local to this screen -- the game id is handed straight to
      `onEnterSandbox` and this component unmounts, so there is nothing to keep. */
   const [sandboxRoomError, setSandboxRoomError] = useState<string | null>(null);
@@ -224,8 +284,12 @@ export function Lobby({ onEnterSandbox, onWatchSandbox }: LobbyProps) {
   const [hostSetup, setHostSetup] = useState(false);
   const [joinOpen, setJoinOpen] = useState(false);
   const publicRooms = usePublicRooms();
-  /* LIVE-2F/3D (C9-01): the tables this profile sits at -- the way back to a seat from any tab or browser. */
-  const myTables = useMyTables();
+  /* P3-ACCT (public first): who is looking -- a visitor browses; Host and Join ask for an account first. */
+  const session = useSession();
+  const signedIn = session.state === "ready" && session.account !== null;
+  /* LIVE-2F/3D (C9-01): the tables this profile sits at -- the way back to a seat from any tab or browser (signed in
+     only: a visitor sits nowhere, and the server answers it nothing). */
+  const myTables = useMyTables(signedIn);
 
   /** A refusal, said as a sentence a player can act on; an internal failure's reference goes to the console only. */
   const sayRefusal = useCallback((code: string, reason: string): string => {
@@ -303,6 +367,24 @@ export function Lobby({ onEnterSandbox, onWatchSandbox }: LobbyProps) {
     [handleJoinSandboxRoom],
   );
 
+  /* P3-ACCT: the three doors that seat somebody ask for an account first and carry on by themselves once signed in
+     (`requireAccount`). Watch and the rules never ask (OD-19: Watch is read-only for everyone). */
+  const openHost = useCallback(() => {
+    setSandboxRoomError(null);
+    requireAccount(() => setHostSetup(true), "Log in or create an account to host a game.");
+  }, []);
+  const openJoin = useCallback(() => {
+    setSandboxRoomError(null);
+    requireAccount(() => setJoinOpen(true), "Log in or create an account to join a game.");
+  }, []);
+  const joinListed = useCallback(
+    (code: string) => {
+      setRoomRefusal(null);
+      requireAccount(() => void handleJoinListedRoom(code), "Log in or create an account to join this table.");
+    },
+    [handleJoinListedRoom],
+  );
+
   const wallet = useWallet();
   const address = wallet.address;
   const chainError = chainConfigError();
@@ -313,7 +395,7 @@ export function Lobby({ onEnterSandbox, onWatchSandbox }: LobbyProps) {
   /* ---------------- Render ---------------- */
 
   return (
-    <div style={{ ...styles.root, ...chromeZoomFor(uiScale), ...heroVars(uiScale, utilityRowPx) }}>
+    <div ref={rootRef} style={{ ...styles.root, ...chromeZoomFor(uiScale), ...heroVars(uiScale, utilityRowPx, actions.bottom) }}>
       {/* Design note #46 is the standing exception and this is the case it exists for: neither a keyframe nor
           a media query can be expressed as an inline style object.
           Design note #1130: #1123's 860px breakpoint is GONE WITH ITS GRID -- one centred column needs no
@@ -357,8 +439,12 @@ export function Lobby({ onEnterSandbox, onWatchSandbox }: LobbyProps) {
           </div>
         )}
         <div style={styles.utilityAccount}>
+        {/* P3-ACCT: the rules are public -- a visitor reads them here, no account needed. */}
+        <button type="button" style={styles.rulesButton} onClick={() => openInfoPage("rules")} data-testid="lobby-rules">
+          Rules
+        </button>
         {/* LIVE-2E: who this browser plays as -- the profile chip, first in the account corner. Its menu links another
-            device, rotates the recovery key and signs devices out. */}
+            device, rotates the recovery key and signs devices out. P3-ACCT: signed out, Log in and Create account. */}
         <ProfileMenu />
         {/* Design note #1336: the text-size control, on the first screen a player sees. The same component
             as the bars'; the scale it writes is the one every later screen reads. */}
@@ -463,7 +549,7 @@ export function Lobby({ onEnterSandbox, onWatchSandbox }: LobbyProps) {
               -- the same "put both sides in one space" move #1144 made for the cover arithmetic.
               THE DESKTOP POSITION IS UNTOUCHED, and so is the vertical composition: `top: 70%` still puts
               the row on the table, and only its horizontal extent changes. */}
-          <div className="lobby-table-anchor" style={styles.tableAnchor}>
+          <div className="lobby-table-anchor" ref={actionsRef} style={{ ...styles.tableAnchor, ...actionsTopFor(utilityRowPx, actions.height) }} data-testid="lobby-actions">
             {/* Design note #1083: `appliedCount={0}` and `onLeave={() => undefined}` are GONE with the props
                 they fed. Both were placeholders this surface had no use for -- the lobby is never in a room --
                 and a required prop satisfied by a stub is a prop the component did not need. */}
@@ -473,19 +559,9 @@ export function Lobby({ onEnterSandbox, onWatchSandbox }: LobbyProps) {
               available={isBackendConfigured()}
               error={sandboxRoomError}
               busy={sandboxRoomBusy}
-              onHost={() => {
-                setSandboxRoomError(null);
-                setHostSetup(true);
-              }}
-              onJoin={handleJoinSandboxRoom}
-              onOpenJoin={
-                roomLinkAvailable()
-                  ? () => {
-                      setSandboxRoomError(null);
-                      setJoinOpen(true);
-                    }
-                  : undefined
-              }
+              onHost={openHost}
+              onJoin={(raw) => void requireAccount(() => void handleJoinSandboxRoom(raw), "Log in or create an account to join a game.")}
+              onOpenJoin={roomLinkAvailable() ? openJoin : undefined}
             />
           </div>
         </div>
@@ -565,7 +641,7 @@ export function Lobby({ onEnterSandbox, onWatchSandbox }: LobbyProps) {
           the player is looking. */}
       {/* LIVE-2F/3D (C9-01): "Your tables" above the public list -- a private table is in no list but this one, and
           after the deal its code no longer opens it. Hidden when there is nothing to show. */}
-      <MyTablesList tables={myTables.tables} error={myTables.error} onOpen={(gameId) => onEnterSandbox(gameId)} />
+      {signedIn ? <MyTablesList tables={myTables.tables} error={myTables.error} onOpen={(gameId) => onEnterSandbox(gameId)} /> : null}
       <LobbyRoomList
         rooms={publicRooms.rooms}
         loading={publicRooms.loading}
@@ -573,7 +649,7 @@ export function Lobby({ onEnterSandbox, onWatchSandbox }: LobbyProps) {
         available={publicRooms.available}
         busy={sandboxRoomBusy}
         refusal={roomRefusal}
-        onJoin={(code) => void handleJoinListedRoom(code)}
+        onJoin={joinListed}
         /* LIVE-2D: Watch needs no op -- a public table is readable by any signed-in profile; the shell opens its
            RoomView and log by game id, and the viewer holds no seat and is never given one.
            PHASE 3 W3-J (OD-19): its OWN door, so "never given one" holds for a principal who IS seated there too --
@@ -992,8 +1068,21 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     alignItems: "center",
     flexWrap: "wrap",
+    /* P3-ACCT: a wrapped corner stays right-aligned, so the account buttons never drift under the title. */
+    justifyContent: "flex-end",
     gap: "10px",
     marginLeft: "auto",
+  },
+  /* P3-ACCT: the public rules, as quiet as the corner's other furniture. */
+  rulesButton: {
+    fontSize: FONT_SIZE.small,
+    fontWeight: 700,
+    padding: CONTROL_PADDING.buttonSmall,
+    borderRadius: RADIUS.pill,
+    border: "1px solid #3a3a3a",
+    backgroundColor: "rgba(8, 8, 8, 0.6)",
+    color: "#f2f0eb",
+    cursor: "pointer",
   },
   /* Design note #1130: the stage -- a centred column holding a sentence and the two controls, with no panel
      around them. See the note at its call site for why the box came off. */

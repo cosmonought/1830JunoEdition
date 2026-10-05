@@ -90,6 +90,8 @@ import {
   type ReloadFrame,
 } from "../../frontend/src/utils/clientAnswers";
 import { createMoneyLimiter, handleMoneyHttp } from "./escrow/moneyHttpApi";
+import { createTrustFacts } from "./rooms/trustFacts";
+import { createTrustLimiter, handleTrustHttp } from "./rooms/trustHttpApi";
 import type { MoneyTables } from "./escrow/moneyTables";
 import type { EscrowGameplaySeam } from "./rooms/roomHost";
 import { reconcileLoaded } from "./rooms/reconcile";
@@ -1477,6 +1479,14 @@ export function createGameServer(options: GameServerOptions): {
 
   /* ESCROW-4: `/gs/api/money/*` (its own per-session budget; the same ingress rules as the identity routes). */
   const moneyLimiter = createMoneyLimiter(identityNow);
+  /* P3-ACCT: `/gs/api/trust/*` -- factual trust indicators, derived from the durable records (`rooms/trustFacts.ts`). */
+  const trustLimiter = createTrustLimiter(identityNow);
+  const trustFacts = createTrustFacts({
+    profileFacts: (principalId) => (principalId.startsWith(DEV_PRINCIPAL_PREFIX) ? null : identity.trustProfileFacts(principalId)),
+    tablesOf: (principalId) => host.tablesOf(principalId),
+    financial: async (gameId) => (options.money?.() ?? null)?.financialRecord(gameId) ?? null,
+    now: identityNow,
+  });
   const http = createServer((req, res) => {
     /* LIVE-5 L5-7: readiness first (AWS storage mode only): it reads no body and no identity. */
     if (options.readiness !== undefined && handleReadiness(req, res, options.readiness)) return;
@@ -1501,6 +1511,30 @@ export function createGameServer(options: GameServerOptions): {
           },
         },
         moneyLimiter,
+      )
+    ) {
+      return;
+    }
+    if (
+      handleTrustHttp(
+        req,
+        res,
+        {
+          allowedOrigins,
+          trustedProxyHops: identityOptions.trustedProxyHops,
+          identity,
+          maxBodyBytes: limits.identity.maxApiBodyBytes,
+          now: identityNow,
+          facts: trustFacts,
+          readableSeats: (gameId, principalId) => host.readableSeats(gameId, principalId, { moneyOnly: true }),
+          onError: (what, error) => {
+            const ref = errorRef();
+            // eslint-disable-next-line no-console
+            console.error(`  trust: ${what} failed (ref ${ref}) -- ${excerpt(error instanceof Error ? error.message : String(error), 300)}`);
+            return ref;
+          },
+        },
+        trustLimiter,
       )
     ) {
       return;
@@ -1846,12 +1880,19 @@ export function createGameServer(options: GameServerOptions): {
       }
       buckets.consecutiveLimited = 0;
 
-      /* LIVE-2E: DEFENCE IN DEPTH. The upgrade already refused an unprofiled principal, and a profile is never taken
-         away (a disabled one ends every session, 4401) -- but no room, list, log, chat, presence or move frame is
-         handled for a principal without one, whatever path it came by. One answer, `profile-required`, before any game
-         is looked up, so nothing about a table's existence is said. */
-      if (!hasProfile(ctx.principalId)) {
-        const reason = "Create or sign in to a profile to play.";
+      /* LIVE-2E: DEFENCE IN DEPTH -- and P3-ACCT (owner, 2026-10-05: public first): THE SIGNED-OUT ALLOW-LIST. A socket
+         whose principal has no profile (a visitor who has not signed in) may send exactly the PUBLIC READS: the public
+         list (`rooms-watch`), a table's view (`room-hello`) and a table's log (`hello`) -- each still authorized per
+         frame against the record (`roomAuthz.ts`: a private table is `not-found` to it; a visitor holds no seat, so a
+         public one is read as any watcher reads it: Watch is read-only, OD-19 -- the one exception, a principal from
+         before profiles that still holds seats ("has-tables"), reads its OWN seated tables as their seat-holder, and
+         still can act on none of them). Every other frame -- create, join, a seat, a
+         move, chat, presence, "Your tables", any room op -- is answered `profile-required` before any game is looked
+         up, so nothing about a table's existence is said. A profile is never taken away (a disabled one ends every
+         session, 4401). */
+      const publicRead = frame.kind === "rooms-watch" || frame.kind === "room-hello" || frame.kind === "hello";
+      if (!hasProfile(ctx.principalId) && !publicRead) {
+        const reason = "Log in or create an account to do that.";
         if (frame.kind === "room-op") {
           send(socket, { kind: "room-ack", requestId: (frame as unknown as { requestId: string }).requestId, ok: false, code: "profile-required", reason });
         } else if (frame.kind === "submit") {

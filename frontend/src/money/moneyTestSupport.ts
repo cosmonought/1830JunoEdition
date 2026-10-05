@@ -12,6 +12,7 @@ import { toHex } from "@cosmjs/encoding";
 import type { RoomMoneyView, MoneyYouView } from "../utils/moneyProtocol";
 import type { SessionApiAnswer, SessionApiBody, SessionApiPath, SessionPort } from "../utils/sessionBootstrap";
 import { createConsentKeys, memoryConsentKeyVault, type ConsentKeys } from "./consentKeys";
+import { createKeplrLock } from "./keplrLock";
 import type { PinnedEscrowDeployment } from "./escrowDeployment";
 import type { BroadcastOutcome, ConnectedWallet, SignedWalletTx, TxStatus, WalletPort, WalletResult } from "./keplrWallet";
 import type { MoneyServices } from "./moneySession";
@@ -222,6 +223,9 @@ export function testServices(over: { wallet?: FakeWallet; keys?: ConsentKeys; st
     pending: createPendingTxStore(() => storage, now),
     pin: () => (over.pinned === false ? { ok: false, reason: "This build has no Juno escrow configured, so real-money actions can't be signed here." } : { ok: true, pin: TEST_PIN }),
     now,
+    /* Each test world has its own Keplr lock (this page alone): an action a test leaves running never holds the next
+       test's Keplr. The cross-tab lock itself is `keplrLock.test.ts`'s. */
+    keplrLock: createKeplrLock(),
   };
 }
 

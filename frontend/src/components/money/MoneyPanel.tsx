@@ -7,13 +7,14 @@
 // At a real-money table the waiting room's Ready is replaced by this panel (a deposit on Juno IS the seat's
 // readiness). It draws the seat's state from `useMoneyTable` -- the server's view, this browser's pending transaction
 // and signing key, this page's Keplr connection and "Confirm it's you" -- and offers exactly one primary button at a
-// time, on the progression
+// time.
 //
-//   Connect -> Confirm -> Link -> Review -> Approve in Keplr -> Sent -> Funded -> Seats locked
-//
-// with the host's path (open the table's escrow with CreateGame) and a joiner's (Join with the server's admission)
-// told apart. Before any deposit it shows the terms in full (the review card); before a withdrawal or a cancel it says
-// what comes back. Every refusal is the sentence that explains it; nothing here is a generic failure.
+// PHASE 3 (P3-ACCT, owner 2026-10-05): that button is "Ante X JUNO". One press runs what the seat still needs --
+// Connecting wallet… -> Verifying wallet… -> Waiting for deposit… -> Ante confirmed -- and the progress line shows five
+// steps (Connect wallet, Verify wallet, Deposit, Ante confirmed, Seats locked). The deposit's terms are always on the
+// panel before the press (the compact line, with the full terms one click away, and the Terms page linked: AUD-20.08);
+// Keplr shows the transaction itself before anything moves. Before a withdrawal or a cancel it says what comes back.
+// Every refusal is the sentence that explains it; nothing here is a generic failure.
 
 import React, { useState } from "react";
 
@@ -22,7 +23,8 @@ import type { RoomView } from "../../utils/roomProtocol";
 import type { SessionPort } from "../../utils/sessionBootstrap";
 import { ConfirmItsYou } from "../ConfirmItsYou";
 import { explorerLink } from "../../money/escrowDeployment";
-import { amountText, FUNDING_STEPS, startBlockerSentence, type FlowAction } from "../../money/moneyFlow";
+import { amountText, FUNDING_STEPS, fundingStepIndex, startBlockerSentence, type FlowAction } from "../../money/moneyFlow";
+import { TermsLink } from "../InfoPages";
 import type { MoneyServices } from "../../money/moneySession";
 import { moneyServices } from "../../money/moneySession";
 import { formatMoneyTime } from "../../money/moneyTime";
@@ -67,7 +69,8 @@ export function StakeStrip({ money, now }: { money: RoomMoneyView; now?: number 
 }
 
 /** The deposit's terms, in full, before "Approve in Keplr" (brief §14's list). */
-function ReviewCard({ money, isHost, wallet, now }: { money: RoomMoneyView; isHost: boolean; wallet: string; now: number }): JSX.Element {
+function ReviewCard({ money, isHost, wallet, now }: { money: RoomMoneyView; isHost: boolean; wallet: string | null; now: number }): JSX.Element {
+  const from = wallet === null ? "the wallet you deposit from" : shortWallet(wallet);
   const exponent = money.deployment.exponent;
   const symbol = money.deployment.symbol;
   const fmt = (base: string | null) => formatAmount(base, exponent, symbol);
@@ -82,7 +85,7 @@ function ReviewCard({ money, isHost, wallet, now }: { money: RoomMoneyView; isHo
       <dl style={styles.terms}>
         <dt style={styles.termLabel}>You send</dt>
         <dd style={styles.termValue} data-testid="money-review-ante">
-          {fmt(money.terms.anteGross)} from {shortWallet(wallet)}
+          {fmt(money.terms.anteGross)} from {from}
         </dd>
         <dt style={styles.termLabel}>Into the pot</dt>
         <dd style={styles.termValue}>{net === null ? "shown once the escrow is read" : fmt(net)}</dd>
@@ -105,7 +108,7 @@ function ReviewCard({ money, isHost, wallet, now }: { money: RoomMoneyView; isHo
           </span>
         </dd>
         <dt style={styles.termLabel}>Winnings go to</dt>
-        <dd style={styles.termValue}>{shortWallet(wallet)} — the depositing wallet; it can't change once the game starts</dd>
+        <dd style={styles.termValue}>{from} — the depositing wallet; it can't change once the game starts</dd>
         <dt style={styles.termLabel}>Funding closes</dt>
         <dd style={styles.termValue}>{money.escrow.fundingDeadline === null ? (isHost ? "set by Juno when you open the table" : "—") : formatMoneyTime(money.escrow.fundingDeadline, { now })}</dd>
       </dl>
@@ -129,7 +132,27 @@ function exitSentence(money: RoomMoneyView, kind: AskedKind): string {
   return `Funding has closed. Refund every deposit (${back} each, minus the fee)? Keplr sends it from ${to}.`;
 }
 
+/** P3-ACCT: the deposit's terms in one line, before the Ante press (the full card is one click away). */
+function CompactTerms({ money, wallet }: { money: RoomMoneyView; wallet: string | null }): JSX.Element {
+  const exponent = money.deployment.exponent;
+  const symbol = money.deployment.symbol;
+  const fmt = (base: string | null) => formatAmount(base, exponent, symbol);
+  const feeBps = money.terms.feeBps;
+  const fee = feeBps === null ? null : feeOf(money.terms.anteGross, feeBps);
+  const net = money.terms.anteNet ?? (feeBps === null ? null : netOf(money.terms.anteGross, feeBps));
+  const pot = money.terms.pot ?? (net === null ? null : (BigInt(net) * BigInt(money.terms.seats)).toString());
+  return (
+    <p style={styles.faint} data-testid="money-compact-terms">
+      You send {fmt(money.terms.anteGross)}
+      {fee !== null ? ` · escrow fee ${fmt(fee)} (not refunded)` : ""}
+      {pot !== null ? ` · pot when full ${fmt(pot)}` : ""} · winnings go to {wallet === null ? "the wallet you deposit from" : shortWallet(wallet)} · Keplr shows the network fee. <TermsLink className="wr-touch" />
+    </p>
+  );
+}
+
 const CONFIRM_PURPOSE: Partial<Record<MoneyActionKind, string>> = {
+  ante: "To use this wallet here",
+  verify: "To use this wallet here",
   link: "To link a wallet to this table",
   relink: "To relink your deposit to your seat",
   "replace-link": "To replace this seat's wallet",
@@ -156,7 +179,7 @@ export function MoneyPanel({ room, onStart, busy = false, port, services }: Mone
   if (money === null || table.flow === null) return null;
   const flow = table.flow;
   const pinned = svc.pin();
-  const stepIndex = flow.step === null ? -1 : FUNDING_STEPS.findIndex((step) => step.key === flow.step);
+  const stepIndex = fundingStepIndex(flow.step);
   const inFlight = table.busy !== null || busy;
   const press = (action: FlowAction) => {
     if (action.kind === "withdraw" || action.kind === "cancel-escrow" || action.kind === "refund-after-deadline" || action.kind === "liveness-settle" || action.kind === "annul") {
@@ -188,6 +211,11 @@ export function MoneyPanel({ room, onStart, busy = false, port, services }: Mone
       <p style={styles.headline} data-testid="money-headline">
         {flow.headline}
       </p>
+      {(table.busy === "ante" || table.busy === "verify") && table.progress !== null ? (
+        <p style={styles.notice} role="status" aria-live="polite" data-testid="money-progress">
+          {table.progress}
+        </p>
+      ) : null}
       {flow.detail ? (
         <p style={styles.detail} data-testid="money-detail">
           {flow.detail}
@@ -230,6 +258,16 @@ export function MoneyPanel({ room, onStart, busy = false, port, services }: Mone
       ) : null}
 
       {table.reviewing && flow.step === "review" && money.you?.link ? <ReviewCard money={money} isHost={room.you.role === "host"} wallet={money.you.link.wallet} now={table.now} /> : null}
+      {/* P3-ACCT: before the Ante press, the terms are on the panel -- one line, the full card a click away. */}
+      {(flow.primary?.kind === "ante" || flow.primary?.kind === "verify") && !table.reviewing ? (
+        <>
+          <CompactTerms money={money} wallet={money.you?.link?.wallet ?? (table.wallet.kind === "connected" ? table.wallet.address : null)} />
+          <details data-testid="money-full-terms">
+            <summary style={styles.disclosure}>Full deposit terms</summary>
+            <ReviewCard money={money} isHost={room.you.role === "host"} wallet={money.you?.link?.wallet ?? (table.wallet.kind === "connected" ? table.wallet.address : null)} now={table.now} />
+          </details>
+        </>
+      ) : null}
 
       {asking !== null ? (
         <div style={styles.confirm} role="group" aria-label="Confirm" data-testid="money-exit-confirm">
@@ -269,7 +307,7 @@ export function MoneyPanel({ room, onStart, busy = false, port, services }: Mone
               data-testid={`money-action-${flow.primary.kind}`}
             >
               {flow.primary.kind === "connect" ? <KeplrMark /> : null}
-              {table.busy === flow.primary.kind ? `${flow.primary.label}…` : flow.primary.label}
+              {(table.busy === "ante" || table.busy === "verify") && table.busy === flow.primary.kind ? (table.progress ?? `${flow.primary.label}…`) : table.busy === flow.primary.kind ? `${flow.primary.label}…` : flow.primary.label}
             </button>
           ) : null}
           {table.reviewing && flow.step === "review" ? (

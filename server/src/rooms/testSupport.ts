@@ -573,6 +573,30 @@ export async function profiledBrowser(port: number, name = "Player", origin: str
   return { cookie, recoveryKey: created.body.recoveryKey as string, name: profile.name };
 }
 
+/** P3-ACCT: a browser that CREATED A USERNAME/PASSWORD ACCOUNT -- its cookie is the FRESH one the create answer set (the
+ *  bootstrap's was replaced). */
+export interface AccountBrowser {
+  readonly cookie: string;
+  readonly username: string;
+  readonly password: string;
+  readonly name: string;
+}
+
+export async function accountBrowser(port: number, username: string, password = "correct horse battery", name = username.slice(0, 24), origin: string = PROD_ORIGIN): Promise<AccountBrowser> {
+  const before = await bootstrapCookie(port, origin);
+  const created = await apiRequest(port, "/gs/api/account/create", { cookie: before, body: { username, password, name }, origin });
+  const cookie = cookieFromAnswer(created);
+  if (created.status !== 201 || cookie === null) throw new Error(`create account: expected 201 + a cookie, got ${created.status} ${created.text}`);
+  return { cookie, username, password, name: (created.body?.profile as { name: string }).name };
+}
+
+/** P3-ACCT: a fresh browser logs in; its new cookie (or the refusal). */
+export async function loginOnFreshBrowser(port: number, username: string, password: string, origin: string = PROD_ORIGIN): Promise<{ answer: ApiAnswer; before: string; cookie: string | null }> {
+  const before = await bootstrapCookie(port, origin);
+  const answer = await apiRequest(port, "/gs/api/account/login", { cookie: before, body: { username, password }, origin });
+  return { answer, before, cookie: answer.status === 200 ? cookieFromAnswer(answer) : null };
+}
+
 /** `profiledBrowser`, when only the cookie is wanted. */
 export async function profiledCookie(port: number, name = "Player", origin: string = PROD_ORIGIN): Promise<string> {
   return (await profiledBrowser(port, name, origin)).cookie;

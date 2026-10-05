@@ -13,11 +13,16 @@
 //                   (`ESCROW_MONEY_TABLES=nonmainnet`) and a verified backend are required; the rules must be
 //                   settlement-certified. The financial record is written BEFORE the GameRecord (no money table ever
 //                   exists without one).
-//   link            "Confirm it's you" (the session's own /reauth grant) + an ADR-036 signature over a server-minted,
-//                   single-use challenge naming this site, network, contract, table, seat and wallet
-//                   (`walletProof.ts`) -> a ticket issued in the game's ACTOR TASK, with the verified proof recorded on
-//                   the grant (the join admission's precondition). The refusal policy is exact (below); nothing is ever
-//                   reassigned automatically.
+//   link            an AUTHORITY + an ADR-036 signature over a server-minted, single-use challenge naming this site,
+//                   network, contract, table, seat and wallet (`walletProof.ts`) -> a ticket issued in the game's ACTOR
+//                   TASK, with the verified proof recorded on the grant (the join admission's precondition). The refusal
+//                   policy is exact (below); nothing is ever reassigned automatically.
+//                   P3-ACCT: the AUTHORITY is either the session's "Confirm it's you" grant (a recent sign-in, the
+//                   password, or a legacy recovery key) -- or, for the wallet the PROFILE already proved it controls
+//                   (its persisted, verified wallet), that wallet's own fresh signature: a returning player is never asked
+//                   for the password just to play another game with the wallet they already proved. Any OTHER wallet
+//                   still needs the grant (a stolen cookie alone can neither link a new wallet nor replace the profile's),
+//                   and a link authorized by the grant persists its wallet to the profile.
 //   admission       a joiner's Join needs the server's admission (ESCROW-JOIN): `authorizeJoin` runs in the game's actor
 //                   task, so a seat op and an admission never interleave (R-J1: the seat is locked until the admission's
 //                   expiry plus the clock margin).
@@ -109,7 +114,7 @@ const MAX_PLAYERS = 6;
 const LINK_REFUSALS: Readonly<Record<string, readonly [number, string]>> = {
   "reauth-required": [403, "Confirm it's you first."],
   "not-seated": [403, "You don't have a seat at that table."],
-  "security-context-ended": [403, "This device was signed out (or your recovery key changed). Sign in again, confirm it's you, and link again."],
+  "security-context-ended": [403, "This device was signed out (or your sign-in changed). Sign in again and ante again."],
   frozen: [409, "The seats are locked with the escrow; the payout wallet can't change now."],
   conflict: [409, "The link changed meanwhile. Try again."],
   "admission-outstanding": [409, "This seat's join approval hasn't expired yet."],
@@ -127,8 +132,12 @@ export interface MoneyCaller {
   readonly familyId: string;
   readonly recoverySelector: string;
   readonly principalId: string;
-  /** This session holds a live "Confirm it's you" grant (`/gs/api/profile/reauth`, 3A) -- and nothing else counts. */
+  /** This session holds a live "Confirm it's you" grant (`/gs/api/profile/reauth`, 3A; P3-ACCT: or a sign-in in the
+   *  last few minutes, which makes one). */
   readonly sensitive: boolean;
+  /** P3-ACCT: the wallet this caller's PROFILE proved it controls (persisted, verified), or null. A fresh proof by this
+   *  wallet authorizes its own link without the grant. */
+  readonly profileWallet: string | null;
   /** The request's allow-listed Origin: the challenge's `Site:`. */
   readonly origin: string;
 }
@@ -172,7 +181,22 @@ export interface MoneyTablesDeps {
   readonly challenges?: ChallengeBook;
   /** Tests: the observer's ticks are driven by hand. */
   readonly manualObserver?: boolean;
+  /** P3-ACCT: persist a wallet whose proof a GRANT-authorized link just verified to the caller's profile (identity's
+   *  `associateWallet`). Absent: nothing is persisted (every link then needs the grant, as before). */
+  readonly associateWallet?: (
+    context: { readonly principalId: string; readonly familyId: string; readonly recoverySelector: string; readonly seen: string | null },
+    wallet: string,
+    verifiedAt: number,
+  ) => Promise<"associated" | "unchanged" | "no-profile" | "stale" | "unavailable">;
 }
+
+/** P3-ACCT: what authorizes a wallet link for `wallet` -- the session's grant, or the profile's own proven wallet. */
+function linkAuthority(caller: MoneyCaller, wallet: string): "grant" | "profile-wallet" | null {
+  if (caller.sensitive) return "grant";
+  if (caller.profileWallet !== null && caller.profileWallet === wallet) return "profile-wallet";
+  return null;
+}
+const CONFIRM_FIRST = "Confirm it's you (your password, or a profile's recovery key) to use a wallet that isn't this account's verified wallet; then the wallet signs.";
 
 type Snapshot = Awaited<ReturnType<WalletTicketLedger["snapshot"]>>;
 type Grant = Snapshot["grants"][number];
@@ -1208,11 +1232,12 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
   async function walletChallenge(caller: MoneyCaller, body: Record<string, unknown>): Promise<MoneyAnswer> {
     const down = serviceReady();
     if (down !== null) return down;
-    if (!caller.sensitive) return refusal(403, "reauth-required", "Confirm it's you first (your recovery key), then link the wallet.");
     const table = tableFor(caller, body.gameId);
     if (!isTable(table)) return table;
     const wallet = canonicalJunoWallet(body.wallet);
     if (wallet === null) return refusal(400, "bad-wallet", "That isn't a Juno wallet address.");
+    /* P3-ACCT: the grant, or the profile's own proven wallet (its fresh signature, next, is the proof). */
+    if (linkAuthority(caller, wallet) === null) return refusal(403, "reauth-required", CONFIRM_FIRST);
     if (table.record.status !== "waiting" || dealtRecord(table.record)) return refusal(409, "wrong-state", "A wallet is linked before the game starts.");
     /* W2-M (AUD-20.14): before the wallet signs, say which wallet this seat's standing link would replace (the
        standing-link half of the link's `replace-required` test; the link's earlier refusals and its relink of an own
@@ -1315,7 +1340,7 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
   async function walletLink(caller: MoneyCaller, body: Record<string, unknown>): Promise<MoneyAnswer> {
     const down = serviceReady();
     if (down !== null) return down;
-    if (!caller.sensitive) return refusal(403, "reauth-required", "Confirm it's you first (your recovery key), then link the wallet.");
+    if (!caller.sensitive && caller.profileWallet === null) return refusal(403, "reauth-required", CONFIRM_FIRST);
     const table = tableFor(caller, body.gameId);
     if (!isTable(table)) return table;
     const elsewhere = await notServedHere(table.record);
@@ -1327,6 +1352,10 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
     if (taken.kind === "spent") return taken.signature === signature ? (taken.result as MoneyAnswer) : refusal(409, "challenge-used", "That link request was already used. Start the link again.");
     const entry = taken.entry;
     const nonce = entry.nonce;
+    /* P3-ACCT: decided again at LINK time, for the wallet the challenge names (a grant that lapsed meanwhile, or a profile
+       wallet that changed, refuses). Not spent: the same signature may be sent again once authorized. */
+    const authority = linkAuthority(caller, entry.wallet);
+    if (authority === null) return refusal(403, "reauth-required", CONFIRM_FIRST);
     /* The nonce is spent with its answer -- unless the answer is "try again" (the chain or the table busy for a moment):
        then the same signed challenge may be sent again, and a lost answer is not replayed as that failure (S-L4). */
     const finish = (result: MoneyAnswer): MoneyAnswer => {
@@ -1374,7 +1403,7 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
           playerId: seat.player_id,
           wallet: entry.wallet,
           context: { principalId: caller.principalId, familyId: caller.familyId, recoverySelector: caller.recoverySelector },
-          reauthorized: caller.sensitive,
+          reauthorized: authority !== null,
           proof,
           consentKey,
           relinkFrom: grant.epoch,
@@ -1393,7 +1422,10 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
         playerId: seat.player_id,
         wallet: entry.wallet,
         context: { principalId: caller.principalId, familyId: caller.familyId, recoverySelector: caller.recoverySelector },
-        reauthorized: caller.sensitive,
+        /* P3-ACCT: always true here -- a link reaches this point only with an authority (a sensitive grant, or the
+           profile's own proven wallet), checked at the challenge and again above. The ledger keeps its own check as a
+           backstop against a caller that skipped it. */
+        reauthorized: authority !== null,
         proof,
         consentKey,
         relinkFrom: decision.relinkFrom,
@@ -1403,11 +1435,23 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
         const [status, reason] = LINK_REFUSALS[issued.refusal] ?? [409, "The wallet wasn't linked."];
         return refusal(status, issued.refusal, reason);
       }
-      audit("money.wallet-linked", { game_id: record.game_id, epoch: issued.epoch, relink: decision.relinkFrom !== null });
+      audit("money.wallet-linked", { game_id: record.game_id, epoch: issued.epoch, relink: decision.relinkFrom !== null, authority });
       return answer({ mode: decision.relinkFrom === null ? "issued" : "relinked", wallet: entry.wallet, epoch: issued.epoch, ticket: issued.ticket });
     });
     soon(table.record.game_id);
-    return finish(ran.ok ? ran.value : refusal(ran.code === "not-found" ? 404 : 503, ran.code, ran.reason));
+    /* The challenge is spent FIRST (money review NIT): its single use never waits on the identity write below. */
+    const linked = finish(ran.ok ? ran.value : refusal(ran.code === "not-found" ? 404 : 503, ran.code, ran.reason));
+    /* P3-ACCT: a GRANT-authorized link of a wallet the profile has not proved persists it to the profile (the proof's own
+       verification time); the profile's wallet authorizes its later links. A failure to persist changes nothing about
+       the link (the next one simply asks for the grant again). Audited without ids. */
+    if (linked.ok && authority === "grant" && entry.wallet !== caller.profileWallet && deps.associateWallet !== undefined) {
+      /* Re-review N-3: bound to the context that authorized THIS link (decided inside the identity queue). */
+      const persisted = await deps
+        .associateWallet({ principalId: caller.principalId, familyId: caller.familyId, recoverySelector: caller.recoverySelector, seen: caller.profileWallet }, entry.wallet, proof.verified_at)
+        .catch(() => "unavailable" as const);
+      if (persisted === "associated") audit("money.profile-wallet", { game_id: table.record.game_id, replaced: caller.profileWallet !== null });
+    }
+    return linked;
   }
 
   async function joinAdmission(caller: MoneyCaller, body: Record<string, unknown>): Promise<MoneyAnswer> {
@@ -1489,7 +1533,10 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
   }
 
   async function consentKey(caller: MoneyCaller, body: Record<string, unknown>): Promise<MoneyAnswer> {
-    if (!caller.sensitive) return refusal(403, "reauth-required", "Confirm it's you first (your recovery key) to set up signing on this device.");
+    /* Unchanged by P3-ACCT: registering or moving a signing key outside a wallet link stays SENSITIVE. (The Ante registers
+       this browser's key through a wallet link -- a fresh proof by the wallet itself -- whenever this browser holds none,
+       so it never needs this route: `frontend/src/money/moneyActions.ts` anteNow.) */
+    if (!caller.sensitive) return refusal(403, "reauth-required", "Confirm it's you (your password, or a profile's recovery key) to set up signing on this device.");
     const table = tableFor(caller, body.gameId);
     if (!isTable(table)) return table;
     const pubkey = typeof body.pubkey === "string" ? body.pubkey : "";
@@ -1708,6 +1755,8 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
 
   return {
     creationStatus,
+    /** P3-ACCT (trust indicators): a table's financial record, read-only (its phase and the chain's outcome route). */
+    financialRecord: (gameId: string): Promise<FinancialGameRecord | null> => deps.financial.load(gameId),
     /** A create's money terms, checked against this deployment (never a caller's claim about the deployment). */
     async prepareCreate(input: { readonly stake: unknown; readonly exactPlayers: unknown; readonly variants: GameVariants }): Promise<{ readonly ok: true; readonly terms: GameMoneyTerms } | { readonly ok: false; readonly code: string; readonly reason: string }> {
       const status = creationStatus();

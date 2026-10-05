@@ -8,7 +8,9 @@
 // scripted server and a fake Juno -- the same seams the ESCROW-4 suites use. What a player sees and what Keplr is
 // asked to sign, row by row:
 //
-//   AUD-20.02  an aged (or server-refused) proof: "Re-prove …", the free re-proof of the same wallet, then the deposit;
+//   AUD-20.02  an aged (or server-refused) proof: "Re-prove …", the free re-proof of the same wallet, then the deposit
+//              (P3-ACCT: the one "Ante" button runs it -- first when the server's word says so, after the server's
+//              refusal when it is only this page's inference -- and "Re-prove wallet (free)" stays beside it);
 //   AUD-20.03  "Change wallet": the question first (both wallets named, nothing signed), then ONE Keplr signature;
 //   AUD-20.07  "Dispute": the resolver's deadline as a time; the band's dispute record and how it ended, from Juno;
 //   AUD-20.06  Juno re-read at "Continue in Keplr": a payout or bond that moved since the confirm signs nothing;
@@ -136,28 +138,33 @@ describe("W2-M AUD-20.02, rendered: an aged proof reads re-prove, and re-proving
     expect(byTestId("money-headline")?.textContent).toBe(`Re-prove ${shortWallet(TEST_WALLET)} to deposit`);
     expect(container.textContent).not.toMatch(/Wallet linked/);
     expect(byTestId("money-action-reprove")?.textContent).toBe("Re-prove wallet (free)");
-    /* The deposit stays beside it (a re-proof elsewhere keeps the link's time; the server decides). */
-    expect(byTestId("money-action-open-review")?.textContent).toBe("Deposit 1 JUNOX");
+    /* P3-ACCT: the Ante stays the primary (a re-proof elsewhere keeps the link's time; the server decides). */
+    expect(byTestId("money-action-ante")?.textContent).toBe("Ante 1 JUNOX");
     await click(byTestId("money-action-reprove"));
     expect(signLinks(services.wallet.calls)).toEqual([`signLink:${TEST_WALLET}:18COSMOS/WALLET-LINK/v1`]);
     expect(port.requests.find((request) => request.path === "money/wallet-link")?.body.replace).toBeUndefined();
     expect(byTestId("money-notice")?.textContent).toBe("Wallet proof renewed: you can deposit now. Nothing was charged.");
     /* The view's linkedAt didn't move (a same-wallet re-proof keeps it); the page's own record of the accepted proof does. */
-    expect(byTestId("money-headline")?.textContent).toBe(`Wallet linked · ${shortWallet(TEST_WALLET)}`);
-    expect(byTestId("money-action-open-review")?.textContent).toBe("Deposit 1 JUNOX");
+    expect(byTestId("money-headline")?.textContent).toBe(`Wallet verified · ${shortWallet(TEST_WALLET)}`);
+    expect(byTestId("money-action-ante")?.textContent).toBe("Ante 1 JUNOX");
   });
 
-  it("the server refuses the approval for want of a proof: the panel turns to re-prove -- and a room update doesn't undo it", async () => {
+  it("the server refuses the approval for want of a proof: Ante re-proves the SAME wallet once (no replace) and asks again -- refused again, the panel turns to re-prove, no transaction signed, and a room update doesn't undo it", async () => {
     const { services, port } = connectedWorld();
     const key = await services.keys.create({ chainId: "uni-7", contract: TEST_CONTRACT, gameId: "g_table", playerId: "p-me", wallet: TEST_WALLET });
     if (!key.ok) throw new Error(key.reason);
     const money = joinerMoney(T0, [key.pubkey]);
     port.answer("money/join-admission", 409, { error: "link-first", reason: "Link your wallet to this seat again (the proof is missing or too old)." });
+    port.answer("money/wallet-challenge", 200, challengeAnswer(TEST_WALLET));
+    port.answer("money/wallet-link", 200, { ok: true, mode: "unchanged", wallet: TEST_WALLET, epoch: 1, ticket: TICKET });
+    port.answer("money/join-admission", 409, { error: "link-first", reason: "Link your wallet to this seat again (the proof is missing or too old)." });
     await render(<MoneyPanel room={room(money)} onStart={() => undefined} services={services} port={port} />);
-    expect(byTestId("money-headline")?.textContent).toMatch(/^Wallet linked/);
-    await click(byTestId("money-action-open-review"));
-    await click(byTestId("money-action-approve"));
+    expect(byTestId("money-headline")?.textContent).toMatch(/^Wallet verified/);
+    await click(byTestId("money-action-ante"));
     expect(services.wallet.calls.some((call) => call.startsWith("signTx"))).toBe(false);
+    expect(signLinks(services.wallet.calls)).toEqual([`signLink:${TEST_WALLET}:18COSMOS/WALLET-LINK/v1`]);
+    expect(port.requests.filter((request) => request.path === "money/wallet-link").map((request) => request.body.replace)).toEqual([undefined]);
+    expect(port.requests.map((request) => request.path)).toEqual(["money/join-admission", "money/wallet-challenge", "money/wallet-link", "money/join-admission"]);
     expect(byTestId("money-error")?.textContent).toBe("Link your wallet to this seat again (the proof is missing or too old).");
     expect(byTestId("money-headline")?.textContent).toBe(`Re-prove ${shortWallet(TEST_WALLET)} to deposit`);
     expect(byTestId("money-detail")?.textContent).toMatch(/^The server needs a fresh proof/);
@@ -170,17 +177,50 @@ describe("W2-M AUD-20.02, rendered: an aged proof reads re-prove, and re-proving
     port.answer("money/wallet-link", 200, { ok: true, mode: "unchanged", wallet: TEST_WALLET, epoch: 1, ticket: TICKET });
     await click(byTestId("money-action-reprove"));
     expect(byTestId("money-headline")?.textContent).not.toMatch(/^Re-prove/);
-    expect(byTestId("money-action-approve")).toBeTruthy();
+    expect(byTestId("money-action-ante")).toBeTruthy();
   });
 
-  it("aged: the Deposit beside Re-prove opens the review and reaches Approve in Keplr (the server then decides)", async () => {
+  it("aged: Ante goes to the deposit without a re-proof signature first (only this page's inference; the server then decides)", async () => {
     const { services, port } = connectedWorld();
-    await render(<MoneyPanel room={room(joinerMoney(T0 - 25 * HOUR))} onStart={() => undefined} services={services} port={port} />);
+    const key = await services.keys.create({ chainId: "uni-7", contract: TEST_CONTRACT, gameId: "g_table", playerId: "p-me", wallet: TEST_WALLET });
+    if (!key.ok) throw new Error(key.reason);
+    await render(<MoneyPanel room={room(joinerMoney(T0 - 25 * HOUR, [key.pubkey]))} onStart={() => undefined} services={services} port={port} />);
     expect(byTestId("money-headline")?.textContent).toMatch(/^Re-prove/);
-    await click(byTestId("money-action-open-review"));
-    expect(byTestId("money-review")).toBeTruthy();
-    expect(byTestId("money-action-approve")?.textContent).toBe("Approve in Keplr");
+    await click(byTestId("money-action-ante"));
+    /* It reached the deposit step: the server's approval was asked (nothing scripted: the server didn't answer) -- and
+       no message signature was asked for first. */
+    expect(port.requests.map((request) => request.path)).toContain("money/join-admission");
     expect(signLinks(services.wallet.calls)).toEqual([]);
+    expect(services.wallet.calls.some((call) => call.startsWith("signTx"))).toBe(false);
+  });
+
+  it("P3-ACCT (money review L2): a seat linked on ANOTHER device (no registered key here): Ante re-proves the SAME wallet -- one free signature that registers this browser's key with the link -- never the password route", async () => {
+    const { services, port } = connectedWorld();
+    act(() => updateMoneySession({ wallet: "connected", address: TEST_WALLET, confirmedUntil: null }));
+    port.answer("money/wallet-challenge", 200, challengeAnswer(TEST_WALLET));
+    port.answer("money/wallet-link", 200, { ok: true, mode: "unchanged", wallet: TEST_WALLET, epoch: 1, ticket: TICKET });
+    const elsewhere = `02${"77".repeat(32)}`;
+    await render(<MoneyPanel room={room(joinerMoney(T0, [elsewhere]))} onStart={() => undefined} services={services} port={port} />);
+    expect(byTestId("money-headline")?.textContent).toMatch(/^Wallet verified/);
+    await click(byTestId("money-action-ante"));
+    expect(signLinks(services.wallet.calls)).toEqual([`signLink:${TEST_WALLET}:18COSMOS/WALLET-LINK/v1`]);
+    expect(port.requests.map((request) => request.path)).toEqual(["money/wallet-challenge", "money/wallet-link"]);
+    expect(port.requests[1].body.replace).toBeUndefined();
+    const registered = String(port.requests[1].body.consentKey);
+    expect(typeof registered).toBe("string");
+    /* The Ante waits for the server's next view to show THIS browser's key on the link; nothing more is asked until then. */
+    await settle();
+    expect(port.requests).toHaveLength(2);
+    await render(<MoneyPanel room={room(joinerMoney(T0, [elsewhere, registered]))} onStart={() => undefined} services={services} port={port} />);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 400));
+    });
+    await settle();
+    const paths = port.requests.map((request) => request.path);
+    expect(paths).toContain("money/join-admission");
+    expect(paths).not.toContain("money/consent-key");
+    expect(byTestId("money-reauth")).toBeNull();
+    expect(services.wallet.calls.some((call) => call.startsWith("signTx"))).toBe(false);
   });
 
   it("a device without Keplr: the re-prove state says why it can't be done here, and nothing is pressed", async () => {
@@ -242,7 +282,7 @@ describe("W2-M AUD-20.03, rendered: Change wallet asks first, then one signature
     port.answer("money/wallet-challenge", 200, challengeAnswer(TEST_WALLET));
     port.answer("money/wallet-link", 409, { error: "replace-required", reason: `This seat is linked to ${OTHER_WALLET}. Replace it with this wallet?` });
     await render(<MoneyPanel room={room(moneyView())} onStart={() => undefined} services={services} port={port} />);
-    await click(byTestId("money-action-link"));
+    await click(byTestId("money-action-verify"));
     /* The server's sentence names the wallet that really stands (the view didn't know it). */
     expect(byTestId("money-replace-question")?.textContent).toBe(`This seat is linked to ${OTHER_WALLET}. Replace it with this wallet? The old link stops working; nothing is charged. Keplr asks you to sign the link message once more.`);
     expect(byTestId("money-error")).toBeNull();
@@ -411,21 +451,26 @@ const provenMoney = (linkedAt: number, proofVerifiedAt?: unknown) =>
   });
 
 describe("W2-M AUD-20.13, rendered: the server's proof time decides freshness after a reload", () => {
-  it("an old link re-proven an hour ago: a fresh page (no record of its own) reads Wallet linked and Deposit -- no Re-prove", async () => {
+  it("an old link re-proven an hour ago: a fresh page (no record of its own) reads Wallet verified and Ante -- no Re-prove", async () => {
     const { services, port } = connectedWorld();
     await render(<MoneyPanel room={room(provenMoney(T0 - 48 * HOUR, T0 - HOUR))} onStart={() => undefined} services={services} port={port} />);
-    expect(byTestId("money-headline")?.textContent).toBe(`Wallet linked · ${shortWallet(TEST_WALLET)}`);
-    expect(byTestId("money-action-open-review")?.textContent).toBe("Deposit 1 JUNOX");
+    expect(byTestId("money-headline")?.textContent).toBe(`Wallet verified · ${shortWallet(TEST_WALLET)}`);
+    expect(byTestId("money-action-ante")?.textContent).toBe("Ante 1 JUNOX");
     expect(byTestId("money-action-reprove")).toBeNull();
   });
 
-  it("a proof the server shows as over a day old: Re-prove, the server's word -- no Deposit beside it", async () => {
+  it("a proof the server shows as over a day old: Re-prove, the server's word -- Ante re-proves FIRST (one signature), no bare Deposit beside it", async () => {
     const { services, port } = connectedWorld();
     await render(<MoneyPanel room={room(provenMoney(T0 - 48 * HOUR, T0 - 25 * HOUR))} onStart={() => undefined} services={services} port={port} />);
     expect(byTestId("money-headline")?.textContent).toBe(`Re-prove ${shortWallet(TEST_WALLET)} to deposit`);
     expect(byTestId("money-detail")?.textContent).toMatch(/^The server needs a fresh proof/);
     expect(byTestId("money-action-reprove")).toBeTruthy();
     expect(byTestId("money-action-open-review")).toBeNull();
+    port.answer("money/wallet-challenge", 200, { ...challengeAnswer(TEST_WALLET), replaces: null });
+    port.answer("money/wallet-link", 200, { ok: true, mode: "unchanged", wallet: TEST_WALLET, epoch: 1, ticket: TICKET });
+    await click(byTestId("money-action-ante"));
+    expect(signLinks(services.wallet.calls)).toEqual([`signLink:${TEST_WALLET}:18COSMOS/WALLET-LINK/v1`]);
+    expect(port.requests.slice(0, 2).map((request) => request.path)).toEqual(["money/wallet-challenge", "money/wallet-link"]);
   });
 
   it("the server's time beats the link's own: a link made an hour ago whose proof the server shows as stale still asks", async () => {
@@ -441,23 +486,24 @@ describe("W2-M AUD-20.13, rendered: the server's proof time decides freshness af
     await render(<MoneyPanel room={room(provenMoney(T0 - 48 * HOUR, T0 - 25 * HOUR))} onStart={() => undefined} services={services} port={port} />);
     await click(byTestId("money-action-reprove"));
     expect(signLinks(services.wallet.calls)).toHaveLength(1);
-    expect(byTestId("money-headline")?.textContent).toBe(`Wallet linked · ${shortWallet(TEST_WALLET)}`);
+    expect(byTestId("money-headline")?.textContent).toBe(`Wallet verified · ${shortWallet(TEST_WALLET)}`);
     await render(<MoneyPanel room={room(provenMoney(T0 - 48 * HOUR, T0))} onStart={() => undefined} services={services} port={port} />);
-    expect(byTestId("money-headline")?.textContent).toBe(`Wallet linked · ${shortWallet(TEST_WALLET)}`);
+    expect(byTestId("money-headline")?.textContent).toBe(`Wallet verified · ${shortWallet(TEST_WALLET)}`);
   });
 
-  it("near the limit by the server's time (inside the margin): an inference, so Deposit stays beside Re-prove", async () => {
+  it("near the limit by the server's time (inside the margin): an inference, so the Ante (straight to the deposit) stays beside Re-prove", async () => {
     const { services, port } = connectedWorld();
     await render(<MoneyPanel room={room(provenMoney(T0 - 48 * HOUR, T0 - (24 * HOUR - 2 * 60_000)))} onStart={() => undefined} services={services} port={port} />);
     expect(byTestId("money-headline")?.textContent).toMatch(/^Re-prove/);
-    expect(byTestId("money-action-open-review")?.textContent).toBe("Deposit 1 JUNOX");
+    expect(byTestId("money-action-ante")?.textContent).toBe("Ante 1 JUNOX");
+    expect(byTestId("money-action-reprove")).toBeTruthy();
   });
 
   it("the host's CreateGame needs no approval: a server-stale proof never hides the host's deposit", async () => {
     const { services, port } = connectedWorld();
     const hostMoney = moneyView({ you: linked([], { actions: ["open-escrow", "link-wallet"], link: { wallet: TEST_WALLET, epoch: 1, ticket: TICKET, linkedAt: T0 - 48 * HOUR, consentKeys: [], proofVerifiedAt: T0 - 48 * HOUR } }) });
     await render(<MoneyPanel room={room(hostMoney, { hostId: "p-me", you: { role: "host", playerId: "p-me", kicked: false, canStart: false } })} onStart={() => undefined} services={services} port={port} />);
-    expect(byTestId("money-action-open-review")?.textContent).toBe("Open the table on Juno — deposit 1 JUNOX");
+    expect(byTestId("money-action-ante")?.textContent).toBe("Ante 1 JUNOX");
     expect(byTestId("money-action-reprove")).toBeNull();
   });
 
@@ -465,11 +511,12 @@ describe("W2-M AUD-20.13, rendered: the server's proof time decides freshness af
     ["absent (an older server)", undefined],
     ["not a number", "yesterday"],
     ["not finite", Number.NaN],
-  ] as const)("the field %s: the page falls back to the link's own time -- Re-prove with Deposit beside it, never a false 'fresh'", async (_case, value) => {
+  ] as const)("the field %s: the page falls back to the link's own time -- Re-prove with the Ante beside it, never a false 'fresh'", async (_case, value) => {
     const { services, port } = connectedWorld();
     await render(<MoneyPanel room={room(provenMoney(T0 - 25 * HOUR, value))} onStart={() => undefined} services={services} port={port} />);
     expect(byTestId("money-headline")?.textContent).toMatch(/^Re-prove/);
-    expect(byTestId("money-action-open-review")?.textContent).toBe("Deposit 1 JUNOX");
+    expect(byTestId("money-action-ante")?.textContent).toBe("Ante 1 JUNOX");
+    expect(byTestId("money-action-reprove")).toBeTruthy();
   });
 });
 
@@ -478,7 +525,7 @@ describe("W2-M AUD-20.14, rendered: the wallet a link would replace is named bef
     const { services, port } = connectedWorld(TEST_WALLET);
     port.answer("money/wallet-challenge", 200, { ...challengeAnswer(TEST_WALLET), replaces: OTHER_WALLET });
     await render(<MoneyPanel room={room(moneyView())} onStart={() => undefined} services={services} port={port} />);
-    await click(byTestId("money-action-link"));
+    await click(byTestId("money-action-verify"));
     expect(byTestId("money-replace-question")?.textContent).toBe(
       `This seat is linked to ${shortWallet(OTHER_WALLET)}. Replace it with ${shortWallet(TEST_WALLET)}? The old link stops working; nothing is charged. Keplr then asks you to sign one link message.`,
     );
@@ -496,7 +543,7 @@ describe("W2-M AUD-20.14, rendered: the wallet a link would replace is named bef
     port.answer("money/wallet-challenge", 200, { ...challengeAnswer(TEST_WALLET), replaces: OTHER_WALLET });
     port.answer("money/wallet-link", 200, { ok: true, mode: "issued", wallet: TEST_WALLET, epoch: 2, ticket: "cd".repeat(32) });
     await render(<MoneyPanel room={room(moneyView())} onStart={() => undefined} services={services} port={port} />);
-    await click(byTestId("money-action-link"));
+    await click(byTestId("money-action-verify"));
     await click(byTestId("money-replace-confirm"));
     expect(signLinks(services.wallet.calls)).toEqual([`signLink:${TEST_WALLET}:18COSMOS/WALLET-LINK/v1`]);
     expect(port.requests.map((request) => request.path)).toEqual(["money/wallet-challenge", "money/wallet-challenge", "money/wallet-link"]);
@@ -509,7 +556,7 @@ describe("W2-M AUD-20.14, rendered: the wallet a link would replace is named bef
     port.answer("money/wallet-challenge", 200, { ...challengeAnswer(TEST_WALLET), replaces: null });
     port.answer("money/wallet-link", 409, { error: "replace-required", reason: `This seat is linked to ${OTHER_WALLET}. Replace it with this wallet?` });
     await render(<MoneyPanel room={room(moneyView())} onStart={() => undefined} services={services} port={port} />);
-    await click(byTestId("money-action-link"));
+    await click(byTestId("money-action-verify"));
     expect(signLinks(services.wallet.calls)).toHaveLength(1);
     expect(byTestId("money-replace-question")?.textContent).toMatch(/^This seat is linked to juno1q+nrql8a\. Replace it with this wallet\? .*once more\.$/);
   });
@@ -521,7 +568,7 @@ describe("W2-M AUD-20.14, rendered: the wallet a link would replace is named bef
     port.answer("money/wallet-link", 409, { error: "replace-required", reason: `This seat is linked to ${OTHER_WALLET}. Replace it with this wallet?` });
     port.answer("money/wallet-challenge", 200, { ...challengeAnswer(TEST_WALLET), replaces: third });
     await render(<MoneyPanel room={room(moneyView())} onStart={() => undefined} services={services} port={port} />);
-    await click(byTestId("money-action-link"));
+    await click(byTestId("money-action-verify"));
     await click(byTestId("money-replace-confirm"));
     expect(signLinks(services.wallet.calls)).toHaveLength(1);
     expect(byTestId("money-replace-question")?.textContent).toMatch(new RegExp(`^This seat is linked to ${shortWallet(third)}\\. Replace it with ${shortWallet(TEST_WALLET)}\\?.*sign one link message\\.$`));
@@ -537,7 +584,7 @@ describe("W2-M AUD-20.14, rendered: the wallet a link would replace is named bef
     port.answer("money/wallet-challenge", 200, { ...challengeAnswer(TEST_WALLET), replaces: OTHER_WALLET });
     port.answer("money/wallet-challenge", 200, { ...challengeAnswer(TEST_WALLET), replaces: null });
     await render(<MoneyPanel room={room(moneyView())} onStart={() => undefined} services={services} port={port} />);
-    await click(byTestId("money-action-link"));
+    await click(byTestId("money-action-verify"));
     await click(byTestId("money-replace-confirm"));
     expect(byTestId("money-error")?.textContent).toMatch(/linked wallet changed since you were asked, so nothing was signed/);
     expect(signLinks(services.wallet.calls)).toEqual([]);
@@ -556,7 +603,7 @@ describe("W2-M AUD-20.14, rendered: the wallet a link would replace is named bef
     const { services, port } = connectedWorld(TEST_WALLET);
     port.answer("money/wallet-challenge", 200, { ...challengeAnswer(TEST_WALLET), replaces: 42 });
     await render(<MoneyPanel room={room(moneyView())} onStart={() => undefined} services={services} port={port} />);
-    await click(byTestId("money-action-link"));
+    await click(byTestId("money-action-verify"));
     expect(byTestId("money-error")).toBeTruthy();
     expect(signLinks(services.wallet.calls)).toEqual([]);
   });

@@ -823,6 +823,8 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
   let identity: IdentityService;
   try {
     identity = await IdentityService.open(identityStore, {
+      /* P3-ACCT (review L2): no new recovery-key profiles (accounts have a username and password). */
+      policy: { legacyProfileCreation: false },
       security: {
         journal: substrate.securityJournal({ onFenced: (detail) => w.markLost(`the security-event journal was refused: the adopted generation moved (${detail})`) }),
         grants: identityStore.grants,
@@ -1157,6 +1159,8 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
         now: input.now,
         warn: input.warn,
         ops: input.ops,
+        /* P3-ACCT: a grant-authorized link's wallet is persisted to the profile. */
+        associateWallet: (context, wallet, verifiedAt) => identity.associateWallet(context, wallet, verifiedAt),
       },
       server.rooms.moneyPort,
     );

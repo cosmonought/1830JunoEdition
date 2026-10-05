@@ -701,7 +701,8 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
      4401, the server saying the session ended under an open socket -- and the next attempt bootstraps again first
      (a cookie rotated by another tab, or lost with a response, is recovered to the same principal), then the existing
      backoff resumes. A session the server says has ended stops the link: `SessionEndedNotice` asks the player.
-     LIVE-2E: only a PROFILED session is "ready"; "unprofiled" backs off like "unknown" and never opens a socket. */
+     P3-ACCT (public first): a signed-out visitor's ("unprofiled") session opens its socket too -- the server answers it
+     a public table's log (Watch, read-only) and refuses every submission `profile-required`. */
   const session = options.session ?? appSessionPort();
   let failedOpens = 0;
   let rebootstrap = false;
@@ -709,7 +710,7 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
   /** #1253: open a socket and wire it. Called once at construction and once per reconnection. */
   const connect = () => {
     if (closedByUs) return;
-    if (session.state === "ready" && !(rebootstrap && session.refreshable)) {
+    if ((session.state === "ready" || session.state === "unprofiled") && !(rebootstrap && session.refreshable)) {
       rebootstrap = false;
       openSocket();
       return;
@@ -718,7 +719,7 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
     rebootstrap = false;
     void session.ensure(force).then((state) => {
       if (closedByUs) return;
-      if (state === "ready") {
+      if (state === "ready" || state === "unprofiled") {
         openSocket();
         return;
       }

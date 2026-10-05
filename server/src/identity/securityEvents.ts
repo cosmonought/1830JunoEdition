@@ -42,8 +42,17 @@
 //     change committed and just its confirmation was lost, and `from_selector` otherwise. OWNER DECISION (2026-09-29):
 //     retire `from_selector` (its player asked for it to die: it must not come back), do NOT install `to_selector`, and
 //     send the profile to an operator's review.
+//   - `credentials-established` (P3-ACCT): a legacy profile's username and password. The profile's CONFIRMED one when
+//     there is one; otherwise its last one, confirmed or not (as `profile-created`: a credential whose confirmation
+//     alone was lost is its player's way back in, and a phantom's is a password its own player chose under "Confirm it's
+//     you"). A username the replay finds held by another profile -- in the restored table, or by a confirmed event --
+//     was never committed here (a username is unique, checked inside every write): such a phantom is not installed. A
+//     new account's credential travels inside its schema-2 `profile-created` and follows that rule, with the same
+//     username check.
+//   - the persisted WALLET (P3-ACCT) is NOT journaled: the restore CLEARS every profile's wallet (fail safe -- a wallet
+//     is re-proven, under a fresh sign-in, on its next money action; nothing the player removed can come back).
 //
-// WHAT IS RECORDED (and what is not): the five kinds of change below, each carrying exactly what a replay needs to
+// WHAT IS RECORDED (and what is not): the six kinds of change below, each carrying exactly what a replay needs to
 // re-apply it idempotently and in any order -- a rotation names the selector it replaced and the one it installed (a
 // chain, not a clock), a revocation names its families -- and their confirmations. Plain session rotations and
 // single-session evictions are NOT recorded: the restore procedure signs every session out (preflight §17.3 step 3). No
@@ -53,8 +62,9 @@
 // PRIVATE: the ids here (`pr_`, `pf_`, `sf_`, `rk_`) never go on the wire, in a RoomView, a log, a hold or a chain.
 
 import { StoreDefiniteError, StoreUncertainError } from "../persistence/storeResult";
+import { isLoginKey, isLoginName, isPasswordHash, loginKeyOf } from "./accountCredentials";
 import { FAMILY_ID_PATTERN, PRINCIPAL_ID_PATTERN, PROFILE_ID_PATTERN, RECOVERY_SELECTOR_PATTERN } from "./ids";
-import { isPrincipal, isProfile, REVOKE_REASONS, type Principal, type Profile, type RevokeReason } from "./store";
+import { isPrincipal, isProfile, PROFILE_V2_FIELDS, REVOKE_REASONS, type Principal, type Profile, type RevokeReason } from "./store";
 
 export const SECURITY_EVENT_FORMAT = "gs-security-event";
 export const SECURITY_EVENT_VERSION = 1;
@@ -74,9 +84,10 @@ interface SecurityEventCommon {
   readonly principal_id: string;
 }
 
-/** The kinds of security CHANGE an event records (every kind but `confirmed`). */
-export type SecurityChangeKind = "profile-created" | "recovery-key-rotated" | "family-revoked" | "signed-out-others" | "principal-disabled";
-export const SECURITY_CHANGE_KINDS: readonly SecurityChangeKind[] = Object.freeze(["profile-created", "recovery-key-rotated", "family-revoked", "signed-out-others", "principal-disabled"]);
+/** The kinds of security CHANGE an event records (every kind but `confirmed`). P3-ACCT adds `credentials-established`:
+ *  a LEGACY profile set its username and password (a new account's are inside its `profile-created`, schema 2). */
+export type SecurityChangeKind = "profile-created" | "recovery-key-rotated" | "family-revoked" | "signed-out-others" | "principal-disabled" | "credentials-established";
+export const SECURITY_CHANGE_KINDS: readonly SecurityChangeKind[] = Object.freeze(["profile-created", "recovery-key-rotated", "family-revoked", "signed-out-others", "principal-disabled", "credentials-established"]);
 
 export type SecurityEvent =
   /** A profile was created: the principal as bound to it and the profile, exactly as committed (no secret). */
@@ -96,6 +107,16 @@ export type SecurityEvent =
   | (SecurityEventCommon & { readonly kind: "signed-out-others"; readonly kept_family_id: string; readonly family_ids: readonly string[] })
   /** The principal was disabled (and these families closed with it). */
   | (SecurityEventCommon & { readonly kind: "principal-disabled"; readonly family_ids: readonly string[] })
+  /** P3-ACCT: a legacy profile's username and password were set (the scrypt hash only -- never the password). The
+   *  username is unique and never changes; the restore installs it (`securityReplay.ts`). */
+  | (SecurityEventCommon & {
+      readonly kind: "credentials-established";
+      readonly profile_id: string;
+      readonly login_key: string;
+      readonly login_name: string;
+      readonly password_hash: string;
+      readonly set_at: number;
+    })
   /** Review F2: the change the event `confirms` (of kind `confirmed_kind`, same principal) WAS committed. */
   | (SecurityEventCommon & { readonly kind: "confirmed"; readonly confirms: string; readonly confirmed_kind: SecurityChangeKind });
 
@@ -109,6 +130,7 @@ const KIND_FIELDS: Readonly<Record<SecurityEventKind, readonly string[]>> = {
   "family-revoked": ["family_ids", "reason"],
   "signed-out-others": ["kept_family_id", "family_ids"],
   "principal-disabled": ["family_ids"],
+  "credentials-established": ["profile_id", "login_key", "login_name", "password_hash", "set_at"],
   confirmed: ["confirms", "confirmed_kind"],
 };
 const COMMON_FIELDS = ["format", "version", "event_id", "kind", "at", "principal_id"];
@@ -172,6 +194,16 @@ export function isSecurityEvent(value: unknown): value is SecurityEvent {
       );
     case "principal-disabled":
       return isFamilyList(value.family_ids, 0);
+    case "credentials-established":
+      return (
+        typeof value.profile_id === "string" &&
+        PROFILE_ID_PATTERN.test(value.profile_id) &&
+        isLoginName(value.login_name) &&
+        isLoginKey(value.login_key) &&
+        value.login_key === loginKeyOf(value.login_name as string) &&
+        isPasswordHash(value.password_hash) &&
+        isEventTime(value.set_at)
+      );
     case "confirmed":
       return (
         typeof value.confirms === "string" &&
@@ -196,7 +228,7 @@ export function canonicalSecurityEvent(event: SecurityEvent): SecurityEvent {
       out[key] = { principal_id: p.principal_id, kind: p.kind, status: p.status, created_at: p.created_at, activated_at: p.activated_at, last_seen_at: p.last_seen_at, account_link: p.account_link };
     } else if (key === "profile") {
       const p = value as Profile;
-      out[key] = {
+      const profile: Record<string, unknown> = {
         profile_id: p.profile_id,
         principal_id: p.principal_id,
         display_name: p.display_name,
@@ -207,6 +239,9 @@ export function canonicalSecurityEvent(event: SecurityEvent): SecurityEvent {
         recovery_rotated_at: p.recovery_rotated_at,
         schema: p.schema,
       };
+      /* P3-ACCT: a schema-2 profile carries its six fields too, in their stored order (a schema-1 one, none). */
+      if (p.schema === 2) for (const field of PROFILE_V2_FIELDS) profile[field] = (p as unknown as Record<string, unknown>)[field];
+      out[key] = profile;
     } else if (key === "family_ids") {
       out[key] = [...(value as string[])];
     } else {

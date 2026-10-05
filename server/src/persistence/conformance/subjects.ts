@@ -416,6 +416,7 @@ export const wholeFileIdentitySubject: IdentitySubject = {
     "ID-07": "legacy v2 format: a family's revocation is not stored, so it does not survive a restart (never a production store)",
     "ID-15": "legacy v2 format: a family's revocation is not stored, so the whole-family sign-out cannot be read back (never a production store)",
     "ID-08": "legacy writer: a relation failure escapes as IdentityStoreCorruptError (read as an unknown outcome), not StoreDefiniteError",
+    "ID-21": "legacy writer: a username relation failure escapes as IdentityStoreCorruptError (as ID-08), and it keeps no record history (never a production store)",
   },
   async open(ctx, options) {
     return createFileIdentityStore(ctx.dir, { ...quiet, fs: faultFs(ctx), ...writer(options) });

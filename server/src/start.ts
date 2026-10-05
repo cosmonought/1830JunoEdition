@@ -19,6 +19,8 @@
 //   GS_MODE=development BUILD_ID=$(git rev-parse --short HEAD) node dist/server/src/start.js
 //   node dist/server/src/start.js --mode development --build dev          (PowerShell / cmd)
 
+/* P3-ACCT (review M1): FIRST -- libuv's thread pool is sized when first used (`threadPool.ts`). */
+import "./threadPool";
 import * as path from "path";
 
 import { createGameServer, GAME_SERVER_BIND_HOST } from "./gameServer";
@@ -221,7 +223,8 @@ async function main(): Promise<void> {
       onRestartRequired: (detail) => failFast("the identity store", detail),
       onCompacted: (info) => ops.audit("identity.compacted", { seq: info.seq, records: info.records, bytes: info.bytes }),
     });
-    identity = await IdentityService.open(identityStore);
+    /* P3-ACCT (review L2): this server makes no new recovery-key profiles (accounts have a username and password). */
+    identity = await IdentityService.open(identityStore, { policy: { legacyProfileCreation: false } });
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error(`Refusing to start: the identity store in ${dataDir} cannot be read -- ${error instanceof Error ? error.message : String(error)}`);
@@ -470,6 +473,8 @@ async function main(): Promise<void> {
         // eslint-disable-next-line no-console
         warn: (line) => console.warn(line),
         ops,
+        /* P3-ACCT: a grant-authorized link's wallet is persisted to the profile. */
+        associateWallet: (context, wallet, verifiedAt) => server.identity.associateWallet(context, wallet, verifiedAt),
       },
       server.rooms.moneyPort,
     );

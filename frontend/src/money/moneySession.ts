@@ -16,6 +16,7 @@ import { createKeplrWallet, type WalletPort } from "./keplrWallet";
 import { browserConsentKeys, type ConsentKeys } from "./consentKeys";
 import { browserPendingTxStore, type PendingTxStore } from "./pendingTx";
 import { pinnedDeployment, type PinnedDeploymentResult } from "./escrowDeployment";
+import type { KeplrLock } from "./keplrLock";
 
 export interface MoneySessionState {
   readonly wallet: "unknown" | "unavailable" | "disconnected" | "connecting" | "connected";
@@ -39,6 +40,8 @@ export interface MoneyServices {
   readonly pending: PendingTxStore;
   readonly pin: () => PinnedDeploymentResult;
   readonly now: () => number;
+  /** W1-K (AUD-19.02): the cross-tab Keplr lock (`keplrLock.ts`); absent: the page's own (`browserKeplrLock`). */
+  readonly keplrLock?: KeplrLock;
 }
 
 let services: MoneyServices | null = null;

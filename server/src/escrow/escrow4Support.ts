@@ -19,7 +19,7 @@ import { IdentityService } from "../identity/sessions";
 import { createMemoryOpsRecorder } from "../persistence/opsRecorder";
 import { seatOf } from "../rooms/gameRecord";
 import { NoMoneyRosterSource } from "../rooms/roomService";
-import { apiRequest, Client, IN_SEAT_ORDER, profiledBrowser, PROD_ORIGIN, startServer, type ApiAnswer, type Frame, type ProfiledBrowser } from "../rooms/testSupport";
+import { accountBrowser, apiRequest, Client, IN_SEAT_ORDER, profiledBrowser, PROD_ORIGIN, startServer, type ApiAnswer, type Frame, type ProfiledBrowser } from "../rooms/testSupport";
 import { createMemoryChainIntentStore } from "./chainIntents";
 import { createEscrowService, type EscrowService, type JunoBackendRuntime } from "./escrowService";
 import { createMemoryFinancialGameStore } from "./financialGameStore";
@@ -130,7 +130,8 @@ export async function moneyServer(options: MoneyServerOptions = {}): Promise<Mon
   const clock = { now: T0 };
   const warnings: string[] = [];
   const identityStore = createMemoryIdentityStore();
-  const identity = IdentityService.fromSnapshot(identityStore, { principals: [], sessions: [] });
+  /* P3-ACCT: a cheap password KDF for the test world (production's is `DEFAULT_PASSWORD_KDF`). */
+  const identity = IdentityService.fromSnapshot(identityStore, { principals: [], sessions: [] }, { policy: { passwordKdf: TEST_PASSWORD_KDF } });
   const chain = new FakeJunoChain({
     chainId: CHAIN_ID,
     contract: CONTRACT,
@@ -254,7 +255,7 @@ export async function moneyServer(options: MoneyServerOptions = {}): Promise<Mon
     void started.server.lifecycle.reviewContinuation().catch(() => undefined);
   });
   const money = createMoneyTables(
-    { enabled: options.enabled ?? true, service, pin: options.pin ?? PIN, symbol: "JUNOX", rest: chain, tickets: ledger, financial, appName: "Project 18XX", now: () => clock.now, warn: (line) => warnings.push(line), ops, manualObserver: true },
+    { enabled: options.enabled ?? true, service, pin: options.pin ?? PIN, symbol: "JUNOX", rest: chain, tickets: ledger, financial, appName: "Project 18XX", now: () => clock.now, warn: (line) => warnings.push(line), ops, manualObserver: true, associateWallet: (context, wallet, verifiedAt) => identity.associateWallet(context, wallet, verifiedAt) },
     started.server.rooms.moneyPort,
   );
   refs.money = money;
@@ -320,6 +321,25 @@ export interface Player {
   readonly name: string;
   api(route: string, body?: object): Promise<ApiAnswer>;
   confirm(): Promise<void>;
+}
+
+/** P3-ACCT: the cheap scrypt parameters test worlds use (the stored hash carries them; production makes N=2^15, p=3). */
+export const TEST_PASSWORD_KDF = Object.freeze({ logN: 10, r: 1, p: 1 });
+
+/** P3-ACCT: a USERNAME/PASSWORD account player -- "Confirm it's you" is its password. */
+export async function accountPlayer(world: MoneyServer, name: string, password = "correct horse battery"): Promise<Player> {
+  const account = await accountBrowser(world.port, name, password);
+  const client = await Client.openWithCookie(world.port, account.cookie, name);
+  return {
+    browser: { cookie: account.cookie, recoveryKey: "", name: account.name },
+    client,
+    name,
+    api: (route, body = {}) => apiRequest(world.port, `/gs/api/money/${route}`, { cookie: account.cookie, body }),
+    async confirm() {
+      const answer = await apiRequest(world.port, "/gs/api/profile/reauth", { cookie: account.cookie, body: { password } });
+      if (answer.status !== 200) throw new Error(`reauth: ${answer.status} ${answer.text}`);
+    },
+  };
 }
 
 export async function player(world: MoneyServer, name: string): Promise<Player> {

@@ -19,6 +19,7 @@ import { deploymentMismatch, pinnedDeployment } from "../../money/escrowDeployme
 import { moneyConfig, type MoneyConfig } from "../../money/moneyApi";
 import { bpsText } from "./MoneyPanel";
 import { moneyStyles as styles } from "./moneyStyles";
+import { TermsLink } from "../InfoPages"; // P3-ACCT (AUD-20.08): every money surface links the Terms
 
 /** What the server offers this build (null: no real-money tables here). */
 export function useMoneyTableOffer(): MoneyConfig | null {
@@ -88,7 +89,7 @@ export function HostStakeSection({ offer, on, onToggle, typed, onType, choice }:
           ) : null}
           <p style={styles.faint}>
             Creating the table moves no money: you open it on Juno with your own deposit from the waiting room, and every player deposits with Keplr. Winnings are paid to each
-            depositing wallet. Deposits on Juno are public.
+            depositing wallet. Deposits on Juno are public. <TermsLink testId="host-stake-terms-link" />
           </p>
         </>
       ) : (

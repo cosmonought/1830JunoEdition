@@ -54,6 +54,8 @@ import { ANTE_SUBSIDY_NOTE, VISIBILITY_COPY } from "./HostSetupCard";
 import { anteBreakdown, formatJuno } from "../utils/anteMath";
 import { SEAT_COLORS, SEAT_COLOR_NAMES, resolveSeatColors } from "../utils/playerLabels";
 import { MoneyPanel, StakeStrip, bpsText } from "./money/MoneyPanel";
+import { TableTrustFacts } from "./TrustFacts";
+import { TermsLink } from "./InfoPages";
 import { amountText, fundingTag } from "../money/moneyFlow";
 import { type AudioControlsProps } from "./AudioControls";
 /* Design note #1138: the shell's own bar, mounted here so the audio controls stop moving between the
@@ -914,6 +916,14 @@ export function SandboxWaitingRoom({
                     />
                   )}
                 </dl>
+                {/* P3-ACCT: at a real-money table, the Terms (AUD-20.08) right under the stake they govern, and the
+                    seats' factual history (never a score). Outside the terms list: neither is a term/value pair. */}
+                {money !== null ? (
+                  <p style={{ margin: "4px 0 0", fontSize: "12px" }}>
+                    <TermsLink label="Terms of real-money play" testId="waiting-room-terms-link" />
+                  </p>
+                ) : null}
+                {money !== null && room !== null ? <TableTrustFacts gameId={room.gameId} players={players} /> : null}
 
                 {/* #1445: with no optional rules there is no right region at all -- an empty rail and a
                     divider around the word "None" is half a surface reserved for an absence. The fact is

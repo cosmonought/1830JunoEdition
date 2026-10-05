@@ -9,8 +9,9 @@
 // mode over real HTTP and real WebSockets, with real cookies and an allowed Origin, as a browser does:
 //   - creation: the cleaned name, the recovery key (shown once, stored only as a digest), no id on the wire, and one
 //     profile per principal however many tabs press "Create" at once;
-//   - the unprofiled principal: the profile gate (bootstrap `profile: null`, upgrade 403 at step "profile", the
-//     profiled actions 403 `profile-required`), and the per-frame defence behind it;
+//   - the unprofiled principal: bootstrap `profile: null`, the profiled actions 403 `profile-required`, and -- P3-ACCT
+//     (owner, 2026-10-05: public first) -- a PUBLIC, READ-ONLY socket (no longer an upgrade 403): the per-frame
+//     allow-list answers only the public reads and refuses everything else `profile-required`;
 //   - recovery and device linking: a fresh session for the SAME principal (so the same seats), the browser's temporary
 //     session `replaced`, one indistinguishable answer for every wrong credential, single-use and expiring codes;
 //   - rotation, "sign out this device", "sign out other devices" -- and their sockets closing 4401;
@@ -306,34 +307,31 @@ describe("LIVE-2E create", () => {
    ================================================================== */
 
 describe("LIVE-2E the profile gate", () => {
-  test("an unprofiled browser: bootstrap says profile null, its upgrade is 403 (charged to the address like any refused upgrade), the profiled actions are 403", async () => {
+  test("an unprofiled browser: bootstrap says profile null, its socket is a PUBLIC one (P3-ACCT: no failed-upgrade budget spent), the profiled actions are 403", async () => {
     const { server, port } = await prodServer({ limits: { failedUpgradesPerIp: { capacity: 4, refillPerSecond: 0.0001 } } });
     try {
       const guest = await bootstrapCookie(port);
       const boot = await session(port, guest);
       assert.equal(boot.status, 200);
       assert.equal((boot.body as { profile: unknown }).profile, null);
-      for (let n = 0; n < 4; n += 1) assert.equal(await upgradeStatus(port, guest), 403, "an unprofiled principal opens no game socket");
-      assert.equal(server.upgrades.refused["profile:403"], 4);
-      assert.equal(server.upgrades.accepted, 0);
-      assert.equal(server.socketCounts().total, 0);
+      for (let n = 0; n < 4; n += 1) assert.equal(await upgradeStatus(port, guest), 101, "P3-ACCT: a signed-out visitor opens a public, read-only socket");
+      assert.equal(server.upgrades.refused["profile:403"], undefined);
+      assert.equal(server.upgrades.accepted, 4);
       for (const action of [linkCode, rotateKey, signOutOthers]) {
         const refused = await action(port, guest);
         assert.deepEqual([refused.status, refused.body], [403, { error: "profile-required" }]);
       }
       // Without any session they are not-authenticated (the client bootstraps first).
       for (const action of [linkCode, rotateKey, signOutOthers]) assert.deepEqual((await action(port, "")).body, { error: "not-authenticated" });
-      // LIVE-2E review I3: the four refusals spent the address's failed-upgrade budget (capacity 4) -- the client never
-      // opens a socket before its profile exists, so only a misbehaving one gets here -- and the address now waits.
+      // Nothing was charged to the address's failed-upgrade budget (capacity 4): a signed-in player there still opens.
       const player = await profiledBrowser(port, "Ann");
-      assert.equal(await upgradeStatus(port, player.cookie), 429);
-      assert.equal(server.upgrades.accepted, 0);
+      assert.equal(await upgradeStatus(port, player.cookie), 101);
     } finally {
       await stopServer(server);
     }
   });
 
-  test("decideUpgrade: a principal without a profile is refused at step 5b, after authentication and before the caps -- in either mode", async () => {
+  test("decideUpgrade: P3-ACCT -- a principal without a profile passes step 5b (public, read-only) and meets the caps like any other -- in either mode", async () => {
     const limits = { ...DEFAULT_INGRESS_LIMITS.identity };
     const identity = IdentityService.fromSnapshot(createMemoryIdentityStore(), { principals: [], sessions: [] });
     const created = await identity.bootstrap({ kind: "none" }, false, 0);
@@ -357,11 +355,12 @@ describe("LIVE-2E the profile gate", () => {
     const verdict = (decision: ReturnType<typeof decideUpgrade>) => (decision.ok ? 101 : `${decision.step}:${decision.status}`);
     const asked: string[] = [];
     const principalId = (identity.authenticate(readSessionCookie(cookie), 0) as { principalId: string }).principalId;
-    // Authenticated, no profile: 403 at "profile" although every cap is full -- and the gate was asked about THIS principal.
-    const refused = decideUpgrade(req("/gs", { origin: PROD_ORIGIN, cookie }), gate({ hasProfile: (id) => (asked.push(id), false) }));
-    assert.equal(verdict(refused), "profile:403");
-    assert.equal(refused.ok ? undefined : refused.retryAfterMs, undefined, "no Retry-After: waiting does not help");
+    // Authenticated, no profile: past 5b (the gate was asked about THIS principal) to the caps, which are full here.
+    const capped = decideUpgrade(req("/gs", { origin: PROD_ORIGIN, cookie }), gate({ hasProfile: (id) => (asked.push(id), false) }));
+    assert.equal(verdict(capped), "principal-cap:429");
     assert.deepEqual(asked, [principalId]);
+    // Under the caps it opens: the frame gate (gameServer.ts) decides what it may then read.
+    assert.equal(verdict(decideUpgrade(req("/gs", { origin: PROD_ORIGIN, cookie }), gate({ counts: { global: () => 0, forIp: () => 0, forAggregate: () => 0, forPrincipal: () => 0, forSession: () => 0 } }))), 101);
     // The earlier steps still answer first: no cookie is 401, a wrong Origin 403 at "origin" -- the gate is not asked.
     assert.equal(verdict(decideUpgrade(req("/gs", { origin: PROD_ORIGIN }), gate())), "authenticate:401");
     assert.equal(verdict(decideUpgrade(req("/gs", { origin: "https://evil.example", cookie }), gate())), "origin:403");
@@ -377,7 +376,7 @@ describe("LIVE-2E the profile gate", () => {
       counts: { global: () => 0, forIp: () => 0, forAggregate: () => 0, forPrincipal: () => 0, forSession: () => 0 },
     });
     const devReq = req("/?dev_claim=p-alice", { origin: DEV_ORIGIN, host: "127.0.0.1:8917" }, "127.0.0.1");
-    assert.equal(verdict(decideUpgrade(devReq, devGate)), "profile:403");
+    assert.equal(verdict(decideUpgrade(devReq, devGate)), 101, "a public socket in development too");
     assert.equal(verdict(decideUpgrade(devReq, { ...devGate, hasProfile: (id) => id === "pr_dev_p-alice" })), 101);
   });
 
@@ -415,7 +414,7 @@ describe("LIVE-2E the profile gate", () => {
     }
   });
 
-  test("defence in depth: a socket whose principal has no profile has every frame answered `profile-required`, before any game is read", async () => {
+  test("defence in depth (P3-ACCT allow-list): a socket whose principal has no profile has every frame but the public reads answered `profile-required`, before any game is read", async () => {
     const records = createMemoryRecordStore();
     const { server, port } = await prodServer({ records });
     try {
@@ -427,21 +426,24 @@ describe("LIVE-2E the profile gate", () => {
       try {
         const create = await client.op(CREATE());
         assert.deepEqual([create.ok, create.code], [false, "profile-required"]);
-        client.send({ kind: "rooms-watch", on: true });
-        client.roomHello(gameId);
-        client.hello(gameId);
+        const myTables = await client.op({ type: "my-tables" });
+        assert.deepEqual([myTables.ok, myTables.code], [false, "profile-required"], "Your tables is identity-bearing");
+        const seat = await client.op({ type: "take-seat" }, gameId);
+        assert.deepEqual([seat.ok, seat.code], [false, "profile-required"]);
         client.send({ kind: "chat-send", gameId, text: "hi" });
         client.submit(BUY, { baseIndex: 0, submissionId: "gate-submit" });
         client.send({ kind: "presence-set", gameId, state: { actingCompanyId: null } });
         const refusedSubmit = await client.answerTo("gate-submit");
         assert.deepEqual([refusedSubmit.kind, refusedSubmit.code], ["refused", "profile-required"]);
-        await until(() => client.of("error").filter((frame) => frame.code === "profile-required").length === 4, "four error answers");
+        await until(() => client.of("error").filter((frame) => frame.code === "profile-required").length === 1, "the chat refused");
         await sleep(50);
-        assert.equal(client.of("room").length, 0, "no view");
-        assert.equal(client.of("rooms").length, 0, "no public list");
-        assert.equal(client.of("catch-up").length, 0, "no log");
-        assert.equal(client.of("error").length, 4, "presence is dropped silently; nothing else answered");
+        assert.equal(client.of("error").length, 1, "presence is dropped silently; nothing else answered");
         assert.equal(records.records.size, 1, "nothing created");
+        // The PUBLIC READS are answered (a public table: read as any watcher reads it -- Watch is read-only).
+        client.send({ kind: "rooms-watch", on: true });
+        await client.next((frame) => frame.kind === "rooms", "the public list");
+        client.roomHello(gameId);
+        await client.next((frame) => frame.kind === "room", "the public table's view");
       } finally {
         delete (identity as { isProfiled?: unknown }).isProfiled;
       }
@@ -467,7 +469,7 @@ describe("LIVE-2E recovery", () => {
       const table = await tableOf(port, ann.cookie, "ann-table");
       const annSocket = await Client.openWithCookie(port, ann.cookie, "ann");
       const before = await bootstrapCookie(port);
-      assert.equal(await upgradeStatus(port, before), 403, "unprofiled before");
+      assert.equal(((await session(port, before)).body as { profile: unknown }).profile, null, "unprofiled before (P3-ACCT: its socket would be a public one)");
       const answer = await recover(port, before, `  ${ann.recoveryKey}\n`);
       assert.equal(answer.status, 200, answer.text);
       assert.deepEqual(answer.body, { ok: true, profile: { name: "Ann" } });
@@ -834,7 +836,7 @@ describe("LIVE-2E persistence", () => {
       try {
         const boot = await session(port, cookie);
         assert.deepEqual([boot.status, (boot.body as { profile: unknown }).profile], [200, null], "its session holds; it meets the profile gate");
-        assert.equal(await upgradeStatus(port, cookie), 403);
+        assert.equal(await upgradeStatus(port, cookie), 101, "P3-ACCT: a public, read-only socket until it signs in");
         /* LIVE-2E review M2: this browser played before profiles existed, so it may hold seats. Signing it in to
            ANOTHER profile would orphan them: recover and link are refused `has-tables`, and nothing is spent. */
         const other = await profiledBrowser(port, "Other");
@@ -931,7 +933,7 @@ describe("LIVE-2E persistence", () => {
       assert.ok(refusedCreate.headers["retry-after"]);
       assert.equal(durable(), before);
       assert.equal(((await session(port, bea)).body as { profile: unknown }).profile, null, "no profile half-created");
-      assert.equal(await upgradeStatus(port, bea), 403);
+      assert.equal(await upgradeStatus(port, bea), 101, "P3-ACCT: still only a public, read-only socket");
       assert.equal((await createProfile(port, bea, "Bea")).status, 201, "the retry creates it (not already-profiled)");
 
       // Link-code issue.

@@ -46,7 +46,7 @@ const challengeText = (wallet: string, expiresAt = T0 + 300_000) =>
 /* AUD-20.02 (E-1): the aged proof                                    */
 /* ================================================================== */
 
-describe("W2-M AUD-20.02: a proof that can't be counted on reads 're-prove', never 'Wallet linked'", () => {
+describe("W2-M AUD-20.02: a proof that can't be counted on reads 're-prove', never 'Wallet verified'", () => {
   /* The server's real action set for a linked joiner at a bound FUNDING table: `deposit` alone (never with
      `link-wallet`: `server/src/escrow/moneyTables.ts` actionsOf). */
   const joinerView = (linkedAt = T0) => moneyView({ escrow: bound, you: linked([], { actions: ["deposit"], link: { wallet: TEST_WALLET, epoch: 1, ticket: TICKET, linkedAt, consentKeys: [] } }) });
@@ -61,25 +61,26 @@ describe("W2-M AUD-20.02: a proof that can't be counted on reads 're-prove', nev
 
   it("a joiner who can deposit: re-prove headline and the free re-proof of the SAME wallet; Change wallet stays the other option", () => {
     const fresh = seatFlow(flowInput({ view: joinerView(), proof: null }));
-    expect([fresh.headline, fresh.primary?.kind]).toEqual([`Wallet linked · ${shortWallet(TEST_WALLET)}`, "open-review"]);
+    expect([fresh.headline, fresh.primary?.kind]).toEqual([`Wallet verified · ${shortWallet(TEST_WALLET)}`, "ante"]);
     const aged = seatFlow(flowInput({ view: joinerView(), proof: "aged" }));
     expect(aged.headline).toBe(`Re-prove ${shortWallet(TEST_WALLET)} to deposit`);
-    expect(aged.headline).not.toMatch(/Wallet linked/);
-    expect([aged.step, aged.primary?.kind, aged.primary?.label]).toEqual(["link", "reprove", "Re-prove wallet (free)"]);
-    expect(aged.detail).toMatch(/linked more than a day ago.*proof from the last 24 hours.*unless you've re-proven it since.*free.*nothing moves/);
-    /* `aged` is this page's inference from the link's time: the deposit stays offered beside it, and the server decides. */
-    expect(aged.others.map((action) => [action.kind, action.label, action.tone])).toEqual([["open-review", "Deposit 1 JUNOX", "secondary"]]);
+    expect(aged.headline).not.toMatch(/Wallet (linked|verified)/);
+    /* P3-ACCT: the one Ante button stays the primary; the free re-proof of the SAME wallet is offered beside it. */
+    expect([aged.step, aged.primary?.kind, aged.primary?.label]).toEqual(["link", "ante", "Ante 1 JUNOX"]);
+    expect(aged.detail).toMatch(/linked more than a day ago.*proof from the last 24 hours.*if the server asks.*free, nothing moves/);
+    expect(aged.others.map((action) => [action.kind, action.label, action.tone])).toEqual([["reprove", "Re-prove wallet (free)", "secondary"]]);
     const refused = seatFlow(flowInput({ view: joinerView(), proof: "refused" }));
-    expect(refused.detail).toMatch(/^The server needs a fresh proof/);
-    /* `refused` is the server's own answer: no deposit until the re-proof. */
-    expect([refused.primary?.kind, refused.others]).toEqual(["reprove", []]);
+    expect(refused.detail).toMatch(/^The server needs a fresh proof.*Ante asks Keplr to sign one first/);
+    /* `refused` is the server's own answer: the Ante re-proves FIRST (moneyActions.anteNow); never a bare deposit. */
+    expect([refused.primary?.kind, refused.others.map((action) => action.kind)]).toEqual(["ante", ["reprove"]]);
+    expect(refused.others.some((action) => action.kind === "open-review" || action.kind === "approve")).toBe(false);
   });
 
-  it("re-proving needs what a link needs: Keplr connected, then Confirm it's you; Keplr on another account blocks it", () => {
+  it("re-proving needs what a link needs -- the Ante connects Keplr itself, and the server asks for 'Confirm it's you' only when it must; Keplr on another account blocks it", () => {
     const disconnected = seatFlow(flowInput({ view: joinerView(), proof: "aged", wallet: { kind: "disconnected" } }));
-    expect([disconnected.step, disconnected.primary?.kind]).toEqual(["connect", "connect"]);
+    expect([disconnected.step, disconnected.primary?.kind, disconnected.blocker]).toEqual(["link", "ante", null]);
     const unconfirmed = seatFlow(flowInput({ view: joinerView(), proof: "aged", confirmed: false }));
-    expect([unconfirmed.step, unconfirmed.primary?.kind]).toEqual(["confirm", "confirm"]);
+    expect([unconfirmed.step, unconfirmed.primary?.kind]).toEqual(["link", "ante"]);
     const wrong = seatFlow(flowInput({ view: joinerView(), proof: "aged", wallet: { kind: "connected", address: OTHER_WALLET } }));
     expect(wrong.blocker).toMatch(/Switch accounts in Keplr/);
     const phone = seatFlow(flowInput({ view: joinerView(), proof: "aged", wallet: { kind: "unavailable" } }));
@@ -88,17 +89,19 @@ describe("W2-M AUD-20.02: a proof that can't be counted on reads 're-prove', nev
 
   it("never for the host (CreateGame needs no approval), never before the table can take the deposit, never while Keplr is asked", () => {
     const host = seatFlow(flowInput({ isHost: true, view: moneyView({ you: linked([], { actions: ["open-escrow", "link-wallet"] }) }), proof: "aged" }));
-    expect(host.primary?.kind).toBe("open-review");
+    expect([host.primary?.kind, host.headline]).toEqual(["ante", expect.stringMatching(/^Wallet verified/)]);
+    expect(host.others.some((action) => action.kind === "reprove")).toBe(false);
     const unbound = seatFlow(flowInput({ view: moneyView({ you: linked([], { actions: ["link-wallet"] }) }), proof: "aged" }));
-    expect([unbound.headline, unbound.primary]).toEqual([expect.stringMatching(/^Wallet linked/), null]);
-    /* The player chose the Deposit beside an aged re-prove: the review goes ahead (the server decides); a refusal holds. */
+    expect([unbound.headline, unbound.primary]).toEqual([expect.stringMatching(/^Wallet verified/), null]);
+    /* The older review path (still reachable from the full terms): the review goes ahead (the server decides); a
+       refusal holds -- the Ante, which re-proves first. */
     expect(seatFlow(flowInput({ view: joinerView(), proof: "aged", ui: "review" })).primary?.kind).toBe("approve");
-    expect(seatFlow(flowInput({ view: joinerView(), proof: "refused", ui: "review" })).primary?.kind).toBe("reprove");
+    expect(seatFlow(flowInput({ view: joinerView(), proof: "refused", ui: "review" })).primary?.kind).toBe("ante");
     const approving = seatFlow(flowInput({ view: joinerView(), proof: "aged", ui: "approving" }));
     expect(approving.headline).toBe("Approve in Keplr…");
     /* No deposit offered by the server (the escrow isn't taking them): no re-prove either -- nothing to re-prove for. */
     const notTaking = seatFlow(flowInput({ view: moneyView({ escrow: { ...bound, state: "FUNDED" }, you: linked([], { actions: ["link-wallet"] }) }), proof: "refused" }));
-    expect(notTaking.headline).toMatch(/^Wallet linked/);
+    expect(notTaking.headline).toMatch(/^Wallet verified/);
   });
 
   it("the re-proof signs once for the linked wallet, says so, and the page records the accepted proof", async () => {

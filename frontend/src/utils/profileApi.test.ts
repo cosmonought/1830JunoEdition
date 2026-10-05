@@ -240,7 +240,7 @@ describe("results and the re-bootstrap (LIVE-2E)", () => {
     server.queue("/gs/api/profile/recover", 409, { error: "has-tables" });
     const refused = await recoverProfile(KEY, server.port);
     expect(refused).toEqual({ ok: false, error: "has-tables" });
-    expect(profileErrorSentence(refused as ProfileFailure, "credential")).toMatch(/Create profile/);
+    expect(profileErrorSentence(refused as ProfileFailure, "credential")).toMatch(/Create account/);
     expect(server.port.state).toBe("unprofiled");
   });
 
@@ -272,7 +272,7 @@ describe("ESCROW-3A: sensitive actions ask this session to confirm the recovery 
     const rotate = await rotateRecoveryKey(server.port);
     expect(rotate).toEqual({ ok: false, error: "reauth-required" });
     expect(await signOutOtherDevices(server.port)).toEqual({ ok: false, error: "reauth-required" });
-    expect(profileErrorSentence(rotate as ProfileFailure)).toBe("For your security, confirm it's you with your recovery key first.");
+    expect(profileErrorSentence(rotate as ProfileFailure)).toBe("For your security, confirm it's you first.");
     server.queue("/gs/api/profile/reauth", 403, { error: "invalid-credential" });
     const wrong = await reauthenticate(KEY, server.port);
     expect(wrong).toEqual({ ok: false, error: "invalid-credential" });

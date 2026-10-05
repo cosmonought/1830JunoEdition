@@ -60,8 +60,9 @@ describe("LIVE-2F/3D C9-01: Your tables", () => {
     const LOBBY = readStripped("components/Lobby.tsx");
     const LIST = readStripped("components/MyTablesList.tsx");
     const DATA = readStripped("utils/lobby.ts");
-    expect(LOBBY).toContain("const myTables = useMyTables();");
-    expect(LOBBY).toMatch(/<MyTablesList tables=\{myTables\.tables\} error=\{myTables\.error\} onOpen=\{\(gameId\) => onEnterSandbox\(gameId\)\} \/>/);
+    /* P3-ACCT (public first): asked, and shown, only while signed in -- a visitor sits nowhere. */
+    expect(LOBBY).toContain("const myTables = useMyTables(signedIn);");
+    expect(LOBBY).toMatch(/\{signedIn \? <MyTablesList tables=\{myTables\.tables\} error=\{myTables\.error\} onOpen=\{\(gameId\) => onEnterSandbox\(gameId\)\} \/> : null\}/);
     expect(LIST).toContain("onClick={() => onOpen(table.gameId)}");
     expect(DATA).toContain('roomOp({ type: "my-tables" })');
     expect(DATA).toContain("export const MY_TABLES_REFRESH_MS = 60_000;");
@@ -70,6 +71,10 @@ describe("LIVE-2F/3D C9-01: Your tables", () => {
        socket's room-op budget with Create and Join). */
     expect(DATA).toContain("export const MY_TABLES_VISIBLE_MIN_MS = 15_000;");
     expect(DATA).toContain("Date.now() - lastAsked >= MY_TABLES_VISIBLE_MIN_MS");
+    /* P3-ACCT (independent review M2): a sign-in renews the links -- the list is asked again on the new session, and an
+       answer from before the renewal (the old session's "renewed" refusal) is never shown as "Could not load". */
+    expect(DATA).toContain("const renewed = onRoomLinksRenewed(ask);");
+    expect(DATA).toContain("if (!live || roomLinkRenewals() !== renewal) return;");
   });
 
   test("the closed schema takes the read with no game and nothing else in it", () => {

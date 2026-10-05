@@ -18,7 +18,7 @@
 import { useEffect, useState } from "react";
 import { type GameVariants } from "../gameEngine/gameVariants";
 import { backendConfigError } from "../config/backend";
-import { roomLinkAvailable, roomOp, watchPublicRooms } from "./roomLink";
+import { onRoomLinksRenewed, roomLinkAvailable, roomLinkRenewals, roomOp, watchPublicRooms } from "./roomLink";
 import { myTablesOf, refusalMessage, type MyTableSummary, type RoomSummary } from "./roomProtocol";
 
 /* ------------------------------------------------------------------ */
@@ -159,12 +159,13 @@ export interface MyTablesResult {
 }
 
 /** The tables this profile is seated at, from the server (`room-op {type:"my-tables"}`) -- the way back to a seat
- *  from any tab, device or browser the profile is signed in on. */
-export function useMyTables(): MyTablesResult {
+ *  from any tab, device or browser the profile is signed in on. P3-ACCT (public first): asked only while signed in (a
+ *  visitor sits nowhere, and the server would answer it `profile-required`); asked again the moment a sign-in lands. */
+export function useMyTables(signedIn = true): MyTablesResult {
   const [tables, setTables] = useState<MyTableSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [asked, setAsked] = useState(0);
-  const available = roomLinkAvailable();
+  const available = roomLinkAvailable() && signedIn;
 
   useEffect(() => {
     if (!available) {
@@ -172,8 +173,11 @@ export function useMyTables(): MyTablesResult {
       return undefined;
     }
     let live = true;
+    const renewal = roomLinkRenewals();
     void roomOp({ type: "my-tables" }).then((answer) => {
-      if (!live) return;
+      /* Review M2: an answer from before a renewal (the sign-in replaced the session) is the old session's; the
+         renewal's own re-ask answers instead. */
+      if (!live || roomLinkRenewals() !== renewal) return;
       if (answer.ok) {
         setTables(myTablesOf(answer.data));
         setError(null);
@@ -194,6 +198,7 @@ export function useMyTables(): MyTablesResult {
       setAsked((count) => count + 1);
     };
     const timer = setInterval(ask, MY_TABLES_REFRESH_MS);
+    const renewed = onRoomLinksRenewed(ask);
     /* A page coming back asks again -- at most every 15 s (independent review IR-08): the read shares the lobby socket's
        room-op budget with Create and Join, and tab-switching must never spend it. */
     const onVisible = () => {
@@ -202,6 +207,7 @@ export function useMyTables(): MyTablesResult {
     if (typeof document !== "undefined") document.addEventListener("visibilitychange", onVisible);
     return () => {
       clearInterval(timer);
+      renewed();
       if (typeof document !== "undefined") document.removeEventListener("visibilitychange", onVisible);
     };
   }, [available]);

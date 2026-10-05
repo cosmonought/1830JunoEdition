@@ -209,8 +209,8 @@ describe("the hosted session bootstrap (LIVE-2B)", () => {
   });
 });
 
-describe("mandatory profiles (LIVE-2E)", () => {
-  it("an unprofiled browser is 'unprofiled': no socket opens, and the links wait without asking the server again", async () => {
+describe("public first (P3-ACCT; LIVE-2E's mandatory profiles superseded)", () => {
+  it("a signed-out browser is 'unprofiled': its sockets open (the public, read-only surface) without asking the server again", async () => {
     const http = manualFetch();
     const session = httpSessionPort({ endpoint: "https://play.example/gs/api/session", fetch: http.fetch });
     installSessionPort(session);
@@ -235,17 +235,15 @@ describe("mandatory profiles (LIVE-2E)", () => {
       later.shift()?.();
       await flush();
     }
-    expect(wire.made).toHaveLength(0);
-    expect(http.calls).toHaveLength(1); // the first answer stands until a profile action forces the next bootstrap
-    /* A profile is created: the forced bootstrap says so, and the next attempt opens the socket. */
+    /* P3-ACCT: a visitor's sockets open at once (the server answers them the public list, a public table's view and
+       log, and `profile-required` to everything else). */
+    expect(wire.made.length).toBeGreaterThanOrEqual(1);
+    expect(http.calls).toHaveLength(1); // the first answer stands until a sign-in forces the next bootstrap
+    /* A sign-in: the forced bootstrap says so. */
     const forced = session.ensure(true);
     await http.answer(200, { ok: true, expiresAt: 1, profile: { name: "Brad", otherSessions: 2 } });
     expect(await forced).toBe("ready");
     expect(session.account).toEqual({ name: "Brad", otherSessions: 2 });
-    later.shift()?.();
-    await flush();
-    expect(wire.made.length).toBeGreaterThanOrEqual(1);
-    expect(wire.made.every((made) => made.url === withClientAnnouncement("wss://play.example/gs"))).toBe(true);
     link.close();
     stop();
   });
@@ -310,7 +308,7 @@ describe("mandatory profiles (LIVE-2E)", () => {
   });
 
   it("names the LIVE-2E reasons a session ends", () => {
-    expect(sessionEndedSentence("replaced")).toBe("This browser signed in to a profile, which replaced its earlier session.");
+    expect(sessionEndedSentence("replaced")).toBe("This browser signed in to an account, which replaced its earlier session.");
     expect(sessionEndedSentence("signed-out-remotely")).toBe("It was signed out from another of your devices.");
     for (const reason of ["expired", "logout", "evicted", "operator", "principal-disabled", "rotated", "unreadable", "replaced", "signed-out-remotely", null]) {
       expect(sessionEndedSentence(reason)).not.toMatch(/guest/i);

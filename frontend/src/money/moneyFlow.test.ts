@@ -15,14 +15,16 @@ const pendingTx = (stage: "signed" | "sent" | "landed", kind: PendingWalletTx["k
 const bound = { chainGameId: "7", state: "FUNDING" as const, fundingDeadline: T0 + 3_600_000 };
 
 describe("ESCROW-4: the funding progression, reload by reload", () => {
-  it("not connected -> connected -> confirmed: Connect, Confirm it's you, Link wallet", () => {
-    const disconnected = seatFlow(input({}));
-    expect([disconnected.step, disconnected.primary?.kind]).toEqual(["connect", "connect"]);
-    const needConfirm = seatFlow(input({ wallet: connected }));
-    expect([needConfirm.step, needConfirm.primary?.kind]).toEqual(["confirm", "confirm"]);
-    const ready = seatFlow(input({ wallet: connected, confirmed: true }));
-    expect([ready.step, ready.primary?.kind, ready.primary?.label]).toEqual(["link", "link", "Link wallet"]);
-    expect(ready.detail).toMatch(/free and moves no funds/);
+  it("P3-ACCT: no link yet -- ONE button, Ante, whether Keplr is connected or not, with no client-side 'Confirm it's you' step (the server asks only when it must)", () => {
+    const disconnected = seatFlow(input({ view: moneyView({ escrow: bound }) }));
+    expect([disconnected.step, disconnected.primary?.kind, disconnected.primary?.label]).toEqual(["connect", "ante", "Ante 1 JUNOX"]);
+    const connectedUnconfirmed = seatFlow(input({ wallet: connected, view: moneyView({ escrow: bound }) }));
+    expect([connectedUnconfirmed.step, connectedUnconfirmed.primary?.kind]).toEqual(["link", "ante"]);
+    expect(connectedUnconfirmed.detail).toMatch(/verifies your wallet with a free signature, then deposits/);
+    /* Before the host opens the table, a joiner's one button verifies the wallet only (free). */
+    const early = seatFlow(input({ wallet: connected }));
+    expect([early.primary?.kind, early.primary?.label]).toEqual(["verify", "Verify wallet (free)"]);
+    expect(early.detail).toMatch(/The host opens the table on Juno first/);
   });
 
   it("a device without Keplr, or a build with no escrow, can't do the wallet steps -- and says why", () => {
@@ -33,14 +35,14 @@ describe("ESCROW-4: the funding progression, reload by reload", () => {
     expect(unpinned.blocker).toBe("This build has no Juno escrow configured.");
   });
 
-  it("linked: the host opens the escrow; a joiner waits for it, then deposits; review, then Approve in Keplr", () => {
+  it("linked: the host antes to open the escrow; a joiner waits for it, then antes; the older review path still reaches Approve in Keplr", () => {
     const host = seatFlow(input({ isHost: true, view: moneyView({ you: linked([], { actions: ["open-escrow"] }) }) }));
-    expect([host.step, host.primary?.kind, host.primary?.label]).toEqual(["review", "open-review", "Open the table on Juno — deposit 1 JUNOX"]);
+    expect([host.step, host.primary?.kind, host.primary?.label]).toEqual(["review", "ante", "Ante 1 JUNOX"]);
     const waiting = seatFlow(input({ view: moneyView({ you: linked([], { actions: ["link-wallet"] }) }) }));
     expect([waiting.step, waiting.primary]).toEqual(["review", null]);
     expect(waiting.detail).toMatch(/Waiting for the host to open the table on Juno/);
     const joiner = seatFlow(input({ view: moneyView({ escrow: bound, you: linked([], { actions: ["deposit", "link-wallet"] }) }) }));
-    expect([joiner.primary?.kind, joiner.primary?.label]).toEqual(["open-review", "Deposit 1 JUNOX"]);
+    expect([joiner.primary?.kind, joiner.primary?.label]).toEqual(["ante", "Ante 1 JUNOX"]);
     expect(joiner.others.map((action) => action.kind)).toEqual(["replace-link"]);
     const review = seatFlow(input({ ui: "review", wallet: connected, view: moneyView({ escrow: bound, you: linked([], { actions: ["deposit"] }) }) }));
     expect([review.step, review.primary?.kind]).toEqual(["review", "approve"]);

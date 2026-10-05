@@ -56,7 +56,7 @@ import {
 } from "../../identity/store";
 import { FaultScript, gate } from "./faults";
 import { installFaults } from "./dynamoLocal";
-import { anotherSession, identitySet, seededRandom } from "./fixtures";
+import { anotherSession, FIXTURE_PASSWORD_HASH, FIXTURE_WALLET, FIXTURE_WALLET_2, identitySet, seededRandom } from "./fixtures";
 import { dynamoSuite, IMMEDIATE, QUIET, roleItem, tableItems } from "./identityDynamoSubjects";
 import { T0, rejection } from "./harness";
 
@@ -160,10 +160,27 @@ function changeGenerator(pool: Pools, seed: number) {
     ...over,
   });
   const link = (hash: string, profileId: string, over: Partial<LinkCredential> = {}): LinkCredential => ({ link_hash: hash, profile_id: profileId, created_at: T0, expires_at: T0 + 600_000, consumed_at: null, ...over });
+  /* P3-ACCT: usernames from a small pool whose canonical keys collide ("Ann" / "ann"), and two wallets. */
+  const LOGINS = ["Ann", "ann", "Bob", "Cy"];
+  const keyOf = (name: string) => name.toLowerCase();
+  const withLogin = (target: Profile, name: string | null): Profile => ({
+    ...target,
+    schema: 2,
+    login_key: name === null ? null : keyOf(name),
+    login_name: name,
+    password_hash: name === null ? null : FIXTURE_PASSWORD_HASH,
+    password_set_at: name === null ? null : T0,
+    wallet_address: target.schema === 2 ? (target.wallet_address ?? null) : null,
+    wallet_verified_at: target.schema === 2 ? (target.wallet_verified_at ?? null) : null,
+  });
+  const withWallet = (target: Profile, wallet: string | null): Profile => {
+    const base = target.schema === 2 ? target : withLogin(target, null);
+    return { ...base, wallet_address: wallet, wallet_verified_at: wallet === null ? null : tick() };
+  };
 
   const randomPrecondition = (s: FullIdentitySnapshot): IdentityPrecondition => {
     const known = <T>(items: readonly T[], fallback: T) => (items.length > 0 && chance(0.6) ? pick(items) : fallback);
-    switch (Math.floor(random() * 11)) {
+    switch (Math.floor(random() * 14)) {
       case 0:
         return { kind: "principal-absent", principal_id: known(s.principals.map((p) => p.principal_id), pick(pool.principals)) };
       case 1:
@@ -190,6 +207,15 @@ function changeGenerator(pool: Pools, seed: number) {
       }
       case 9:
         return { kind: "family-absent", family_id: known(s.families.map((f) => f.family_id), pick(pool.families)) };
+      case 11:
+        return { kind: "login-unused", login_key: keyOf(pick(LOGINS)) };
+      case 12:
+        return { kind: "profile-no-login", profile_id: known(s.profiles.map((p) => p.profile_id), pick(pool.profiles)) };
+      case 13: {
+        const target = known(s.profiles, null);
+        const held = target !== null && target.schema === 2 ? (target.wallet_address ?? null) : null;
+        return { kind: "profile-wallet", profile_id: target?.profile_id ?? pick(pool.profiles), wallet_address: chance(0.6) ? held : pick([null, FIXTURE_WALLET, FIXTURE_WALLET_2]) };
+      }
       default:
         return { kind: "family-open", family_id: known(s.families.map((f) => f.family_id), pick(pool.families)) };
     }
@@ -197,7 +223,7 @@ function changeGenerator(pool: Pools, seed: number) {
 
   return (s: FullIdentitySnapshot): IdentityChange => {
     const principals = s.principals;
-    const choice = Math.floor(random() * 14);
+    const choice = Math.floor(random() * 17);
     let change: IdentityChange;
     if (choice === 0 || principals.length === 0) {
       /* sometimes a principal never seen before (so principal-absent keeps holding), sometimes one of the pool */
@@ -213,7 +239,11 @@ function changeGenerator(pool: Pools, seed: number) {
       if (chance(0.7)) expect.push(chance(0.8) ? { kind: "principal-unprofiled", principal_id: pr } : { kind: "principal-absent", principal_id: pr });
       if (chance(0.7)) expect.push({ kind: "profile-absent", profile_id: pf });
       if (chance(0.7)) expect.push({ kind: "selector-unused", recovery_selector: key.selector });
-      change = chance(0.85) ? { principals: [bound], profiles: [profile(pf, pr, key)], expect } : chance(0.5) ? { principals: [bound], expect } : { profiles: [profile(pf, pr, key)], expect };
+      /* P3-ACCT: sometimes a new ACCOUNT -- the profile at schema 2 with a username (and its login-unused term). */
+      const login = chance(0.35) ? pick(LOGINS) : null;
+      if (login !== null && chance(0.7)) expect.push({ kind: "login-unused", login_key: keyOf(login) });
+      const made = login === null ? profile(pf, pr, key) : withLogin(profile(pf, pr, key), login);
+      change = chance(0.85) ? { principals: [bound], profiles: [made], expect } : chance(0.5) ? { principals: [bound], expect } : { profiles: [made], expect };
     } else if (choice === 2 && s.profiles.length > 0) {
       /* a recovery-key rotation (or a move, or a selector someone else holds) */
       const target = pick(s.profiles);
@@ -277,6 +307,25 @@ function changeGenerator(pool: Pools, seed: number) {
       };
     } else if (choice === 9) {
       change = chance(0.5) ? { dropSessions: [pick(pool.sessions)] } : { dropLinks: [pick(pool.links)] };
+    } else if ((choice === 14 || choice === 15) && s.profiles.length > 0) {
+      /* P3-ACCT: a legacy profile establishing a username -- or a held one changed or dropped (refused: never moves) */
+      const target = pick(s.profiles);
+      const name = chance(0.85) ? pick(LOGINS) : null;
+      const expect: IdentityPrecondition[] = [];
+      if (chance(0.6)) expect.push({ kind: "profile-no-login", profile_id: target.profile_id });
+      if (name !== null && chance(0.6)) expect.push({ kind: "login-unused", login_key: keyOf(name) });
+      change = { profiles: [withLogin(target, name)], expect };
+    } else if (choice === 16 && s.profiles.length > 0) {
+      /* P3-ACCT: the persisted wallet set, replaced or forgotten (its CAS sometimes wrong), or a schema-2 downgrade */
+      const target = pick(s.profiles);
+      if (chance(0.1) && target.schema === 2) {
+        const { login_key: _a, login_name: _b, password_hash: _c, password_set_at: _d, wallet_address: _e, wallet_verified_at: _f, ...v1 } = target;
+        change = { profiles: [{ ...v1, schema: 1 }] };
+      } else {
+        const held = target.schema === 2 ? (target.wallet_address ?? null) : null;
+        const next = pick([null, FIXTURE_WALLET, FIXTURE_WALLET_2]);
+        change = { profiles: [withWallet(target, next)], expect: chance(0.8) ? [{ kind: "profile-wallet", profile_id: target.profile_id, wallet_address: chance(0.8) ? held : pick([null, FIXTURE_WALLET]) }] : [] };
+      }
     } else if (choice === 10 && principals.length > 0) {
       /* a principal rewritten: sometimes leaving its profile, or bound to another */
       const target = pick(principals);
@@ -308,6 +357,7 @@ describe("L5-4 A: conditions alone -- DynamoDB's verdict on a planned change is 
        (not the planner) refused. */
     const holds = new Map<string, number>();
     const soleRefusals = new Map<string, number>();
+    const reached = { login: false, wallet: false };
     for (let step = 0; step < 700; step += 1) {
       const change = next(state);
       const pure = pureVerdict(state, change);
@@ -332,13 +382,15 @@ describe("L5-4 A: conditions alone -- DynamoDB's verdict on a planned change is 
         tally.accepted += 1;
         for (const condition of change.expect ?? []) holds.set(condition.kind, (holds.get(condition.kind) ?? 0) + 1);
         state = applyChange(state, change);
+        if (state.profiles.some((p) => p.schema === 2 && p.login_key !== null)) reached.login = true;
+        if (state.profiles.some((p) => p.schema === 2 && p.wallet_address !== null)) reached.wallet = true;
       } else {
         tally.refusedPure += 1;
       }
       const loaded = await openStore(client, table).load();
       assert.deepEqual(loaded, applyChange(state, {}), `step ${step}: the table holds exactly the model's identity set`);
     }
-    const kinds = ["principal-absent", "principal-unprofiled", "profile-absent", "selector-unused", "profile-selector", "session-absent", "session-open", "link-absent", "link-unconsumed", "family-absent", "family-open"];
+    const kinds = ["principal-absent", "principal-unprofiled", "profile-absent", "selector-unused", "profile-selector", "session-absent", "session-open", "link-absent", "link-unconsumed", "family-absent", "family-open", "login-unused", "profile-no-login", "profile-wallet"];
     for (const kind of kinds) {
       assert.ok((holds.get(kind) ?? 0) >= 3, `${kind} held in an accepted change (${holds.get(kind) ?? 0})`);
       assert.ok((soleRefusals.get(kind) ?? 0) >= 1, `${kind} alone made the TABLE refuse (${soleRefusals.get(kind) ?? 0})`);
@@ -346,6 +398,7 @@ describe("L5-4 A: conditions alone -- DynamoDB's verdict on a planned change is 
     t.diagnostic(`tally ${JSON.stringify(tally)}; held ${JSON.stringify(Object.fromEntries(holds))}; refused alone by the table ${JSON.stringify(Object.fromEntries(soleRefusals))}`);
     assert.ok(tally.accepted > 100 && tally.refusedByTable > 100, `a real mix: ${JSON.stringify(tally)}`);
     assert.ok(state.profiles.length >= 2 && state.families.some((f) => f.revoked_at !== null) && state.links.length >= 1, "the run reached profiles, revoked families and links");
+    assert.ok(reached.login && reached.wallet, `the run reached usernames and persisted wallets (P3-ACCT): ${JSON.stringify(reached)}`);
   });
 
   test("a stale view can only refuse: a plan made from a wrong selector for a profile is refused by the pin and writes nothing", async () => {

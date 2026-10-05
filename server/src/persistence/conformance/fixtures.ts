@@ -227,3 +227,28 @@ export function anotherSession(set: IdentitySet, tag: string, over: Partial<Sess
   const random = seededRandom(`session-${set.session.session_id}-${tag}`);
   return { ...set.session, session_id: mintSessionId(random), secret_hash: secretHash(mintSecret(random)), ...over };
 }
+
+/* ---- P3-ACCT: username/password and the persisted wallet (storage shapes only: the hash need not be a real scrypt) ---- */
+
+/** A well-formed stored password hash (fixed bytes; storage tests never verify it). */
+export const FIXTURE_PASSWORD_HASH = `scrypt$1$10$1$1$${Buffer.alloc(16, 7).toString("base64url")}$${Buffer.alloc(32, 9).toString("base64url")}`;
+/** A canonical Juno wallet address (20-byte data). */
+export const FIXTURE_WALLET = "juno1qyqszqgpqyqszqgpqyqszqgpqyqszqgpypz92q";
+export const FIXTURE_WALLET_2 = "juno1qgpqyqszqgpqyqszqgpqyqszqgpqyqsz49yqpk";
+
+/** `set`'s profile as schema 2, with `login` (a username) and/or a wallet. */
+export function accountProfile(set: IdentitySet, over: { readonly login?: string | null; readonly wallet?: string | null; readonly at?: number } = {}): Profile {
+  const at = over.at ?? T0;
+  const login = over.login ?? null;
+  const wallet = over.wallet ?? null;
+  return {
+    ...set.profile,
+    schema: 2,
+    login_key: login === null ? null : login.normalize("NFKC").toLowerCase().normalize("NFKC"),
+    login_name: login,
+    password_hash: login === null ? null : FIXTURE_PASSWORD_HASH,
+    password_set_at: login === null ? null : at,
+    wallet_address: wallet,
+    wallet_verified_at: wallet === null ? null : at,
+  };
+}

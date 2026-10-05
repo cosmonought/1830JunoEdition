@@ -66,6 +66,7 @@ import {
   checkSnapshot,
   IdentityIndex,
   IdentityStoreCorruptError,
+  loginOf,
   preconditionFailure,
   type FullIdentitySnapshot,
   type IdentityChange,
@@ -78,7 +79,7 @@ import {
   type SessionFamily,
 } from "../../identity/store";
 import { StoreDefiniteError, StoreUncertainError } from "../../persistence/storeResult";
-import { decodeItem, grantItem, isRoleText, keyAttributes, keys, markerItem, RESTORE_KEY, ROLE_KEY, type Item, type RestoreRecord, type ReviewRecord, type RoleRecord, type SelectorRecord } from "./identityItems";
+import { decodeItem, grantItem, isRoleText, keyAttributes, keys, markerItem, RESTORE_KEY, ROLE_KEY, type Item, type RestoreRecord, type ReviewRecord, type RoleRecord, type SelectorRecord, type UserRecord } from "./identityItems";
 import { CHUNK_BUDGET, planIdentityChange, type PlannedAction } from "./identityPlan";
 
 /* ------------------------------------------------------------------ */
@@ -313,6 +314,7 @@ export function decodeIdentityTable(items: readonly Item[], where: string): Iden
   const families: SessionFamily[] = [];
   const links: LinkCredential[] = [];
   const selectors: SelectorRecord[] = [];
+  const users: UserRecord[] = [];
   const reviews: ReviewRecord[] = [];
   let roles = 0;
   let role: RoleRecord | null = null;
@@ -342,6 +344,9 @@ export function decodeIdentityTable(items: readonly Item[], where: string): Iden
         break;
       case "selector":
         selectors.push(decoded.record);
+        break;
+      case "user":
+        users.push(decoded.record);
         break;
       case "role":
         roles += 1;
@@ -374,6 +379,14 @@ export function decodeIdentityTable(items: readonly Item[], where: string): Iden
   if (live.size !== profiles.length) throw new IdentityStoreCorruptError(`${where}: the live selector items do not match the profiles (${live.size} for ${profiles.length})`);
   for (const profile of profiles) {
     if (live.get(profile.recovery_selector) !== profile.profile_id) throw new IdentityStoreCorruptError(`${where}: a profile's recovery selector has no live selector item naming it`);
+  }
+  /* P3-ACCT: the username items are the username's uniqueness authority: exactly one per profile with a username,
+     naming it, and none other. */
+  const userOf = new Map(users.map((user) => [user.login_key, user.profile_id] as const));
+  const withLogin = profiles.filter((profile) => loginOf(profile) !== null);
+  if (userOf.size !== users.length || users.length !== withLogin.length) throw new IdentityStoreCorruptError(`${where}: the username items do not match the profiles (${users.length} for ${withLogin.length})`);
+  for (const profile of withLogin) {
+    if (userOf.get((loginOf(profile) as { key: string }).key) !== profile.profile_id) throw new IdentityStoreCorruptError(`${where}: a profile's username has no username item naming it`);
   }
   const whole = checkSnapshot(applyChange({ principals, sessions, profiles, links, families }, {}), where);
   return { snapshot: applyChange(whole, {}), role, restore, reviews: reviews.sort((a, b) => (a.profile_id < b.profile_id ? -1 : a.profile_id > b.profile_id ? 1 : a.restore_id < b.restore_id ? -1 : 1)), grants, self };

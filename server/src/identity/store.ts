@@ -17,6 +17,7 @@
 // unknown -- which the identity service treats as a restart-required fault, never as success and never silently.
 
 import { StoreDefiniteError, StoreUncertainError } from "../persistence/storeResult";
+import { isLoginKey, isLoginName, isPasswordHash, loginKeyOf } from "./accountCredentials";
 import { FAMILY_ID_PATTERN, familyIdOf, PRINCIPAL_ID_PATTERN, PROFILE_ID_PATTERN, RECOVERY_SELECTOR_PATTERN, SESSION_ID_PATTERN } from "./ids";
 
 /* ==================================================================
@@ -43,7 +44,19 @@ export interface Principal {
   account_link: string | null;
 }
 
-/** LIVE-2E: the application identity. PRIVATE: its id and its principal never leave the server. */
+/** LIVE-2E: the application identity. PRIVATE: its id and its principal never leave the server.
+ *
+ *  PHASE 3 (P3-ACCT): SCHEMA 2 adds the ordinary account credential and the persisted wallet, as six fields present on
+ *  every schema-2 record and on no schema-1 one (a schema-1 record is read exactly as before and stays schema 1 until
+ *  the profile next changes something schema 2 carries). An older build reads a schema-2 record as damage and refuses
+ *  to load -- it never silently ignores a credential or a wallet.
+ *    login_key / login_name / password_hash / password_set_at   all null (a LEGACY profile: recovery key only, not yet
+ *        migrated) or all set: the username's canonical form (unique, the login lookup -- NEVER an authority key), the
+ *        username as chosen (shown only to the account's own sessions), the scrypt hash (`accountCredentials.ts`), and
+ *        when it was set. Once set, the username never changes (no rename in this phase).
+ *    wallet_address / wallet_verified_at   both null, or the payout wallet the profile PROVED it controls (an ADR-036
+ *        signature verified by this server, at a moment a sensitive authentication stood) and when that proof was
+ *        verified. A browser's claim never sets it. */
 export interface Profile {
   profile_id: string;
   /** Immutable: the one principal this profile controls. */
@@ -52,14 +65,49 @@ export interface Profile {
   display_name: string;
   created_at: number;
   status: "active" | "disabled";
-  /** The recovery key's selector (`rk_…`), a lookup key. */
+  /** The recovery key's selector (`rk_…`), a lookup key. P3-ACCT: also the profile's CREDENTIAL EPOCH (every sensitive
+   *  grant and wallet ticket is bound to it); a username/password account has one too, with a SEALED digest
+   *  (`accountCredentials.sealedRecoveryDigest`): no recovery key exists for it. */
   recovery_selector: string;
   /** Hex SHA-256 of the recovery key's 32-byte secret. Never the secret. */
   recovery_hash: string;
   recovery_rotated_at: number;
-  /** The record's own schema, for LIVE-3's migration. */
-  schema: 1;
+  /** The record's own schema, for LIVE-3's migration. 2: P3-ACCT (the six fields below are present). */
+  schema: 1 | 2;
+  login_key?: string | null;
+  login_name?: string | null;
+  password_hash?: string | null;
+  password_set_at?: number | null;
+  wallet_address?: string | null;
+  wallet_verified_at?: number | null;
 }
+
+/** P3-ACCT: the fields a schema-2 profile adds, in their stored order. */
+export const PROFILE_V2_FIELDS = Object.freeze(["login_key", "login_name", "password_hash", "password_set_at", "wallet_address", "wallet_verified_at"] as const);
+
+/** P3-ACCT: a profile as schema 2 (a schema-1 record gains the six fields, every one null). Never changes a schema-2
+ *  record. What every write that sets a credential or a wallet starts from. */
+export function asSchema2(profile: Profile): Profile {
+  if (profile.schema === 2) return { ...profile };
+  return { ...profile, schema: 2, login_key: null, login_name: null, password_hash: null, password_set_at: null, wallet_address: null, wallet_verified_at: null };
+}
+
+/** P3-ACCT: the profile's username login, when it has one. */
+export const loginOf = (profile: Profile): { key: string; name: string; hash: string } | null =>
+  profile.schema === 2 && typeof profile.login_key === "string" && typeof profile.login_name === "string" && typeof profile.password_hash === "string"
+    ? { key: profile.login_key, name: profile.login_name, hash: profile.password_hash }
+    : null;
+
+/** P3-ACCT: the profile's persisted, verified wallet, when it has one. */
+export const walletOf = (profile: Profile): { address: string; verifiedAt: number } | null =>
+  profile.schema === 2 && typeof profile.wallet_address === "string" && typeof profile.wallet_verified_at === "number" ? { address: profile.wallet_address, verifiedAt: profile.wallet_verified_at } : null;
+
+/** P3-ACCT: the same profile with no persisted wallet (unchanged when it has none -- a schema-1 profile never has one). */
+export const withoutWallet = (profile: Profile): Profile => (walletOf(profile) === null ? profile : { ...profile, wallet_address: null, wallet_verified_at: null });
+
+/** P3-ACCT: a canonical Juno account address (20-byte data: `juno1` + 38 bech32 symbols). Shape only; the money layer
+ *  decodes the bech32 (`walletProof.canonicalJunoWallet`) before anything sets a wallet. */
+export const JUNO_WALLET_PATTERN = /^juno1[02-9ac-hj-np-z]{38}$/;
 
 /** LIVE-2E: one "Link another device" code -- short-lived, single use, stored only as a digest. */
 export interface LinkCredential {
@@ -124,8 +172,10 @@ export type FamilyOrigin =
   /** A browser signed in by a "Link another device" code. */
   | "link"
   /** Derived at the migration of a pre-family session (its founding is not on record). */
-  | "legacy";
-export const FAMILY_ORIGINS: readonly FamilyOrigin[] = Object.freeze(["bootstrap", "recovery", "link", "legacy"]);
+  | "legacy"
+  /** P3-ACCT: a browser signed in by a username and password (a login, or the account creation that signs it in). */
+  | "login";
+export const FAMILY_ORIGINS: readonly FamilyOrigin[] = Object.freeze(["bootstrap", "recovery", "link", "legacy", "login"]);
 
 export interface SessionFamily {
   family_id: string;
@@ -192,7 +242,14 @@ export type IdentityPrecondition =
   /** ESCROW-3A: CREATE-IF-ABSENT for a session family. */
   | { readonly kind: "family-absent"; readonly family_id: string }
   /** ESCROW-3A (IR-03): the family is stored and not revoked -- a member may be minted into it, or it may be revoked. */
-  | { readonly kind: "family-open"; readonly family_id: string };
+  | { readonly kind: "family-open"; readonly family_id: string }
+  /** P3-ACCT: no stored profile holds this username (its canonical login key). */
+  | { readonly kind: "login-unused"; readonly login_key: string }
+  /** P3-ACCT: the profile is stored and has no username login yet (a legacy profile establishing one). */
+  | { readonly kind: "profile-no-login"; readonly profile_id: string }
+  /** P3-ACCT: COMPARE-AND-SWAP of the profile's persisted wallet -- the profile is stored and holds exactly this wallet
+   *  (`null`: none). */
+  | { readonly kind: "profile-wallet"; readonly profile_id: string; readonly wallet_address: string | null };
 
 export interface IdentityChange {
   /** LIVE-3C: checked by the store in the same step that writes the change; any failure writes nothing. */
@@ -306,7 +363,20 @@ export function isDisplayName(value: unknown): value is string {
 const HEX_64 = /^[0-9a-f]{64}$/;
 
 export function isProfile(value: unknown): value is Profile {
-  if (!isRecordObject(value) || !exactKeys(value, PROFILE_KEYS)) return false;
+  if (!isRecordObject(value)) return false;
+  if (value.schema === 2) {
+    if (!exactKeys(value, [...PROFILE_KEYS, ...PROFILE_V2_FIELDS])) return false;
+    /* P3-ACCT: the login is all or nothing, and its key is its name's canonical form; the wallet is a pair. */
+    const login = [value.login_key, value.login_name, value.password_hash, value.password_set_at];
+    const noLogin = login.every((field) => field === null);
+    const hasLogin =
+      isLoginName(value.login_name) && isLoginKey(value.login_key) && value.login_key === loginKeyOf(value.login_name as string) && isPasswordHash(value.password_hash) && isTime(value.password_set_at);
+    const noWallet = value.wallet_address === null && value.wallet_verified_at === null;
+    const hasWallet = typeof value.wallet_address === "string" && JUNO_WALLET_PATTERN.test(value.wallet_address) && isTime(value.wallet_verified_at);
+    if (!(noLogin || hasLogin) || !(noWallet || hasWallet)) return false;
+  } else if (!exactKeys(value, PROFILE_KEYS)) {
+    return false;
+  }
   return (
     typeof value.profile_id === "string" &&
     PROFILE_ID_PATTERN.test(value.profile_id) &&
@@ -320,7 +390,7 @@ export function isProfile(value: unknown): value is Profile {
     typeof value.recovery_hash === "string" &&
     HEX_64.test(value.recovery_hash) &&
     isTime(value.recovery_rotated_at) &&
-    value.schema === 1
+    (value.schema === 1 || value.schema === 2)
   );
 }
 
@@ -480,6 +550,7 @@ export function checkSnapshot(snapshot: unknown, where: string): FullIdentitySna
   const profiles = new Map<string, Profile>();
   const profileOfPrincipal = new Set<string>();
   const selectors = new Set<string>();
+  const logins = new Set<string>();
   rawProfiles.forEach((record, at) => {
     if (!isProfile(record)) throw new IdentityStoreCorruptError(`${where}: profile #${at} is not a profile record`);
     if (profiles.has(record.profile_id)) throw new IdentityStoreCorruptError(`${where}: profile #${at} is a duplicate`);
@@ -489,9 +560,13 @@ export function checkSnapshot(snapshot: unknown, where: string): FullIdentitySna
     }
     if (profileOfPrincipal.has(record.principal_id)) throw new IdentityStoreCorruptError(`${where}: profile #${at} shares a principal`);
     if (selectors.has(record.recovery_selector)) throw new IdentityStoreCorruptError(`${where}: profile #${at} repeats a recovery selector`);
+    /* P3-ACCT: a username belongs to one profile. */
+    const login = loginOf(record);
+    if (login !== null && logins.has(login.key)) throw new IdentityStoreCorruptError(`${where}: profile #${at} repeats a username`);
     profiles.set(record.profile_id, record);
     profileOfPrincipal.add(record.principal_id);
     selectors.add(record.recovery_selector);
+    if (login !== null) logins.add(login.key);
   });
   principals.forEach((record) => {
     /* Both ways (LIVE-2E review L2): the profile a principal names must name THAT principal back. */
@@ -551,6 +626,8 @@ export interface IdentityLookups {
   link(hash: string): LinkCredential | undefined;
   profileOfSelector(selector: string): string | undefined;
   family(id: string): SessionFamily | undefined;
+  /** P3-ACCT: the profile holding this username's canonical key. */
+  profileOfLogin(loginKey: string): string | undefined;
 }
 
 /** The lookups of a whole snapshot (built per call: the memory and whole-file stores, for tests and the migration). */
@@ -561,6 +638,11 @@ export function lookupsOf(snapshot: IdentitySnapshot): IdentityLookups {
   const links = new Map((snapshot.links ?? []).map((record) => [record.link_hash, record] as const));
   const selectors = new Map((snapshot.profiles ?? []).map((record) => [record.recovery_selector, record.profile_id] as const));
   const families = new Map((snapshot.families ?? []).map((record) => [record.family_id, record] as const));
+  const logins = new Map<string, string>();
+  for (const record of snapshot.profiles ?? []) {
+    const login = loginOf(record);
+    if (login !== null) logins.set(login.key, record.profile_id);
+  }
   return {
     principal: (id) => principals.get(id),
     session: (id) => sessions.get(id),
@@ -568,6 +650,7 @@ export function lookupsOf(snapshot: IdentitySnapshot): IdentityLookups {
     link: (hash) => links.get(hash),
     profileOfSelector: (selector) => selectors.get(selector),
     family: (id) => families.get(id),
+    profileOfLogin: (loginKey) => logins.get(loginKey),
   };
 }
 
@@ -607,6 +690,16 @@ export function preconditionFailure(lookups: IdentityLookups, expect: readonly I
           const family = lookups.family(condition.family_id);
           return family === undefined || family.revoked_at !== null;
         }
+        case "login-unused":
+          return lookups.profileOfLogin(condition.login_key) !== undefined;
+        case "profile-no-login": {
+          const profile = lookups.profile(condition.profile_id);
+          return profile === undefined || loginOf(profile) !== null;
+        }
+        case "profile-wallet": {
+          const profile = lookups.profile(condition.profile_id);
+          return profile === undefined || (walletOf(profile)?.address ?? null) !== condition.wallet_address;
+        }
         default:
           return true; // an unknown condition never holds
       }
@@ -626,7 +719,9 @@ export function preconditionFailure(lookups: IdentityLookups, expect: readonly I
    accept. Every store now refuses a malformed change DEFINITE, before anything is looked up, with the same answer --
    conformance ID-19. Never reached by the service (its ids are minted and its times are clock readings). Commit paths
    only: a stored journal line is never re-judged by this at a load. */
-const PRECONDITION_SHAPES: Readonly<Record<IdentityPrecondition["kind"], readonly [string, RegExp | "time"][]>> = {
+type FieldShape = RegExp | "time" | ((value: unknown) => boolean);
+const walletOrNull = (value: unknown): boolean => value === null || (typeof value === "string" && JUNO_WALLET_PATTERN.test(value));
+const PRECONDITION_SHAPES: Readonly<Record<IdentityPrecondition["kind"], readonly [string, FieldShape][]>> = {
   "principal-absent": [["principal_id", PRINCIPAL_ID_PATTERN]],
   "principal-unprofiled": [["principal_id", PRINCIPAL_ID_PATTERN]],
   "profile-absent": [["profile_id", PROFILE_ID_PATTERN]],
@@ -644,6 +739,12 @@ const PRECONDITION_SHAPES: Readonly<Record<IdentityPrecondition["kind"], readonl
   ],
   "family-absent": [["family_id", FAMILY_ID_PATTERN]],
   "family-open": [["family_id", FAMILY_ID_PATTERN]],
+  "login-unused": [["login_key", isLoginKey]],
+  "profile-no-login": [["profile_id", PROFILE_ID_PATTERN]],
+  "profile-wallet": [
+    ["profile_id", PROFILE_ID_PATTERN],
+    ["wallet_address", walletOrNull],
+  ],
 };
 
 /** Why a change's preconditions or drops are malformed (`null`: they are not). Names the kind and position only. */
@@ -660,7 +761,7 @@ export function changeShapeProblem(change: IdentityChange): string | null {
       if (!exactKeys(condition, ["kind", ...fields.map(([name]) => name)])) return `precondition #${at} (${condition.kind}) is not well-formed`;
       for (const [name, shape] of fields) {
         const value = condition[name];
-        const ok = shape === "time" ? isTime(value) : typeof value === "string" && shape.test(value);
+        const ok = shape === "time" ? isTime(value) : typeof shape === "function" ? shape(value) : typeof value === "string" && shape.test(value);
         if (!ok) return `precondition #${at} (${condition.kind}) is not well-formed`;
       }
     }
@@ -712,6 +813,8 @@ export class IdentityIndex implements IdentityLookups {
   readonly links = new Map<string, LinkCredential>();
   readonly selectors = new Map<string, string>();
   readonly families = new Map<string, SessionFamily>();
+  /** P3-ACCT: username (canonical key) -> profile. A login never changes or goes once set, so nothing is ever removed. */
+  readonly logins = new Map<string, string>();
 
   static from(snapshot: FullIdentitySnapshot): IdentityIndex {
     const index = new IdentityIndex();
@@ -720,6 +823,8 @@ export class IdentityIndex implements IdentityLookups {
     for (const record of snapshot.profiles) {
       index.profiles.set(record.profile_id, record);
       index.selectors.set(record.recovery_selector, record.profile_id);
+      const login = loginOf(record);
+      if (login !== null) index.logins.set(login.key, record.profile_id);
     }
     for (const record of snapshot.links) index.links.set(record.link_hash, record);
     for (const record of snapshot.families) index.families.set(record.family_id, record);
@@ -743,6 +848,9 @@ export class IdentityIndex implements IdentityLookups {
   }
   family(id: string) {
     return this.families.get(id);
+  }
+  profileOfLogin(loginKey: string) {
+    return this.logins.get(loginKey);
   }
 
   /** Why this change would make the set invalid, or `null`. Checks the change alone against this index -- the
@@ -776,10 +884,21 @@ export class IdentityIndex implements IdentityLookups {
       }
     }
     const selectorsTaken = new Map<string, string>();
+    const loginsTaken = new Set<string>();
     for (const [at, record] of (change.profiles ?? []).entries()) {
       if (!isProfile(record)) return `${where}: profile #${at} is not a profile record`;
       const before = this.profiles.get(record.profile_id);
       if (before !== undefined && before.principal_id !== record.principal_id) return `${where}: profile #${at} would move to another principal`;
+      /* P3-ACCT: a profile never goes back to schema 1, and its username, once set, never changes or goes. */
+      if (before !== undefined && before.schema === 2 && record.schema !== 2) return `${where}: profile #${at} would return to schema 1`;
+      const loginBefore = before === undefined ? null : loginOf(before);
+      const login = loginOf(record);
+      if (loginBefore !== null && login?.key !== loginBefore.key) return `${where}: profile #${at} would change or drop its username`;
+      if (login !== null) {
+        const holder = this.logins.get(login.key);
+        if ((holder !== undefined && holder !== record.profile_id) || loginsTaken.has(login.key)) return `${where}: profile #${at} repeats a username`;
+        loginsTaken.add(login.key);
+      }
       const owner = principalAfter(record.principal_id);
       if (owner === undefined || owner.kind !== "profile" || owner.account_link !== record.profile_id) {
         return `${where}: profile #${at} is not bound to its principal both ways`;
@@ -814,6 +933,8 @@ export class IdentityIndex implements IdentityLookups {
       if (before !== undefined && this.selectors.get(before.recovery_selector) === record.profile_id) this.selectors.delete(before.recovery_selector);
       this.profiles.set(record.profile_id, { ...record });
       this.selectors.set(record.recovery_selector, record.profile_id);
+      const login = loginOf(record);
+      if (login !== null) this.logins.set(login.key, record.profile_id);
     }
     for (const record of change.links ?? []) this.links.set(record.link_hash, { ...record });
     for (const hash of change.dropLinks ?? []) this.links.delete(hash);
@@ -865,7 +986,9 @@ export function createMemoryIdentityStore(initial: IdentitySnapshot = { principa
       /** The change against what is durable now: the next content, or DEFINITE (nothing written). */
       const decide = (): FullIdentitySnapshot => {
         /* LIVE-3C: the change's own contract -- one record once, every precondition -- before anything is applied. */
-        const problem = changeShapeProblem(change) ?? changeIdProblem(change) ?? preconditionFailure(lookupsOf(durable), change.expect);
+        /* P3-ACCT: and the rules about a record's own past (a username never changes; a family never reopens; ...), as
+           the journal store (`IdentityIndex.check`) and the DynamoDB conditions apply them. */
+        const problem = changeShapeProblem(change) ?? changeIdProblem(change) ?? IdentityIndex.from(durable).check(change, "memory identity store") ?? preconditionFailure(lookupsOf(durable), change.expect);
         if (problem !== null) {
           stats.failed += 1;
           throw new StoreDefiniteError(`memory identity store: ${problem}; nothing was written`);

@@ -45,7 +45,7 @@
    "od": "OD-14(a) (probe readout may inform it first)",
    "p4": "—",
    "notes": "Part C U-16: \"Decide, then remove it either way.\" The removal happens whatever OD-14(a) decides, but only after it is recorded, because the probe is the instrument for that decision (AUD-01.02).",
-   "status": "IMPLEMENTED — W1-I `1b76512` on `phase3/w1-i-completion`, after OD-14(a) was RULED (owner, 2026-10-04): `useStickyFitProbe`, its call, its player-visible readout (\"Temporary instrument …\") and the `fitProbe` style removed, with the now-unused `canPinWithoutTrapping` import (the predicate stays in `utils/stickyCollapse.ts`); `stickyFitProbe.test.ts` deleted; `stickyTrap`, `stepJumpButton` and `stickyBarSplit` re-anchored (absence pins added); no layout change; not integrated"
+   "status": "IMPLEMENTED — W1-I `1b76512` + review fix `195755a` on `phase3/w1-i-completion`, after OD-14(a) was RULED (owner, 2026-10-04): `useStickyFitProbe`, its call, its player-visible readout (\"Temporary instrument …\") and the `fitProbe` style removed, with the now-unused `canPinWithoutTrapping` import (the predicate stays in `utils/stickyCollapse.ts`); `stickyFitProbe.test.ts` deleted (its three non-probe blocks carried verbatim into `utils/stepPanelCopy.test.ts`, review fix); `stickyTrap`, `stepJumpButton` and `stickyBarSplit` re-anchored (absence pins added); no layout change; not integrated"
   },
   {
    "key": "AUD-01.02",
@@ -4941,7 +4941,7 @@
   "W1-F": "COMPLETE — L4 `9baf4da`",
   "W1-G": "COMPLETE — L4 `a8b9f27` + review follow-ups `bee2717`",
   "W1-H": "COMPLETE — L6 `2e0700b` + review fixes `cb0c49c`",
-  "W1-I": "COMPLETE — slice branch `phase3/w1-i-completion` `1b76512` (from `phase3/wave3-i-w2i-w2j-w3c-w3g-v13cert-integration` @ `d29bb2f`); NOT integrated (integration and owner broad gate pending). OD-14(a) RULED (owner, 2026-10-04: keep the current step-panel placement; remove the temporary fit probe; W1-I-b not opened). AUD-01.01 IMPLEMENTED (`1b76512`); AUD-01.02 RULED — resolved by OD-14(a). The unconditional portion was integrated at Wave 1 (L5 `9dcad19`, `b9fd1bf`, `82b93ca`, `beac07a`, `3904533`, `fee2f66`).",
+  "W1-I": "COMPLETE — slice branch `phase3/w1-i-completion` @ `195755a` (code `1b76512`, review fix `195755a`; from `phase3/wave3-i-w2i-w2j-w3c-w3g-v13cert-integration` @ `d29bb2f`); NOT integrated (integration and owner broad gate pending). OD-14(a) RULED (owner, 2026-10-04: keep the current step-panel placement; remove the temporary fit probe; W1-I-b not opened). AUD-01.01 IMPLEMENTED (`1b76512` + `195755a`); AUD-01.02 RULED — resolved by OD-14(a). The unconditional portion was integrated at Wave 1 (L5 `9dcad19`, `b9fd1bf`, `82b93ca`, `beac07a`, `3904533`, `fee2f66`).",
   "W1-J": "COMPLETE — L5 `5a56987`",
   "W1-K": "NOT STARTED — not one of the seven Wave-1 lane branches",
   "W1-L": "COMPLETE — unconditional portion, L6 `de22084` + review fix `8d6f1e9`; RR-4 copy per OD-7 at the integration (`ca73834`). AUD-18.07 stays owner-gated (OD-14(e))",

@@ -34,6 +34,7 @@ import { rollBackIfRefused, submissionRefused } from "./utils/submissionAnswer";
 import { paidStationRefusal } from "./utils/paidStationView"; // Phase 3 W3-J (AUD-25.08)
 import {
   BOARD_CURRENT,
+  WATCHING_NO_SEAT,
   appliedPositionFor,
   boardCurrencyFor,
   boardSendRefusal,
@@ -13215,6 +13216,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
     async (op: RoomOpBody, options?: { busy?: boolean }): Promise<boolean> => {
       const gameIdNow = sandboxRoomRef.current;
       if (!gameIdNow) return false;
+      /* Phase 3 W3-J (OD-19): a room op acts for the signed-in principal, so a Watch tab -- a read-only view, whoever is
+         signed in -- sends none (its surfaces offer none; this is the backstop). */
+      if (watchOnly) {
+        setSandboxRoomError(WATCHING_NO_SEAT);
+        return false;
+      }
       if (options?.busy !== false) setSandboxRoomBusy(true);
       dispatchRoomNotice({ type: "clear-refusal" }); // W3-C: a new op retires the last refusal, not the link's notice
       try {
@@ -13228,7 +13235,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
         if (options?.busy !== false) setSandboxRoomBusy(false);
       }
     },
-    [sayRoomRefusal],
+    [sayRoomRefusal, watchOnly, setSandboxRoomError],
   );
 
   /** Enter a table this principal was just seated at (or may watch): the game id is the only thing kept. */
@@ -13285,7 +13292,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
    *  forgets the table, so a refresh does not reopen it. The BOARD IS LEFT WHERE IT IS rather than reset. */
   const handleLeaveSandboxRoom = useCallback(() => {
     const leaving = sandboxRoomRef.current;
-    if (leaving && roomLost === null) void roomOp({ type: "leave" }, leaving);
+    /* Phase 3 W3-J (OD-19, AUD-25.16 review): a Watch tab leaves WITHOUT `room-op leave`. The op acts for the principal
+       -- on a waiting table it gives up the seat (and, for the host, hands the table on or cancels it) -- and a Watch tab
+       of a principal seated there is a read-only view that must not act as that seat. A watcher has nothing to give up. */
+    if (leaving && roomLost === null && !watchOnly) void roomOp({ type: "leave" }, leaving);
     // Design note #537b: release the roster, so a solo session afterwards
     // resolves the fixture's own names again rather than staying blank.
     clearRoomNicknames();
@@ -13296,7 +13306,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
     dispatchRoomNotice({ type: "reset" }); // W3-C: nothing on the strip belongs to the next table
     appliedIndexRef.current = 0;
     setSandboxAppliedCount(0);
-  }, [roomLost]);
+  }, [roomLost, watchOnly]);
 
   /** W1-N / A-12 (AUD-18.01): leave the table AND go to the Lobby -- Game Over's "Leave game". Leaving alone drops the
    *  player on the sandbox gate ("Open a room or join one"), a screen nobody at a finished table asked for; the
@@ -13920,7 +13930,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
         onSetVisibility={isSandboxHost ? handleSetVisibility : undefined}
         onRotateCode={isSandboxHost ? handleRotateCode : undefined}
         onCancelRoom={isSandboxHost ? handleCancelRoom : undefined}
-        onTakeSeat={!seated && !sandboxRoom.you.kicked && sandboxRoom.joinable ? handleTakeSeat : undefined}
+        /* Phase 3 W3-J (OD-19): a Watch tab is read-only -- no "Take a seat" (a seat is taken with Join, or re-entered
+           from "Your tables"). */
+        onTakeSeat={!watchOnly && !seated && !sandboxRoom.you.kicked && sandboxRoom.joinable ? handleTakeSeat : undefined}
         onReleaseSeat={seated ? handleReleaseSeat : undefined}
         onLeave={() => {
           handleLeaveSandboxRoom();

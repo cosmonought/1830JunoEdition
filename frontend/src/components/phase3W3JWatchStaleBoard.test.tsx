@@ -13,7 +13,7 @@
 // Exercised here with the real pieces: the Lobby's two doors, the active-game pointer, the watcher projection, the
 // board-currency answers, the forced notice, the REAL `connectServerLink` over an injected socket, and the REAL
 // `RoomSession` (the server's room engine) answering what the link sends. The shell's wiring is source-pinned where it
-// cannot be executed (`phase3W3JShellWiring` below and `phase3W3GWatchDefect.test.tsx`'s flipped cases).
+// cannot be executed (the "shell wiring" block below, `phase3W3JRed.test.ts` and `phase3W3GWatchDefect.test.tsx`).
 
 import React from "react";
 import { act } from "react";
@@ -307,5 +307,29 @@ describe("W3-J AUD-25.16 (C): a move chosen on a board resting behind the room i
     socket.onopen?.({});
     expect(wire.find((frame) => frame.kind === "submit")).toMatchObject({ baseIndex: 7, baseId: "e7" });
     link.close();
+  });
+});
+
+describe("W3-J AUD-25.16: shell wiring (source-pinned: the shell cannot be mounted in a unit test)", () => {
+  const { readShell } = require("../utils/sourceScan") as typeof import("../utils/sourceScan");
+  const shell = readShell();
+
+  it("a board that is not current is nobody's turn (OD-19: a stale view of whose turn it is enables no move)", () => {
+    const memo = shell.slice(shell.indexOf("const isMyTurn = useMemo(() => {"), shell.indexOf("}, [viewerAddress, gameState, waterfallState, scrubbing, boardCurrency]);"));
+    expect(memo).toContain("if (!boardCurrency.current) return false;");
+  });
+
+  it("the forced notice is mounted with the board's currency and the two exits", () => {
+    expect(shell).toContain("notice={sandbox && sandboxRoomCode && !boardCurrency.current ? boardCurrency.notice : null}");
+    expect(shell).toContain("onReload={() => window.location.reload()}");
+    expect(shell).toContain("onLeave={handleLeaveTableToLobby}");
+  });
+
+  it("a Watch tab leaves without acting for the seat, offers no Take a seat, and sends no room op (review MEDIUM)", () => {
+    expect(shell).toContain('if (leaving && roomLost === null && !watchOnly) void roomOp({ type: "leave" }, leaving);');
+    expect(shell).toContain("onTakeSeat={!watchOnly && !seated && !sandboxRoom.you.kicked && sandboxRoom.joinable ? handleTakeSeat : undefined}");
+    const op = shell.slice(shell.indexOf("const runRoomOp = useCallback("), shell.indexOf("const enterHostedGame = useCallback("));
+    expect(op).toContain("if (watchOnly) {");
+    expect(op).toContain("setSandboxRoomError(WATCHING_NO_SEAT);");
   });
 });

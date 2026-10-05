@@ -11631,27 +11631,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   const dueFleetNotice = useMemo<FleetLossNotice | null>(() => {
     if ((gameState?.current_round_type ?? null) !== "OperatingRound") return null;
     if (spectator) return null;
-    /* ==================================================================
-        DESIGN NOTE 1049a: THE PAYOUT IS READ FIRST, AND THIS IS WHERE THAT IS ENFORCED
-       ==================================================================
-       BOTH MODALS CAN COME DUE ON ONE DISPATCH. The private payout fires when an Operating Round opens; a
-       fleet-loss notice fires at the acting corporation's turn, and the first corporation is already acting
-       at that moment. From Phase 4 on -- which is the first phase with rust in it -- that collision is
-       ordinary rather than exotic.
-       THE COST WAS ACCEPTED, WITH A CONDITION IMPLIED BY HOW IT WAS PUT: "they might then get hit with two
-       modals in a row on one OR ... two modals carrying meaningful information does not seem so
-       overwhelming, and one is for players, the other is for the corporation." IN A ROW is the operative
-       phrase, and it is the thing #1047 was right to worry about -- an undifferentiated stack trains a player
-       to click through, and the fleet-loss modal is the one where clicking through costs a turn.
-       SO IT IS A SEQUENCE, NOT A STACK, and the order is the physical one: everybody collects their private
-       income, and then the first corporation acts. Withholding the notice while the payout is open is enough
-       to produce that -- the queue is untouched, `dismissedFleetNoticesRef` is untouched, and the memo
-       recomputes when this clears because the state it reads is in its dependency list. Nothing is lost by
-       waiting; the notice is exactly as due a moment later.
-       NOT DONE WITH Z-INDEX. Two mounted modals with one on top is two things to click through with the
-       second one already visible behind the first, which is the stack this avoids rather than an
-       implementation of avoiding it. */
-    if (privatePayoutPhase !== null) return null;
+    /* W3-A / OD-5(c) (OD-12, RED R4): #1049a WITHHELD THIS NOTICE WHILE THE PAYOUT WAS OPEN, so the payout always
+       came first. RULED (2026-10-04): Fleet Loss outranks Private Revenue. The order -- and the "a sequence, not a
+       stack" that #1049a was right about -- now belongs to the shell's forced-notice chain (`noticeChain.ts`), which
+       presents one notice at a time; this memo answers only whether a fleet notice is due. */
     /* ==================================================================
         DESIGN NOTE (VF-7): AND THE RUST FLOURISH FINISHES BEFORE ITS TUTORIAL SPEAKS
        ==================================================================
@@ -11709,15 +11692,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     turnIdentity,
     sandboxRoomCode,
     viewerAddress,
-    /* Design note (VF-7): and what makes the rust hold lift on its own, for exactly #1049a's reason one
-       line down -- this memo has to re-run when the flourish finishes, and a ref read would leave the
-       notice suppressed until something else happened to change. */
+    /* Design note (VF-7): and what makes the rust hold lift on its own, for the reason #1049a gave (its hold
+       is gone -- see the W3-A note above) -- this memo has to re-run when the flourish finishes, and a ref read
+       would leave the notice suppressed until something else happened to change. */
     rustNoticeHeld,
     discardNoticeHeld,
-    /* Design note #1049a: what makes the suppression above lift on its own. Listed rather than read through a
-       ref precisely BECAUSE this memo must re-run when the payout modal closes -- a ref read would suppress
-       the notice and then never notice it was safe to show it. */
-    privatePayoutPhase,
   ]);
 
   const acknowledgeFleetNotice = useCallback(() => {

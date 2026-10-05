@@ -75,8 +75,9 @@ const STICKY_START = CODE.lastIndexOf("ref={actionBarRef}");
 const STICKY_END = CODE.indexOf("{!sessionReady && (");
 const sticky = CODE.slice(STICKY_START, STICKY_END);
 /* `outside` is GONE with the arrangement it described. Every assertion that used it was about a panel lifted
-   past the bar's closing tag, and #828 put both of them back inside -- so the region it named is now the
-   probe and the private-powers panel, neither of which this file is about. Deleted rather than left unused:
+   past the bar's closing tag, and #828 put both of them back inside -- so the region it named became the
+   probe and the private-powers panel (both since removed: #885, and W1-I under OD-14(a)), neither of which
+   this file is about. Deleted rather than left unused:
    ESLint found it, which is the only reason it is not still here as a slice nobody reads. */
 
 describe("the route detail is inside the bar too (design note #855)", () => {

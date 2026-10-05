@@ -169,6 +169,36 @@ describe("Phase 3 lane A: the record's transitions (pure, integer ms)", () => {
     assert.equal(elapsedOf(r, T0 + 31 * MIN), MIN);
   });
 
+  test("a turn of the same key is a NEW turn when another seat moved in between, even if the keeper never saw that turn", () => {
+    const record = started(); // Alice's turn (the deal)
+    const aliceAgain = factsAfter(2); // Alice bought, Bob bought: Alice is on turn again with the same key
+    assert.equal(aliceAgain.turnKey, alice.turnKey, "one seat's turns in a round share a key");
+    assert.equal(aliceAgain.lastForeignIndex > (record.turn?.from_index as number), true, "Bob moved after Alice's turn began");
+    const { record: next } = observeFacts(record, aliceAgain, T0 + 5 * MIN, T0 + 5 * MIN);
+    assert.notEqual(next, record, "never merged into the old turn");
+    assert.equal(next.turn?.started_at, T0 + 5 * MIN);
+    assert.equal(elapsedOf(next, T0 + 5 * MIN), 0);
+  });
+
+  test("an undo that reaches back into an ended turn resumes it with the time it had used -- never a fresh allowance", () => {
+    const session = boardAfter(1); // the deal, Alice's purchase: Bob on turn
+    const aliceTurn = observeFacts(newClockRecord(gameId, "live", TEST_POLICY, T0), clockFactsOf({ state: boardAfter(0).state, entries: boardAfter(0).entries }, { ended: false, closed: false }), T0, T0).record;
+    const bobFacts = clockFactsOf({ state: session.state, entries: session.entries }, { ended: false, closed: false });
+    const bobTurn = observeFacts(aliceTurn, bobFacts, T0 + 90_000, T0 + 90_000).record;
+    assert.deepEqual(bobTurn.history.map((past) => [past.seat, past.active_ms]), [[ALICE, 90_000]]);
+    const buy = session.entries.filter((entry) => entry.actor === ALICE && entry.derived !== true).pop() as { index: number };
+    const undone = session.submit({ actor: ALICE, build: BUILD, msg: { RevertTo: { index: buy.index, player: ALICE, summary: "undo" } } as never, baseIndex: session.nextIndex - 1, submissionId: "undo" });
+    assert.equal(undone.kind, "applied", JSON.stringify(undone));
+    const back = clockFactsOf({ state: session.state, entries: session.entries }, { ended: false, closed: false });
+    assert.equal(back.seat, ALICE);
+    assert.equal(back.liveHead < (bobTurn.turn?.from_index as number), true, "the live head fell below where Bob's turn began");
+    const { record: resumed } = observeFacts(bobTurn, back, T0 + 100_000, T0 + 100_000);
+    assert.equal(resumed.turn?.seat, ALICE);
+    assert.equal(elapsedOf(resumed, T0 + 100_000), 90_000, "resumed with the 90 s it had used");
+    assert.equal(resumed.history.length, 0);
+    assert.equal(resumed.tally.turns, bobTurn.tally.turns, "a resumed turn is not a new turn");
+  });
+
   test("expiry is a fact, noted once: the view says expired, the clock keeps counting, nothing else changes", () => {
     const record = started();
     assert.equal(msUntilExpiry(record, T0), 2 * MIN);

@@ -22,9 +22,12 @@
 // that table's promise chain, so the record is decided by one writer at a time (the store's revision condition, and the
 // DynamoDB writer fence, refuse any other).
 //
-// VISIBLE BEFORE DURABLE, FOR A TURN CHANGE ONLY -- AND WHY THAT IS SAFE. A new turn's start is shown at once, and written
-// behind. If the write is lost and the server restarts, the load starts that turn at the newest committed entry's server
-// stamp -- the very commit that started it (or a later move inside it): the turn never loses time it was shown to have.
+// VISIBLE BEFORE DURABLE, FOR A TURN CHANGE ONLY -- AND WHAT THAT COSTS. A new turn's start is shown at once, and written
+// behind (a failed write is retried). If the write is lost AND the server restarts before the retry lands, the load starts
+// that turn at the HAND-OVER's server stamp -- the other seat's move that began it (`ClockFacts.handoverAt`), durable in the
+// log. That is the turn's true start unless another seat made an off-turn move inside it (an offer's answer, say), when the
+// recovered start is that later move and the turn shows LESS time than it was shown before the restart. It never shows
+// more, and nothing acts on the figure (review finding 3: recorded, bounded to a lost write plus a restart).
 // A PAUSE OR RESUME is different: it is the host's statement, so it is written first and acknowledged (and shown) only
 // once the store has it.
 
@@ -252,7 +255,8 @@ export function createClockKeeper(deps: ClockKeeperDeps) {
       entry.expiryTimer = null;
     }
     const record = entry.record;
-    if (record === null || entry.status !== "ready") return;
+    /* A held table's clock (loaded with no facts) is read, never timed or written (review finding 5). */
+    if (record === null || entry.status !== "ready" || entry.facts === null) return;
     const due = msUntilExpiry(record, now());
     if (due === null) return;
     const epoch = entry.epoch;
@@ -294,9 +298,9 @@ export function createClockKeeper(deps: ClockKeeperDeps) {
       return;
     }
     const base = entry.record ?? newClockRecord(entry.gameId, entry.mode, deps.policy, now());
-    /* At a load (or a reread), a turn the record does not know starts at the newest committed entry's server stamp --
-       the durable evidence of when the board last moved. A live commit's turn starts when it was observed. */
-    const since = source === "commit" ? entry.since : Math.min(entry.since, facts.lastAt ?? entry.since);
+    /* At a load (or a reread), a turn the record does not know starts at the hand-over's server stamp -- the durable
+       evidence of when it began. A live commit's turn starts when it was observed. */
+    const since = source === "commit" ? entry.since : Math.min(entry.since, facts.handoverAt ?? facts.lastAt ?? entry.since);
     const { record: next, ended } = observeFacts(base, facts, since, now());
     if (next === base && entry.record !== null) {
       armExpiry(entry);
@@ -313,8 +317,11 @@ export function createClockKeeper(deps: ClockKeeperDeps) {
   }
 
   async function expire(entry: Entry): Promise<void> {
-    if (entries.get(entry.gameId) !== entry || entry.unreadable) return;
-    if (entry.stale && !(await reread(entry))) return;
+    if (entries.get(entry.gameId) !== entry || entry.unreadable || entry.facts === null) return;
+    /* A reread brings the record in line with the board FIRST, so an expiry is never noted for a turn already over (review
+       finding 4). */
+    if (entry.stale) await settle(entry, "retry");
+    if (entry.stale) return;
     const record = entry.record;
     if (record === null) return;
     const next = noteExpiry(record, now());
@@ -334,7 +341,9 @@ export function createClockKeeper(deps: ClockKeeperDeps) {
 
   async function op(entry: Entry, kind: "pause" | "resume", by: string, revision: number): Promise<ClockOpAnswer> {
     if (entries.get(entry.gameId) !== entry || entry.unreadable) return { ok: false, code: "unavailable", reason: CLOCK_UNAVAILABLE_REASON };
-    if (entry.stale && !(await reread(entry))) return { ok: false, code: "unavailable", reason: CLOCK_UNAVAILABLE_REASON };
+    /* A reread brings the record in line with the board first (review finding 4); the tab's revision is then judged. */
+    if (entry.stale) await settle(entry, "retry");
+    if (entry.stale) return { ok: false, code: "unavailable", reason: CLOCK_UNAVAILABLE_REASON };
     if (entry.status !== "ready") return { ok: false, code: "unavailable", reason: CLOCK_UNAVAILABLE_REASON };
     /* The turn a pause names is the board's: an observation queued ahead of this op has already been settled (one chain). */
     const record = entry.record;
@@ -346,7 +355,7 @@ export function createClockKeeper(deps: ClockKeeperDeps) {
     const at = now();
     const answer = kind === "pause" ? pauseClock(record, by, at) : resumeClock(record, at);
     if ("code" in answer) return { ok: false, code: answer.code, reason: answer.reason };
-    if (answer.record === record) return { ok: true }; // already so: nothing to write (a second tab's double press)
+    if (answer.record === record) return { ok: true }; // already so: nothing to write (defensive -- a second tab's press names an older revision and is refused stale above)
     /* DURABLE BEFORE IT IS ACKNOWLEDGED OR SHOWN. */
     if (!(await write(entry, answer.record))) return { ok: false, code: "unavailable", reason: CLOCK_WRITE_FAILED_REASON };
     entry.record = answer.record;
@@ -393,7 +402,7 @@ export function createClockKeeper(deps: ClockKeeperDeps) {
       const previous = entries.get(gameId);
       if (previous !== undefined) clearTimers(previous);
       const entry = freshEntry(gameId, input.mode, previous, input.held ? null : input.facts);
-      entry.since = input.facts?.lastAt ?? now();
+      entry.since = input.facts?.handoverAt ?? input.facts?.lastAt ?? now();
       entries.set(gameId, entry);
       return enqueue(entry, async () => {
         if (entries.get(gameId) !== entry) return;

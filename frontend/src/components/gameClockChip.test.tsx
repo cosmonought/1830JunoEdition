@@ -105,6 +105,11 @@ describe("Phase 3 lane A: the clock chip", () => {
     expect(text("game-clock-value")).toBe("1:20 left");
   });
 
+  test("a view replayed from the link's cache counts from when its frame ARRIVED, not from when the chip mounted", () => {
+    render({ receivedAtOf: () => mono - 20_000 });
+    expect(text("game-clock-value")).toBe("1:10 left");
+  });
+
   test("with its room link down it shows no figure and no control (not current)", () => {
     render();
     act(() => linkListener?.(false));

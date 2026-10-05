@@ -32,7 +32,7 @@ const G = gameId(1);
 const POLICY = { live: { turnAllowanceMs: 120_000 }, async: { turnAllowanceMs: null } } as const;
 
 function facts(seat: string, n: number): ClockFacts {
-  return { dealt: true, ended: false, closed: false, seat, turnKey: `StockRound|1.0.-1|${seat}`, watermark: n, lastAt: 1_000 + n };
+  return { dealt: true, ended: false, closed: false, seat, turnKey: `StockRound|1.0.-1|${seat}`, watermark: n, lastAt: 1_000 + n, liveHead: n, lastForeignIndex: n - 1, handoverAt: 1_000 + n };
 }
 
 /** The first clock of `G` (revision 2: created, then its first turn), and the next one (a turn change). */

@@ -21,7 +21,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { styles } from "../styles/appStyles";
 import { CLOCK_PAUSE_OP, CLOCK_RESUME_OP, type RoomClockView } from "../utils/clockProtocol";
 import { presentClock, type ClockTone } from "../utils/gameClockView";
-import { roomOp, watchRoomLink } from "../utils/roomLink";
+import { roomOp, roomViewReceivedAt, watchRoomLink } from "../utils/roomLink";
 import type { RoomViewPlayer } from "../utils/roomProtocol";
 
 export interface GameClockChipProps {
@@ -40,6 +40,8 @@ export interface GameClockChipProps {
   sendOp?: typeof roomOp;
   /** TESTS: the room-link watcher (`watchRoomLink` when absent). */
   watchLink?: typeof watchRoomLink;
+  /** TESTS: when the newest room view arrived, on the `monotonic` clock (`roomViewReceivedAt` when absent). */
+  receivedAtOf?: (gameId: string) => number | null;
 }
 
 const TONE_STYLE: Record<ClockTone, React.CSSProperties> = {
@@ -75,11 +77,13 @@ const buttonStyle: React.CSSProperties = {
 
 const defaultMonotonic = () => (typeof performance !== "undefined" && typeof performance.now === "function" ? performance.now() : Date.now());
 
-export function GameClockChip({ gameId, clock, players, viewerPlayerId, isHost, current, boardSeat, monotonic = defaultMonotonic, sendOp = roomOp, watchLink = watchRoomLink }: GameClockChipProps) {
-  /* When this view of the clock arrived (monotonic): every new view object from the server resets it. */
-  const [seen, setSeen] = useState<{ clock: RoomClockView | undefined; at: number }>(() => ({ clock, at: monotonic() }));
-  if (seen.clock !== clock) setSeen({ clock, at: monotonic() });
-  const receivedAt = seen.clock === clock ? seen.at : monotonic();
+export function GameClockChip({ gameId, clock, players, viewerPlayerId, isHost, current, boardSeat, monotonic = defaultMonotonic, sendOp = roomOp, watchLink = watchRoomLink, receivedAtOf = roomViewReceivedAt }: GameClockChipProps) {
+  /* When this view of the clock ARRIVED (monotonic): the room link's own receipt time of the frame that carried it (a
+     view replayed from the link's cache to a newly mounted chip is as old as its frame -- review finding 6), else now. */
+  const arrivedAt = () => receivedAtOf(gameId) ?? monotonic();
+  const [seen, setSeen] = useState<{ clock: RoomClockView | undefined; at: number }>(() => ({ clock, at: arrivedAt() }));
+  if (seen.clock !== clock) setSeen({ clock, at: arrivedAt() });
+  const receivedAt = seen.clock === clock ? seen.at : arrivedAt();
   const [, setTick] = useState(0);
   const [linkOpen, setLinkOpen] = useState(true);
   const [busy, setBusy] = useState(false);

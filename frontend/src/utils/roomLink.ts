@@ -109,6 +109,8 @@ interface Channel {
   presences: Set<(entries: PresenceState[], serverNow?: number) => void>;
   /** Phase 3 lane A (AUD-11.04): who wants to know whether this channel's socket is open (the clock's currency). */
   links: Set<(open: boolean) => void>;
+  /** Phase 3 lane A: when (monotonic ms) the last `room` frame arrived -- a replayed view is as old as its frame. */
+  lastViewAt?: number;
   last: { view?: RoomView; rooms?: RoomSummary[]; chat?: RoomChatEntry[]; presence?: { entries: PresenceState[]; now?: number } };
   /** Terminal: this tab may not read this game any more. */
   lost: RoomLoss | null;
@@ -384,6 +386,7 @@ function attachNow(channel: Channel): void {
         const view = (frame as unknown as RoomFrame).view;
         if (!view || (frame as unknown as RoomFrame).gameId !== channel.key) return;
         channel.last.view = view;
+        channel.lastViewAt = monotonicNow();
         channel.views.forEach((listener) => listener.onView(view));
         return;
       }
@@ -639,6 +642,19 @@ export function watchRoom(gameId: string, listener: ViewListener): () => void {
     channel.views.delete(listener);
     releaseIfIdle(channel);
   };
+}
+
+/** Phase 3 lane A: the page's monotonic clock (never the wall clock). */
+function monotonicNow(): number {
+  return typeof performance !== "undefined" && typeof performance.now === "function" ? performance.now() : Date.now();
+}
+
+/** Phase 3 lane A (AUD-11.04): when (monotonic ms, `performance.now`) this game's newest room view ARRIVED, or `null`. A
+ *  view handed to a late subscriber from the channel's cache is as old as this -- the clock counts on from here, not from
+ *  when a component happened to mount. */
+export function roomViewReceivedAt(gameId: string): number | null {
+  const channel = channels.get(gameId);
+  return channel === undefined || channel.retired ? null : (channel.lastViewAt ?? null);
 }
 
 /** Phase 3 lane A (AUD-11.04): whether this game's room channel is connected -- now, and on every change. The clock is

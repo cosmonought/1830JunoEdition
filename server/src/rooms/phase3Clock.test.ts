@@ -116,15 +116,21 @@ async function tab(port: number, claim: string, gameId: string): Promise<Client>
 /** The last log index a log client has seen (its catch-up and fan-out). */
 const lastIndex = (client: Client): number => client.seen().reduce((max, entry) => Math.max(max, entry.index), -1);
 
-/** The seat on turn buys the cheapest private, through its own log socket. */
-async function buy(port: number, claim: string, gameId: string, label: string): Promise<void> {
+/** One move through the seat's own log socket, answered `applied`. */
+async function play(port: number, claim: string, gameId: string, msg: object, label: string): Promise<Frame> {
   const client = await Client.open(port, claim);
   client.hello(gameId);
   await client.next((frame) => frame.kind === "catch-up", "the catch-up");
-  client.submit(BUY, { baseIndex: lastIndex(client), submissionId: label });
+  client.submit(msg, { baseIndex: lastIndex(client), submissionId: label });
   const answer = await client.answerTo(label);
   assert.equal(answer.kind, "applied", `${label}: ${JSON.stringify(answer)}`);
   await client.close();
+  return answer;
+}
+
+/** The seat on turn buys the cheapest private. */
+async function buy(port: number, claim: string, gameId: string, label: string): Promise<void> {
+  await play(port, claim, gameId, BUY, label);
 }
 
 /** A table created with chosen variants (`openGame` deals `{}`), dealt by the host. */
@@ -247,6 +253,34 @@ describe("Phase 3 lane A: the gameplay clock through the server", () => {
         await until(() => bob.frames.some((frame) => frame.kind === "error" && frame.code === "bad-frame"), "the invented field refused");
         assert.deepEqual(booted.server.rooms.clocks.recordOf(table.gameId), before);
         await Promise.all([fresh.close(), stale.close(), bob.close()]);
+      } finally {
+        await stopServer(booted.server);
+      }
+    }));
+
+  test("an UNDO cannot reset a clock: undoing the move that ended your turn resumes it with the time already used", async () =>
+    withDir("undo", async (dir) => {
+      const time = fakeTime(Date.now());
+      const booted = await boot(dir, time, TEST_POLICY);
+      try {
+        const table = await openGame(booted.port, ALICE, [BOB]);
+        await settle(booted, table.gameId);
+        await time.advance(50 * SEC);
+        const bought = await play(booted.port, ALICE, table.gameId, BUY, "a-buy");
+        const buyIndex = (bought.entries as Array<{ index: number; actor: string }>).find((entry) => entry.actor === table.playerIds[ALICE])?.index as number;
+        await settle(booted, table.gameId);
+        const alice = await tab(booted.port, ALICE, table.gameId);
+        await clockWhere(alice, (clock) => clock.seat === table.playerIds[BOB], "Bob's turn");
+        await time.advance(20 * SEC);
+        await play(booted.port, ALICE, table.gameId, { RevertTo: { index: buyIndex, player: "me", summary: "undo" } }, "a-undo");
+        await settle(booted, table.gameId);
+        const resumed = await clockWhere(alice, (clock) => clock.seat === table.playerIds[ALICE], "Alice's turn, resumed");
+        assert.equal(resumed.elapsedMs, 50 * SEC, "the undone turn resumes with the 50 s it had used -- not a fresh allowance, not charged Bob's 20 s");
+        assert.equal(resumed.remainingMs, 2 * MIN - 50 * SEC);
+        await time.advance(10 * SEC);
+        const later = await tab(booted.port, BOB, table.gameId);
+        assert.equal(latestClock(later)?.elapsedMs, 60 * SEC);
+        await Promise.all([alice.close(), later.close()]);
       } finally {
         await stopServer(booted.server);
       }
@@ -410,7 +444,7 @@ describe("Phase 3 lane A: the gameplay clock through the server", () => {
         const clock = latestClock(bob) as RoomClockView;
         assert.equal(clock.mode, "live", "a record that names no mode reads as Live (#1256)");
         assert.equal(clock.seat, BOB);
-        assert.equal(clock.turnStartedAt, log[log.length - 1].at, "timed from the newest committed entry's server stamp");
+        assert.equal(clock.turnStartedAt, log[log.length - 1].at, "timed from the hand-over's server stamp (Alice's purchase, the newest entry)");
         const stored = JSON.parse(fs.readFileSync(path.join(dir, "games", `${gameId}.json`), "utf8")) as GameRecord;
         assert.equal(stored.record_version, record.record_version, "the GameRecord itself is not rewritten for the clock");
         assert.equal(Object.prototype.hasOwnProperty.call(stored, "clock"), false);

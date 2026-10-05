@@ -309,8 +309,10 @@ export class NoticeLedger {
   /** The fleet-loss raiser's question: should this event NOT be queued? Answered, or historical to this viewer. */
   has(key: string): boolean {
     if (this.acknowledged.has(key)) return true;
-    if (this.historical.has(key)) return true;
+    /* THE PLAYER'S OWN UNANSWERED NOTICE WINS over "history": the log can drain before the room view names the
+       seat, marking an event historical before this record's pending list is loaded (review, MEDIUM). */
     if (this.isPending(key)) return false;
+    if (this.historical.has(key)) return true;
     if (!this.historyIsUnwitnessed()) return false;
     this.historical.add(key);
     return true;

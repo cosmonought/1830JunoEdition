@@ -235,6 +235,19 @@ describe("4-5. a late joiner gets no backlog; Fleet Loss does not replay old his
     expect(ledger.has(fleetLossNoticeKey(LIMIT))).toBe(false); // never seen at load: a live event is still new
   });
 
+  it("a restored notice survives a log that drained before the room view named the seat", () => {
+    /* Review MEDIUM (after the Undo fix): the catch-up and the room view arrive on separate sockets. */
+    mount(KEY_A).remember({ kind: "fleetLoss", key: fleetLossNoticeKey(RUST), payload: RUST });
+    let loading = true;
+    const reloading = new NoticeLedger(() => loading);
+    reloading.bind(null); // no room view yet
+    expect(reloading.has(fleetLossNoticeKey(RUST))).toBe(true); // the drain: history, as far as anyone knows
+    reloading.bind(KEY_A); // the view arrives: this player's record has RUST pending
+    loading = false;
+    expect(reloading.has(fleetLossNoticeKey(RUST))).toBe(false);
+    expect(nextDueNotice([RUST], reloading)).toBe(RUST);
+  });
+
   it("an answered event stays answered whatever the history is doing", () => {
     mount(KEY_A).acknowledge(fleetLossNoticeKey(RUST));
     expect(mount(KEY_A, () => true).has(fleetLossNoticeKey(RUST))).toBe(true);

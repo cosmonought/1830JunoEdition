@@ -6588,10 +6588,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
         /* #1407: A BOARD MID-REPLAY IS NOBODY'S TURN TO JUDGE. After a reload the drain applies the whole log
            an action at a time, and a click that lands during it is gated against whichever historical board
            the drain has reached -- which is how a president on turn was told "It is not your turn". Said
-           honestly instead, and not sent: the player tries again a moment later on the settled board. */
+           honestly instead, and not sent: the player tries again a moment later on the settled board.
+           Phase 3 W3-J (AUD-25.13 W2-D item, OD-12 RED R1): a PLAYER decision sent `automatic` (the B&O par, the home
+           station, the M&H exchange, Undo) is about that historical board too; only the replay and the game's own
+           derived actions pass -- the same rule as the landed branch (AUD-25.03). */
         if (
           options?.isRemoteReplay !== true &&
-          options?.automatic !== true &&
+          options?.derived !== true &&
           replayingRef.current
         ) {
           setSandboxRoomError(CATCHING_UP_BANNER);

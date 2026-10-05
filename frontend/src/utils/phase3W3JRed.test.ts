@@ -42,3 +42,31 @@ describe("RED R1 (AUD-25.03): a landed PLAYER decision retires the refusal, auto
     expect(run({ type: "refusal", text: TURN_REFUSAL }, ...landedDispatches).refusal).toBeNull();
   });
 });
+
+/** The #1407 catching-up guard: the first `if (` after its note, up to its body. */
+const catchingUpGuard = () => {
+  const from = shell.indexOf("setSandboxRoomError(CATCHING_UP_BANNER);");
+  const start = shell.lastIndexOf("if (", from);
+  return shell.slice(start, from);
+};
+
+describe("RED R1 (AUD-25.13, W2-D deferred): an `automatic` player decision no longer bypasses the catching-up guard", () => {
+  it("the guard exempts only the replay and the derived actions -- not `automatic`", () => {
+    const guard = catchingUpGuard();
+    expect(guard).toContain("options?.isRemoteReplay !== true");
+    expect(guard).toContain("options?.derived !== true");
+    expect(guard).toContain("replayingRef.current");
+    expect(guard).not.toContain("options?.automatic");
+  });
+
+  it("the same distinction as the landed branch (AUD-25.03): one rule, not two mechanisms", () => {
+    expect(landedBranch()).toContain("if (options?.derived !== true) {");
+    expect(catchingUpGuard()).toContain("options?.derived !== true");
+  });
+
+  it("the turn gate keeps its own exemptions: an automatic decision is still not judged by whose turn it is (#536)", () => {
+    const turnGate = sliceBetween(shell, "const onTurnNow =", "setSandboxRoomError(TURN_REFUSAL);");
+    expect(turnGate).toContain("options?.automatic !== true");
+    expect(turnGate).toContain("options?.offTurn !== true");
+  });
+});

@@ -221,9 +221,10 @@ function room() {
 }
 
 describe("AUD-25.16 (C): controls stay live on a stale board, and a click reaches the server", () => {
-  it("DEFECT: the only currentness gate is a drain in progress; the turn gate reads the shell's own board", () => {
+  it("FIXED (W3-J): the catching-up gate no longer lets an automatic player decision through; the turn gate reads the shell's own board", () => {
     const shell = readShell();
-    expect(shell).toMatch(/options\?\.isRemoteReplay !== true &&\s*options\?\.automatic !== true &&\s*replayingRef\.current/);
+    // AUD-25.13 (W2-D deferred), RED R1: only the replay and the derived actions pass the catching-up gate.
+    expect(shell).toMatch(/options\?\.isRemoteReplay !== true &&\s*options\?\.derived !== true &&\s*replayingRef\.current/);
     expect(shell).toContain("actingAddress(boardNow, sandboxWaterfallRef.current) === viewerAddressRef.current");
   });
 

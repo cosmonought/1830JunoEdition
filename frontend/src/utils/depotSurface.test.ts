@@ -85,6 +85,7 @@ describe("the panel sits above its surroundings, not below them", () => {
        whose `#0f0f0f` is the appStyles line asserted above; so the ordering this case defends still holds, now
        against the surface that is really there. */
     const privatePanel = strip(read("components/PrivateTradePanel.tsx"));
+    expect(privatePanel.indexOf("  embeddedCard: {")).toBeGreaterThan(-1);
     const embedded = privatePanel.slice(privatePanel.indexOf("  embeddedCard: {"));
     expect(embedded.slice(0, embedded.indexOf("},"))).not.toContain("backgroundColor");
     /* #1092 retoned this panel and its neighbours, and THIS LINE IS WHY THE PANEL IS NOT `#161616`: the

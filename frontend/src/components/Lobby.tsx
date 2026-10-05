@@ -509,7 +509,8 @@ export function Lobby({ onEnterSandbox }: LobbyProps) {
           the scene, and each card's backdrop says `pointerEvents: "auto"` itself so no ancestor can do this
           to them again. Enter "worked" only because the PIN field had focus and resubmitted the lookup. */}
       {/* #1415: the host's setup card, at the root for #1360's reason. */}
-      {/* #1648: the pilot for the modal layer. The mount lifecycle is unchanged -- `hostSetup` still decides
+      {/* [Superseded in part by W3-D, below: the wrapper this note describes is removed, and the "later batch" that
+          would make this screen `inert` is ruled out by OD-15(b).] #1648: the pilot for the modal layer. The mount lifecycle is unchanged -- `hostSetup` still decides
           whether the card exists, and closing still unmounts it, which is still what resets every selection.
           Only the DOM destination moved: the card now renders into the layer beside this screen rather than
           inside it, so a later batch can make this screen `inert` without disabling the dialog. React context

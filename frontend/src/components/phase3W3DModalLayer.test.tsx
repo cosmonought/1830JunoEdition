@@ -159,8 +159,10 @@ describe("2. ModalPortal has one consumer left: NativeModal", () => {
 
 describe("3. no manual inert machinery (OD-15(b))", () => {
   it("the only inert the app writes is the cinematic cover on the shell root", () => {
+    /* Every way to write it: the property, `setAttribute`, a JSX attribute (with or without a value), and an
+       object key headed for a spread. */
     const writers = SOURCES.filter(([, code]) =>
-      /\.inert\s*=|setAttribute\(\s*["']inert["']|\binert=\{|\{\s*inert\s*:|["']inert["']\s*:/.test(code),
+      /\.inert\s*=|setAttribute\(\s*["']inert["']|\sinert(?:=|[ \t]*\/?>|[ \t]+[\w-]+=)|\{\s*inert\s*:|["']inert["']\s*:/.test(code),
     ).map(([rel]) => rel);
     expect(writers).toEqual(["components/CinematicTakeover.tsx"]);
   });
@@ -170,12 +172,15 @@ describe("4. every aria-modal left in source is classified", () => {
   /* The only surfaces still claiming `aria-modal` on a hand-written element, each with its owner and reason. A
      new one fails here until it is classified; a migrated one fails here until it is struck from the list. */
   const CLASSIFIED: Record<string, string> = {
-    /* AUD-13.04: the native-dialog conversion is W3-D's, but it waits for W3-A's OD-5 notice/focus/re-arm
-       architecture to integrate. Not touched by this pass. */
+    /* AUD-13.04: GENUINELY MODAL (a library the player opens and closes; the notice blocks the board while up), so
+       its target is NativeModal. The conversion is W3-D's, but it waits for W3-A's integration (OD-5, the notice /
+       focus / re-arm architecture, and R-TUT are W3-A's while it is active). Not touched by this pass. */
     "components/TutorialModal.tsx": "AUD-13.04 -- waits for W3-A integration",
-    /* Excluded by the plan (W3-D does not touch it; W2-H settled it): its President's card hands off to the map,
-       so a top-layer dialog would make the board it needs inert (nativeModalBoundary's note). */
-    "components/HomeStationPrompt.tsx": "W2-H-settled, excluded from W3-D",
+    /* CLASSIFIED BY BEHAVIOUR (W3-D review L4): GENUINELY MODAL -- a fixed scrim that blocks the board by pointer,
+       with no keyboard isolation -- so under OD-15(b) its target is NativeModal, not the removal of the claim. Its
+       migration is deferred, not refused: the President's card hands off to the MAP, and a top-layer dialog would
+       make the board it needs inert (nativeModalBoundary's note). The plan keeps it out of W3-D; W2-H settled it. */
+    "components/HomeStationPrompt.tsx": "genuinely modal; NativeModal migration deferred (map hand-off); W2-H's, excluded from W3-D",
   };
   it("lists exactly the surfaces that still carry it", () => {
     const carriers = SOURCES.filter(([, code]) => /aria-modal=["{]/.test(code)).map(([rel]) => rel);

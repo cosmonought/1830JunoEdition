@@ -362,6 +362,9 @@ export function GameIntroOverlay({ onDone, sfxEnabled, gameType = "standard" }: 
         playsInline
         muted={!sfxEnabled}
         loop={false}
+        /* W3-D review: the name the takeover gave up with `role="dialog"`, kept on the film itself -- an
+           announcement of what is playing, with no modal claim. */
+        aria-label="Opening titles"
         onEnded={holdEnded}
         onTimeUpdate={onTimeUpdate}
         /* A clip that will not decode must not become a ten-second black screen with a button on it. */

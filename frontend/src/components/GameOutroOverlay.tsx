@@ -145,10 +145,14 @@ export function GameOutroOverlay({ onCue, cued, sfxEnabled }: GameOutroOverlayPr
 export default GameOutroOverlay;
 
 const styles: Record<string, React.CSSProperties> = {
-  /* Under the Game Over modal (1600) and over the board and its toasts: the modal rises over THIS. */
-  /* Phase 3 W3-D: the viewport geometry is the takeover's (`CINEMATIC_TAKEOVER_GEOMETRY`); this is the surface. */
+  /* Phase 3 W3-D: the viewport geometry is the takeover's (`CINEMATIC_TAKEOVER_GEOMETRY`); this is the surface.
+     W3-D REVIEW (L1): OVER THE WHOLE SHELL, AT THE INTRO'S TIER. This was 1500 under a note that the Game Over modal
+     sat at 1600. Since #1651 that modal is a `showModal()` dialog in the TOP LAYER, which rises over any z-index --
+     so the number no longer ordered the film against the modal, and 1500 left the status dock (3000), the waiting
+     banner (3900) and the toasts (4000) painted over a film OD-15(a) says fills the viewport. 40000 clears every
+     shell layer as the intro does; the modal still rises over it at the cue. */
   backdrop: {
-    zIndex: 1500,
+    zIndex: 40000,
     backgroundColor: "#080808",
     display: "flex",
     alignItems: "center",

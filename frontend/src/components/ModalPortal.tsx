@@ -65,7 +65,10 @@
 
    WHAT DELETING THE REST TAKES (recorded, not done here): `NativeModal` rendering its `<dialog>` in place instead
    of here; then this file, the two `<ModalLayerHost />` in `GameRouter`, and the `ModalLayerHost` mount in every
-   modal suite's harness go. It is not done in W3-D because (1) every dialog would then inherit styles from, and
+   modal suite's harness go. ONE DEPENDENCY MUST MOVE FIRST: the OD-15(a) cinematic cover makes the shell root
+   `inert` (`CinematicTakeover.tsx`), and a dialog rendered in place inside an inert ancestor is inert itself, top
+   layer or not -- so before dialogs leave this layer, the cover must stop sitting on an ancestor of theirs (or the
+   dialogs that can open during a film must stay outside the shell root). It is not done in W3-D because (1) every dialog would then inherit styles from, and
    bubble native DOM events through, the subtree that opened it -- fifteen mount sites that need a real-browser
    pass, not jsdom; and (2) it rewrites the harnesses of suites other active lanes are editing (the W3-A notice
    suites, the W2-M wallet suite). The cinematics never used this layer and are not counted as consumers: they

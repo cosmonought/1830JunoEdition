@@ -36,6 +36,8 @@
 import React from "react";
 import { createPortal } from "react-dom";
 
+import { styles as appStyles } from "../styles/appStyles";
+
 /** The attribute the tests and the shell find a takeover by. */
 export const CINEMATIC_TAKEOVER_ATTRIBUTE = "data-cinematic-takeover";
 
@@ -48,6 +50,19 @@ export const CINEMATIC_TAKEOVER_GEOMETRY: Readonly<React.CSSProperties> = Object
   right: 0,
   bottom: 0,
   left: 0,
+});
+
+/* ==================================================================
+    W3-D REVIEW (M1): WHAT THE LAYER USED TO INHERIT, IT NOW DECLARES
+   ==================================================================
+   Inside the shell root the films inherited the app's type and ink from `styles.appRoot`. On <body> nothing sets
+   either, so the credit ("Powered by Neta DAO") and the skip (`fontFamily: "inherit"`) would fall back to the
+   browser's default serif -- a composition change jsdom cannot see. The layer therefore carries the shell root's
+   own `fontFamily` and `color`, READ FROM `styles.appRoot` rather than copied, so a re-theme of the shell moves
+   the films with it. Only the inherited text properties transfer; the shell's zoom deliberately does not. */
+export const CINEMATIC_TAKEOVER_INHERITED: Readonly<React.CSSProperties> = Object.freeze({
+  fontFamily: appStyles.appRoot.fontFamily,
+  color: appStyles.appRoot.color,
 });
 
 export type CinematicTakeoverProps = {
@@ -69,7 +84,7 @@ export function CinematicTakeover({ style, testId, ariaHidden, role, children }:
       data-testid={testId}
       role={role}
       aria-hidden={ariaHidden}
-      style={{ ...style, ...CINEMATIC_TAKEOVER_GEOMETRY }}
+      style={{ ...CINEMATIC_TAKEOVER_INHERITED, ...style, ...CINEMATIC_TAKEOVER_GEOMETRY }}
     >
       {children}
     </div>
@@ -89,7 +104,13 @@ export function cinematicTakeoverActive(introPlaying: boolean, outro: "playing" 
 }
 
 /** The attribute spread for the covered root. `inert` is not in React 18's DOM typings, so it is written as a
- *  plain attribute; absent (not `false`) when nothing covers the game, so the root carries no attribute at all. */
+ *  plain attribute; absent (not `false`) when nothing covers the game, so the root carries no attribute at all.
+ *  REACT 19 NOTE: React 19 knows `inert` as a boolean and warns on `""`; on that upgrade this returns `{ inert: true }`.
+ *
+ *  W3-D REVIEW (L5), A RECORDED RESIDUAL: making the root inert blurs whatever in-shell control held focus. For
+ *  the outro that means a player who presses Escape before its Skip appears and then dismisses Game Over lands on
+ *  <body> rather than on their last control (with Skip shown, the pre-existing path already lost it: Skip took
+ *  focus and unmounts at the cue). Where focus returns after a forced surface is OD-5's question, in W3-A. */
 export function inertWhileCovered(covered: boolean): Record<string, string> {
   return covered ? { inert: "" } : {};
 }

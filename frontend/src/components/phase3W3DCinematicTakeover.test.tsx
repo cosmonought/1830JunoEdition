@@ -18,6 +18,10 @@
 // no `zoom`, and does not enforce `inert`. So "fills the viewport" is asserted as the geometry contract and the
 // absence of every scaled ancestor; "cannot be interacted with" as the `inert` attribute on the covered root
 // with the takeover outside it. A real-browser pass at several scales is a Phase-4 observation.
+//
+// THE HARNESS SPREADS `inert` ITSELF, from the same two exported functions the shell calls, so cases 6 and 7 prove
+// the rule; that the shell's real root calls them is pinned against its source in the last block. Under jsdom a
+// whole-shell render is out of reach, so that pin is the honest limit, not a shortcut.
 
 import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -35,6 +39,7 @@ import { NATIVE_MODAL_ATTRIBUTE } from "./NativeModal";
 import { useUiScale } from "../utils/useUiScale";
 import { UI_SCALE_STEPS, setUiScale, resetUiScaleForTests } from "../utils/uiScale";
 import { readStripped, readShell, sliceBetween } from "../utils/sourceScan";
+import { styles as appStyles } from "../styles/appStyles";
 
 declare global {
   // eslint-disable-next-line no-var
@@ -46,10 +51,6 @@ type Outro = "playing" | "cued" | null;
 
 /* The shell, reduced to the three things that matter here: the scaled root with the covered-root `inert`, a
    control on the board, and the overlay mounted inside the root. The modal layer is the root's sibling. */
-let api: {
-  setIntro: (on: boolean) => void;
-  setOutro: (state: Outro) => void;
-} | null = null;
 let introDone = 0;
 let outroCues = 0;
 
@@ -57,7 +58,6 @@ function Shell({ initialIntro, initialOutro }: { initialIntro: boolean; initialO
   const uiScale = useUiScale();
   const [intro, setIntro] = useState(initialIntro);
   const [outro, setOutro] = useState<Outro>(initialOutro);
-  api = { setIntro, setOutro };
   return (
     <>
       <div data-testid="shell-root" style={{ zoom: uiScale }} {...inertWhileCovered(cinematicTakeoverActive(intro, outro))}>
@@ -109,7 +109,6 @@ afterEach(() => {
   host?.remove();
   root = null;
   host = null;
-  api = null;
   act(() => resetUiScaleForTests());
   jest.useRealTimers();
 });
@@ -195,6 +194,16 @@ describe.each(SURFACES)("the $name is a full-viewport takeover (OD-15(a))", ({ t
     expect(source.includes("aria-modal")).toBe(false);
   });
 
+  it("declares the app's type and ink, which it no longer inherits from the shell (review M1)", () => {
+    mount(open);
+    const layer = takeover(testId)!;
+    /* On <body> nothing sets either, and the credit and the skip would fall back to the browser's serif. */
+    expect(layer.style.fontFamily).toContain("system-ui");
+    expect(String(appStyles.appRoot.fontFamily)).toContain("system-ui");
+    expect(layer.style.fontFamily).not.toBe("");
+    expect(layer.style.color).not.toBe("");
+  });
+
   it("5. has no modal-panel chrome or constrained sizing: the layer is the picture's ground, edge to edge", () => {
     mount(open);
     const layer = takeover(testId)!;
@@ -233,8 +242,11 @@ describe("the takeover's covered-root rule (cinematicTakeoverActive / inertWhile
   it("the geometry cannot be overridden by an overlay's own surface style", () => {
     expect(CINEMATIC_TAKEOVER_GEOMETRY).toEqual({ position: "fixed", top: 0, right: 0, bottom: 0, left: 0 });
     expect(Object.isFrozen(CINEMATIC_TAKEOVER_GEOMETRY)).toBe(true);
-    /* Merged AFTER the surface style, so a surface writing `position` would lose. */
-    expect(readStripped("components/CinematicTakeover.tsx")).toContain("style={{ ...style, ...CINEMATIC_TAKEOVER_GEOMETRY }}");
+    /* Merged AFTER the surface style, so a surface writing `position` would lose; the inherited type and ink go
+       FIRST, so a surface may restyle its own text. */
+    expect(readStripped("components/CinematicTakeover.tsx")).toContain(
+      "style={{ ...CINEMATIC_TAKEOVER_INHERITED, ...style, ...CINEMATIC_TAKEOVER_GEOMETRY }}",
+    );
   });
 });
 

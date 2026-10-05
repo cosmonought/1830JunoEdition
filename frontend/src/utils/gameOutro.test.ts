@@ -23,7 +23,9 @@ describe("the outro plays on the ending's edge and hands off to the modal (desig
   it("cues on the picture's clock at the settled title, sits under the modal, and ducks the radio", () => {
     expect(outro).toContain("export const OUTRO_CUE_SECONDS = 8.0;"); // #1445 // #1437: after the first fireworks
     expect(outro).toContain("if (event.currentTarget.currentTime >= OUTRO_CUE_SECONDS) cue();");
-    expect(outro).toContain("zIndex: 1500");
+    /* Phase 3 W3-D (OD-15(a), review L1): was `zIndex: 1500`. The film is a full-viewport takeover now and sits at
+       the intro's tier over every shell layer; the top-layer modal below still rises over it at the cue. */
+    expect(outro).toContain("zIndex: 40000");
     /* "SITS UNDER THE MODAL", SUPERSEDED BY #1651 AND STRONGER FOR IT. This read
        `expect(modal).toContain("zIndex: 1600")` -- 1600 over the overlay's 1500, a pair two files had to keep
        in step by hand. `GameOverModal` is now a `<dialog>` opened with `showModal()`, so it is in the TOP
@@ -31,7 +33,7 @@ describe("the outro plays on the ending's edge and hands off to the modal (desig
        come apart because there is no longer a pair. The number is gone from the modal rather than changed,
        and a new one would be a claim the engine does not honour -- so it is forbidden here, on the scrim's
        own style block. The overlay keeps its 1500: it is an ordinary z-indexed surface and nothing about it
-       moved. */
+       moved. [W3-D: the overlay is a takeover at 40000 now -- see the line above; the top-layer argument holds.] */
     expect(modal).toContain("<NativeModal");
     expect(sliceBetween(modal, "backdrop: {", "},")).not.toContain("zIndex");
     expect(outro).toContain("duckRadio(DUCK_FOR_VIDEO)");

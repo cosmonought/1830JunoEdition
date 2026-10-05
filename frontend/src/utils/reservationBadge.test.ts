@@ -65,7 +65,9 @@ describe("a badge in the margin wears no ring", () => {
        the position still answer one question; the question is "is this a claim on a slot". */
     expect(RENDERER).toContain("!optional,");
     expect(RENDERER).toContain("const optional = home.enforced === false;");
-    expect(RENDERER).toContain("? twoNodePositions(homeCenter, hexSize)");
+    /* VF D-35: the ternary became early returns when the laid OO home gained its second marker; the printed
+       circles are unchanged. */
+    expect(RENDERER).toContain("if (inMargin && !homeLaidTile) return twoNodePositions(homeCenter, hexSize);");
   });
 
   it("keeps the ring on a reservation that IS in a city", () => {
@@ -110,8 +112,10 @@ describe("the position and the outline now agree", () => {
        "misleadingly", so the phrase a reader sees is not a string the file contains. Fifth time this pass
        that source text has read as contiguous and was not -- a JSX `$`, a `+`-joined tutorial line, a
        wrapped block comment, a template literal's doubled `$`, and now a wrapped line comment. */
-    /* Design note #1283 supersedes #43: both circles carry the badge, so neither is misrepresented. */
-    expect(RENDERER).toContain("? twoNodePositions(homeCenter, hexSize)");
+    /* Design note #1283 supersedes #43: both circles carry the badge, so neither is misrepresented. VF D-35 carries
+       the same "both" onto a laid OO home's two cities. */
+    expect(RENDERER).toContain("if (inMargin && !homeLaidTile) return twoNodePositions(homeCenter, hexSize);");
+    expect(RENDERER).toContain("const cities = tileCityAnchors(homeLaidTile.tile_id, homeLaidTile.orientation, homeCenter, hexSize);");
   });
 
   it("no longer parks ERIE's badge on a vertex", () => {

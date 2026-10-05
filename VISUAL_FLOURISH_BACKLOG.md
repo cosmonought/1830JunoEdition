@@ -1199,9 +1199,8 @@ that city's own choreography: a marker on a city's centre stays on the centre th
 following no branch, and travels with a migrating or merging city. It has no planned place — it is already drawn as a
 faded token — so while a tile is being chosen a marker the confirm will move is left out of the proposal, and from the
 confirm the real marker rides in from where it stood; a marker the lay does not move stays as it was. On an OO home
-(ERIE, PMQ) the two markers on the printed circles converge on the one city a tile gives them: the one whose circle
-becomes that city rides it, and the other — like any marker whose old city does not become its new one — moves
-straight to its place, as before (D-35). Swept over every accepted transition on a home hex, remote and confirmed
+(ERIE, PMQ) the two markers on the printed circles converged on the one city a tile gave them, the other moving
+straight to its place (D-35); since D-35's resolution a laid OO home keeps a marker in each city and each rides its own. Swept over every accepted transition on a home hex, remote and confirmed
 (3,466 markers): every start and end exact; the 2,710 that ride a seat inside their city's drawn shapes in every
 sampled frame (at least 4.4 px inside at hex size 40); at most 2.8 px left to travel when the commit starts.
 **Watch:** whether a marker missing from the proposal while the tile is being chosen reads as "this reservation
@@ -1547,7 +1546,7 @@ whether tokens passing over a receded planned shape read as moving above it.
 ### D-33 · `RESOLVED` (#1473) · A confirmed proposal's reservation markers held still
 Was: #1472 seated corporation tokens only, and a confirmed proposal's reservation markers held where the proposal
 drew them while their city moved in beneath them. Since #1473 every reservation marker rides its city, reading its
-city from where the board draws it rather than from an index it does not carry (D-14); an OO home's markers are D-35.
+city from where the board draws it rather than from an index it does not carry (D-14); an OO home's markers were D-35 (resolved).
 
 ### D-34 · `PLAYTEST` · A token's planned place
 While a tile is being chosen, a token the lay will move — one `pieceMoves` finds further than 0.02 of the hex from its
@@ -1564,7 +1563,10 @@ not. Reduced motion shows none. Only corporation tokens have one (D-14). **Watch
 subordinate to a real token over a washed proposal; whether a planned place half covered by a token still gathering or
 travelling reads as a target or as a second token.
 
-### D-35 · `OPEN` · An OO home's reservation has no city to ride
+### D-35 · `RESOLVED` (lane B, 2026-10-05) · An OO home's reservation has no city to ride
+**RESOLVED on `phase3/preplaytest-d35-oo-marker` (from `b8d5246`; presentation only; no gameplay, state, rules, legality or version change; NOT integrated).** Root cause: the renderer paired each old reservation marker with the NEAREST new place -- a second, geometric city matcher -- and the board drew a laid OO home's reservation only in the tile's artwork second city. The plan's own correspondence (`plan.cities[*].sources`, #1462) carries #59's second city into the green tile's FIRST city at every accepted facing, and #64 / #66 / #67 / #984's second city into #167's first, so 90 of 156 standard markers (156 of 270 per Plus / LPF OO home) left their city and crossed the hex. No fixed per-facing choice of ONE city can follow identity and draw the same board after a reload (#59@0 and #59@1 both upgrade to #66@0 with opposite correspondences -- odd cycles in the constraint graph). **Owner ruling (2026-10-05, on that finding): a laid OO home is reserved in BOTH its cities**, one marker per city, as #1283 already drew both printed circles (ERIE's and PMQ's home is either city whatever is laid, `homeSlotsAreOpen`). `homeReservationPoints` returns every city anchor of a laid OO home tile (`tileCityAnchors`); `reservationPlaceFor` pairs each marker with the place drawn in the city its own city becomes, by the plan's correspondence, falling back to the nearest place only where no city can be read (every non-OO home: one place, unchanged). Each marker then rides its own city's seat exactly as before (`reservationPositionAt`), and is exactly on that city's place at commit. Swept over every accepted transition on E11 (standard, Plus, LPF) and E5 (LPF): 960 markers, 546 of them changing artwork city index, every one paired with its own city's successor one-to-one, exact at both ends and inside its own city's drawn station in every 8 ms frame (`tileTransitionD35.test.ts`); the mounted board drives #59@0 -> #64@2 frame by frame (`tileTransitionD35Board.test.tsx`). **Watch (Phase 4, real browser):** two muted ERIE / PMQ markers on a laid OO home reading as "either city is reserved" (as on the printed hex); the pair riding through a brown #167 upgrade; a reservation marker drawn under another corporation's token in one of the two cities (unchanged in kind from the one-marker rule, which could stand under a token in the second city).
+
+**Superseded record (kept for provenance):**
 **OWNER DIRECTION (2026-10-05, the Phase-3 consolidated-integration brief) -- stays `OPEN`, now REQUIRED PHASE-3 FLOURISH IMPLEMENTATION (pre-Phase-4 lane B), not an owner-design question and not a Phase-4 watch:** the visual-flourish design already established that a station / reservation marker moves WITH its city's geometry during a tile transition and resolves to the correct final city position at commit. The OO edge case below is a correspondence problem -- an OO tile holds two distinct city identities, so the transition must keep which city the reservation marker belongs to. Presentation only: no gameplay, state or rules change to animate it. (The W3-H analysis below, which proposed a Phase-4 watch, is superseded on that point.)
 
 The board draws an OO home's reservation (ERIE at E11, PMQ at E5) in a laid tile's second city (#43, #724a) and on

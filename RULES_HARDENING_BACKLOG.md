@@ -5367,6 +5367,13 @@ re-pinned silently: the re-pin, its index and its reason go in the batch write-u
 
 ## Part F — Order of work
 
+**Roadmap order (owner; AUD-00.02, 2026-10-05) -- this governs over any older order in this ledger.** Phase 1 server /
+infrastructure migration → 2 JUNO testnet live proof → **3 player-facing UI / UX and pre-playtest closure** → 4 human playtesting
+and stabilization → 5 major frontend / App.tsx refactor → 6 final polish / release testing → 7 mainnet readiness / launch. UI/UX
+work (Part C's U-items and the Phase-3 audit) is Phase 3 and comes BEFORE the frontend refactor, not after it; it is executed by
+`docs/phase3/` (the plan, the matrix and the status list in its `README.md`). The older order recorded in this ledger (the
+ROADMAP 3.2 numbering, "frontend cleanup" before "UI/UX consolidation / polish") is history.
+
 Stages run in the canonical order: **6 → 7 → 8 → 9 → 10**, with Stage 5.5's cleanup landing first. Within a
 stage, the audit's own priority holds: the one-line refusals with outsized integrity value first (S7-1, S6-2),
 then the identity/legality gates (S6-5…S6-8, S7-7, S7-8), then the large validator move (S6-1 with S6-4), the

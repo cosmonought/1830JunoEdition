@@ -1,5 +1,10 @@
 # docs/phase3 — Phase 3 (player-facing UI / UX) planning record
 
+**Roadmap (owner, authoritative):** Phase 1 server / infrastructure migration → 2 JUNO testnet live proof → **3 player-facing UI / UX
+and pre-playtest closure** → 4 human playtesting and stabilization → 5 major frontend / App.tsx refactor → 6 final polish / release
+testing → 7 mainnet readiness / launch. **Current Phase-3 baseline:** `phase3/consolidated-pre-playtest-integration` @ `b8d5246c579d32ad4f9a2fccd7c293d1655ff81a` (provisional; not merged
+to main; no broad owner gate). Status: the table "Status after the consolidated integration and AUD-00.02" below.
+
 Start here. These documents plus the repository are all a Phase-3 session needs. It does not need any chat, Project memory
 or attachment.
 
@@ -33,7 +38,7 @@ or attachment.
 | Wave 2 B+C+G+D+F + W3-I + W2-I + W2-J + W3-C + v13 cert (provisional; superseded as baseline) | `phase3/wave3-i-w2i-w2j-w3c-v13cert-integration` @ `c0a44d7` (2026-10-04, from `18d4762`): the accepted W3-C (`3454daa`) merged `--no-ff` (`b32ef6e`) plus one tracking commit; OD-12 RED R1 / R5 commits audited; no owner gate; not merged. See the matrix's "W3-C integration status" / `wave3_i_w2i_w2j_w3c_v13cert_integration` in the JSON |
 | Wave 2 B+C+G+D+F + W3-I + W2-I + W2-J + W3-C + W3-G audit + v13 cert (provisional; superseded as baseline) | `phase3/wave3-i-w2i-w2j-w3c-w3g-v13cert-integration` @ `d29bb2f` (2026-10-04, from `c0a44d7`): the accepted W3-G audit (`e86a933` + owner review `967e4e7`, docs/tracking only) merged `--no-ff` (`72ccd00`) plus one tracking commit; no product code; no owner gate; not merged. See the matrix's "W3-G integration status" / `wave3_i_w2i_w2j_w3c_w3g_v13cert_integration` in the JSON |
 | Wave 2 B+C+G+D+F + W3-I + W2-I + W2-J + W3-C + W3-G audit + W3-B (AUD-25.01) + v13 cert (provisional; superseded as baseline; the consolidated integration's base) | `phase3/wave3-i-w2i-w2j-w3c-w3g-w3b-v13cert-integration` (2026-10-04, from `d29bb2f`): the accepted W3-B AUD-25.01 slice (`7efda71`) merged `--no-ff` (`00b2b3c`) plus one tracking commit; W3-B stays PARTIAL (AUD-14.06, P3-N021 open); no RED edit; no owner gate; not merged. See the matrix's "W3-B AUD-25.01 integration status" / `wave3_i_w2i_w2j_w3c_w3g_w3b_v13cert_integration` in the JSON |
-| **Consolidated pre-playtest integration (provisional, current baseline)** | `phase3/consolidated-pre-playtest-integration` (2026-10-05, from `9ebca03` exactly): the owner-decision reconciliation (`26bca3b`), W1-I (`5ffdfa5`), W2-M (`d68602d`), W3-A (`bb20225`), W3-D (`746aa6f`), W3-J (`789a3d0`, carrying the Watch triage `3be965d`) and W3-H (`aa3896a`) merged `--no-ff` in that order, then the integration corrections (W3-A tutorial chain, AUD-25.02 copy, stale source pins) and this tracking normalisation. Not merged to main; no broad owner gate. See the matrix's "Consolidated pre-playtest integration status" / `consolidated_pre_playtest_integration` in the JSON |
+| **Consolidated pre-playtest integration (provisional, current baseline)** | `phase3/consolidated-pre-playtest-integration` @ `b8d5246c579d32ad4f9a2fccd7c293d1655ff81a` (2026-10-05, from `9ebca03` exactly): the owner-decision reconciliation (`26bca3b`), W1-I (`5ffdfa5`), W2-M (`d68602d`), W3-A (`bb20225`), W3-D (`746aa6f`), W3-J (`789a3d0`, carrying the Watch triage `3be965d`) and W3-H (`aa3896a`) merged `--no-ff` in that order, then the integration corrections (W3-A tutorial chain, AUD-25.02 copy, stale source pins) and this tracking normalisation. Not merged to main; no broad owner gate. See the matrix's "Consolidated pre-playtest integration status" / `consolidated_pre_playtest_integration` in the JSON |
 | Phase-4 playtest baseline | TBD — recorded at Phase-3 closure (W3-F) |
 
 ## Owner rulings recorded
@@ -44,7 +49,7 @@ restated in the same places. OD-6 and OD-8 were ruled 2026-10-04 (W2-I, W2-J); O
 the W3-G owner review (2026-10-04); OD-19 was ruled 2026-10-04 (the Watch triage). The owner-decision reconciliation (2026-10-04)
 transcribed OD-5 (ordering), OD-9(b), OD-14(b), (c), (e)–(h), OD-15, OD-16 and OD-18 from earlier owner conversations.
 
-**The owner's consolidated-integration brief (2026-10-05) is the current word** and is in the plan's §7.3 ("The rulings below are from
+**The owner's consolidated-integration brief (2026-10-05) was the current word until the AUD-00.02 brief (below)** and is in the plan's §7.3 ("The rulings below are from
 the owner's Phase-3 consolidated-integration brief"): OD-0 SUPERSEDED / RULED BY CURRENT INTEGRATION LINEAGE; OD-5 canonical (A
 tutorial design last; B per-user / per-game acknowledgement, no backlog; C focus returns once to the game-screen heading; D the
 five-notice chain Emergency > Fleet Loss > Private Revenue > Phase Three > Herald -- Tutorial NOT in it); OD-9(b) ASSET PENDING;
@@ -54,24 +59,34 @@ blocker (lane D); OD-18 superseded in part (BUILD the clock in Phase 3, not its 
 re-confirmation of W3-J's RED edits); D-17 a Phase-4 observation; D-35 required Phase-3 implementation; AUD-25.02 copy-only
 correction; the third-seat emergency offer a required Phase-3 bugfix; W3-H `4c89333` approved.
 
+**The owner's AUD-00.02 brief (2026-10-05) is the latest word** (plan §7.3, after the consolidated rulings; `aud00_roadmap_reconciliation`
+in the JSON): the Phase 1–7 roadmap order; AUD-04.04 + AUD-08.01 placed in a pre-Phase-4 derivation residue lane; the final gameplay
+tutorial pass LAST; the Account / Profile / Wallet lane (onboarding redesign, homepage overlap fix, trust indicators) with W1-K and
+AUD-20.08 folded in; the profile policy recorded as direction (below). **No owner decision is open.**
+
 **Owner-decision rule.** Owner decisions require explicit owner approval. Assistant / Cowork recommendations, planning
 defaults, inferred choices and implementation decisions are NOT owner rulings. A ruling given in conversation is transcribed
 in the same pass; the list below is the single maintained status list.
 
-## Status after the consolidated integration (2026-10-05)
+## Status after the consolidated integration and AUD-00.02 (2026-10-05)
 
 | Status | Items |
 |---|---|
-| **OWNER DECISION OPEN** | Two, neither created by this integration: (1) placement of AUD-04.04 (DH-1) and AUD-08.01 (GR-1 / S10-27): approved, derivation-only defects (no version bump) that OD-10(a) kept out of the v13 batch; no owner ruling places them in a slice (Phase 3 or later) -- open since the v13 scope verification, not created by this integration; (2) timing of the FINAL tutorial pass (AUD-13.04 and the tutorial system, OD-5(A) "built last, after the gameplay shell/UI is stable"): the plan's closure contract (§11 item 2) requires every A/B row fixed before Phase-3 closure, where the Phase-4 baseline is recorded -- so by default the final tutorial pass is the LAST Phase-3 lane (F), after lanes A-E; if the owner means after Phase 4, AUD-13.04 moves to E with that ruling. Everything the consolidated brief listed -- OD-0, OD-5, OD-9(b), OD-10(b), OD-14(a)–(i), OD-15, OD-16, the clock placement of OD-18 / U-10, OD-19 and D-35 -- is ruled. |
-| **IMPLEMENTATION OPEN — required before Phase 4** (plan §6, "Pre-Phase-4 implementation lanes") | **A** Live / Async clocks, AUD-11.04 (no automatic forfeit, trade decline or host succession) · **B** D-35 OO reservation marker, VF/D-35 · **C** emergency `train-offer` third-seat duplicate prompt, P3-N027 · **D** Terms route / page shell + Terms / deposit links, AUD-20.08 (no invented prose) · **E** W3-B latch residue, AUD-14.06 + P3-N021 |
-| **IMPLEMENTATION OPEN — also before the Phase-4 baseline (the closure contract, §11)** | **F (LAST)** the final tutorial pass -- AUD-13.04 and the tutorial system (OD-5(A); timing an owner decision open, above) · **W1-K** AUD-19.02 cross-tab Keplr single flight (NOT STARTED; not among lanes A–E) · AUD-00.02 (P0 docs) · W3-F closure bookkeeping (AUD-25.14), the Phase-4 checklist and the broad owner gate |
+| **OWNER DECISION OPEN** | **None.** The two left open by the consolidated integration are RULED by the AUD-00.02 brief: AUD-04.04 / AUD-08.01 → the derivation residue lane (tracking disposition C → B); the final gameplay tutorial pass → the LAST pre-Phase-4 implementation lane. |
+| **IMPLEMENTATION OPEN — required before Phase 4** (plan §6, "Pre-Phase-4 work after the AUD-00.02 brief"); **none implemented yet** -- a lane whose branch is starting is not implemented | **ACCOUNT** Account / Profile / Wallet onboarding redesign · homepage overlap fix · trust indicators · W1-K cross-tab Keplr single flight (AUD-19.02) folded in · AUD-20.08 Terms route / page shell + Terms / deposit link infrastructure folded in (was lane D; no invented prose) · **A** Live / Async clocks, AUD-11.04 (no automatic forfeit, trade decline or host succession) · **B** D-35 OO reservation marker, VF/D-35 · **C** emergency `train-offer` third-seat duplicate prompt, P3-N027 · **E** W3-B latch residue, AUD-14.06 + P3-N021 · **DERIV** AUD-04.04 + AUD-08.01 derivation residue · **F (LAST)** the final gameplay tutorial pass, AUD-13.04 and the tutorial system (OD-5(A)) |
+| **CLOSURE — after the implementation lanes** | **W3-F** final Phase-3 closure: AUD-25.14 bookkeeping, `PHASE4_PLAYTEST_CHECKLIST.md`, the Phase-4 baseline (full SHA), the broad owner gate |
+| **PROFILE POLICY (owner direction for ACCOUNT; target UX, NOT implemented)** | A public homepage before login; Create Account / Log In visible; username / password as the normal account UX; no mandatory recovery-key ritual for new accounts; signed-in players do not re-enter credentials per game; a verified wallet persists to the profile; one application-level Ante X JUNO initiation; factual trust indicators rather than a numeric composite score. No "established profile" threshold is defined. Today's `ProfileGate` / recovery-key flow is the current code, not the desired final UX; no frozen invariant or financial protocol moves by this record. |
 | **ASSET PENDING** | The official Keplr logo (AUD-18.05, OD-9(b)); `KeplrMark` stays empty, nothing fabricated |
-| **PHASE-4 PLAYTEST** | Every D row (including VF/D-17 now) and the plan's §8 table, with the consolidated observation items: the float ceremony now actually visible (`4c89333`); D-17 tile-lay smoothness / whole-board repaint; cinematic intro and outro at several UI scales; keyboard blocking under a takeover; Firefox / Safari modal / takeover behaviour; tile-ring first facing; recovery R1–R12; Live / Async clock behaviour once lane A lands; the VF PLAYTEST entries; recorded integration residuals -- a forced notice presenting over a cinematic film, the stale-board notice holding a film's Skip, and where focus lands when the chain ends under an interim tutorial or a takeover (the focus move is dropped, AUD-13.02 / AUD-13.04) |
-| **PHASE-5 DEFERRED** | Phone-width gameplay layout, keyboard map access, the responsive map architecture and a keyboard map controller (OD-10(b)); the major App.tsx refactor |
+| **PHASE-4 PLAYTEST** | Every D row (including VF/D-17) and the plan's §8 table, with the consolidated observation items: the float ceremony now actually visible (`4c89333`); D-17 tile-lay smoothness / whole-board repaint; cinematic intro and outro at several UI scales; keyboard blocking under a takeover; Firefox / Safari modal / takeover behaviour; tile-ring first facing; recovery R1–R12; Live / Async clock behaviour once lane A lands; the VF PLAYTEST entries; recorded integration residuals -- a forced notice presenting over a cinematic film, the stale-board notice holding a film's Skip, and where focus lands when the chain ends under an interim tutorial or a takeover (the focus move is dropped, AUD-13.02 / AUD-13.04) |
+| **PHASE-5 DEFERRED** | Phone-width gameplay layout and map accessibility: keyboard map access, the responsive map architecture and a keyboard map controller (OD-10(b)); the major App.tsx refactor |
 | **DEFERRED PENDING PHASE-4 VALIDATION** | Automatic forfeit on clock expiry, automatic trade decline, host succession (AUD-19.04, OD-18); any Forfeit / Clemency settlement payload |
 | **PHASE-7 / MAINNET GATE** | The substantive owner-authored Terms copy (OD-16); deployment (drained v12 rooms, the final owner gate) |
-| **PARTIAL slices** | W2-M (AUD-20.08), W3-B (AUD-14.06, P3-N021), W3-D (AUD-13.04 → final tutorial pass), W3-H (VF/D-35), W2-K (Keplr asset), P0 (AUD-00.02) |
-| **IMPLEMENTED and INTEGRATED** | Every other Phase-3 slice: Wave 1 (but W1-K), Wave 2 (but W2-K's asset and W2-M's AUD-20.08), W3-A, W3-C, W3-E, W3-G (audit gate), W3-I, W3-J, W3-K, the v13 settlement certification |
+| **PARTIAL slices** | W2-M (AUD-20.08 → ACCOUNT), W3-B (AUD-14.06, P3-N021), W3-D (AUD-13.04 → final tutorial pass), W3-H (VF/D-35), W2-K (Keplr asset) |
+| **NOT STARTED slices** | W1-K (folded into ACCOUNT), W3-F |
+| **IMPLEMENTED and INTEGRATED** | Every other Phase-3 slice: Wave 1 (but W1-K), Wave 2 (but W2-K's asset and W2-M's AUD-20.08), W3-A, W3-C, W3-E, W3-G (audit gate), W3-I, W3-J, W3-K, the v13 settlement certification; P0 COMPLETE with AUD-00.02 (docs, on `phase3/preplaytest-aud00-roadmap-docs`; pending owner review / integration) |
+
+*The status at the consolidated integration itself (two owner decisions open; lanes A–E plus F, W1-K, AUD-00.02 and W3-F) is the
+`consolidated_pre_playtest_integration` record in the JSON and the matrix's "Consolidated pre-playtest integration status" section.*
 
 ## Rules v13 (W3-K)
 

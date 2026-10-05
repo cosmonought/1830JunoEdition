@@ -1,12 +1,61 @@
-# ROADMAP 3.2 — remaining work
+# ROADMAP — remaining work (the owner's Phase 1–7 order; the file keeps its ROADMAP 3.2 name)
 
-This is the canonical roadmap: the owner's ROADMAP 3.2, recorded in git on 2026-09-27 after DA-8 (`81fd037`) and the context prune (`68f6baf`).
+## Authoritative phase order (owner; current)
+
+Recorded by the AUD-00.02 roadmap / canonical-doc reconciliation (2026-10-05, `phase3/preplaytest-aud00-roadmap-docs`). **This order governs.**
+Everything below the "Historical" line is the earlier ROADMAP 3.2 record, kept for provenance (its headings annotated; content unchanged).
+
+| Phase | Scope | Status |
+|---|---|---|
+| **1** | Server / infrastructure migration (the single-host migration and its hardening; the LIVE-4/5/6 and COST programs feed it) | As recorded by its own passes (`PROJECT_CANONICAL_CONTEXT.md` header; Project `claude/PHASE1_*`); AUD-00.02 records no closure |
+| **2** | JUNO testnet live proof (Junox / uni-7 end-to-end on the canonical escrow artifact) | As recorded by its own passes; AUD-00.02 records no closure |
+| **3** | Player-facing UI / UX and pre-playtest closure | **In progress.** Baseline `phase3/consolidated-pre-playtest-integration` @ `b8d5246c579d32ad4f9a2fccd7c293d1655ff81a` (provisional; not merged to main; no broad owner gate). Plan and status: `docs/phase3/` (start at its `README.md`) |
+| **4** | Human playtesting and stabilization | Not started; begins on the Phase-4 baseline that W3-F records |
+| **5** | Major frontend / App.tsx refactor | Not started; Phase 3 does not begin it (plan §1) |
+| **6** | Final polish / release testing | Not started |
+| **7** | Mainnet readiness / launch | Not started; carries the substantive owner-authored Terms copy (OD-16) and the final deployment gates |
+
+**Before Phase 4** (Phase 3's remaining work; none implemented yet -- a lane whose branch is starting is not implemented):
+- the **Account / Profile / Wallet** lane: the onboarding redesign, the homepage overlap fix, trust indicators; W1-K cross-tab Keplr single flight
+  (AUD-19.02) and AUD-20.08's Terms route / page shell and Terms / deposit link infrastructure folded in (no invented Terms prose);
+- Live / Async clocks (AUD-11.04; no automatic forfeit, trade decline or host succession);
+- the D-35 OO reservation marker;
+- P3-N027, the emergency third-seat duplicate prompt;
+- the W3-B latch residue (AUD-14.06, P3-N021);
+- the AUD-04.04 + AUD-08.01 derivation residue lane;
+- **the final gameplay tutorial pass, LAST**;
+- then **W3-F**, the final Phase-3 closure (the Phase-4 checklist and baseline, the broad owner gate).
+
+**Not before Phase 4:** the official Keplr logo (ASSET PENDING); the substantive Terms copy (owner-authored; a Phase-7 / mainnet gate);
+D-17 (a Phase-4 observation); phone-width gameplay / map accessibility (Phase 5).
+
+**Profile policy (owner direction for the account lane; not implemented):** a public homepage before login; Create Account / Log In
+visible; username / password as the normal account UX; no mandatory recovery-key ritual for new accounts; signed-in players do not
+re-enter credentials per game; a verified wallet persists to the profile; one application-level Ante X JUNO initiation; factual trust
+indicators rather than a numeric composite score. No "established profile" threshold is defined.
+
+**Mapping from the ROADMAP 3.2 numbering below** (for reading older records): its 4 (LIVE-4/5/6) and the COST / single-host work → Phase 1;
+its 5 (Junox E2E, "ESCROW-5") → Phase 2; its 9–10 (UI/UX consolidation and polish) → Phase 3; its 11 (near-production playtest) → Phase 4;
+its 7 (frontend structural cleanup) and the App.tsx decomposition → Phase 5; its 12 (release hardening) → Phases 6–7. Its 6 (Rust retirement)
+and 8 (production repo extraction) are not re-placed by this reconciliation; the owner places them.
+
+## Parked (current)
+
+- **Gno (GNOLAND-2…8)** stays parked until the Juno application is live and the agreed Gno maturity gate is met.
+- The chain-neutral interface is already in place (`b804150`), and Juno is the only production backend.
+- Reference: `claude/GNOLAND0_ESCROW_FEASIBILITY_2026-09-26.md` and `claude/GNOLAND1_CHAIN_NEUTRAL_ESCROW_INTERFACE_2026-09-26.md`.
+
+---
+
+## Historical — ROADMAP 3.2 (superseded order; kept for provenance)
+
+This was the canonical roadmap: the owner's ROADMAP 3.2, recorded in git on 2026-09-27 after DA-8 (`81fd037`) and the context prune (`68f6baf`). Its phase numbers are NOT the current Phase 1–7.
 
 - The owner governs it. Update this file when a phase closes, is re-scoped or is re-estimated.
 - Current state, frozen invariants and the working rules are in `PROJECT_CANONICAL_CONTEXT.md`.
 - Each pass's exact scope comes from the owner's brief. The "scope sources" column is where that brief's inputs already live. Paths starting with `claude/` are claude.ai Project docs.
 
-## Completed
+### Completed (ROADMAP 3.2 numbering)
 
 | Phase | Status | Record |
 |---|---|---|
@@ -20,7 +69,7 @@ This is the canonical roadmap: the owner's ROADMAP 3.2, recorded in git on 2026-
 | Integrated closure — ESCROW-4 + Phase 6.5-B (the fix-before UI pass: K-01, K-08, K-09, K-10, H-02, SI-H01, the RR-2 copy) + APP-TEST-0A (the shell source-scan guards); a dispute's evidence now reads the live board | **COMPLETE** — the integrated broad gate was GREEN at `467498e` (534/534 frontend suites, 10,160 tests; server 515 = 514 + the historical FI-22 skip; the build at the 49-warning baseline); one closure commit on top. Rules 11; settlement `[10, 11]` | `claude/INTEGRATED_GATE_ESCROW4_65B_APP0A_2026-09-28.md`; `claude/INTEGRATED_CLOSURE_ESCROW4_65B_APP0A_2026-09-28.md` |
 | 4 (LIVE-4) — the compatibility tuple and RNG: L4-1 canonical model → L4-2 no-money continuation → L4-3 client compatibility (protocol 1) → L4-4 money continuation → L4-5 cryptographic room seed, integrated and hardened (N-3; one capability and one chain-facts runtime per process), tooled (L4-6) and certified (L4-7) | **COMPLETE — certified and closed by L4-7** (the certified commit `f1736bf` plus a documentation-only evidence commit, on L4-6's `89a4b5b`, on the corpus-gate-certified integration `6da8a1f`, on the real closure baseline `9c81bbd`). L4-7 repaired how a verified chain contradiction is carried (the continuation review reaches every resident game at once and is never dropped; the owner's hold is written when the conflict is learned, over any weaker hold; a game held for it waits for a verification-grade read after a restart) and added the certification suites. No version moved: rules 11; settlement `[10, 11]`; hosted 1; financial 3; client 1 (accepts `[0, 1]`); money records schema 2 | `claude/LIVE4_L4_7_FINAL_CERTIFICATION_2026-09-29.md`; `claude/LIVE4_INTEGRATION_HARDENING_2026-09-28.md`; `claude/LIVE4_L4_6_TOOLING_DOCS_2026-09-29.md`; `LIVE4_COMPATIBILITY_MODEL.md` |
 
-## Remaining, in dependency order
+### Remaining, in dependency order (ROADMAP 3.2 numbering; superseded by the Phase 1–7 order above)
 
 | Phase | Scope | Estimate | Scope sources |
 |---|---|---|---|
@@ -39,16 +88,10 @@ This is the canonical roadmap: the owner's ROADMAP 3.2, recorded in git on 2026-
 
 **L5-1 prerequisite (recorded 2026-09-28) — RESOLVED by L5-1 (2026-09-29).** Plain frontend `npm ci` failed ("Missing: yaml@2.9.1 from lock file"; `yaml` is an optional peer of tailwind's nested `postcss-load-config`), while `npm ci --legacy-peer-deps` worked. L5-1 regenerated the lock with `npm install --package-lock-only`: exactly one entry is added (`node_modules/tailwindcss/node_modules/yaml@2.9.1`, optional peer); no other package moved. Plain `npm ci` and `npm ci --legacy-peer-deps` both install from it.
 
-## Human evidence (Phase 6.5), beside the roadmap
+### Human evidence (Phase 6.5), beside the roadmap (historical, as of 2026-09-30)
 
 - **Available now:** a **reduced S0**, the lightweight human UI/evidence smoke. **LIVE-5 is next in the infrastructure program** (Phase 4; LIVE-4 closed by L4-7).
 - **Later:** the full **G1/G2** games, the substantive human certification.
 - **Before any substantive G5 / LPF route playtest:** backlog **S6-15** and **S6-16** must be fixed (pre-registered route-search / authority certification blockers; pending the route-certification preflight's final report).
 - **The route engine / v12 is a separate gameplay program, not part of LIVE-4:** the route-engine certification preflight's findings (with S6-15 / S6-16) are its blockers, and **substantive human gameplay waits for that route hardening**. It moves no LIVE-4 identity. Record: `claude/ROUTE_ENGINE_EXTRACTION_CERTIFICATION_PREFLIGHT_2026-09-28.md`. **R12-1** (the independent oracle) is on `main`; **R12-2** (the production repair, rules → **v12**, S6-15 / S6-16 fixed) is on the feature branch `route-v12/r12-2-production-repair`; **R12-3** (v12 settlement certification, `[10, 11, 12]`, plus the owner's #62 ruling folded into v12) is on `route-v12/r12-3-settlement-certification` on top of it; **R12-4** (exact route optimality: production's v12 demonstration is the true maximum, equal to the oracle on the whole B-2 corpus; rules stay v12) is on `route-v12/r12-4-true-optimality` on top of that. None is merged; the owner broad-gates the combined tree (with LIVE-5 L5-3 from `main`) later, including the B-1 full-corpus gate (`ROUTE_ORACLE_FULL=1` with the owner-local logs). Remaining route work: that corpus gate, review LOW-4, an optional per-state memo of the search (S6-14). Records: `claude/ROUTE_V12_R12_2_PRODUCTION_REPAIR_2026-09-29.md`, `claude/ROUTE_V12_R12_3_SETTLEMENT_CERTIFICATION_2026-09-29.md`, `claude/ROUTE_V12_R12_4_TRUE_OPTIMALITY_2026-09-30.md`.
 - **Later, not now:** the App.tsx decomposition (Phase 7). (The v12 rules batch is R12-2 / R12-3 / R12-4 above; settlement `[10, 11, 12]` there, by its own certification.)
-
-## Parked
-
-- **Gno (GNOLAND-2…8)** stays parked until Juno is live (after Phase 5) and the Gno maturity gate is met.
-- The chain-neutral interface is already in place (`b804150`), and Juno is the only production backend.
-- Reference: `claude/GNOLAND0_ESCROW_FEASIBILITY_2026-09-26.md` and `claude/GNOLAND1_CHAIN_NEUTRAL_ESCROW_INTERFACE_2026-09-26.md`.

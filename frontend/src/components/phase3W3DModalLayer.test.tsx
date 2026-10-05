@@ -173,9 +173,10 @@ describe("4. every aria-modal left in source is classified", () => {
      new one fails here until it is classified; a migrated one fails here until it is struck from the list. */
   const CLASSIFIED: Record<string, string> = {
     /* AUD-13.04: GENUINELY MODAL (a library the player opens and closes; the notice blocks the board while up), so
-       its target is NativeModal. The conversion is W3-D's, but it waits for W3-A's integration (OD-5, the notice /
-       focus / re-arm architecture, and R-TUT are W3-A's while it is active). Not touched by this pass. */
-    "components/TutorialModal.tsx": "AUD-13.04 -- waits for W3-A integration",
+       its target is NativeModal. Owner ruling OD-5 (restated at the Phase-3 consolidated integration, 2026-10-05):
+       the tutorial work -- this conversion included -- is the FINAL tutorial pass's (contextual whitebox / spotlight,
+       built last), not W3-D's now. Not touched by this pass. */
+    "components/TutorialModal.tsx": "AUD-13.04 -- deferred to the final tutorial pass (OD-5)",
     /* CLASSIFIED BY BEHAVIOUR (W3-D review L4): GENUINELY MODAL -- a fixed scrim that blocks the board by pointer,
        with no keyboard isolation -- so under OD-15(b) its target is NativeModal, not the removal of the claim. Its
        migration is deferred, not refused: the President's card hands off to the MAP, and a top-layer dialog would

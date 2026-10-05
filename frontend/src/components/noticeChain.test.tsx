@@ -27,6 +27,7 @@ import PhaseThreeNoticeModal from "./PhaseThreeNoticeModal";
 import HeraldHomeFloatModal from "./HeraldHomeFloatModal";
 import TutorialModal from "./TutorialModal";
 import GameScreenHeading, { GAME_SCREEN_HEADING_TEXT } from "./GameScreenHeading";
+import BoardBehindNotice from "./BoardBehindNotice";
 import GameOverModal from "./GameOverModal";
 import { NativeModalTurn } from "./NativeModalTurn";
 import { useNoticeChain } from "../utils/useNoticeChain";
@@ -80,6 +81,10 @@ type Due = {
   foreign: boolean;
   gameOver: boolean;
   selfOpening: boolean;
+  /** The consolidated integration's pins: the shell covered by a cinematic takeover (`inert`), and W3-J's stale-board
+   *  notice standing. */
+  covered: boolean;
+  boardBehind: boolean;
   tick: number;
 };
 const NOTHING: Due = {
@@ -92,6 +97,8 @@ const NOTHING: Due = {
   foreign: false,
   gameOver: false,
   selfOpening: false,
+  covered: false,
+  boardBehind: false,
   tick: 0,
 };
 
@@ -116,7 +123,15 @@ function Shell({ initial }: { initial: Due }) {
       <button type="button" data-testid="board-control" data-tick={due.tick}>
         Lay track
       </button>
-      <GameScreenHeading ref={headingRef} />
+      {/* As the shell: the heading inside the root W3-D makes `inert` while a cinematic takeover covers it. */}
+      <div {...(due.covered ? { inert: "" } : {})} data-testid="shell-root">
+        <GameScreenHeading ref={headingRef} />
+      </div>
+      <BoardBehindNotice
+        notice={due.boardBehind ? "This board is behind the room." : null}
+        onReload={() => update({ boardBehind: false })}
+        onLeave={() => update({ boardBehind: false })}
+      />
       {due.foreign && (
         <NativeModal name="Market peek" dismissible onDismiss={() => update({ foreign: false })} restoreOpener scrimStyle={{}}>
           <button type="button" onClick={() => update({ foreign: false })}>
@@ -280,8 +295,9 @@ describe("8-10. AUD-13.07 / OD-5(c): forced notices present one at a time, in th
 
   it("a tutorial is not part of the chain: the chain neither holds it nor waits for it (owner ruling OD-5)", () => {
     /* The consolidated integration's correction of W3-A's sixth entry. A tutorial keeps the presentation it had before
-       W3-A -- it opens on its own arming -- until the final tutorial pass replaces it; this pins only that the forced
-       chain does not own it, not how the interim tutorial and a forced notice should share the screen. */
+       W3-A -- it opens on its own arming -- until the final tutorial pass replaces it. The co-presence below is that
+       pre-W3-A presentation, asserted only to prove the chain neither holds nor waits for the tutorial; it is not a
+       design for how a tutorial and a forced notice should share the screen (the final tutorial pass decides that). */
     render({ ...NOTHING, herald: HERALD, tutorialActive: true });
     expect(surfaces()).toContain("PRR has floated");
     expect(surfaces()).toContain(TUTORIAL_HEADING);
@@ -416,6 +432,46 @@ describe("6-7. AUD-01.06 (INTERIM): the zero-state auto-reset is gone -- not the
     act(() => update({ tutorialActive: false }));
     act(() => update({ tutorialActive: true }));
     expect(surfaces()).toEqual([]);
+  });
+});
+
+describe("consolidated integration (2026-10-05): surfaces the chain did not meet on W3-A's branch", () => {
+  it("the chain ending while an interim tutorial is still up does not move focus behind it", () => {
+    /* Tutorial left the forced-notice chain (owner ruling OD-5), so the chain can end with a tutorial's aria-modal card
+       on screen. Focusing the heading then would put focus BEHIND that card. */
+    render({ ...NOTHING, herald: HERALD, tutorialActive: true });
+    click(/Understood/);
+    expect(surfaces()).toEqual([TUTORIAL_HEADING]);
+    expect(document.activeElement).not.toBe(heading());
+  });
+
+  it("the chain ending while a cinematic takeover makes the shell inert does not focus into the inert subtree", () => {
+    render({ ...NOTHING, covered: true, herald: HERALD });
+    click(/Understood/);
+    expect(heading()?.closest("[inert]")).not.toBeNull();
+    expect(document.activeElement).not.toBe(heading());
+  });
+
+  it("the chain still moves focus once when nothing else has the screen", () => {
+    render({ ...NOTHING, herald: HERALD });
+    click(/Understood/);
+    expect(document.activeElement).toBe(heading());
+  });
+
+  it("the stale-board notice is the one deliberate exception: foreign, it holds every forced notice, the emergency included", () => {
+    render({ ...NOTHING, boardBehind: true, emergency: true, herald: HERALD });
+    // The stale-board dialog is named by its heading (`aria-labelledby`), so `surfaces()` reads it unnamed.
+    expect(surfaces()).toEqual(["(unnamed dialog)"]);
+    expect(document.getElementById("board-behind-title")?.closest("dialog[open]")).not.toBeNull();
+    click(/Reload/);
+    expect(surfaces()).toEqual(["Emergency Train Purchase"]);
+  });
+
+  it("the stale-board notice opens at once, over a dialog that already holds the screen (fail-closed, OD-19)", () => {
+    render({ ...NOTHING, foreign: true });
+    act(() => update({ boardBehind: true }));
+    expect(surfaces()).toEqual(["Market peek", "(unnamed dialog)"]);
+    expect(document.getElementById("board-behind-title")?.closest("dialog[open]")).not.toBeNull();
   });
 });
 

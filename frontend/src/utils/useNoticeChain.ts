@@ -17,7 +17,14 @@
 
    NEVER INTO ANOTHER SURFACE'S FOCUS. If focus is already inside an open dialog when the chain ends, that dialog
    owns it and the heading waits for the next completed chain. `preventScroll`, because the heading is a focus
-   target, not a destination the page should jump to. */
+   target, not a destination the page should jump to.
+
+   PHASE 3 CONSOLIDATED INTEGRATION (2026-10-05), TWO SURFACES THIS FILE DID NOT MEET ON ITS OWN BRANCH: (1) an
+   interim tutorial -- since Tutorial left the forced-notice chain (owner ruling OD-5), the chain can end while a
+   tutorial's `aria-modal` card is still up; and (2) W3-D's cinematic takeover, which makes the shell root -- and the
+   heading inside it -- `inert`. Moving focus then would land BEHIND an open surface, or be ignored by the browser
+   inside an inert subtree. So the one focus move is skipped while any open dialog / `aria-modal` surface stands or
+   while the heading is inert; ordinary play still never moves focus, and the next completed chain moves it as usual. */
 
 import { useEffect, useRef, useSyncExternalStore } from "react";
 
@@ -31,6 +38,13 @@ export function useForeignNativeModalOpen(): boolean {
     () => foreignNativeModalCount() > 0,
     () => false,
   );
+}
+
+/** Another surface has the screen: an open dialog or `aria-modal` surface anywhere (an interim tutorial, the
+ *  stale-board notice), or the heading itself inside an `inert` subtree (a cinematic takeover covering the shell). */
+function anotherSurfaceHasTheScreen(heading: HTMLElement): boolean {
+  if (heading.closest("[inert]") !== null) return true;
+  return typeof document !== "undefined" && document.querySelector("dialog[open], [aria-modal='true']") !== null;
 }
 
 function focusIsInsideAnotherSurface(): boolean {
@@ -60,6 +74,7 @@ export function useNoticeChain(
     const heading = headingRef.current;
     if (!heading || !heading.isConnected) return;
     if (focusIsInsideAnotherSurface()) return;
+    if (anotherSurfaceHasTheScreen(heading)) return;
     heading.focus({ preventScroll: true });
   }, [presented, exhausted, headingRef]);
 

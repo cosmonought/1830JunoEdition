@@ -17,9 +17,16 @@
 
    NO NOTICE STACKS WITH ANOTHER NATIVE DIALOG (AUD-13.07): while a native dialog that is not one of these notices
    is open (`nativeModalRegistry`), every notice waits -- the emergency included, because the ruling admits no two
-   native dialogs at once. Nothing outranks the emergency, so in practice that wait is only ever for a dialog the
-   president opened before the obligation arose (the market peek, Auto-Pass): every background control is inert
-   under the emergency's own `showModal()`, so none can be opened over it. */
+   native dialogs at once. Nothing outranks the emergency, so in practice that wait is for a dialog the president
+   opened before the obligation arose (the market peek, Auto-Pass): every background control is inert under the
+   emergency's own `showModal()`, so none can be opened over it.
+
+   THE ONE DELIBERATE EXCEPTION (recorded at the Phase-3 consolidated integration, 2026-10-05): W3-J's stale-board
+   notice (`BoardBehindNotice`, AUD-25.16 / OD-19). It is a plain `NativeModal` -- registered as FOREIGN, so while
+   it stands every forced notice waits behind it -- and it opens itself at once rather than through
+   `NativeModalTurn`, so it can open over a dialog that already holds the screen and be the one on top. Both are the
+   fail-closed choice OD-19 asks for: a board that is not the room's must stop the table now, before anything else
+   on it is answered. Pinned by `noticeChain.test.tsx`. */
 
 export const NOTICE_PRIORITY = [
   "emergency",

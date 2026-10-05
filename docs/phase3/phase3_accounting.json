@@ -1429,7 +1429,8 @@
    "disp": "A",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "NOT STARTED — BLOCKED ONLY ON W3-A INTEGRATION: the owner reports OD-5 ruled in W3-A's lane (W3-A records it; not recorded here), and W3-A owns R-TUT and the notice/focus/re-arm architecture while active; W3-D converts TutorialModal (both role=\"dialog\" aria-modal divs) to NativeModal against that landed architecture, and with it TutorialModal leaves the aria-modal classification list in phase3W3DModalLayer."
   },
   {
    "key": "AUD-13.05",
@@ -1438,11 +1439,12 @@
    "cls": "[UX]",
    "item": "The intro overlay's scale contract is unsettled.",
    "src": "CONFIRMED — `components/GameIntroOverlay.tsx`:346 `zoom: 1 / uiScale` on an `aria-modal` div.",
-   "slice": "W3-D",
-   "disp": "C",
-   "od": "OD-15(a)",
+   "slice": "W3-D (OD-15(a) ruled: viewport takeovers -- the intro and the end-game film; implemented on `phase3/w3-d`, not integrated)",
+   "disp": "B",
+   "od": "OD-15(a) (RULED 2026-10-04)",
    "p4": "—",
-   "notes": "—"
+   "notes": "OD-15(a) as corrected by the owner (2026-10-04): the intro is a full-viewport takeover, not a modal; the same contract covers the end-game film. C -> B under the ruling.",
+   "status": "IMPLEMENTED — W3-D on `phase3/w3-d` (NOT integrated): `CinematicTakeover` renders GameIntroOverlay and GameOutroOverlay into document.body, outside every scaled root, with fixed four-zero-edge geometry; `zoom: 1 / uiScale` and the intro's role=\"dialog\" aria-modal=\"true\" removed; no NativeModal; the shell root is `inert` while a takeover covers the game (intro, outro until its cue); film, timing, skip, Escape, duck, backstop and cue unchanged. Tests: phase3W3DCinematicTakeover."
   },
   {
    "key": "AUD-13.06",
@@ -1451,11 +1453,12 @@
    "cls": "[UX]",
    "item": "Whether the portal / inert layer is still needed is undecided.",
    "src": "CONFIRMED — `components/ModalPortal.tsx`:6-11, 43-45 disowns inert and any open-modal registry.",
-   "slice": "W3-D",
-   "disp": "C",
-   "od": "OD-15(b)",
+   "slice": "W3-D (OD-15(b) ruled: native dialogs, `ModalPortal` retired with its last consumer; implemented on `phase3/w3-d`, not integrated)",
+   "disp": "B",
+   "od": "OD-15(b) (RULED 2026-10-04)",
    "p4": "—",
-   "notes": "—"
+   "notes": "OD-15(b) (2026-10-04): converge on native <dialog>/showModal() via NativeModal; no manual inert; retire ModalPortal when its last legitimate consumer migrates; false modal semantics removed, not wrapped. C -> B under the ruling.",
+   "status": "IMPLEMENTED — W3-D on `phase3/w3-d` (NOT integrated): no manual inert anywhere; the Lobby's standalone <ModalPortal> around Host Game removed (HostSetupCard is a NativeModal), so NativeModal is ModalPortal's only consumer, as its scaled destination -- the remaining deletion (dialogs rendered in place, ModalLayerHost and harness mounts removed) is recorded in ModalPortal.tsx and needs a real-browser pass plus the W3-A / W2-M harnesses settled; PrivateTradePanel classified by behaviour as a panel and its unreachable role=\"dialog\"/aria-modal shape deleted; every remaining aria-modal (TutorialModal -> AUD-13.04, HomeStationPrompt -> W2-H) classified. Tests: phase3W3DModalLayer."
   },
   {
    "key": "AUD-13.07",
@@ -4852,6 +4855,18 @@
     "(i) W2-K / W2-M may extend the established styling while touching money UI, but this is NOT permission for a money-panel redesign or broader frontend refactor."
    ],
    "effect": "OD-14(d) and OD-14(i): RULED — transcribed at the W3-G owner review (2026-10-04; AUD-25.15). (d): AUD-12.07 RULED, no change. (i): bounds W2-K's panel pass and any W2-M money-UI styling. OD-14(a)–(c) and (e)–(h) remain OPEN."
+  },
+  "OD-15": {
+   "title": "MODAL INFRASTRUCTURE AND THE CINEMATIC TAKEOVERS (W3-D)",
+   "date": "2026-10-04",
+   "ruling": [
+    "OD-15(a): RULED — GameIntroOverlay is a full-viewport takeover independent of uiScale; remove inverse scaling and use true viewport geometry. It is NOT a NativeModal and does not use dialog semantics.",
+    "OD-15(a) covers both full-screen cinematic takeovers, the intro and the end-game film: each fills the full visual viewport, stays independent of gameplay uiScale, uses true viewport-fixed geometry rather than inverse scaling, has no dialog box/frame/chrome or constrained modal-panel dimensions, does not use NativeModal or native <dialog> semantics merely because it blocks interaction, prevents interaction with the gameplay underneath while active, and preserves its full-screen composition; preferably rendered outside the scaled gameplay layer.",
+    "OD-15(b): RULED — use native showModal()/NativeModal for modal surfaces and retire ModalPortal when its final legitimate modal consumer has migrated. No second custom modal architecture based on ModalPortal + manual inert management; no new global manual-inert system; the browser top layer supplies modal isolation.",
+    "Semantic rule: a genuinely modal aria-modal surface migrates to NativeModal; one that is not genuinely modal has its false modal semantics removed instead. Both cinematics are excluded from the NativeModal migration and are not ModalPortal consumers.",
+    "AUD-13.04 waits for W3-A's integration (per the owner, OD-5 is ruled in W3-A's lane and recorded there); W3-D does not touch TutorialModal or R-TUT while W3-A is active."
+   ],
+   "effect": "OD-15: RULED — AUD-13.05 and AUD-13.06 C -> B, IMPLEMENTED by W3-D on `phase3/w3-d` (not integrated); AUD-13.04 BLOCKED ONLY ON W3-A INTEGRATION; W3-D PARTIAL. Dock-control keyboard reach stays OD-10(b)."
   }
  },
  "wave1_integration": {
@@ -4961,7 +4976,7 @@
   "W3-A": "NOT STARTED",
   "W3-B": "NOT STARTED",
   "W3-C": "COMPLETE — ACCEPTED and INTEGRATED on `phase3/wave3-i-w2i-w2j-w3c-v13cert-integration` (2026-10-04, merge `b32ef6e` of `phase3/w3-c-refusal-display` @ `3454daa`, parents `18d4762` / `3454daa`, its 7 commits carried unchanged). slice branch `phase3/w3-c-refusal-display` support `3c75394` + `bfec83c`, RED R1 `08d857b`, RED R5 `21d6b15`, implementation `6cb86e4`, review fix `6c28662` (from `phase3/wave3-i-w2i-w2j-v13cert-integration` @ `18d4762`). AUD-14.01, P3-N004, P3-N020 IMPLEMENTED. OD-12 followed: two RED commits, each its own and independently reviewed -- R1 (two lines: the landed-submission clear and the room branch's answer) and R5 (the server-link callbacks, the drain's catching-up clear and its divergence write; the latter two sit in R5 outside the plan's line range and are named by AUD-14.01's own source). Dependencies W2-J and W1-H integrated in the base. Recorded follow-ups (LOW): the client's own pre-send gates (turn, catching-up, link-down) answer `undefined` and roll nothing back (needs further R1 lines); a resync can settle a landed move null and roll back its shell state (the board stays authoritative); an `error` frame answering a submission is shown as a `transport` connection notice and is not retired by a landed move (unchanged from before); the App wiring of the rollbacks is source-pinned. Presentation only: no engine, server, rules-version or settlement change",
-  "W3-D": "NOT STARTED",
+  "W3-D": "PARTIAL — `phase3/w3-d` from `d29bb2f` (NOT integrated): OD-15(a) and OD-15(b) RULED 2026-10-04; AUD-13.05 and AUD-13.06 IMPLEMENTED (C -> B); AUD-13.04 BLOCKED ONLY ON W3-A INTEGRATION.",
   "W3-E": "COMPLETE — `phase3/w3-manual-city-bypass` `07454d0` + review follow-ups `6d7cfa1`; integrated at the safe Wave-2 integration (`a860178`) under OD-11",
   "W3-F": "NOT STARTED",
   "W3-G": "COMPLETE — OWNER REVIEW ACCEPTED (2026-10-04) and INTEGRATED on `phase3/wave3-i-w2i-w2j-w3c-w3g-v13cert-integration` (merge `72ccd00` of `967e4e7`, parents `c0a44d7` / `967e4e7`): audit branch `phase3/w3-g-ui-parity-audit` (docs only, from `phase3/wave3-i-w2i-w2j-w3c-v13cert-integration` @ `c0a44d7`; audit `e86a933`, owner-review tracking on top); no product code. An accepted audit gate, not a product slice. AUD-00.01 and AUD-22.01 IMPLEMENTED (the audit is done); findings AUD-25.01 … AUD-25.15 accepted and preserved. Owner rulings: AUD-25.11 CLOSED — OBSOLETE / UNREACHABLE ARCHITECTURE (GR-1b); AUD-25.13 ruled item by item (FIX IN W3-J / RECORDED RESIDUAL / OBSOLETE); AUD-25.15 resolved (OD-3, OD-13, OD-14(d), OD-14(i) transcribed). OPEN remediation obligations: AUD-25.01 (MEDIUM) -> W3-B, AUD-25.02 (MEDIUM) -> W3-J, AUD-25.03 … 25.10 and 25.12 -> W3-J, AUD-25.14 -> W3-F; both MEDIUM rows must be fixed before W3-F closes Phase 3. W3-J is unblocked",
@@ -4970,7 +4985,7 @@
   "W3-J": "NOT STARTED",
   "W3-K": "COMPLETE — ACCEPTED (owner, 2026-10-04) and INTEGRATED on `phase3/wave2a-v13-integration` (2026-10-04): `phase3/w3-k-rules-v13` @ `be1fd10` merged `--no-ff` onto `phase3/wave2a-integration` @ `96ccb22`, its 9 commits carried unchanged (same SHAs). OD-2, SBS-3, SBS-4, OD-4 with the owner's 2026-10-04 rulings 1-5 and the four review findings. The ledger's PARTIAL (held only for the shared row AUD-03.04) lifted with W2-B's one-click \"Pass Turn\" control, integrated on `phase3/wave2-bcg-v13cert-integration` (merge `181e51e`). v13 settlement certification PASS / CERTIFIED and INTEGRATED there (merge `69c7496` of `phase3/v13-settlement-certification` @ `7916763`). RULES_ENGINE_VERSION 13; supported live [13]; settlement-certified [10, 11, 12, 13]. Not deployable until drained v12 rooms and the final integrated owner gate (W2-D / W2-F and other open slices are tracked separately)"
  },
- "owner_rulings_source": "The owner's Phase-3 Wave-1 integration brief (2026-10-03), in its words; instructions addressed to that integration turned into statements. OD-9 and OD-11: the owner's safe Wave-2 integration brief (2026-10-03), in its words. OD-4, OD-10 and OD-17: restated from the owner's W3-K rules-v13 brief (2026-10-03); instructions addressed to that slice turned into statements. The 2026-10-04 additions to OD-4 and OD-10 are restated from the owner's W3-K continuation brief (2026-10-04). OD-3, OD-13, OD-14(d) and OD-14(i): transcribed from the owner's W3-G owner-review brief (2026-10-04), in its words.",
+ "owner_rulings_source": "The owner's Phase-3 Wave-1 integration brief (2026-10-03), in its words; instructions addressed to that integration turned into statements. OD-9 and OD-11: the owner's safe Wave-2 integration brief (2026-10-03), in its words. OD-4, OD-10 and OD-17: restated from the owner's W3-K rules-v13 brief (2026-10-03); instructions addressed to that slice turned into statements. The 2026-10-04 additions to OD-4 and OD-10 are restated from the owner's W3-K continuation brief (2026-10-04). OD-3, OD-13, OD-14(d) and OD-14(i): transcribed from the owner's W3-G owner-review brief (2026-10-04), in its words. OD-15(a) and OD-15(b): the owner's W3-D decision briefs (2026-10-04) -- OD-15(a) as corrected by the owner the same day (the intro is a takeover, not a modal) and extended to the end-game film -- in their words.",
  "wave2_safe_integration": {
   "branch": "phase3/wave2-safe-integration",
   "base": "4e51cff7014632726de94f44024d66fc433b12cb (phase3/wave1-integration)",

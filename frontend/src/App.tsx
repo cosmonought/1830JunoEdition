@@ -6600,6 +6600,15 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
           setSandboxRoomError(CATCHING_UP_BANNER);
           return false; // Phase 3 W3-J (AUD-25.05, OD-12 RED R1): not sent -- the caller takes back what it set
         }
+        /* Phase 3 W3-J (AUD-25.16, OD-19; OD-12 RED R1): a board that is not the room's -- a drain that failed, a
+           divergence unresolved -- or a Watch tab sends no move, whoever's turn its board shows (`boardCurrency.ts`). */
+        if (options?.isRemoteReplay !== true && options?.derived !== true) {
+          const notLive = boardSendRefusalRef.current();
+          if (notLive !== null) {
+            setSandboxRoomError(notLive);
+            return false;
+          }
+        }
         const boardNow = sandboxStateRef.current;
         const onTurnNow =
           boardNow !== null

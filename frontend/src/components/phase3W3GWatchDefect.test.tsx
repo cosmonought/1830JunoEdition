@@ -225,6 +225,8 @@ describe("AUD-25.16 (C): controls stay live on a stale board, and a click reache
     const shell = readShell();
     // AUD-25.13 (W2-D deferred), RED R1: only the replay and the derived actions pass the catching-up gate.
     expect(shell).toMatch(/options\?\.isRemoteReplay !== true &&\s*options\?\.derived !== true &&\s*replayingRef\.current/);
+    // AUD-25.16, RED R1: and a board that is not current (or a Watch tab) is refused before the turn gate is asked.
+    expect(shell).toContain("const notLive = boardSendRefusalRef.current();");
     expect(shell).toContain("actingAddress(boardNow, sandboxWaterfallRef.current) === viewerAddressRef.current");
   });
 

@@ -91,3 +91,30 @@ describe("RED R1 (AUD-25.05, pre-send half): the client's own gates answer `fals
     expect(rolledBack).toEqual(["gate"]);
   });
 });
+
+describe("RED R1 (AUD-25.16, OD-19): the send gate refuses a move from a board that is not current, or from a Watch tab", () => {
+  const gate = () => {
+    const at = shell.indexOf("const notLive = boardSendRefusalRef.current();");
+    expect(at).toBeGreaterThan(-1);
+    return shell.slice(shell.lastIndexOf("if (", at), shell.indexOf("const boardNow = sandboxStateRef.current;", at));
+  };
+
+  it("asks the board's currency for every dispatch but the replay and the derived actions -- automatic player decisions included", () => {
+    expect(gate()).toContain("if (options?.isRemoteReplay !== true && options?.derived !== true) {");
+    expect(gate()).not.toContain("options?.automatic");
+    expect(gate()).toContain("setSandboxRoomError(notLive);");
+    expect(gate()).toContain("return false;");
+  });
+
+  it("runs after the catching-up gate and BEFORE the turn gate -- a stale view of whose turn it is enables nothing", () => {
+    const send = shell.indexOf("const notLive = boardSendRefusalRef.current();");
+    expect(send).toBeGreaterThan(shell.indexOf("setSandboxRoomError(CATCHING_UP_BANNER);"));
+    expect(send).toBeLessThan(shell.indexOf("const onTurnNow ="));
+  });
+
+  it("the answer it reads is the shell's synchronous one (refs, read at the click), assigned outside the RED region", () => {
+    expect(shell).toContain("boardSendRefusalRef.current = () => boardSendRefusal({ watchOnly, currency: syncBoardCurrency() });");
+    expect(shell).toContain("drainFailed: drainFailedRoomRef.current !== null && drainFailedRoomRef.current === sandboxRoomRef.current,");
+    expect(shell).toContain("divergedAt: divergenceReportedAtRef.current,");
+  });
+});

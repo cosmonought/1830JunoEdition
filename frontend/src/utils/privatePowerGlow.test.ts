@@ -190,9 +190,12 @@ describe("the palette is the auction's, and stays the auction's", () => {
       path.join(__dirname, "..", "components", "WaterfallAuctionDashboard.tsx"),
       "utf8",
     );
-    for (const stop of PRIVATE_POWER_GLOW_STOPS) {
-      expect(dashboard.toLowerCase()).toContain(stop.toLowerCase());
-    }
+    /* W3-H (VF H-6): it used to assert that the card SPELLED every stop out -- i.e. that a hand-written copy
+       existed and still matched. The card now interpolates this array, so the drift cannot happen; the pin
+       follows. The behavioural proof (the array replaced, the card's stylesheet following it) is
+       `components/w3hMiniAuctionPalette.test.tsx`. */
+    expect(dashboard).toMatch(/import \{ PRIVATE_POWER_GLOW_STOPS \} from "\.\.\/utils\/privatePowerGlow"/);
+    expect(dashboard).toMatch(/\$\{PRIVATE_POWER_GLOW_STOPS\.join\(", "\)\}/);
   });
 });
 

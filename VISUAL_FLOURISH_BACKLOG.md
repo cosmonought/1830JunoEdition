@@ -1910,13 +1910,15 @@ borrowing, which would break the association #727 exists to protect. **What to w
 contested mini-auction card. If it muddies, the fix is fewer stops for this surface — *taken from the same
 array*, never a new palette by eye.
 
-### H-6 · `OPEN` · The mini-auction card writes the palette out by hand
+### H-6 · `RESOLVED` (W3-H, 2026-10-04) · The mini-auction card writes the palette out by hand
 `WaterfallAuctionDashboard.tsx` spells the eight stops inline in its CSS rather than importing
 `PRIVATE_POWER_GLOW_STOPS`, which is the exact drift #727 created that constant to prevent ("two hard-coded
 palettes drifting apart is how the association quietly stops being one"). **Pre-existing, and deliberately
 not changed by this batch** — the ticket imports the shared array, so there are now two consumers of the
 constant and one hand-written copy. **Smallest fix:** interpolate the array into that card's template
 literal, exactly as `bankBreakFlourish.ts` does. Left for a batch that has reason to open that file.
+
+**RESOLVED by W3-H** — the card now interpolates `PRIVATE_POWER_GLOW_STOPS.join(", ")` into its template literal, exactly as `bankBreakFlourish.ts` does; no hand-written stop is left. Pinned behaviourally by `components/w3hMiniAuctionPalette.test.tsx` (the shared array is replaced with sentinel colours and the card's stylesheet must follow it); `utils/privatePowerGlow.test.ts`'s source pin, which asserted the hand-written copy, now asserts the interpolation.
 
 ### H-7 · `PLAYTEST` · Two tickets on screen at once
 The bar prints the ticket on both rails (the Operating Round panel's left rail and the action row's lead),

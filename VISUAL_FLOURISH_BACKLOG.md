@@ -1558,7 +1558,7 @@ not. Reduced motion shows none. Only corporation tokens have one (D-14). **Watch
 subordinate to a real token over a washed proposal; whether a planned place half covered by a token still gathering or
 travelling reads as a target or as a second token.
 
-### D-35 · `OPEN` · An OO home's reservation has no city to ride
+### D-35 · `PLAYTEST` · An OO home's reservation has no city to ride
 The board draws an OO home's reservation (ERIE at E11, PMQ at E5) in a laid tile's second city (#43, #724a) and on
 both printed circles before any tile (#1283): a place, not a city, because the president chooses the circle. Where
 the new tile's second city is not what the old second city becomes — the brown OO facings over #59 (#64, #65, #66,
@@ -1567,6 +1567,8 @@ the marker has no seat to ride and moves straight across the hex (0.4 to 1 hex u
 did before #1473 (756 of 3,466 markers). Nothing pairs it with a city instead: which city a reservation marks is the
 board's placement rule, unchanged. **Watch:** whether a reservation crossing the hex reads as wrong; the lever would
 be that placement rule, which is not presentation's to change.
+
+**W3-H analysis (2026-10-04) — no presentation fix exists inside the current vocabulary; reclassified `OPEN` → `PLAYTEST`.** The flourish already has a fallback for a piece with no seat (`anchoredRide`), but a reservation marker stands on its city's centre or slot, so that fallback reduces to the same straight line across the hex it already takes. There is no existing "ride the source city, then hand over to a different one" behaviour, and which city a reservation marks is the board's placement rule, which presentation must not change (unchanged here). So nothing was changed, and the open question is the visual one this entry already names. **If Phase 4 finds the crossing reads as wrong**, the one presentation-side option is new behaviour needing an owner ruling: the marker rides the city its old circle becomes through the migration, then reappears at its new place as the commit front sweeps it (reduced motion's "swap rather than two see-through stations" rule, borrowed).
 
 ### D-36 · `RESOLVED` (asset trim, 2026-09-16) · `mutation.mp3` was silent for its first 1.37 s
 Was: as supplied, the clip was 1,337 ms of digital silence and a lead-in below -44 dBFS, first above -40 dBFS at
@@ -1792,7 +1794,7 @@ document hidden / board off screen → none; resumes on return); each fails with
 
 ## Part G — Open review items (VF-4)
 
-### G-1 · `OPEN` · Audio is unanswered, and the flip is silent until it is
+### G-1 · `OWNER DECISION` · Audio is unanswered, and the flip is silent until it is
 The brief allows a cue only if "an existing suitable mechanical cue already exists and can be reused
 cleanly", and rules out a generic cinematic boom or whoosh. The three clips in `public/audio` that could pass
 for a mechanical plate — `telegraph.mp3`, `watch-wind.mp3`, `steam_hiss.mp3` — are all owned by
@@ -1804,6 +1806,8 @@ own, fired on the fold's start rather than the midpoint (the sound of a plate re
 under the master SFX switch with no category of its own — the rule #1457 established for the presidency cue.
 **Owner decision needed:** whether a phase change deserves a sound at all. It happens five times a game and
 is already the loudest thing on the board in consequence terms.
+
+**OWNER DECISION — OD-14(f), recorded by W3-H** (transcribed 2026-10-04 on `phase3/owner-decision-reconciliation` @ `26bca3b`): "No phase-change sound effect in this phase." The flip stays silent by ruling, not by omission; nothing was built. Revisit only on a new ruling.
 
 ### G-2 · `PLAYTEST` · The timings are first-guess numbers
 200 ms fold, 260 ms unfold, 6° overshoot, 60 ms settle — chosen against the brief's 450–600 ms band and
@@ -1842,12 +1846,14 @@ than as sequencing, especially on the client that dispatched. **What to watch:**
 beat or like a stall; if it stalls, the modal can move to the `faceSwapped` milestone (what the era toast
 uses) and still satisfy the ruling — a one-word change now that the holds are named rather than numbered.
 
-### G-7 · `OPEN` · A phase change while the bar is unmounted
+### G-7 · `OWNER DECISION` · A phase change while the bar is unmounted
 The event is held for `PHASE_BADGE_TOTAL_MS` and then cleared, whoever is watching. A player on a tab where
 the action bar is not mounted misses the flip entirely and sees the new phase already settled when they
 return — which is correct (the badge is authoritative and the flourish is not), and the same shape as C-7 and
 E-6 for the cards. Recorded rather than fixed: the alternative is replaying a ceremony for an event that is
 no longer news.
+
+**OWNER DECISION — OD-14(g), recorded by W3-H** (transcribed 2026-10-04 on `phase3/owner-decision-reconciliation` @ `26bca3b`): "Do not replay stale flourish/celebration effects." A phase change that happened while the bar was unmounted is not replayed; this entry's own reading ("acceptable") is the ruled behaviour. Nothing was built.
 
 ---
 

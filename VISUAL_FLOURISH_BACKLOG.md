@@ -1250,7 +1250,9 @@ washed tile; flagged for playtest, not a hand-over fault. Scope: a lone hex (no 
 not included). Numbers: `docs/phase3/evidence/w3h/d16_handover_pixels.json` (per transition); harness
 `entries/d16.tsx`, `d16.mjs`.
 
-### D-17 · `OPEN` · Whole-board repaint while a flourish runs
+### D-17 · `PLAYTEST` · Whole-board repaint while a flourish runs
+**OWNER DIRECTION (2026-10-05, the Phase-3 consolidated-integration brief) -- header `OPEN` → `PLAYTEST`:** not an implementation requirement before Phase 4 and not an owner-policy question. W3-H's throttled trace (below) suggests optimisation may be possible but does not show that the normal product is visibly bad on ordinary hardware. Phase 4 observes tile-lay animation smoothness on realistic desktop / browser hardware and any visible whole-board hitch / repaint; only if real playtesting shows visible jank may a later fix reduce the repaint scope or cache the static board. No speculative repaint optimisation.
+
 The frame clock (#463's pattern) repaints the whole board canvas every animation frame while any transition runs
 — at most 1328 ms per lay (1600 ms before #1471, 850 ms before the re-timing). A proposal adds nothing: it is
 repainted only when the board is. Unmeasured on low-end devices.
@@ -1563,6 +1565,8 @@ subordinate to a real token over a washed proposal; whether a planned place half
 travelling reads as a target or as a second token.
 
 ### D-35 · `OPEN` · An OO home's reservation has no city to ride
+**OWNER DIRECTION (2026-10-05, the Phase-3 consolidated-integration brief) -- stays `OPEN`, now REQUIRED PHASE-3 FLOURISH IMPLEMENTATION (pre-Phase-4 lane B), not an owner-design question and not a Phase-4 watch:** the visual-flourish design already established that a station / reservation marker moves WITH its city's geometry during a tile transition and resolves to the correct final city position at commit. The OO edge case below is a correspondence problem -- an OO tile holds two distinct city identities, so the transition must keep which city the reservation marker belongs to. Presentation only: no gameplay, state or rules change to animate it. (The W3-H analysis below, which proposed a Phase-4 watch, is superseded on that point.)
+
 The board draws an OO home's reservation (ERIE at E11, PMQ at E5) in a laid tile's second city (#43, #724a) and on
 both printed circles before any tile (#1283): a place, not a city, because the president chooses the circle. Where
 the new tile's second city is not what the old second city becomes — the brown OO facings over #59 (#64, #65, #66,

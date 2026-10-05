@@ -3,7 +3,7 @@
  "planning_snapshot": "8e897f9c5196f825a69c492dfb7c29088123cf67",
  "audit_base": "7b1a956b1eeef31ad17ec6b08b475c4649747f6a",
  "audit_file": "docs/phase3/PHASE3_UIUX_AUDIT_2026-10-03.md",
- "implementation_base": "TBD - pin the final canonical integrated head after Phase 2 closes (OD-0). Wave 1 was built on 8f33f0f by the owner's brief; see wave1_integration",
+ "implementation_base": "RULED BY THE CURRENT INTEGRATION LINEAGE (OD-0, 2026-10-05): the Phase-3 source line is the phase3/... integration chain -- Wave 1 on 8f33f0f through 9ebca03 (phase3/wave3-i-w2i-w2j-w3c-w3g-w3b-v13cert-integration) and its successor phase3/consolidated-pre-playtest-integration. No retroactive re-basing; see consolidated_pre_playtest_integration.",
  "rows": [
   {
    "key": "AUD-00.01",
@@ -45,7 +45,7 @@
    "od": "OD-14(a) (probe readout may inform it first)",
    "p4": "—",
    "notes": "Part C U-16: \"Decide, then remove it either way.\" The removal happens whatever OD-14(a) decides, but only after it is recorded, because the probe is the instrument for that decision (AUD-01.02).",
-   "status": "IMPLEMENTED — W1-I `1b76512` + review fix `195755a` on `phase3/w1-i-completion`, after OD-14(a) was RULED (owner, 2026-10-04): `useStickyFitProbe`, its call, its player-visible readout (\"Temporary instrument …\") and the `fitProbe` style removed, with the now-unused `canPinWithoutTrapping` import (the predicate stays in `utils/stickyCollapse.ts`); `stickyFitProbe.test.ts` deleted (its three non-probe blocks carried verbatim into `utils/stepPanelCopy.test.ts`, review fix); `stickyTrap`, `stepJumpButton` and `stickyBarSplit` re-anchored (absence pins added); no layout change; not integrated"
+   "status": "IMPLEMENTED — W1-I `1b76512` + review fix `195755a` on `phase3/w1-i-completion`, after OD-14(a) was RULED (owner, 2026-10-04): `useStickyFitProbe`, its call, its player-visible readout (\"Temporary instrument …\") and the `fitProbe` style removed, with the now-unused `canPinWithoutTrapping` import (the predicate stays in `utils/stickyCollapse.ts`); `stickyFitProbe.test.ts` deleted (its three non-probe blocks carried verbatim into `utils/stepPanelCopy.test.ts`, review fix); `stickyTrap`, `stepJumpButton` and `stickyBarSplit` re-anchored (absence pins added); no layout change; INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05)"
   },
   {
    "key": "AUD-01.02",
@@ -59,7 +59,7 @@
    "od": "OD-14(a)",
    "p4": "—",
    "notes": "If OD-14(a) = move into the bar, lane 5 adds W1-I-b in wave 2 (3–5 h). If it = keep, no work.",
-   "status": "RULED — RESOLVED BY OD-14(a) (owner, 2026-10-04): keep the current step-panel placement and remove the probe rather than moving the step panels; the conditional W1-I-b sub-scope is not opened (no work). Transcription note (W1-I, from source at `d29bb2f`): since design note #828 the step-panel wrapper (`stepPanelRef`, a full-width row of its own) renders inside the sticky action bar's element, and `1b76512` leaves it there; the ruling's operative effect is no relocation -- the panels stay exactly where they are and W1-I-b is not opened."
+   "status": "RULED — RESOLVED BY OD-14(a) (owner): preserve the CURRENT step-panel placement -- the step panels sit INSIDE the sticky action bar (the `stepPanelRef` wrapper inside `actionBarRef` since design note #828) -- and do not move them; remove the temporary sticky-fit probe; no W1-I-b layout move (not opened, no work). The earlier transcription \"keep the step panels OUTSIDE the action bar\" was WRONG and is corrected (the owner's Phase-3 consolidated-integration brief (2026-10-05)). W1-I's product change is correct: probe removed, placement unchanged; INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05)"
   },
   {
    "key": "AUD-01.03",
@@ -73,7 +73,7 @@
    "od": "OD-5",
    "p4": "—",
    "notes": "The heading is the forced-notice focus target that AUD-13.02 needs.",
-   "status": "IMPLEMENTED — W3-A `b70f087`: a stable, visually hidden game-screen `<h1>` (`components/GameScreenHeading.tsx`, tabIndex -1, focused with preventScroll), mounted before the TopBar; the forced-notice focus target (OD-5(b)); NOT INTEGRATED"
+   "status": "IMPLEMENTED — W3-A `b70f087`: a stable, visually hidden game-screen `<h1>` (`components/GameScreenHeading.tsx`, tabIndex -1, focused with preventScroll), mounted before the TopBar; the forced-notice focus target (OD-5(b)); INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05)"
   },
   {
    "key": "AUD-01.04",
@@ -115,7 +115,7 @@
    "od": "OD-5 (re-arm policy)",
    "p4": "—",
    "notes": "—",
-   "status": "IMPLEMENTED — W3-A `b70f087`: the zero-state effect that cleared every tutorial's seen flag on each shell mount is removed; tutorials arm once per profile on `TutorialModal`'s per-topic localStorage flags (OD-5(d)); `replayTutorials` kept, uncalled, for an explicit control; NOT INTEGRATED"
+   "status": "IMPLEMENTED — DEFECT ONLY (INTERIM; NOT the tutorial redesign): W3-A `b70f087` removed design note #301's zero-state effect, which cleared every tutorial's seen flag on each zero-state mount (the default scenario), so tutorials re-taught on every table, reload and remount. The removal is kept: it is a known bad auto-reset gone, using the seen flags `TutorialModal` already had; it imposes no tutorial architecture. NOT done here, and deferred to the FINAL tutorial pass (OD-5: contextual whitebox / spotlight, built last, after the gameplay shell/UI is stable): the tutorial system itself and its re-arm policy. W3-A's tracking called this a once-per-profile RULING (OD-5(d)); the owner ruled no such re-arm policy, and that wording is withdrawn (the owner's Phase-3 consolidated-integration brief (2026-10-05)). INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05)"
   },
   {
    "key": "AUD-01.07",
@@ -1229,8 +1229,8 @@
    "disp": "A",
    "od": "OD-5",
    "p4": "—",
-   "notes": "—",
-   "status": "IMPLEMENTED — W3-A `b70f087` + `ac78dc9` + `ce705b2`: `NoticeLedger` (`utils/noticeAcknowledgements.ts`) keeps per-game, per-seat (public table position, no player id) acknowledgements and the player's own witnessed-unanswered notices in `1830juno.notice_ack.v1.*`; Herald / Phase Three / Private Revenue come back after reload / new tab until answered, and an answer holds across reload, reconnect, new tab and remount; late joiners get no backlog (OD-5(a)); NOT INTEGRATED"
+   "notes": "Persistence key (consolidated integration review, 2026-10-05): `1830juno.notice_ack.v1.<gameId>.<seatN|watcher>` is a safe implementation of \"per user / per game\" under the existing seat model -- after the deal the record's seats are exactly the deal's players (`roster-mismatch` / `foreign-actor` holds; a post-deal `leave` only unsubscribes), so a table position names one principal for the game's life; the browser keeps no principal (LIVE-2D). A Watch tab binds the `watcher` record (W3-J's watcher projection), never the seat's. A second device starts as a late joiner (no backlog) -- the harmless direction; cross-device sharing is not part of the ruling (reload / reconnect / remount / new tab).",
+   "status": "IMPLEMENTED — W3-A `b70f087` + `ac78dc9` + `ce705b2`: `NoticeLedger` (`utils/noticeAcknowledgements.ts`) keeps per-game, per-seat (public table position, no player id) acknowledgements and the player's own witnessed-unanswered notices in `1830juno.notice_ack.v1.*`; Herald / Phase Three / Private Revenue come back after reload / new tab until answered, and an answer holds across reload, reconnect, new tab and remount; late joiners get no backlog (OD-5(a)); INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05)"
   },
   {
    "key": "AUD-11.03",
@@ -1253,12 +1253,12 @@
    "cls": "[UX] (deferred)",
    "item": "Clock / live-vs-async UX.",
    "src": "NOT CODE — Part C U-10 `DEFERRED` (the UI half of S10-10's 2.5g).",
-   "slice": "—",
-   "disp": "C",
-   "od": "OD-18",
+   "slice": "— (pre-Phase-4 lane A, slice to be cut)",
+   "disp": "B",
+   "od": "OD-18 (SUPERSEDED IN PART 2026-10-05: build the clock in Phase 3; no automatic forfeiture)",
    "p4": "—",
    "notes": "The audit says U-10 \"stays deferred\", but no owner ruling placing it later is on record, and Part F says deferral alone does not count. OD-18 asks the owner to confirm a later placement (then E) or scope it into Phase 3.",
-   "status": "RULED — OD-18 (owner; transcribed 2026-10-04): no move clock, automatic forfeit or automatic trade decline at this stage; reconsider only after Phase-4 human playtesting. U-10's \"pause cap\" is not named by the ruling and is not inferred (the owner may confirm it falls under this placement); the C → E move is left to W3-F"
+   "status": "OPEN — REQUIRED PHASE-3 IMPLEMENTATION, pre-Phase-4 lane A (owner ruling OD-18 / U-10, superseded in part 2026-10-05: the clock is BUILT in Phase 3 so Phase 4 can playtest it). Build: Live vs Async clock / timing infrastructure; visible clock state; the pause / resume semantics that clock model needs (U-10's \"pause cap\" belongs to this design, inside the ruling); durable / persistent timing state; reconnect / reload behaviour; server-authoritative timing where required; enough instrumentation / status to playtest it in Phase 4. NOT built: automatic forfeiture because a clock expires, automatic trade decline, host succession (deferred pending Phase-4 validation, AUD-19.04). A clock reaching zero must not create a forfeiture settlement; no Forfeit / Clemency settlement payload before clock / forfeit semantics are validated and separately authorised. Not built during the integration (no clock code in merge-conflict resolution). C -> B at the consolidated integration."
   },
   {
    "key": "AUD-11.05",
@@ -1355,7 +1355,7 @@
    "od": "OD-14(b)",
    "p4": "—",
    "notes": "—",
-   "status": "RULED — OD-14(b) (owner; transcribed 2026-10-04 on `phase3/owner-decision-reconciliation` @ `26bca3b`): use the cash/payout player-colour wash. W3-H found it ALREADY IMPLEMENTED (#1347: `washedPlayerSurface` on `MoneyMachinePanel`'s player kind and `PrivateRevenueModal`'s player cards; Part C U-7's \"not yet reaching\" was stale) and pinned it behaviourally, `a2aaa31` (`components/w3hPlayerSurfaceWash.test.tsx`); NOT integrated; disposition letter left for W3-F"
+   "status": "RULED — OD-14(b) (owner; transcribed 2026-10-04 on `phase3/owner-decision-reconciliation` @ `26bca3b`): use the cash/payout player-colour wash. W3-H found it ALREADY IMPLEMENTED (#1347: `washedPlayerSurface` on `MoneyMachinePanel`'s player kind and `PrivateRevenueModal`'s player cards; Part C U-7's \"not yet reaching\" was stale) and pinned it behaviourally, `a2aaa31` (`components/w3hPlayerSurfaceWash.test.tsx`); INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05); disposition letter left for W3-F"
   },
   {
    "key": "AUD-12.06",
@@ -1369,7 +1369,7 @@
    "od": "OD-14(c)",
    "p4": "—",
    "notes": "The draft map assumed \"U-8 closed\"; that is an owner call and is not defaulted.",
-   "status": "RULED — OD-14(c) (owner; transcribed 2026-10-04 on `26bca3b`): give the seventh LPF/player a distinct colour. W3-H found it ALREADY IMPLEMENTED (#1344 Raspberry; seven-wide contrast/livery guards in `utils/seatColor.test.ts`) and pinned a full seven-seat table resolving to seven colours, `a2aaa31`; NOT integrated; disposition letter left for W3-F"
+   "status": "RULED — OD-14(c) (owner; transcribed 2026-10-04 on `26bca3b`): give the seventh LPF/player a distinct colour. W3-H found it ALREADY IMPLEMENTED (#1344 Raspberry; seven-wide contrast/livery guards in `utils/seatColor.test.ts`) and pinned a full seven-seat table resolving to seven colours, `a2aaa31`; INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05); disposition letter left for W3-F"
   },
   {
    "key": "AUD-12.07",
@@ -1410,7 +1410,7 @@
    "od": "OD-5",
    "p4": "—",
    "notes": "—",
-   "status": "IMPLEMENTED — W3-A `b70f087`: when the forced-notice chain is exhausted, focus moves once to the game-screen heading (`utils/useNoticeChain.ts`), never during ordinary play and never into another open dialog (OD-5(b)); NOT INTEGRATED"
+   "status": "IMPLEMENTED — W3-A `b70f087`: when the forced-notice chain is exhausted, focus moves once to the game-screen heading (`utils/useNoticeChain.ts`), never during ordinary play and never into another open dialog (OD-5(b)); INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05)"
   },
   {
    "key": "AUD-13.03",
@@ -1437,7 +1437,7 @@
    "od": "—",
    "p4": "—",
    "notes": "—",
-   "status": "NOT STARTED — BLOCKED ONLY ON W3-A INTEGRATION: the owner reports OD-5 ruled in W3-A's lane (W3-A records it; not recorded here), and W3-A owns R-TUT and the notice/focus/re-arm architecture while active; W3-D converts TutorialModal (both role=\"dialog\" aria-modal divs) to NativeModal against that landed architecture, and with it TutorialModal leaves the aria-modal classification list in phase3W3DModalLayer."
+   "status": "NOT STARTED — DEFERRED TO THE FINAL TUTORIAL PASS (owner ruling OD-5: the tutorial design is contextual whitebox / spotlight work, built LAST, after the gameplay shell/UI is stable). Not forced complete now; not a pre-Phase-4 lane (nothing in the canonical plan requires the tutorial pass before Phase 4). Until then the two `TutorialModal` `role=\"dialog\"` / `aria-modal` divs stay as they are, outside the forced-notice chain (W3-A's sixth chain entry was removed at the consolidated integration). W3-D stays PARTIAL on this row alone (the owner's Phase-3 consolidated-integration brief (2026-10-05))."
   },
   {
    "key": "AUD-13.05",
@@ -1451,7 +1451,7 @@
    "od": "OD-15(a) (RULED 2026-10-04)",
    "p4": "—",
    "notes": "OD-15(a) as corrected by the owner (2026-10-04): the intro is a full-viewport takeover, not a modal; the same contract covers the end-game film. C -> B under the ruling.",
-   "status": "IMPLEMENTED — W3-D on `phase3/w3-d` (NOT integrated): `CinematicTakeover` renders GameIntroOverlay and GameOutroOverlay into document.body, outside every scaled root, with fixed four-zero-edge geometry; `zoom: 1 / uiScale` and the intro's role=\"dialog\" aria-modal=\"true\" removed; no NativeModal; the shell root is `inert` while a takeover covers the game (intro, outro until its cue); film, timing, skip, Escape, duck, backstop and cue unchanged. Tests: phase3W3DCinematicTakeover."
+   "status": "IMPLEMENTED — W3-D on `phase3/w3-d` (INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05)): `CinematicTakeover` renders GameIntroOverlay and GameOutroOverlay into document.body, outside every scaled root, with fixed four-zero-edge geometry; `zoom: 1 / uiScale` and the intro's role=\"dialog\" aria-modal=\"true\" removed; no NativeModal; the shell root is `inert` while a takeover covers the game (intro, outro until its cue); film, timing, skip, Escape, duck, backstop and cue unchanged. Tests: phase3W3DCinematicTakeover."
   },
   {
    "key": "AUD-13.06",
@@ -1465,7 +1465,7 @@
    "od": "OD-15(b) (RULED 2026-10-04)",
    "p4": "—",
    "notes": "OD-15(b) (2026-10-04): converge on native <dialog>/showModal() via NativeModal; no manual inert; retire ModalPortal when its last legitimate consumer migrates; false modal semantics removed, not wrapped. C -> B under the ruling.",
-   "status": "IMPLEMENTED — W3-D on `phase3/w3-d` (NOT integrated): no manual inert anywhere; the Lobby's standalone <ModalPortal> around Host Game removed (HostSetupCard is a NativeModal), so NativeModal is ModalPortal's only consumer, as its scaled destination -- the remaining deletion (dialogs rendered in place, ModalLayerHost and harness mounts removed) is recorded in ModalPortal.tsx and needs a real-browser pass plus the W3-A / W2-M harnesses settled; PrivateTradePanel classified by behaviour as a panel and its unreachable role=\"dialog\"/aria-modal shape deleted; every remaining aria-modal (TutorialModal -> AUD-13.04, HomeStationPrompt -> W2-H) classified. Tests: phase3W3DModalLayer."
+   "status": "IMPLEMENTED — W3-D on `phase3/w3-d` (INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05)): no manual inert anywhere; the Lobby's standalone <ModalPortal> around Host Game removed (HostSetupCard is a NativeModal), so NativeModal is ModalPortal's only consumer, as its scaled destination -- the remaining deletion (dialogs rendered in place, ModalLayerHost and harness mounts removed) is recorded in ModalPortal.tsx and needs a real-browser pass plus the W3-A / W2-M harnesses settled; PrivateTradePanel classified by behaviour as a panel and its unreachable role=\"dialog\"/aria-modal shape deleted; every remaining aria-modal (TutorialModal -> AUD-13.04, HomeStationPrompt -> W2-H) classified. Tests: phase3W3DModalLayer."
   },
   {
    "key": "AUD-13.07",
@@ -1479,7 +1479,7 @@
    "od": "OD-5",
    "p4": "—",
    "notes": "Not in the draft map. Policy = which notice yields; see OD-5.",
-   "status": "IMPLEMENTED — W3-A `b70f087` + RED R4 `e8b9504` + `ac78dc9`: the forced notices present one at a time in the ruled order Emergency > Fleet Loss > Private Revenue > Phase Three > Herald > Tutorial (`utils/noticeChain.ts`), every one waiting while a non-notice native dialog is open (`utils/nativeModalRegistry.ts`); dialogs that open themselves (Game Over, B&O par prompt, private power flow) wait for the screen (`components/NativeModalTurn.tsx`); no two native dialogs at once (OD-5(c)); NOT INTEGRATED"
+   "status": "IMPLEMENTED — W3-A `b70f087` + RED R4 `e8b9504` + `ac78dc9`: the forced notices present one at a time in the ruled order Emergency > Fleet Loss > Private Revenue > Phase Three > Herald > Tutorial (`utils/noticeChain.ts`), every one waiting while a non-notice native dialog is open (`utils/nativeModalRegistry.ts`); dialogs that open themselves (Game Over, B&O par prompt, private power flow) wait for the screen (`components/NativeModalTurn.tsx`); no two native dialogs at once (OD-5(c)); INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05). Consolidated integration (2026-10-05): the chain is the owner's five -- Emergency, Fleet Loss, Private Revenue, Phase Three, Herald; W3-A's sixth entry (Tutorial) removed (owner ruling OD-5: Tutorial is NOT part of the forced-notice chain); tutorials keep their pre-W3-A presentation until the final tutorial pass."
   },
   {
    "key": "AUD-13.08",
@@ -1574,7 +1574,8 @@
    "disp": "A",
    "od": "—",
    "p4": "—",
-   "notes": "Latching is distributed: W1-B (dashboard), W1-D (consent prompts), W1-E (ring confirm), W2-C (embedded proposal), W2-G (emergency); W3-B closes the residue and owns the coverage test."
+   "notes": "Latching is distributed: W1-B (dashboard), W1-D (consent prompts), W1-E (ring confirm), W2-C (embedded proposal), W2-G (emergency); W3-B closes the residue and owns the coverage test.",
+   "status": "NOT STARTED — W3-B residue, pre-Phase-4 lane E (re-evaluated on the combined tree, 2026-10-05): no later slice closed it -- `BuyLicenseModal` and `PrivatePowerFlowModal` read no latch (no `actionInFlight` / in-flight guard), and the token confirm and route edits are not covered either. W3-B's AUD-25.01 latch (integrated) bounds the bar, Stock Round, consent and emergency surfaces only."
   },
   {
    "key": "AUD-15.01",
@@ -1588,7 +1589,7 @@
    "od": "OD-12 (only if the fix must touch the apply half)",
    "p4": "—",
    "notes": "Preferred fix is inside `utils/audio.ts` (a new duck supersedes the previous one), which needs no RED edit.",
-   "status": "IMPLEMENTED — W3-H `b3ed9c1` (`utils/audio.ts`: `duckRadio(depth, slot?)` -- a hold in a named slot is superseded by the next hold in that slot, counted first and released second; `releaseDuckSlot`; holds without a slot, the titles and the outro, unchanged; the shell frees the haunting's slot when the board's clip is gone and on unmount, outside every RED region) + the one OD-12 RED R2 commit `9f88178` (one argument: the haunting's `duckRadio(DUCK_FOR_VIDEO, HAUNTING_DUCK_SLOT)`; the audio-side fix alone could not tell the haunting's hold from the titles'/outro's) + pins `3913f9c`; NOT integrated. Residual (LOW, review): when the silent fog film replaces a haunting with its own audio, the deep duck is held until the fog clip ends (~6 s) instead of releasing at once -- bounded where it used to be permanent; a tighter fix needs a further RED edit"
+   "status": "IMPLEMENTED — W3-H `b3ed9c1` (`utils/audio.ts`: `duckRadio(depth, slot?)` -- a hold in a named slot is superseded by the next hold in that slot, counted first and released second; `releaseDuckSlot`; holds without a slot, the titles and the outro, unchanged; the shell frees the haunting's slot when the board's clip is gone and on unmount, outside every RED region) + the one OD-12 RED R2 commit `9f88178` (one argument: the haunting's `duckRadio(DUCK_FOR_VIDEO, HAUNTING_DUCK_SLOT)`; the audio-side fix alone could not tell the haunting's hold from the titles'/outro's) + pins `3913f9c`; INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05). Residual (LOW, review): when the silent fog film replaces a haunting with its own audio, the deep duck is held until the fog clip ends (~6 s) instead of releasing at once -- bounded where it used to be permanent; a tighter fix needs a further RED edit"
   },
   {
    "key": "AUD-16.01",
@@ -1707,9 +1708,9 @@
    "src": "NOT CODE.",
    "slice": "—",
    "disp": "D",
-   "od": "OD-10(b) (whether phone width is a target)",
+   "od": "OD-10(b) (RULED 2026-10-05: phone-width layout and keyboard map access are Phase 5; Phase 4 observes)",
    "p4": "At 360/390/430 px, play one SR turn and one OR turn; record every unreachable control.",
-   "notes": "—"
+   "notes": "OD-10(b) RULED (owner, 2026-10-05): phone-width gameplay layout and keyboard map access are NOT required for Phase 3 -- they belong to Phase 5 (the responsive map architecture and the keyboard map controller). Phase 4 may observe and report real-device / mobile / keyboard behaviour; nothing here is a Phase-3 implementation."
   },
   {
    "key": "AUD-17.01",
@@ -1926,11 +1927,10 @@
    "item": "No host succession and no clock for an absent seat.",
    "src": "NOT CODE — the audit records these as limits (also the 6.5 preflight's \"Known limits\").",
    "slice": "—",
-   "disp": "C",
-   "od": "OD-18",
+   "disp": "E",
+   "od": "OD-18 (RULED; consequences deferred pending Phase-4 validation)",
    "p4": "—",
-   "notes": "Recorded product limits. OD-18 asks the owner to confirm their later placement (then E).",
-   "status": "RULED — OD-18 (owner; transcribed 2026-10-04): no host succession and no clock / automatic forfeit for an absent seat at this stage; reconsider only after Phase-4 human playtesting. The C → E move is left to W3-F"
+   "notes": "OWNER RULING OD-18 (superseded in part 2026-10-05): host succession and the automatic consequences of an absent seat's clock -- automatic forfeit, automatic trade decline -- stay DEFERRED pending Phase-4 validation of the clock (which IS built in Phase 3: AUD-11.04, lane A). No Forfeit / Clemency settlement payload until those semantics are validated and separately authorised. C -> E at the consolidated integration (the owner placed it after Phase 4). Earlier: recorded product limits; OD-18 asked the owner to confirm their later placement."
   },
   {
    "key": "AUD-20.01",
@@ -1958,7 +1958,7 @@
    "od": "—",
    "p4": "—",
    "notes": "Roster wording (owner, 2026-10-04): the waiting-room roster's \"Wallet linked\" (`fundingTag`, the audit's cited `money/moneyFlow.ts`:121-122 at `8e897f9`, rendered by `components/SandboxWaitingRoom.tsx`:491) is ACCEPTED TEMPORARILY as a description of linkage rather than proof freshness -- no separate remediation; the roster tag is not to become a wallet/proof authority. The panel is the row's fix; AUD-20.13 makes its freshness exact after a reload. OWNER DESIGN DIRECTION (2026-10-04): the Profile + Keplr flow is PROVISIONAL and slated for a later redesign/rebuild; this row is a minimal, removable compatibility change, not an endorsement of the current flow (no new UI surface, no new authority).",
-   "status": "IMPLEMENTED — W2-M `90a3608` (+ review `8d34474`, `5c7334b`), NOT INTEGRATED: a joiner whose proof can't be counted on (link older than the server's 24 h less 5 min with no newer proof accepted on this page, or the server's `link-first` refusal) reads \"Re-prove <wallet> to deposit\" with the free same-wallet re-proof; Deposit stays beside an inferred (aged) state, withheld after the server's refusal; never the host"
+   "status": "IMPLEMENTED — W2-M `90a3608` (+ review `8d34474`, `5c7334b`), INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05): a joiner whose proof can't be counted on (link older than the server's 24 h less 5 min with no newer proof accepted on this page, or the server's `link-first` refusal) reads \"Re-prove <wallet> to deposit\" with the free same-wallet re-proof; Deposit stays beside an inferred (aged) state, withheld after the server's refusal; never the host"
   },
   {
    "key": "AUD-20.03",
@@ -1972,7 +1972,7 @@
    "od": "—",
    "p4": "—",
    "notes": "The remaining stale-view case (a second signature after the server's own `replace-required`) is a server residue: AUD-20.14.",
-   "status": "IMPLEMENTED — W2-M `90a3608` (+ review `8d34474`, `5c7334b`), NOT INTEGRATED: \"Change wallet\" reads Keplr's account (no prompt), asks first naming both wallets, then ONE `signLink` with `replace: true` for exactly the confirmed wallet (refused if the link moved meanwhile); the server-asked fallback shows the server's sentence and costs one more signature (server follow-up)"
+   "status": "IMPLEMENTED — W2-M `90a3608` (+ review `8d34474`, `5c7334b`), INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05): \"Change wallet\" reads Keplr's account (no prompt), asks first naming both wallets, then ONE `signLink` with `replace: true` for exactly the confirmed wallet (refused if the link moved meanwhile); the server-asked fallback shows the server's sentence and costs one more signature (server follow-up)"
   },
   {
    "key": "AUD-20.04",
@@ -1986,7 +1986,7 @@
    "od": "—",
    "p4": "—",
    "notes": "—",
-   "status": "IMPLEMENTED — W2-M `90a3608` (+ review `8d34474`, `5c7334b`), NOT INTEGRATED: `reauth-required` says when this page's grant lapsed or that the server ended it early (60 s clock grace; the server's sentence when never confirmed); `challenge-expired` says expired-while-Keplr-open vs dropped"
+   "status": "IMPLEMENTED — W2-M `90a3608` (+ review `8d34474`, `5c7334b`), INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05): `reauth-required` says when this page's grant lapsed or that the server ended it early (60 s clock grace; the server's sentence when never confirmed); `challenge-expired` says expired-while-Keplr-open vs dropped"
   },
   {
    "key": "AUD-20.05",
@@ -2000,7 +2000,7 @@
    "od": "—",
    "p4": "—",
    "notes": "—",
-   "status": "IMPLEMENTED — W2-M `90a3608` (+ review `8d34474`, `5c7334b`), NOT INTEGRATED: a Keplr decline is `rejected` in `classifyChainError` (after the chain's own refusals; never for a broadcast refusal) and when declined while handing over a signer"
+   "status": "IMPLEMENTED — W2-M `90a3608` (+ review `8d34474`, `5c7334b`), INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05): a Keplr decline is `rejected` in `classifyChainError` (after the chain's own refusals; never for a broadcast refusal) and when declined while handing over a signer"
   },
   {
    "key": "AUD-20.06",
@@ -2014,7 +2014,7 @@
    "od": "—",
    "p4": "—",
    "notes": "—",
-   "status": "IMPLEMENTED — W2-M `90a3608` (+ review `8d34474`, `5c7334b`), NOT INTEGRATED: before a Challenge the browser re-reads Juno through the pinned endpoint (`ChainGameFacts` + bond, window end, resolver window/deadline, dispute record) and refuses unless SETTLEABLE with the shown settlement seq/digest, the shown bond and the shown, still-open window"
+   "status": "IMPLEMENTED — W2-M `90a3608` (+ review `8d34474`, `5c7334b`), INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05): before a Challenge the browser re-reads Juno through the pinned endpoint (`ChainGameFacts` + bond, window end, resolver window/deadline, dispute record) and refuses unless SETTLEABLE with the shown settlement seq/digest, the shown bond and the shown, still-open window"
   },
   {
    "key": "AUD-20.07",
@@ -2028,7 +2028,7 @@
    "od": "—",
    "p4": "—",
    "notes": "—",
-   "status": "IMPLEMENTED — W2-M `90a3608` (+ review `8d34474`, `5c7334b`), NOT INTEGRATED: the dispute confirm gives the resolver's deadline as a local time (Juno's resolver window from now); the band shows Juno's dispute record (who, when, bond, evidence, resolution) while disputed or after a resolver route"
+   "status": "IMPLEMENTED — W2-M `90a3608` (+ review `8d34474`, `5c7334b`), INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05): the dispute confirm gives the resolver's deadline as a local time (Juno's resolver window from now); the band shows Juno's dispute record (who, when, bond, evidence, resolution) while disputed or after a resolver route"
   },
   {
    "key": "AUD-20.08",
@@ -2038,11 +2038,11 @@
    "item": "An owner-authored Terms page is needed before the first real deposit.",
    "src": "CONFIRMED — no Terms page, route or string in `frontend/src` or `frontend/public`.",
    "slice": "W2-M (hosting only)",
-   "disp": "C",
-   "od": "OD-16",
+   "disp": "B",
+   "od": "OD-16 (RULED: shell + links in Phase 3; copy owner-authored; final Terms a Phase-7/mainnet gate)",
    "p4": "—",
    "notes": "—",
-   "status": "OPEN — READY FOR IMPLEMENTATION under a settled ruling (OD-16 RULED; not waiting on the owner): Phase 3 builds the Terms route/page shell and the Terms/deposit link infrastructure, with NO invented Terms prose; the substantive Terms copy is owner-authored and the final Terms are a Phase-7/mainnet gate. Nothing is built yet: W2-M (`d68602d`, integrated on `phase3/consolidated-pre-playtest-integration`) added no page, route, link or placeholder (it predated the ruling); no Terms route exists in the combined tree"
+   "status": "OPEN — READY FOR IMPLEMENTATION under a settled ruling (OD-16 RULED; NOT waiting on an owner decision). Pre-Phase-4 lane D: build the Terms route/page shell and the Terms/deposit link infrastructure, with NO invented Terms prose (a clearly-marked owner-copy slot, not placeholder legal text). Nothing exists yet: no Terms route, page or link is in the combined tree (W2-M, INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05), predated the ruling and added none). The substantive owner-authored Terms are a PHASE-7/MAINNET GATE. C -> B at the consolidated integration (the owner placed the shell in Phase 3)."
   },
   {
    "key": "AUD-20.09",
@@ -2109,7 +2109,7 @@
    "od": "—",
    "p4": "—",
    "notes": "Implemented as the smallest additive change: `you.link.proofVerifiedAt` = the standing grant's stored `proof.verified_at` (`moneyTables.ts` projection); no migration, contract, codec, ledger-format, FINANCIAL_PROTOCOL_VERSION or hosted-protocol change (an additive server-to-client field). The browser takes the newest of it and this page's own accepted re-proof: past 24 h by that time it is the server's word (Re-prove, no Deposit beside it); inside the 5-minute margin, or with the field absent or malformed (an older server), the page's inference (Re-prove with Deposit beside it). Residual (LOW, accepted): the age is judged on this device's clock; a clock hours ahead still reads a fresh proof as stale -- one free re-proof, never a deposit taken. OWNER DESIGN DIRECTION (2026-10-04): the Profile + Keplr flow is PROVISIONAL and slated for a later redesign/rebuild; this row is a minimal, removable compatibility change, not an endorsement of the current flow (no new UI surface, no new authority).",
-   "status": "IMPLEMENTED — W2-M `a97b1d1` + review fix `9637ca7`, NOT INTEGRATED: the room view carries the stored proof time; freshness after a reload follows it"
+   "status": "IMPLEMENTED — W2-M `a97b1d1` + review fix `9637ca7`, INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05): the room view carries the stored proof time; freshness after a reload follows it"
   },
   {
    "key": "AUD-20.14",
@@ -2123,7 +2123,7 @@
    "od": "—",
    "p4": "—",
    "notes": "Implemented as approved (the safer design): `wallet-challenge` also answers `replaces` -- the seat's standing linked wallet when it is another wallet (null: nothing replaced; omitted if the ledger can't be read). The browser asks before Keplr signs (the unspent challenge is superseded by the next mint), then signs once with `replace: true`; a confirmed replacement refuses before signing if the wallet the fresh challenge names is not the one shown (or, from an older server, the view's), and a question raised by the server's own post-signature `replace-required` asks again about the wallet the fresh challenge names. Unchanged: the challenge's single use, the cached answer for a retry, `challenge-used`, `challenge-expired`, the link's own decision and refusal order; the alternative (reusing a consumed challenge / retrying the same signed request) is NOT implemented. Residual (LOW, owner's call, not approved scope): the check is before signing only -- a link made by another device of the same principal while Keplr's prompt is open is still replaced by the plain `replace: true` (as before W2-M); closing it would need an additive `replaceWallet` on wallet-link. OWNER DESIGN DIRECTION (2026-10-04): the Profile + Keplr flow is PROVISIONAL and slated for a later redesign/rebuild; this row is a minimal, removable compatibility change, not an endorsement of the current flow (no new UI surface, no new authority).",
-   "status": "IMPLEMENTED — W2-M `a97b1d1` + review fix `9637ca7`, NOT INTEGRATED: the wallet a link would replace is named before Keplr signs; the replay model unchanged"
+   "status": "IMPLEMENTED — W2-M `a97b1d1` + review fix `9637ca7`, INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05): the wallet a link would replace is named before Keplr signs; the replay model unchanged"
   },
   {
    "key": "AUD-21.01",
@@ -2274,7 +2274,7 @@
    "od": "—",
    "p4": "—",
    "notes": "S6-7 parity: the board path is correct (glow, click refusal, hex markers); only the copy contradicts it. Copy-only fix.",
-   "status": "IMPLEMENTED — W3-J `a560721` on `phase3/w3-j-u28-remediation` (from `phase3/wave3-i-w2i-w2j-w3c-w3g-v13cert-integration` @ `d29bb2f`): the Operating Round gotcha (and the Track watch line that quotes it) now quotes the page's own authoritative sentences verbatim -- the track step's private-hex rule and the DH card's lapse sentence -- so it no longer says the CSL / DH hexes \"are not reserved\"; every claim pinned against `privateHexRefusal` (B20 barred while a player owns the C&SL; open when corporation-owned or closed) in `components/phase3W3JRulesReferenceReservation.test.ts`. Copy only. Recorded for the owner (LOW, independent review): read literally, the quoted private-hex sentence also covers F16 under a player-owned D&H, which the authority leaves open (#1694a); no sentence on the page states that exception and copy is not written from memory -- an owner wording decision. Not integrated"
+   "status": "IMPLEMENTED — W3-J `a560721` on `phase3/w3-j-u28-remediation` (from `phase3/wave3-i-w2i-w2j-w3c-w3g-v13cert-integration` @ `d29bb2f`): the Operating Round gotcha (and the Track watch line that quotes it) now quotes the page's own authoritative sentences verbatim -- the track step's private-hex rule and the DH card's lapse sentence -- so it no longer says the CSL / DH hexes \"are not reserved\"; every claim pinned against `privateHexRefusal` (B20 barred while a player owns the C&SL; open when corporation-owned or closed) in `components/phase3W3JRulesReferenceReservation.test.ts`. Copy only. Recorded for the owner (LOW, independent review): read literally, the quoted private-hex sentence also covers F16 under a player-owned D&H, which the authority leaves open (#1694a); no sentence on the page states that exception and copy is not written from memory -- an owner wording decision. Not integrated. INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05). CORRECTED at the consolidated integration (owner-approved COPY-ONLY, `f29d992`): W3-J's quotation still barred F16 under a player-owned D&H when read literally; the gotcha now tells the two hexes apart as the authority does -- B-20 follows the player-owned restriction (the CSL's owning corporation keeps its extra lay, `cslBonusEntitlement`), F-16 is the one exception (any corporation may tile it under the ordinary rules; doing so ends the DH's special ability, `dhPowerState`; the DH's owning corporation keeps its own placement until then). No engine, privateReservations, rules-version or settlement change; pinned in `phase3W3JRulesReferenceReservation.test.ts`."
   },
   {
    "key": "AUD-25.03",
@@ -2288,7 +2288,7 @@
    "od": "OD-12 (RULED 2026-10-03: narrowly controlled RED fixes; one reviewed commit each)",
    "p4": "—",
    "notes": "One-line RED R1 change (gate on `derived !== true`), its own reviewed commit.",
-   "status": "IMPLEMENTED — W3-J RED R1 `6378dea` (OD-12; one condition): the landed branch dispatches `submission-landed` for every player decision (`derived !== true`), so an automatic-flagged decision (the B&O par, PlaceHomeStation, ExchangePrivate, Undo's RevertTo) retires a standing refusal; the same distinction AUD-25.13 #9 uses (`77b0b38`) -- one rule, not two mechanisms. Pinned with each automatic dispatch site's flags in `utils/phase3W3JRed.test.ts`. Not integrated"
+   "status": "IMPLEMENTED — W3-J RED R1 `6378dea` (OD-12; one condition): the landed branch dispatches `submission-landed` for every player decision (`derived !== true`), so an automatic-flagged decision (the B&O par, PlaceHomeStation, ExchangePrivate, Undo's RevertTo) retires a standing refusal; the same distinction AUD-25.13 #9 uses (`77b0b38`) -- one rule, not two mechanisms. Pinned with each automatic dispatch site's flags in `utils/phase3W3JRed.test.ts`. Not integrated. INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05)."
   },
   {
    "key": "AUD-25.04",
@@ -2302,7 +2302,7 @@
    "od": "—",
    "p4": "—",
    "notes": "Extends P3-N020's rollbacks (W3-C covered lay and run only); the latch half is W3-B's P3-N021.",
-   "status": "IMPLEMENTED — W3-J `19539b2` (+ pin follow-up `6f26a79`; not RED): `commitFreeStationPlacement` keeps the room's answer and records the placement in flight (`utils/freeStationInFlight.ts`): refused -> released, and the spent key (`dh-token`) leaves the shell's fallback set, so the D&H flow asks again; applied -> the home marker holds until the board stops owing that corporation's home token (no flash between the acknowledgement and the entry); no room answer (solo) -> nothing held. HomeStationPrompt `pending` = `homePromptPending(...)`: not while the errand is armed (as before) nor while the placement is in flight, so it no longer re-pops for the round trip or an outage. The latch half stays W3-B's P3-N021. Tests `utils/phase3W3JRollbacks.test.ts` (real boards through the real reducer). Not integrated"
+   "status": "IMPLEMENTED — W3-J `19539b2` (+ pin follow-up `6f26a79`; not RED): `commitFreeStationPlacement` keeps the room's answer and records the placement in flight (`utils/freeStationInFlight.ts`): refused -> released, and the spent key (`dh-token`) leaves the shell's fallback set, so the D&H flow asks again; applied -> the home marker holds until the board stops owing that corporation's home token (no flash between the acknowledgement and the entry); no room answer (solo) -> nothing held. HomeStationPrompt `pending` = `homePromptPending(...)`: not while the errand is armed (as before) nor while the placement is in flight, so it no longer re-pops for the round trip or an outage. The latch half stays W3-B's P3-N021. Tests `utils/phase3W3JRollbacks.test.ts` (real boards through the real reducer). Not integrated. INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05)."
   },
   {
    "key": "AUD-25.05",
@@ -2316,7 +2316,7 @@
    "od": "OD-12 (RULED 2026-10-03: narrowly controlled RED fixes; one reviewed commit each)",
    "p4": "—",
    "notes": "The pre-send half needs RED R1 lines (return `false`); the rest is outside RED.",
-   "status": "IMPLEMENTED — the pre-send half RED R1 `b9afbdf` (OD-12; three one-token edits: the turn, catching-up and link-down gates answer `false`, so W3-C's rollbacks act on them); the rest W3-J `19539b2` (not RED): a refused lay drops its held ghost and a refused token drops its station picture at once (not on their 4 s clocks); a refused paid token restores the local step cursor (Routes -> Tokens) and re-arms targeting for a seat still on turn; End Turn's first-OR market lesson runs only once the pass is answered and not refused. Only a `false` answer rolls anything back. Not taken (not named by the row): the lay's own local step write, which the board's `operating_sub_phase` shadows on hosted rooms. Not integrated"
+   "status": "IMPLEMENTED — the pre-send half RED R1 `b9afbdf` (OD-12; three one-token edits: the turn, catching-up and link-down gates answer `false`, so W3-C's rollbacks act on them); the rest W3-J `19539b2` (not RED): a refused lay drops its held ghost and a refused token drops its station picture at once (not on their 4 s clocks); a refused paid token restores the local step cursor (Routes -> Tokens) and re-arms targeting for a seat still on turn; End Turn's first-OR market lesson runs only once the pass is answered and not refused. Only a `false` answer rolls anything back. Not taken (not named by the row): the lay's own local step write, which the board's `operating_sub_phase` shadows on hosted rooms. Not integrated. INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05)."
   },
   {
    "key": "AUD-25.06",
@@ -2330,7 +2330,7 @@
    "od": "OD-12 (RULED 2026-10-03: narrowly controlled RED fixes; one reviewed commit each)",
    "p4": "—",
    "notes": "Retire `resync` when the rebuild's drain settles (RED R5) and skip `onStale` when `onResync` fires (`serverLink.ts`).",
-   "status": "IMPLEMENTED — W3-J `a1ef9e5` (the link half: a resync no longer settles every submission on the wire `null` with the stale sentence beside the resync notice; the sent submissions become orphans the fresh catch-up reconciles -- landed resolves with its index, still committing stays in flight, not landed resolves `null` with the stale sentence once caught up) + RED R5 `e769e51` (OD-12; one dispatch: the rebuild's drain retires the resync notice) + review fix `11db86f` (between a resync and its fresh catch-up a consumer that binds its submissions sends nothing). Tests `utils/phase3W3JLink.test.ts`, `utils/phase3W3JRed.test.ts`. Not integrated"
+   "status": "IMPLEMENTED — W3-J `a1ef9e5` (the link half: a resync no longer settles every submission on the wire `null` with the stale sentence beside the resync notice; the sent submissions become orphans the fresh catch-up reconciles -- landed resolves with its index, still committing stays in flight, not landed resolves `null` with the stale sentence once caught up) + RED R5 `e769e51` (OD-12; one dispatch: the rebuild's drain retires the resync notice) + review fix `11db86f` (between a resync and its fresh catch-up a consumer that binds its submissions sends nothing). Tests `utils/phase3W3JLink.test.ts`, `utils/phase3W3JRed.test.ts`. Not integrated. INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05)."
   },
   {
    "key": "AUD-25.07",
@@ -2344,7 +2344,7 @@
    "od": "—",
    "p4": "—",
    "notes": "Server frame field only (no rule, no settlement): attach `inReplyTo` to a submit's internal error.",
-   "status": "IMPLEMENTED — W3-J `a1ef9e5`: an unaddressed `internal` error past the hello orphans the sent submissions and says hello on the same socket; its catch-up settles them (a move committed before the throw resolves with its index), the sentence goes to the refusal slot; review fixes `11db86f` (hellos in flight counted, an earlier hello's catch-up during a resync dropped, a hello answered `internal` recycles the socket) and `d312706` (a hello answered by any other unaddressed error -- a maintenance hold, an unavailable store -- is consumed, so a later resync's catch-up is not dropped). The row's server-side remedy (attach `inReplyTo`) is not taken: W3-J does no server work and the client reconciliation needs none. Not integrated"
+   "status": "IMPLEMENTED — W3-J `a1ef9e5`: an unaddressed `internal` error past the hello orphans the sent submissions and says hello on the same socket; its catch-up settles them (a move committed before the throw resolves with its index), the sentence goes to the refusal slot; review fixes `11db86f` (hellos in flight counted, an earlier hello's catch-up during a resync dropped, a hello answered `internal` recycles the socket) and `d312706` (a hello answered by any other unaddressed error -- a maintenance hold, an unavailable store -- is consumed, so a later resync's catch-up is not dropped). The row's server-side remedy (attach `inReplyTo`) is not taken: W3-J does no server work and the client reconciliation needs none. Not integrated. INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05)."
   },
   {
    "key": "AUD-25.08",
@@ -2358,7 +2358,7 @@
    "od": "—",
    "p4": "—",
    "notes": "Batch-3 station gate parity. Ask `stationPlacementRefusal` (or its treasury and allowance arms) for the paid control and the click.",
-   "status": "IMPLEMENTED — W3-J `b74ffef` (+ pin follow-up `6f26a79`; not RED): `utils/paidStationView.ts` asks the engine's own `stationPlacementBlockReason` without the free station (token limit, treasury vs `nextStationTokenCost`, a reachable city); the bar greys \"Place Station Token for $X\" with that sentence and `handleTokenHexClick` refuses before staging a paid token; the D&H free station is untouched. No engine change. Tests `panels/phase3W3JPaidStation.test.tsx`. Not integrated"
+   "status": "IMPLEMENTED — W3-J `b74ffef` (+ pin follow-up `6f26a79`; not RED): `utils/paidStationView.ts` asks the engine's own `stationPlacementBlockReason` without the free station (token limit, treasury vs `nextStationTokenCost`, a reachable city); the bar greys \"Place Station Token for $X\" with that sentence and `handleTokenHexClick` refuses before staging a paid token; the D&H free station is untouched. No engine change. Tests `panels/phase3W3JPaidStation.test.tsx`. Not integrated. INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05)."
   },
   {
    "key": "AUD-25.09",
@@ -2372,7 +2372,7 @@
    "od": "—",
    "p4": "—",
    "notes": "Phase-3 part: a property test over the route-oracle corpus (every exact Auto Route draft survives the filter) or judge drafts with `evaluateRouteSet`. The structural cleanup stays Phase 7 (GitHub issue #1, S6-13).",
-   "status": "IMPLEMENTED — the Phase-3 player-facing parity portion only: W3-J `28fbd85` (+ input pins `1495c42`), property test `routeOracle/phase3W3JRouteDraftParity.test.ts` -- over the route-oracle corpus and in BOTH orientations, every exact Auto Route draft survives `runnableDrafts` with the search's own price, the run is the search's total, and the set `handleRunTrains` would send passes `routeSetRefusal`; the #1554 corporation-blind terminus as a negative control; the re-derivation and its inputs pinned to App. No defect found; no production change. The structural cleanup (retiring the shell's local draft rules and `editRouteDraft`'s click rules) stays Phase 7 / GitHub issue #1 (S6-13). Not integrated"
+   "status": "IMPLEMENTED — the Phase-3 player-facing parity portion only: W3-J `28fbd85` (+ input pins `1495c42`), property test `routeOracle/phase3W3JRouteDraftParity.test.ts` -- over the route-oracle corpus and in BOTH orientations, every exact Auto Route draft survives `runnableDrafts` with the search's own price, the run is the search's total, and the set `handleRunTrains` would send passes `routeSetRefusal`; the #1554 corporation-blind terminus as a negative control; the re-derivation and its inputs pinned to App. No defect found; no production change. The structural cleanup (retiring the shell's local draft rules and `editRouteDraft`'s click rules) stays Phase 7 / GitHub issue #1 (S6-13). Not integrated. INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05)."
   },
   {
    "key": "AUD-25.10",
@@ -2386,7 +2386,7 @@
    "od": "—",
    "p4": "—",
    "notes": "Each a small, local fix; none blocks play.",
-   "status": "IMPLEMENTED — W3-J, one commit per NIT: (a) `3889482` the depot Buy asks `trainPurchaseRefusal`; (b) `cfb3e69` the off-turn funding prompt carries `fundingAnswerRefusalForViewer` / `fundingAcceptRefusalForViewer`; (c) `49501c7` one busy line for one held submission (the link's sentence first); (d) `dbe43a2` the M&H status says \"requested, not executed yet\" (+ `1495c42` / `130363c`: the catalog bullet says the timing without \"queued\"); (e) `01dc5ca` a cancelled delayed auction reads Cancelled, not a tick; (f) `00e91a2` the link-down pre-send line does not restate the reconnecting banner (+ `1495c42`: such a press clears an older refusal); (g) `a61a7c2` the stale RunManualRoute comments outside RED corrected (one present-tense sentence inside RED R2 left untouched: a comment is no reason for an OD-12 edit). Not integrated"
+   "status": "IMPLEMENTED — W3-J, one commit per NIT: (a) `3889482` the depot Buy asks `trainPurchaseRefusal`; (b) `cfb3e69` the off-turn funding prompt carries `fundingAnswerRefusalForViewer` / `fundingAcceptRefusalForViewer`; (c) `49501c7` one busy line for one held submission (the link's sentence first); (d) `dbe43a2` the M&H status says \"requested, not executed yet\" (+ `1495c42` / `130363c`: the catalog bullet says the timing without \"queued\"); (e) `01dc5ca` a cancelled delayed auction reads Cancelled, not a tick; (f) `00e91a2` the link-down pre-send line does not restate the reconnecting banner (+ `1495c42`: such a press clears an older refusal); (g) `a61a7c2` the stale RunManualRoute comments outside RED corrected (one present-tense sentence inside RED R2 left untouched: a comment is no reason for an OD-12 edit). Not integrated. INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05)."
   },
   {
    "key": "AUD-25.11",
@@ -2414,7 +2414,7 @@
    "od": "—",
    "p4": "—",
    "notes": "Verify the text against OD-3 / W2-D's M&H behaviour and correct it if stale.",
-   "status": "IMPLEMENTED — W3-J `b6ab759` (+ `1495c42`, `130363c`): `privateCatalog.ts`'s M&H long form is the Rules Reference card's sentences verbatim (the owner's choice of pile, the Orange/Brown waiver, the certificate limit, the queued timing); the short bullet says the timing -- at once on the owner's Stock Round turn, else at the next turn boundary if legal -- and the closure, within the 100-character card limit. Pinned in `components/phase3W3JCopy.test.ts` against the card and `mhExchangeDisposition`. Not integrated"
+   "status": "IMPLEMENTED — W3-J `b6ab759` (+ `1495c42`, `130363c`): `privateCatalog.ts`'s M&H long form is the Rules Reference card's sentences verbatim (the owner's choice of pile, the Orange/Brown waiver, the certificate limit, the queued timing); the short bullet says the timing -- at once on the owner's Stock Round turn, else at the next turn boundary if legal -- and the closure, within the 100-character card limit. Pinned in `components/phase3W3JCopy.test.ts` against the card and `mhExchangeDisposition`. Not integrated. INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05)."
   },
   {
    "key": "AUD-25.13",
@@ -2427,8 +2427,8 @@
    "disp": "C",
    "od": "—",
    "p4": "—",
-   "notes": "Owner ruling (owner review of the W3-G findings, 2026-10-04) applied item by item; every carried LOW / NIT has exactly one disposition (`aud_25_13_dispositions`). Not in this row because each has its own: W3-C LOWs (a) pre-send gates -> AUD-25.05, (b) resync rollback -> AUD-25.06, (c) `error` frame -> AUD-25.07; stale tracking prose -> AUD-25.14. The FIX IN W3-J items are W3-J work (disposition C kept: the row records the rulings, W3-J carries the fixes).",
-   "status": "RULED — owner, 2026-10-04 (no \"polish later\"): reachable and player-visible -> FIX IN W3-J; solely test coverage with no known runtime defect -> RECORDED RESIDUAL; unreachable / obsolete -> CLOSED OBSOLETE. FIX IN W3-J (10): scroll-to-card on the Stocks tab (W2-F, deferred LOW); duplicate waiting presentation during an emergency-funding private offer (W2-F); the Buy Trains from a Corporation form closes on Send -- queued-submission form retention / retype after a drop (W3-I); the #750 treasury diagnostic beside the float line on an M&H / C&A float (W2-J); post-game statistics miss the EmergencySellPortfolio legs and the automatic liquidation (`gameHistory.ts`; R2); W3-C one-slot NIT: one connection slot, so a later connection notice (e.g. reconnecting) replaces a room-status pause notice; W3-C one-line NIT: the one-slot surfaces (waiting room, gate pages) show the refusal before, and so hide, a standing connection notice; W3-C: a refused lay restores the power / JK arm but does not reopen the errand flow; W2-D deferred: an `automatic: true` dispatch bypasses the reload \"catching up\" guard; W2-B out-of-scope note: the tutorial's \"Instead of buying shares, players can Sell...\" copy. RECORDED RESIDUAL (8): W3-C LOW (d): the App.tsx rollback wiring is source-scanned rather than handler-executed; a weak `escrow3bAdversarial` uncertified-board assertion; `executeEmergencyLegs` fail-loud hardening; W2-J K-22 harness repeats the shell's float loop instead of running App.tsx (call site source-pinned); W2-D: the composition test mirrors App's memo (ordering source-pinned); W2-F NIT: the waitingSentence prop docs name `dockHold.turnHoldReason`; W3-I NIT: variable placement in `TrainPurchasePanel`; W2-I NIT: the legacy on-chain strip's \"On-chain game #<id>\" label. OBSOLETE (4): W2-G's now-unpassed `onEmergencyPurchase` / `emergencyAvailable` props on the bar and `TrainPurchasePanel`; W2-B review nit 3 / accepted limitation: on a legacy revision-1 board the first Pass Turn press walks that board's Sell -> Buy stage; W3-C: the no-server (Firestore) path's subscribe error is routed as a refusal; W2-B out-of-scope notes: Auto-Buy does not ask `dockHold.pass`; AutoBuyModal \"never passes for you\". Each item and its reason: `aud_25_13_dispositions` -- W3-J: every FIX IN W3-J item IMPLEMENTED on `phase3/w3-j-u28-remediation` (not integrated): #1 `a6aa059`; #2 `8673b4e`; #3 `572ca8f` + review fix `a03034f` (MEDIUM: the form closed in the real shell); #4 `95e0b94`; #5 `f058c1f` (no RED R2 edit needed -- the statistics derive from the authoritative replay; OD-12's R2 grant unused); #6 and #7 `00e91a2`; #8 `19539b2` + `f583c95`; #9 RED R1 `77b0b38`; #22 `b6ab759`. RECORDED RESIDUAL (#10-#17) and OBSOLETE (#18-#21) untouched. Observed, not ruled (for the owner): the emergency `train-offer` stage has #2's shape for a third seat (TrainTradePrompt with dead buttons beside the waiting card)"
+   "notes": "Owner ruling (owner review of the W3-G findings, 2026-10-04) applied item by item; every carried LOW / NIT has exactly one disposition (`aud_25_13_dispositions`). Not in this row because each has its own: W3-C LOWs (a) pre-send gates -> AUD-25.05, (b) resync rollback -> AUD-25.06, (c) `error` frame -> AUD-25.07; stale tracking prose -> AUD-25.14. The FIX IN W3-J items are W3-J work (disposition C kept: the row records the rulings, W3-J carries the fixes). Consolidated integration (2026-10-05): W3-J's residual \"the emergency `train-offer` stage has #2's shape for a third seat\" is a REQUIRED PHASE-3 BUGFIX (owner) with its own row, P3-N027 (pre-Phase-4 lane C).",
+   "status": "RULED — owner, 2026-10-04 (no \"polish later\"): reachable and player-visible -> FIX IN W3-J; solely test coverage with no known runtime defect -> RECORDED RESIDUAL; unreachable / obsolete -> CLOSED OBSOLETE. FIX IN W3-J (10): scroll-to-card on the Stocks tab (W2-F, deferred LOW); duplicate waiting presentation during an emergency-funding private offer (W2-F); the Buy Trains from a Corporation form closes on Send -- queued-submission form retention / retype after a drop (W3-I); the #750 treasury diagnostic beside the float line on an M&H / C&A float (W2-J); post-game statistics miss the EmergencySellPortfolio legs and the automatic liquidation (`gameHistory.ts`; R2); W3-C one-slot NIT: one connection slot, so a later connection notice (e.g. reconnecting) replaces a room-status pause notice; W3-C one-line NIT: the one-slot surfaces (waiting room, gate pages) show the refusal before, and so hide, a standing connection notice; W3-C: a refused lay restores the power / JK arm but does not reopen the errand flow; W2-D deferred: an `automatic: true` dispatch bypasses the reload \"catching up\" guard; W2-B out-of-scope note: the tutorial's \"Instead of buying shares, players can Sell...\" copy. RECORDED RESIDUAL (8): W3-C LOW (d): the App.tsx rollback wiring is source-scanned rather than handler-executed; a weak `escrow3bAdversarial` uncertified-board assertion; `executeEmergencyLegs` fail-loud hardening; W2-J K-22 harness repeats the shell's float loop instead of running App.tsx (call site source-pinned); W2-D: the composition test mirrors App's memo (ordering source-pinned); W2-F NIT: the waitingSentence prop docs name `dockHold.turnHoldReason`; W3-I NIT: variable placement in `TrainPurchasePanel`; W2-I NIT: the legacy on-chain strip's \"On-chain game #<id>\" label. OBSOLETE (4): W2-G's now-unpassed `onEmergencyPurchase` / `emergencyAvailable` props on the bar and `TrainPurchasePanel`; W2-B review nit 3 / accepted limitation: on a legacy revision-1 board the first Pass Turn press walks that board's Sell -> Buy stage; W3-C: the no-server (Firestore) path's subscribe error is routed as a refusal; W2-B out-of-scope notes: Auto-Buy does not ask `dockHold.pass`; AutoBuyModal \"never passes for you\". Each item and its reason: `aud_25_13_dispositions` -- W3-J: every FIX IN W3-J item IMPLEMENTED on `phase3/w3-j-u28-remediation` (INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05)): #1 `a6aa059`; #2 `8673b4e`; #3 `572ca8f` + review fix `a03034f` (MEDIUM: the form closed in the real shell); #4 `95e0b94`; #5 `f058c1f` (no RED R2 edit needed -- the statistics derive from the authoritative replay; OD-12's R2 grant unused); #6 and #7 `00e91a2`; #8 `19539b2` + `f583c95`; #9 RED R1 `77b0b38`; #22 `b6ab759`. RECORDED RESIDUAL (#10-#17) and OBSOLETE (#18-#21) untouched. Observed, not ruled (for the owner): the emergency `train-offer` stage has #2's shape for a third seat (TrainTradePrompt with dead buttons beside the waiting card)"
   },
   {
    "key": "AUD-25.14",
@@ -2469,7 +2469,7 @@
    "od": "OD-19",
    "p4": "—",
    "notes": "HIGH (owner-accepted 2026-10-04): a stale view can submit, the click reaches the server and can land (proven in memory; no live game touched). (A) OD-19 RULED: Watch always opens a READ-ONLY spectator view, even for a principal who holds a seat; it never silently reinterprets the viewer as their seated player; re-entering an owned seat is the participant path (\"Your tables\" / Open / Rejoin); the control keeps \"Watch this game. You will not have a seat.\" (B), (C) OPEN / W3-J under the stale-board safety requirement (status). Characterization tests `components/phase3W3GWatchDefect.test.tsx` stay as triage evidence: DEFECT tests flip in W3-J, KEEP tests (the Play / Rejoin seat path) stay.",
-   "status": "IMPLEMENTED — W3-J under OD-19 (triage `d3f9050` and ruling `3be965d` merged by `d4a4ca1`): (A) READ-ONLY WATCH -- `fd3bbda` (the Lobby's Watch is its own door, `activeGame.watch` persisted; `utils/watchView.ts` projects the room view as a watcher's: no seat, no host, no Start) + review fixes `e538039` (a Watch tab gives up no seat, offers no Take a seat, sends no room op) and `45272e6` (a Watch tab's Leave returns to the Lobby); (B) NOT SILENTLY BEHIND -- `utils/boardCurrency.ts` + RED R5 `7c4624f` (a drain pass that throws latches the board as not current) and the settle point's standing digest mismatch: isMyTurn false and a forced native-modal BoardBehindNotice (Reload / Back to the lobby); (C) NOT ACTIONABLE -- RED R1 `b4c1714` (the send gate refuses a board that is not current, or a Watch tab, before the turn gate) and RED R5 `8c5ff63` (each submission bound to the position the board APPLIED; the server's existing anchored staleness guard answers a behind board with a catch-up, nothing applied). No server, wire or engine change. The characterization DEFECT tests flipped, KEEP tests (the participant seat path) stay. Tests `components/phase3W3JWatchStaleBoard.test.tsx` (end to end through the real link and the real RoomSession: a move chosen on a board resting behind the room settles `null` and does not land), `utils/phase3W3JRed.test.ts`. Recorded residual (LOW, review): a latch whose cause recurs on every load keeps that table blocked until fixed -- OD-19's fail-safe, accepting #1223's false-positive cost. Not integrated"
+   "status": "IMPLEMENTED — W3-J under OD-19 (triage `d3f9050` and ruling `3be965d` merged by `d4a4ca1`): (A) READ-ONLY WATCH -- `fd3bbda` (the Lobby's Watch is its own door, `activeGame.watch` persisted; `utils/watchView.ts` projects the room view as a watcher's: no seat, no host, no Start) + review fixes `e538039` (a Watch tab gives up no seat, offers no Take a seat, sends no room op) and `45272e6` (a Watch tab's Leave returns to the Lobby); (B) NOT SILENTLY BEHIND -- `utils/boardCurrency.ts` + RED R5 `7c4624f` (a drain pass that throws latches the board as not current) and the settle point's standing digest mismatch: isMyTurn false and a forced native-modal BoardBehindNotice (Reload / Back to the lobby); (C) NOT ACTIONABLE -- RED R1 `b4c1714` (the send gate refuses a board that is not current, or a Watch tab, before the turn gate) and RED R5 `8c5ff63` (each submission bound to the position the board APPLIED; the server's existing anchored staleness guard answers a behind board with a catch-up, nothing applied). No server, wire or engine change. The characterization DEFECT tests flipped, KEEP tests (the participant seat path) stay. Tests `components/phase3W3JWatchStaleBoard.test.tsx` (end to end through the real link and the real RoomSession: a move chosen on a board resting behind the room settles `null` and does not land), `utils/phase3W3JRed.test.ts`. Recorded residual (LOW, review): a latch whose cause recurs on every load keeps that table blocked until fixed -- OD-19's fail-safe, accepting #1223's false-positive cost. Not integrated. INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05). OD-19 (owner, 2026-10-05): the RED R1 / R5 lines that carry the stale-board requirement (`b4c1714`, `7c4624f`, `8c5ff63`) are NOT re-asked for owner confirmation; the fail-closed behaviour when a board cannot converge (a not-current latch blocks the table until reload) is an intentional safety property and is preserved."
   },
   {
    "key": "AUD-23.01",
@@ -3446,7 +3446,7 @@
    "od": "—",
    "p4": "—",
    "notes": "Gate the proxy on viewport visibility (one fix shape with E-6, F-5).",
-   "status": "IMPLEMENTED — W3-H `223c105` (`utils/surfaceVisibility.ts` `useVisibleLaunch`: a transfer whose card is off screen or whose page is hidden is declined at launch -- no proxy, no staging timers, the committed card) + review fix `31580c1` (a declined takeover still sounds its presidency cue on the crown's beat); NOT integrated"
+   "status": "IMPLEMENTED — W3-H `223c105` (`utils/surfaceVisibility.ts` `useVisibleLaunch`: a transfer whose card is off screen or whose page is hidden is declined at launch -- no proxy, no staging timers, the committed card) + review fix `31580c1` (a declined takeover still sounds its presidency cue on the crown's beat); INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05)"
   },
   {
    "key": "VF/C-10",
@@ -3460,7 +3460,7 @@
    "od": "—",
    "p4": "—",
    "notes": "W3-H records a real-browser trace (Playwright) of the FLIP; Phase 4 judges the feel.",
-   "status": "IMPLEMENTED — W3-H real-browser evidence `d8c7cbd` (Chromium 1243: the presidency FLIP measured per frame, 21 → 0 px over 165 ms starting 493 ms after the event; `docs/phase3/evidence/w3h/`); NOT integrated; Phase 4 judges the feel"
+   "status": "IMPLEMENTED — W3-H real-browser evidence `d8c7cbd` (Chromium 1243: the presidency FLIP measured per frame, 21 → 0 px over 165 ms starting 493 ms after the event; `docs/phase3/evidence/w3h/`); INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05); Phase 4 judges the feel"
   },
   {
    "key": "VF/D-12",
@@ -3474,7 +3474,7 @@
    "od": "—",
    "p4": "—",
    "notes": "—",
-   "status": "IMPLEMENTED — W3-H `58a67df` (on an unproposed lay the printed terrain icon, name labels and terrain-cost badge fade on the printed value's clock instead of switching on the first frame; a confirmed proposal unchanged); NOT integrated"
+   "status": "IMPLEMENTED — W3-H `58a67df` (on an unproposed lay the printed terrain icon, name labels and terrain-cost badge fade on the printed value's clock instead of switching on the first frame; a confirmed proposal unchanged); INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05)"
   },
   {
    "key": "VF/D-13",
@@ -3488,7 +3488,7 @@
    "od": "—",
    "p4": "—",
    "notes": "—",
-   "status": "IMPLEMENTED — W3-H `5f0ffd2` (route overlays and the travelling signal are held on a hex while its flourish runs and return on the first frame after it commits; veil and hover judged not misleading and left); NOT integrated"
+   "status": "IMPLEMENTED — W3-H `5f0ffd2` (route overlays and the travelling signal are held on a hex while its flourish runs and return on the first frame after it commits; veil and hover judged not misleading and left); INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05)"
   },
   {
    "key": "VF/D-16",
@@ -3502,7 +3502,7 @@
    "od": "—",
    "p4": "—",
    "notes": "—",
-   "status": "IMPLEMENTED — W3-H real-browser evidence `cef8cb1` (first/last frames vs the static tile pass for all 33 accepted pairs at hex 40 and 64: only 1-px antialiasing fringes); NOT integrated"
+   "status": "IMPLEMENTED — W3-H real-browser evidence `cef8cb1` (first/last frames vs the static tile pass for all 33 accepted pairs at hex 40 and 64: only 1-px antialiasing fringes); INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05)"
   },
   {
    "key": "VF/D-17",
@@ -3512,11 +3512,11 @@
    "item": "Whole-board repaint while a flourish runs.",
    "src": "OPEN in `VISUAL_FLOURISH_BACKLOG.md` (line 1172)",
    "slice": "W3-H",
-   "disp": "B",
+   "disp": "D",
    "od": "—",
-   "p4": "Low-end device frame-rate during a lay.",
+   "p4": "Tile-lay animation smoothness and any visible whole-board hitch / repaint on realistic desktop / browser hardware.",
    "notes": "Measure with a throttled-CPU trace in W3-H; Phase 4 adds a low-end device.",
-   "status": "IMPLEMENTED — W3-H's planned surface, the throttled-CPU trace, `4007462` (whole-board repaint during a lay: 60 fps unthrottled; 14.6 fps at 4×, 10.7 at 6×, 5.4 at 6× DPR 2; rasterising the full board dominates); NOT integrated. The ledger entry stays OPEN: the measured slowdown is a design question for the tile flourish (repaint only the transitioning hex / cache the static board), and the real low-end device is Phase 4's"
+   "status": "PRE-WORK DONE — W3-H's throttled-CPU trace (`4007462`): 60 fps unthrottled; 14.6 fps at 4x, 10.7 at 6x (rasterising the full board each frame dominates). OWNER DIRECTION (2026-10-05): NOT an implementation requirement before Phase 4 and not an owner-policy question -- a PHASE-4 PLAYTEST / OPEN PERFORMANCE OBSERVATION. Phase 4 observes tile-lay animation smoothness on realistic desktop / browser hardware and any visible whole-board hitch / repaint; only if real playtesting shows visible jank may a later fix reduce the repaint scope or cache the static board. No speculative optimisation. B -> D (ledger header OPEN -> PLAYTEST) at the consolidated integration. INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05)"
   },
   {
    "key": "VF/D-18",
@@ -3544,7 +3544,7 @@
    "od": "—",
    "p4": "—",
    "notes": "—",
-   "status": "IMPLEMENTED — W3-H `b09c4d6` (rail-less centre ties within 1e-6 broken by a stated rule; every pairing the placement filter accepts is unchanged -- independently re-swept at review over 18,960 accepted placements); NOT integrated"
+   "status": "IMPLEMENTED — W3-H `b09c4d6` (rail-less centre ties within 1e-6 broken by a stated rule; every pairing the placement filter accepts is unchanged -- independently re-swept at review over 18,960 accepted placements); INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05)"
   },
   {
    "key": "VF/D-22",
@@ -3572,7 +3572,7 @@
    "od": "—",
    "p4": "—",
    "notes": "—",
-   "status": "IMPLEMENTED — W3-H `41fe7f3` (the value badge crosses the commit front like the rest of the art: each side painted whole off-screen and laid under its clip; the no-scratch-canvas fallback kept); NOT integrated"
+   "status": "IMPLEMENTED — W3-H `41fe7f3` (the value badge crosses the commit front like the rest of the art: each side painted whole off-screen and laid under its clip; the no-scratch-canvas fallback kept); INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05)"
   },
   {
    "key": "VF/D-35",
@@ -3586,7 +3586,7 @@
    "od": "—",
    "p4": "—",
    "notes": "—",
-   "status": "IMPLEMENTED — W3-H analysis `422a361` (no presentation fix exists in the current vocabulary: `anchoredRide` reduces to the same straight crossing for a marker on a centre/slot, and the placement rule is not presentation's to change); no code change; NOT integrated. Ledger header left OPEN for W3-F to reclassify as a Phase-4 watch (D); the one presentation option (ride, then swap at the commit front) is new behaviour for an owner ruling if Phase 4 finds the crossing reads as wrong"
+   "status": "OPEN — REQUIRED PHASE-3 FLOURISH IMPLEMENTATION, pre-Phase-4 lane B (OWNER DIRECTION 2026-10-05: NOT an owner-design question). The visual-flourish design already established that a station / reservation marker moves WITH its city's geometry during a tile transition and resolves to the correct final city position at commit. The remaining OO edge case is a correspondence problem: an OO tile holds two distinct city identities, so the transition must keep which city the reservation marker belongs to. Presentation only -- no gameplay, state or rules change to animate it. W3-H's analysis (`422a361`, no code) is the starting point; nothing in the merged branches solves it. INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05)"
   },
   {
    "key": "VF/E-5",
@@ -3600,7 +3600,7 @@
    "od": "—",
    "p4": "—",
    "notes": "W3-H takes the screenshot.",
-   "status": "IMPLEMENTED — W3-H evidence `be06aa9` found the full-motion float ceremony could never play (ref cycle); fixed `4c89333`; re-run on the shipped path `614172d`: the lifted card settles behind the sticky dock (36/36 overlap samples mid-lift and settled); NOT integrated"
+   "status": "IMPLEMENTED — W3-H evidence `be06aa9` found the full-motion float ceremony could never play (ref cycle); fixed `4c89333`; re-run on the shipped path `614172d`: the lifted card settles behind the sticky dock (36/36 overlap samples mid-lift and settled); INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05)"
   },
   {
    "key": "VF/E-6",
@@ -3614,7 +3614,7 @@
    "od": "—",
    "p4": "—",
    "notes": "—",
-   "status": "IMPLEMENTED — W3-H `223c105` (the float ceremony is declined at launch when its card is off screen, its pane hidden (zero-size box) or the page hidden: no timers, no geometry, no stamp cue); NOT integrated"
+   "status": "IMPLEMENTED — W3-H `223c105` (the float ceremony is declined at launch when its card is off screen, its pane hidden (zero-size box) or the page hidden: no timers, no geometry, no stamp cue); INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05)"
   },
   {
    "key": "VF/F-5",
@@ -3628,7 +3628,7 @@
    "od": "—",
    "p4": "—",
    "notes": "—",
-   "status": "IMPLEMENTED — W3-H `223c105` (`useSurfaceVisible`: the route signal's rAF clock stops while the board is hidden or off screen and re-arms when it returns); NOT integrated"
+   "status": "IMPLEMENTED — W3-H `223c105` (`useSurfaceVisible`: the route signal's rAF clock stops while the board is hidden or off screen and re-arms when it returns); INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05)"
   },
   {
    "key": "VF/G-1",
@@ -3670,7 +3670,7 @@
    "od": "—",
    "p4": "—",
    "notes": "Import `PRIVATE_POWER_GLOW_STOPS`.",
-   "status": "IMPLEMENTED — W3-H `e10dc13` (the mini-auction ring interpolates `PRIVATE_POWER_GLOW_STOPS`); NOT integrated"
+   "status": "IMPLEMENTED — W3-H `e10dc13` (the mini-auction ring interpolates `PRIVATE_POWER_GLOW_STOPS`); INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05)"
   },
   {
    "key": "VF/I-8",
@@ -3684,7 +3684,7 @@
    "od": "—",
    "p4": "—",
    "notes": "—",
-   "status": "IMPLEMENTED — W3-H `887c4e5` (the Ledger's Corporation Assets rows receive the rust event; the depot tier list has no corporation); NOT integrated"
+   "status": "IMPLEMENTED — W3-H `887c4e5` (the Ledger's Corporation Assets rows receive the rust event; the depot tier list has no corporation); INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05)"
   },
   {
    "key": "VF/I-10",
@@ -3698,7 +3698,7 @@
    "od": "OD-14(h)",
    "p4": "—",
    "notes": "—",
-   "status": "RULED — OD-14(h) (owner; transcribed 2026-10-04 on `26bca3b`): static rust icon treatment. W3-H verified it ALREADY IMPLEMENTED (`RustMark`, `crackPath(41, 3)`, built by the warning-marks pass; the ledger's OPEN was stale), `ce99b0d`; NOT integrated; disposition letter left for W3-F"
+   "status": "RULED — OD-14(h) (owner; transcribed 2026-10-04 on `26bca3b`): static rust icon treatment. W3-H verified it ALREADY IMPLEMENTED (`RustMark`, `crackPath(41, 3)`, built by the warning-marks pass; the ledger's OPEN was stale), `ce99b0d`; INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05); disposition letter left for W3-F"
   },
   {
    "key": "VF/J-5",
@@ -3712,7 +3712,7 @@
    "od": "—",
    "p4": "—",
    "notes": "—",
-   "status": "IMPLEMENTED — W3-H `887c4e5` (the Ledger's Corporation Assets rows receive the discard event); NOT integrated"
+   "status": "IMPLEMENTED — W3-H `887c4e5` (the Ledger's Corporation Assets rows receive the discard event); INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05)"
   },
   {
    "key": "VF/J-6",
@@ -3726,7 +3726,7 @@
    "od": "OD-14(h)",
    "p4": "—",
    "notes": "—",
-   "status": "RULED — OD-14(h) (owner; transcribed 2026-10-04 on `26bca3b`): static discard icon treatment. Implemented by W3-H `ce99b0d` (`DiscardMark`: the rust tile parted by one straight blade from `discardCut(110)`, on the train-limit prompt's title); NOT integrated; disposition letter left for W3-F"
+   "status": "RULED — OD-14(h) (owner; transcribed 2026-10-04 on `26bca3b`): static discard icon treatment. Implemented by W3-H `ce99b0d` (`DiscardMark`: the rust tile parted by one straight blade from `discardCut(110)`, on the train-limit prompt's title); INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05); disposition letter left for W3-F"
   },
   {
    "key": "VF/K-4",
@@ -3740,7 +3740,7 @@
    "od": "—",
    "p4": "—",
    "notes": "Render it in a harness screenshot.",
-   "status": "IMPLEMENTED — W3-H real-browser evidence `ce1d0dc` (the fallback capacity glyph rendered at uiScale 0.63/1.0/1.5 beside 4→3 and the rust mark); NOT integrated"
+   "status": "IMPLEMENTED — W3-H real-browser evidence `ce1d0dc` (the fallback capacity glyph rendered at uiScale 0.63/1.0/1.5 beside 4→3 and the rust mark); INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05)"
   },
   {
    "key": "VF/K-6",
@@ -3754,7 +3754,7 @@
    "od": "—",
    "p4": "—",
    "notes": "Add a guard test at the badge size.",
-   "status": "IMPLEMENTED — W3-H `ce99b0d` (badge-size guard: the rust mark rasterised at 12.6px must still read as a break; shown to fail for a straight slash, a lost fork and a bunched zig); NOT integrated"
+   "status": "IMPLEMENTED — W3-H `ce99b0d` (badge-size guard: the rust mark rasterised at 12.6px must still read as a break; shown to fail for a straight slash, a lost fork and a bunched zig); INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05)"
   },
   {
    "key": "P3-N001",
@@ -4020,7 +4020,7 @@
    "od": "OD-5; OD-12 if the prune region must change",
    "p4": "—",
    "notes": "The draft placed this fix in 11295-11405 without flagging that the range is inside its own RED region 11136-11659. Prefer a fix in the dismissal store.",
-   "status": "IMPLEMENTED — W3-A `b70f087` + `ac78dc9` + `ce705b2` + `ce6afe8`: Fleet Loss acknowledgements move from per-tab sessionStorage (#1107) to the per-player, per-game `NoticeLedger`; a fresh tab replays no answered or historical loss, including after a later Undo; fixed in the dismissal store, the RED R2 raiser unchanged; NOT INTEGRATED"
+   "status": "IMPLEMENTED — W3-A `b70f087` + `ac78dc9` + `ce705b2` + `ce6afe8`: Fleet Loss acknowledgements move from per-tab sessionStorage (#1107) to the per-player, per-game `NoticeLedger`; a fresh tab replays no answered or historical loss, including after a later Undo; fixed in the dismissal store, the RED R2 raiser unchanged; INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05)"
   },
   {
    "key": "P3-N020",
@@ -4047,7 +4047,8 @@
    "disp": "A",
    "od": "OD-12 (RULED 2026-10-03: narrowly controlled RED fixes; one reviewed commit each)",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "NOT STARTED — W3-B residue, pre-Phase-4 lane E (re-evaluated on the combined tree, 2026-10-05): the automatic presses (OpenStockRound, M&H exchange, Undo, PlaceHomeStation, SetBoPar) still bypass the `press:true` latch; W3-B's AUD-25.01 narrows it (an automatic press greys the controls while the link holds it) and W3-J's `derived` rule (`6378dea`, `77b0b38`) fixed the refusal / catching-up halves, but neither latches the press nor fixes the serialisation order. Needs an OD-12 RED R1 commit."
   },
   {
    "key": "P3-N022",
@@ -4115,6 +4116,20 @@
    "od": "—",
    "p4": "—",
    "notes": "—"
+  },
+  {
+   "key": "P3-N027",
+   "ids": "W3-J residual (AUD-25.13 #2 shape)",
+   "ref": "W3-J (2026-10-05)",
+   "cls": "[UX] defect",
+   "item": "During an emergency funding `train-offer` stage, a THIRD seat (neither the proposing president nor the answering seat) gets the same duplicate prompt shape AUD-25.13 #2 fixed for the private-offer stage: more than one presentation of one offer.",
+   "src": "FOUND by W3-J while fixing AUD-25.13 #2 (`8673b4e`: the prompt stands aside while the emergency waiting card shows, except for the buyer president); the train-offer stage was not in that item's scope. W3-J residual list (`w3j_u28_remediation.residuals`).",
+   "slice": "— (pre-Phase-4 lane C, first post-integration bugfix lane)",
+   "disp": "B",
+   "od": "—",
+   "p4": "—",
+   "notes": "OWNER (2026-10-05): a REQUIRED PHASE-3 BUGFIX. Narrow: the duplicate-prompt defect only. The fix must prove: exactly one intended offer presentation; only the legitimate answering seat has live answer controls; the third seat gets status only; the proposer gets the correct status / rescind behaviour; server authority unchanged. Not built during the integration.",
+   "status": "OPEN — REQUIRED PHASE-3 FOLLOW-UP (owner, 2026-10-05), pre-Phase-4 lane C; not started."
   }
  ],
  "bullets": {
@@ -4787,6 +4802,17 @@
   "OPEN": 23
  },
  "owner_rulings": {
+  "OD-0": {
+   "title": "PHASE-3 SOURCE PIN — SUPERSEDED / RULED BY THE CURRENT INTEGRATION LINEAGE",
+   "date": "2026-10-05",
+   "ruling": [
+    "The old OD-0 question has been superseded by the actual Phase-3 integration history.",
+    "The authoritative Phase-3 source line is the current Phase-3 integration lineage.",
+    "For the consolidated integration: 9ebca03 is the integration base; the new combined integration HEAD becomes its successor.",
+    "Do NOT rewind Phase 3 to an old main; do NOT rebase Phase 3 onto 8f33f0f; do NOT rewrite historical integration commits; do NOT run a retroactive \"which old SHA should have been the base?\" exercise."
+   ],
+   "effect": "OD-0: SUPERSEDED / RULED BY CURRENT INTEGRATION LINEAGE. `implementation_base` names the lineage; P0's drift check is not run retroactively. The phase3/... integration chain from 8f33f0f (Wave 1) through 9ebca03 and `phase3/consolidated-pre-playtest-integration` is the Phase-3 source line."
+  },
   "OD-1": {
    "title": "AUTHORITATIVE HOLD PRESENTATION",
    "date": "2026-10-03",
@@ -4887,11 +4913,11 @@
     "One RULES_ENGINE_VERSION bump (12 → 13), one changelog entry, no speculative rules. The live list is [13] only; no dual v12 support (pinned v12 rooms are drained or abandoned before deployment).",
     "The settlement-certified literal stays [10, 11, 12]; 13 is added only by its own certification pass. The future v13 certification vectors, including bankruptcy terminal states, are documented.",
     "DH-1 and GR-1 / S10-27 (derivation-only), GR-1b (UI only), D-18 and D-22 are not in the batch.",
-    "(b) is not addressed by this ruling.",
     "Owner ruling 2 (2026-10-04): the Brown Bank Pool continuation is one contiguous multi-certificate purchase by the ACTIVE Stock Round player. Any accepted state-changing turn action by that player which is not another qualifying Brown Bank Pool purchase closes it (a sale, an accepted private trade, an M&H exchange, Pass Turn, any other stock-turn action). Another player's off-turn consent or answer, and derived / system bookkeeping, do not. Decided from actor / turn semantics, not log adjacency; a refused or no-op message closes nothing.",
-    "Owner ruling 3 (2026-10-04): KEEP the existing Stock Round semantics for the M&H exchange: it is not a stock purchase or sale for turn_action_taken, the true-pass / all-pass streak, or Priority Deal / last-trader purposes. It can close an already-open Brown purchase (ruling 2) without becoming stock trading."
+    "Owner ruling 3 (2026-10-04): KEEP the existing Stock Round semantics for the M&H exchange: it is not a stock purchase or sale for turn_action_taken, the true-pass / all-pass streak, or Priority Deal / last-trader purposes. It can close an already-open Brown purchase (ruling 2) without becoming stock trading.",
+    "(b) RULED 2026-10-05 (the owner's consolidated-integration brief): phone-width gameplay layout and keyboard map access are NOT required for Phase 3; they belong to Phase 5. Phase 4 may observe and report real-device / mobile / keyboard behaviour, but Phase 3 does not implement the responsive map architecture or the keyboard map controller."
    ],
-   "effect": "W3-K implemented on `phase3/w3-k-rules-v13` (branch only). AUD-04.04 and AUD-08.01 leave W3-K (owner placement open; no version bump needed). P3-N023 and P3-N024 C/G → A, IMPLEMENTED. OD-10(b) stays open. The 2026-10-04 rulings 2 and 3 are implemented on the same branch. Reconciliation (2026-10-04): the owner's historical approval (\"one consolidated v13 rules batch is allowed\") is OD-10(a), already recorded above. The historical proposal had no (b) subpart, and the current OD-10(b) (phone-width game layout, zoom-aware breakpoints and keyboard map access: Phase-3 target, Phase-4 observation or Phase-5 work) is a different question (layout / input scope, not rules-version scope); no equivalence is shown, so OD-10(b) stays OPEN."
+   "effect": "W3-K implemented on `phase3/w3-k-rules-v13` (branch only). AUD-04.04 and AUD-08.01 leave W3-K (owner placement open; no version bump needed). P3-N023 and P3-N024 C/G → A, IMPLEMENTED. OD-10(b) stays open. The 2026-10-04 rulings 2 and 3 are implemented on the same branch. Reconciliation (2026-10-04): the owner's historical approval (\"one consolidated v13 rules batch is allowed\") is OD-10(a), already recorded above. The historical proposal had no (b) subpart, and the current OD-10(b) (phone-width game layout, zoom-aware breakpoints and keyboard map access: Phase-3 target, Phase-4 observation or Phase-5 work) is a different question (layout / input scope, not rules-version scope); no equivalence is shown, so OD-10(b) stays OPEN. 2026-10-05: OD-10(b) RULED -- Phase 5 (AUD-16.09 stays a Phase-4 observation (D) with the implementation placed in Phase 5; W3-D's dock-control keyboard reach likewise)."
   },
   "OD-17": {
    "title": "TILE-UPGRADE CROSS-REFERENCES",
@@ -4946,8 +4972,8 @@
    "title": "PRESENTATION CALLS — (a) THROUGH (i)",
    "date": "2026-10-04",
    "ruling": [
-    "(a) Keep the step panels OUTSIDE the action bar.",
-    "(a) Remove the temporary sticky-fit probe.",
+    "(a) Preserve the CURRENT step-panel placement: the step panels sit INSIDE the sticky action bar. Do not move them.",
+    "(a) Remove the temporary sticky-fit probe. No W1-I-b layout move.",
     "(b) Use the cash/payout player-color wash.",
     "(c) Give the seventh LPF/player a distinct color.",
     "(d) For the first-Diesel trade-in presentation, keep the label: \"traded\". Earlier 4-trains rusted by the phase event remain rusted.",
@@ -4958,7 +4984,8 @@
     "(i) Phase 3 gets a bounded money-panel consistency pass. The goal is to make the money panel visually belong to the rest of the game and stop there.",
     "(i) W2-K / W2-M may extend the established styling while touching money UI, but this is NOT permission for a money-panel redesign or broader frontend refactor."
    ],
-   "effect": "OD-14 (a)–(i): RULED. (d) and (i): transcribed at the W3-G owner review (2026-10-04; AUD-25.15) -- (d): AUD-12.07 RULED, no change; (i): bounds W2-K's panel pass and any W2-M money-UI styling. (a): explicitly re-approved by the owner on 2026-10-04 (the owner reports an earlier, untranscribed approval); the W1-I slice branch `phase3/w1-i-completion` (probe removal `1b76512`; tracking `63fccca`, NOT integrated) also records (a), in its own words, with a transcription note on where the panel wrapper renders. Here: AUD-01.02 RULED (the panels are not moved into the bar; the conditional W1-I-b sub-scope has no work); AUD-01.01 stays OPEN on this line until W1-I is integrated. (b), (c), (e), (f), (g), (h): Provenance: supplied by the owner in a prior conversation and never transcribed into the repository (the 2026-10-04 history forensic pass found it in no branch, reflog, tracking commit or Project report); transcribed 2026-10-04 from the owner's owner-decision reconciliation brief, in its words. The original ruling date was not recorded. Effects: (b) AUD-12.05 / U-7 ruled in (W3-H); (c) AUD-12.06 / U-8 ruled in (W3-H); (e) AUD-18.07 RULED -- the audit's cited line (`components/SandboxWaitingRoom.tsx`:590 at `7b1a956`) is the seat-persistence sentence (\"Your seat is kept for your profile …\"), so the question and the ruling name the same presentation: keep (and may tighten) it, no replacement model; (f) VF/G-1 RULED -- no phase-change sound effect in Phase 3 (the flip stays silent); (g) VF/G-7 RULED -- the replay option is declined; (h) VF/I-10 and VF/J-6 ruled in (W3-H): the static rust / discard icon treatment."
+   "effect": "OD-14 (a)-(i): RULED. (a): AUD-01.01 IMPLEMENTED (W1-I `1b76512` + `195755a`, integrated); AUD-01.02 RULED, resolved (no relocation; W1-I-b not opened). (b) AUD-12.05 and (c) AUD-12.06: already implemented (#1347, #1344), pinned by W3-H `a2aaa31`. (d) AUD-12.07: \"traded\" kept for the first-Diesel trade-in; earlier trains removed by the phase event stay rusted. (e) AUD-18.07: keep / tighten the waiting-room seat-persistence line, no new model. (f) VF/G-1: no phase-change sound in this phase. (g) VF/G-7: no stale flourish / celebration replay. (h) VF/I-10 and VF/J-6: static rust / discard marks (W3-H `ce99b0d`). (i): bounded money-panel consistency only (W2-K; W2-M within it); no broad redesign. All integrated on `phase3/consolidated-pre-playtest-integration`. Provenance of (b), (c), (e)-(h): transcribed 2026-10-04 by the owner-decision reconciliation; (d), (i) at the W3-G owner review.",
+   "correction": "2026-10-05 (the owner's Phase-3 consolidated-integration brief (2026-10-05)): the earlier transcription \"(a) Keep the step panels OUTSIDE the action bar\" was WRONG; the owner's ruling is to preserve the current placement, which is INSIDE the sticky action bar. W1-I's product change (probe removed, placement unchanged) is correct."
   },
   "OD-19": {
    "title": "WATCH IS A READ-ONLY SPECTATOR VIEW (AUD-25.16)",
@@ -4972,34 +4999,46 @@
     "Preserve the existing user-facing meaning already stated by the Watch control: \"Watch this game. You will not have a seat.\"",
     "Separately (AUD-25.16, independent of spectator policy): a client whose locally APPLIED board state is behind the authoritative game state must never be allowed to submit a gameplay action as though its board were current. The W3-J remediation addresses both layers -- CLIENT: while replay / catch-up / divergence remains unresolved, gameplay controls are non-actionable, and stale local turn authority must not enable a move; SUBMISSION / SERVER: do not rely only on the browser hiding / disabling controls; the submission must carry / bind to the revision / log position actually APPLIED to the client's board, not merely the newest log position received; the server must reject a gameplay action whose client-applied position does not match the authoritative pre-action position. The exact protocol implementation belongs to W3-J investigation / review."
    ],
-   "effect": "OD-19: RULED — AUD-25.16 (A) resolved as policy (Watch = read-only spectator, always); AUD-25.16 stays OPEN, HIGH, owner W3-J, with (B) and (C) OPEN under the stale-board safety requirement. No product code in the triage branch; W3-J implements. W3-G stays COMPLETE — OWNER REVIEW ACCEPTED."
+   "effect": "OD-19: RULED. AUD-25.16 IMPLEMENTED by W3-J and INTEGRATED on `phase3/consolidated-pre-playtest-integration`: Watch is its own door and always a read-only spectator view (a seated principal included; the seat is reopened by Your tables / Open / Rejoin); CLIENT -- a board that is replaying, catching up or diverged is not current and nothing on it is actionable; SUBMISSION -- every submission is bound to the APPLIED board position; SERVER -- the existing anchored staleness guard rejects a position that is not the authoritative pre-action position. The owner does NOT re-ask confirmation of W3-J's RED edits (2026-10-05). The fail-closed behaviour when the board cannot converge is an intentional safety property and is preserved."
   },
   "OD-5": {
-   "title": "NOTICES: PERSISTENCE, FOCUS TARGET, PRIORITY / CHAINING, TUTORIAL RE-ARM (W3-A)",
-   "date": "2026-10-04",
+   "title": "NOTICES, FOCUS AND TUTORIALS",
+   "date": "2026-10-05 (the owner's consolidated-integration ruling; it supersedes the earlier OD-5 transcriptions where they differ)",
    "ruling": [
-    "(a) Persistent acknowledgement PER USER / PER GAME. An acknowledged one-shot notice remains acknowledged across reload, reconnect, new tab and browser remount.",
-    "(a) Old one-shot notices are not derived merely from current game state in a way that replays historical events to someone who did not experience them. Late joiners do NOT receive a backlog of historical one-shot notices.",
-    "(a) The notice system represents \"this player has already been shown / acknowledged this event for this game\", not \"this browser tab happened to dismiss it\". sessionStorage is not the durable authority; use the smallest existing durable / profile / game-scoped mechanism suitable to the architecture.",
-    "(b) A stable GAME-SCREEN HEADING is the post-notice focus target, NOT the action bar's round label. A real accessible heading, programmatically focusable when required; no visible layout jump or unwanted scrolling; after the forced-notice chain completes, focus lands there; focus is not repeatedly stolen during ordinary gameplay.",
-    "(c) Deterministic priority when several forced notices are due: 1. Emergency 2. Fleet Loss 3. Private Revenue 4. Phase Three 5. Herald 6. Tutorial. Only one forced notice is presented at a time; after acknowledgement / dismissal advance to the next due notice; after the chain is exhausted, focus moves to the game-screen heading. A lower-priority notice must not stack natively underneath a higher-priority notice; two native dialogs / modal notices never appear simultaneously.",
-    "(d) Tutorials automatically arm ONCE PER PROFILE. Once completed / dismissed they are not re-armed on reload, reconnect, new game or zero-state remount. A future explicit \"show tutorial again\" control may re-open them if one exists or belongs to another tracked slice; W3-A does not invent broader tutorial-settings UX.",
-    "If RED R4 must change, OD-12 authorizes only the bounded W3-A change actually required, isolated in its own independently audited commit, with no refactor of neighbouring App.tsx code.",
-    "The README omission of OD-5 from its stale \"Still open\" prose remains AUD-25.14 / W3-F bookkeeping."
+    "(A) Tutorial architecture: the eventual tutorial design is contextual whitebox / spotlight work. It is built LAST, after the gameplay shell/UI is stable. The tutorial redesign is not done in the integration.",
+    "(B) One-shot notices: acknowledgement persists per user / per game, so an acknowledged historical notice does not replay merely because of reload, reconnect, remount or a new tab. Late joiners do not receive a backlog of historical one-shot notices.",
+    "(C) Focus: after the forced-notice chain finishes, focus returns once to a stable, accessible game-screen heading. Ordinary gameplay must not repeatedly steal focus.",
+    "(D) Forced-notice order: 1. Emergency 2. Fleet Loss 3. Private Revenue 4. Phase Three 5. Herald. Only one is shown at a time. Tutorial is NOT part of this forced-notice chain. Tutorial behaviour remains deferred to the final tutorial/UI pass."
    ],
-   "effect": "OD-5: RULED -- gates W3-A's six rows (AUD-01.03, AUD-01.06, AUD-11.02, AUD-13.02, AUD-13.07, P3-N019); W3-A unblocked."
+   "superseded_transcriptions": [
+    "Owner-decision reconciliation (`26bca3b`, 2026-10-04): \"tutorial ORDERING only; the three policy questions stay OPEN\" -- superseded: (B) and (C) answer persistence and focus; the tutorial re-arm policy belongs to the final tutorial pass.",
+    "W3-A's OD-5 brief transcription (`9962745`, 2026-10-04): its (a) persistence, (b) focus and (c) order map to (B), (C) and (D) and stand, EXCEPT (c)'s sixth entry \"6. Tutorial\" and item (d) \"tutorials automatically arm ONCE PER PROFILE\" -- the owner states both exceed the approved ruling (2026-10-05). W3-A's code comments cite its own letters (a)-(c)."
+   ],
+   "effect": "OD-5: RULED. W3-A's notice ledger, game-screen heading, focus return, Fleet Loss replay prevention, one-at-a-time sequencing and review fixes stand (AUD-01.03, AUD-11.02, AUD-13.02, AUD-13.07, P3-N019 IMPLEMENTED, integrated). Corrected at the integration (`15fd1d0`): Tutorial removed from the chain (five entries); the tutorial modals keep their pre-W3-A presentation. AUD-01.06: the zero-state auto-reset removal is kept as a DEFECT-ONLY, INTERIM fix -- not the tutorial redesign. AUD-13.04 and the tutorial system are deferred to the final tutorial pass (not a pre-Phase-4 lane). The persistence key (game + public seat position) is a safe implementation of per user / per game under the immutable post-deal seat model (see AUD-11.02's notes)."
   },
   "OD-15": {
-   "title": "MODAL INFRASTRUCTURE AND THE CINEMATIC TAKEOVERS (W3-D)",
-   "date": "2026-10-04",
+   "title": "CINEMATIC TAKEOVERS AND MODALS",
+   "date": "2026-10-05 (the owner's later clarification, restated in the consolidated-integration brief; supersedes any older wording)",
    "ruling": [
-    "OD-15(a): RULED — GameIntroOverlay is a full-viewport takeover independent of uiScale; remove inverse scaling and use true viewport geometry. It is NOT a NativeModal and does not use dialog semantics.",
-    "OD-15(a) covers both full-screen cinematic takeovers, the intro and the end-game film: each fills the full visual viewport, stays independent of gameplay uiScale, uses true viewport-fixed geometry rather than inverse scaling, has no dialog box/frame/chrome or constrained modal-panel dimensions, does not use NativeModal or native <dialog> semantics merely because it blocks interaction, prevents interaction with the gameplay underneath while active, and preserves its full-screen composition; preferably rendered outside the scaled gameplay layer.",
-    "OD-15(b): RULED — use native showModal()/NativeModal for modal surfaces and retire ModalPortal when its final legitimate modal consumer has migrated. No second custom modal architecture based on ModalPortal + manual inert management; no new global manual-inert system; the browser top layer supplies modal isolation.",
-    "Semantic rule: a genuinely modal aria-modal surface migrates to NativeModal; one that is not genuinely modal has its false modal semantics removed instead. Both cinematics are excluded from the NativeModal migration and are not ModalPortal consumers.",
-    "AUD-13.04 waits for W3-A's integration (per the owner, OD-5 is ruled in W3-A's lane and recorded there); W3-D does not touch TutorialModal or R-TUT while W3-A is active."
+    "Intro video: a full-viewport cinematic takeover -- not a modal, not a dialog -- filling the viewport independently of gameplay uiScale.",
+    "End-game video: a full-viewport cinematic takeover -- not a modal, not a dialog -- filling the viewport independently of gameplay uiScale.",
+    "Underlying gameplay is non-interactive while a cinematic takeover covers it.",
+    "No inverse `zoom: 1/uiScale` hacks; true viewport geometry.",
+    "Real modal UI continues through the native / top-layer modal architecture. Do not invent a second manual inert / modal system.",
+    "W3-D's AUD-13.05 and AUD-13.06 work is preserved. AUD-13.04 / TutorialModal belongs with the final tutorial pass and is not force-completed now; W3-D may truthfully remain PARTIAL with that row deferred. Real-browser checking of cinematic coverage / inert behaviour belongs in Phase 4."
    ],
-   "effect": "OD-15: RULED — AUD-13.05 and AUD-13.06 C -> B, IMPLEMENTED by W3-D on `phase3/w3-d` (not integrated); AUD-13.04 BLOCKED ONLY ON W3-A INTEGRATION; W3-D PARTIAL. Dock-control keyboard reach stays OD-10(b)."
+   "effect": "OD-15: RULED. AUD-13.05 and AUD-13.06 IMPLEMENTED (W3-D, integrated): `CinematicTakeover`, the shell root `inert` while a takeover covers it (the cinematic cover, not a second modal system). `ModalPortal` is NOT retired mechanically: on the combined tree its one consumer is `NativeModal` itself, as its scaled destination, so it stays (the deletion recipe in `ModalPortal.tsx` is a future option, not a ruling). AUD-13.04 deferred to the final tutorial pass; W3-D PARTIAL. Phase 4: both films at several UI scales, keyboard blocking under a takeover, Firefox / Safari modal / takeover behaviour.",
+   "history": {
+    "title": "MODAL INFRASTRUCTURE AND THE CINEMATIC TAKEOVERS (W3-D)",
+    "ruling": [
+     "OD-15(a): RULED — GameIntroOverlay is a full-viewport takeover independent of uiScale; remove inverse scaling and use true viewport geometry. It is NOT a NativeModal and does not use dialog semantics.",
+     "OD-15(a) covers both full-screen cinematic takeovers, the intro and the end-game film: each fills the full visual viewport, stays independent of gameplay uiScale, uses true viewport-fixed geometry rather than inverse scaling, has no dialog box/frame/chrome or constrained modal-panel dimensions, does not use NativeModal or native <dialog> semantics merely because it blocks interaction, prevents interaction with the gameplay underneath while active, and preserves its full-screen composition; preferably rendered outside the scaled gameplay layer.",
+     "OD-15(b): RULED — use native showModal()/NativeModal for modal surfaces and retire ModalPortal when its final legitimate modal consumer has migrated. No second custom modal architecture based on ModalPortal + manual inert management; no new global manual-inert system; the browser top layer supplies modal isolation.",
+     "Semantic rule: a genuinely modal aria-modal surface migrates to NativeModal; one that is not genuinely modal has its false modal semantics removed instead. Both cinematics are excluded from the NativeModal migration and are not ModalPortal consumers.",
+     "AUD-13.04 waits for W3-A's integration (per the owner, OD-5 is ruled in W3-A's lane and recorded there); W3-D does not touch TutorialModal or R-TUT while W3-A is active."
+    ],
+    "effect": "OD-15: RULED — AUD-13.05 and AUD-13.06 C -> B, IMPLEMENTED by W3-D on `phase3/w3-d` (not integrated); AUD-13.04 BLOCKED ONLY ON W3-A INTEGRATION; W3-D PARTIAL. Dock-control keyboard reach stays OD-10(b)."
+   }
   },
   "OD-16": {
    "title": "TERMS PAGE (S10-12)",
@@ -5010,16 +5049,28 @@
     "Substantive Terms copy is OWNER-AUTHORED and must not be invented.",
     "Final substantive Terms remain a Phase-7/mainnet gate."
    ],
-   "effect": "OD-16: RULED. Provenance: supplied by the owner in a prior conversation and never transcribed into the repository (the 2026-10-04 history forensic pass found it in no branch, reflog, tracking commit or Project report); transcribed 2026-10-04 from the owner's owner-decision reconciliation brief, in its words. The original ruling date was not recorded. AUD-20.08 RULED: W2-M builds the Terms route / page shell and the Terms / deposit link infrastructure, with no invented Terms copy; the substantive Terms stay owner-authored and are a Phase-7 / mainnet gate. The unintegrated W2-M branch (`phase3/w2-m-wallet-dispute-ux` @ `19c021c`) still records AUD-20.08 as owner-gated with nothing hosted; that branch predates this transcription."
+   "effect": "OD-16: RULED -- NOT an owner-decision blocker. Phase 3 builds the Terms route/page shell and the Terms/deposit link infrastructure (AUD-20.08, B, READY / OPEN IMPLEMENTATION, pre-Phase-4 lane D); no invented Terms prose. The substantive owner-authored Terms are a Phase-7 / mainnet gate. As of the consolidated integration nothing is built (no Terms route, page or link in the tree). Provenance: transcribed 2026-10-04 by the owner-decision reconciliation; restated 2026-10-05."
   },
   "OD-18": {
-   "title": "LIVE / ASYNC LIMITS (U-10) AND RECORDED LIMITS",
-   "date": "2026-10-04 (transcribed; original date not recorded)",
+   "title": "LIVE / ASYNC CLOCKS (U-10) — SUPERSEDED IN PART: BUILD THE CLOCK IN PHASE 3, NOT ITS CONSEQUENCES",
+   "date": "2026-10-05 (the owner's consolidated-integration brief; supersedes the 2026-10-04 transcription in part)",
    "ruling": [
-    "Do NOT add at this stage: move clock; automatic forfeit; automatic trade decline; host succession.",
-    "Reconsider these only after Phase-4 human playtesting."
+    "The earlier blanket deferral is SUPERSEDED IN PART: the clock system is BUILT IN PHASE 3 so it can be tested during Phase 4.",
+    "Build now, before Phase 4: Live vs Async clock / timing infrastructure; visible clock state; the pause / resume semantics that clock model needs; durable / persistent timing state; reconnect / reload behaviour; server-authoritative timing where required; enough instrumentation / status to playtest it meaningfully in Phase 4.",
+    "Do NOT yet implement automatic forfeiture merely because a clock expires. Still deferred pending Phase-4 validation: the automatic forfeit consequence; automatic trade decline; host succession.",
+    "A clock reaching zero must not silently create a forfeiture settlement unless a separately approved later rule explicitly authorises that transition. No Forfeit / Clemency settlement payload may be produced before clock / forfeit semantics are validated and authorised.",
+    "Not built inside merge-conflict resolution; recorded as required remaining Phase-3 work and one of the first post-integration lanes before Phase 4."
    ],
-   "effect": "OD-18: RULED. Provenance: supplied by the owner in a prior conversation and never transcribed into the repository (the 2026-10-04 history forensic pass found it in no branch, reflog, tracking commit or Project report); transcribed 2026-10-04 from the owner's owner-decision reconciliation brief, in its words. The original ruling date was not recorded. AUD-11.04 (U-10) and AUD-19.04 RULED: placed after Phase-4 human playtesting; not Phase-3 work. Transcription note: U-10 as the plan words it also names a \"pause cap\"; the ruling does not name it, and it is not inferred; the owner may confirm whether it falls under this later placement (README, \"Still open\"). The disposition move C → E that the plan's OD-18 row describes is left to W3-F's closure reconciliation; the rows stay C with status RULED."
+   "effect": "OD-18: RULED (superseded in part). AUD-11.04 (U-10) C -> B: OPEN, REQUIRED PHASE-3 IMPLEMENTATION, pre-Phase-4 lane A (U-10's \"pause cap\" is part of that clock design, within the ruling -- no separate owner question). AUD-19.04 C -> E: host succession and the automatic consequences stay deferred pending Phase-4 validation.",
+   "history": {
+    "title": "LIVE / ASYNC LIMITS (U-10) AND RECORDED LIMITS",
+    "date": "2026-10-04 (transcribed; original date not recorded)",
+    "ruling": [
+     "Do NOT add at this stage: move clock; automatic forfeit; automatic trade decline; host succession.",
+     "Reconsider these only after Phase-4 human playtesting."
+    ],
+    "effect": "OD-18: RULED. Provenance: supplied by the owner in a prior conversation and never transcribed into the repository (the 2026-10-04 history forensic pass found it in no branch, reflog, tracking commit or Project report); transcribed 2026-10-04 from the owner's owner-decision reconciliation brief, in its words. The original ruling date was not recorded. AUD-11.04 (U-10) and AUD-19.04 RULED: placed after Phase-4 human playtesting; not Phase-3 work. Transcription note: U-10 as the plan words it also names a \"pause cap\"; the ruling does not name it, and it is not inferred; the owner may confirm whether it falls under this later placement (README, \"Still open\"). The disposition move C → E that the plan's OD-18 row describes is left to W3-F's closure reconciliation; the rows stay C with status RULED."
+   }
   }
  },
  "wave1_integration": {
@@ -5097,7 +5148,7 @@
   "note": "Wave 1 was implemented on 8f33f0f by the owner's brief. Whether 8f33f0f is the OD-0 pin, or Wave 1 is carried onto the final post-Phase-2 head, is the owner's call; OD-0's drift check against the final pin is still owed."
  },
  "slice_status": {
-  "P0": "PARTIAL — only the S1 seam landed (L1 `42c67ee`); the OD-0 drift check, the conventions publication and the roadmap-order update (AUD-00.02) were not run",
+  "P0": "PARTIAL — the S1 seam landed (L1 `42c67ee`); OD-0 is SUPERSEDED / RULED BY CURRENT INTEGRATION LINEAGE (owner, 2026-10-05), so no retroactive drift check is run; the conventions publication and the roadmap-order update (AUD-00.02) were not run",
   "W1-A": "COMPLETE — L1 `82c1de9` (Stock Round reads one authority)",
   "W1-B": "COMPLETE — L1 `f0a7183` + review fixes `76056b7`",
   "W1-C": "COMPLETE — L2 `91b537f`; modal presentation follow-up at the integration (`8dc79e0`)",
@@ -5106,7 +5157,7 @@
   "W1-F": "COMPLETE — L4 `9baf4da`",
   "W1-G": "COMPLETE — L4 `a8b9f27` + review follow-ups `bee2717`",
   "W1-H": "COMPLETE — L6 `2e0700b` + review fixes `cb0c49c`",
-  "W1-I": "COMPLETE — slice branch `phase3/w1-i-completion` @ `195755a` (code `1b76512`, review fix `195755a`; from `phase3/wave3-i-w2i-w2j-w3c-w3g-v13cert-integration` @ `d29bb2f`); NOT integrated (integration and owner broad gate pending). OD-14(a) RULED (owner, 2026-10-04: keep the current step-panel placement; remove the temporary fit probe; W1-I-b not opened). AUD-01.01 IMPLEMENTED (`1b76512` + `195755a`); AUD-01.02 RULED — resolved by OD-14(a). The unconditional portion was integrated at Wave 1 (L5 `9dcad19`, `b9fd1bf`, `82b93ca`, `beac07a`, `3904533`, `fee2f66`).",
+  "W1-I": "COMPLETE — INTEGRATED on `phase3/consolidated-pre-playtest-integration` (merge `4cf853b` of `phase3/w1-i-completion` @ `5ffdfa5`; code `1b76512`, review fix `195755a`). OD-14(a) RULED: the step panels keep their current placement INSIDE the sticky action bar; the sticky-fit probe and its visible readout removed; no W1-I-b move. Integration follow-up `d4f7c53`: two adjacent source pins that still pinned the probe (`buyTrainsPanel`, `uiScale`) follow the removal.",
   "W1-J": "COMPLETE — L5 `5a56987`",
   "W1-K": "NOT STARTED — not one of the seven Wave-1 lane branches",
   "W1-L": "COMPLETE — unconditional portion, L6 `de22084` + review fix `8d6f1e9`; RR-4 copy per OD-7 at the integration (`ca73834`). AUD-18.07 stays owner-gated (OD-14(e))",
@@ -5125,20 +5176,20 @@
   "W2-J": "COMPLETE — ACCEPTED and INTEGRATED on `phase3/wave3-i-w2i-w2j-v13cert-integration` (2026-10-04, merge `32ead52` of `phase3/w2-j-narration` @ `0b33f69`, parents `c774530` / `0b33f69`, its 7 commits carried unchanged): K-18 `b328e53` (its own OD-12 RED R2 commit) + K-20 `464dfbe` + review fix `5f5ddd2` + interim tracking `9927fd7` + K-22 `8a448d2` + review fixes `99b5651` + tracking `0b33f69` (from `phase3/wave3-i-w2i-v13cert-integration` @ `c774530`). AUD-03.08 (K-18), AUD-10.01 (K-20), AUD-03.09 (K-22) IMPLEMENTED and INTEGRATED. OD-8 RULED 2026-10-04 (Option A). OD-7 ruled copy-only and already landed (W1-L, `ca73834`); OD-12 followed: one RED R2 edit (`soldOutRises`' resolver), its own commit, no neighbouring change. Narration only: no reducer, float/capitalisation/home-placement mechanics, rules-version or settlement change; the only gameEngine edit is the `describeFloat` narration helper",
   "W2-K": "PARTIAL — `phase3/w2-money-copy` `e223f64` (exact SHA verified), integrated at the safe Wave-2 integration (`fb4eee5`): U-44 timestamps per OD-9(a) and the OD-14(i) bounded money-panel pass are done; the official Keplr logo is ASSET PENDING (OD-9(b), AUD-18.05)",
   "W2-L": "COMPLETE — `phase3/w2-postgame-statistics` `e16aa5a` (derived history only); integrated at the safe Wave-2 integration (`615e183`). AUD-12.07 stays owner-gated (\"traded\" kept); S10-21's non-UR remainder stays open",
-  "W2-M": "PARTIAL — NOT INTEGRATED. `phase3/w2-m-wallet-dispute-ux` (from `c0a44d7`): implementation `90a3608`, review fixes `8d34474` + `5c7334b`; NOT INTEGRATED. AUD-20.02, AUD-20.03, AUD-20.04, AUD-20.05, AUD-20.06, AUD-20.07 IMPLEMENTED; AUD-20.08 (the Terms page, hosting only) stays OPEN — OWNER-GATED on OD-16 (owner-authored content; no ruling recorded), nothing drawn or drafted. Browser only (`frontend/src/money/`, `components/money/`): no server, contract, payload, codec, settlement, FINANCIAL_PROTOCOL_VERSION, rules-version or App.tsx change. Independent review: 1 HIGH (the re-prove button gated on `link-wallet`, which the server never sends with `deposit`), 1 MEDIUM (an aged inference hid Deposit) and LOWs fixed; re-review clean. Follow-ups (owner-approved 2026-10-04, the browser-only boundary relaxed for exactly these): AUD-20.13 IMPLEMENTED (`a97b1d1` + `9637ca7`: the room view's `you.link.proofVerifiedAt`) and AUD-20.14 IMPLEMENTED (same commits: `wallet-challenge` names the wallet a link would replace before signing; the replay model unchanged); the roster's \"Wallet linked\" accepted temporarily (AUD-20.02 note). Residuals (LOW, recorded): the proof age is judged on this device's clock; a link made by another device while Keplr's prompt is open is still replaced by the plain `replace: true`; the W2-K time-formatter pin accepts the moneyFlow sentence helpers. Server tests: `escrow/w2mWalletFollowups.test.ts` (in the server test list). OWNER DESIGN DIRECTION (2026-10-04): the Profile + Keplr flow is PROVISIONAL and slated for a later redesign/rebuild; this row is a minimal, removable compatibility change, not an endorsement of the current flow (no new UI surface, no new authority).",
-  "W3-A": "COMPLETE — on its slice branch `phase3/w3-a` (from `phase3/wave3-i-w2i-w2j-w3c-w3g-v13cert-integration` @ `d29bb2f`; OD-5 transcription `9962745`, implementation `b70f087`, RED R4 `e8b9504`, review fixes `ac78dc9` + `ce705b2` + `ce6afe8`); NOT INTEGRATED (integration and owner broad gate pending). OD-5 RULED 2026-10-04. OD-12: one RED R4 commit (`e8b9504`, the #1049a payout-first hold, independently audited: APPROVE WITH NITS, nit folded in). Independent slice review: APPROVE WITH NITS after two fix rounds (all HIGH/MEDIUM fixed; nits fixed).",
-  "W3-B": "PARTIAL — INTEGRATED THROUGH AUD-25.01: AUD-25.01 (U-46, MEDIUM) IMPLEMENTED on the slice branch `phase3/w3-b-action-latch-linkqueue` (implementation `26f5982` + review fix `5fd3a7b` + tracking `7efda71`, from `d29bb2f`) and INTEGRATED on `phase3/wave3-i-w2i-w2j-w3c-w3g-w3b-v13cert-integration` (2026-10-04, merge `00b2b3c` of `phase3/w3-b-action-latch-linkqueue` @ `7efda71`, parents `d29bb2f` / `7efda71`, its 3 commits carried unchanged). Slice review APPROVE WITH NITS, integration review APPROVE (no HIGH / MEDIUM). No RED region edited (OD-12 not used); R1 / R5 byte-identical. ACCEPTED LOW (future owned residue, RED R5; not fixed, not PASS): if another seat's move lands while this tab's press remains held, the controls may briefly re-arm once this tab's own move lands -- closing it requires RED R5 work. OPEN (W3-B NOT COMPLETE): AUD-14.06 and P3-N021 NOT STARTED (the latch residue for BuyLicenseModal, PrivatePowerFlowModal, the token confirm and route edits waits on W3-H; P3-N021's R1 `press:true` latch on OD-12) -- on the server path an `automatic` press now greys the controls while the link holds it, which narrows P3-N021's window but does not implement it. W3-G remains COMPLETE — OWNER REVIEW ACCEPTED",
+  "W2-M": "PARTIAL — INTEGRATED on `phase3/consolidated-pre-playtest-integration` (merge `dc6020a` of `phase3/w2-m-wallet-dispute-ux` @ `d68602d`): AUD-20.02 ... AUD-20.07, AUD-20.13, AUD-20.14 IMPLEMENTED. AUD-20.08 OPEN -- READY FOR IMPLEMENTATION under OD-16 (pre-Phase-4 lane D: the Terms route/page shell and link infrastructure, no invented prose); NOT owner-gated. The Profile + Keplr flow is PROVISIONAL (owner direction): no deeper coupling, no broad abstractions. Residuals (LOW, recorded): another device may replace the linked wallet while a Keplr prompt is open; device clock skew can cost one free re-proof.",
+  "W3-A": "COMPLETE — INTEGRATED on `phase3/consolidated-pre-playtest-integration` (merge `ead4034` of `phase3/w3-a` @ `bb20225`; RED R4 `e8b9504`). Integration correction `15fd1d0` (owner ruling OD-5): Tutorial removed from the forced-notice chain (the chain is Emergency, Fleet Loss, Private Revenue, Phase Three, Herald); the tutorial modals keep their pre-W3-A presentation. AUD-01.06 is the zero-state auto-reset removed (DEFECT ONLY, INTERIM), not the tutorial redesign, which the final tutorial pass owns.",
+  "W3-B": "PARTIAL — INTEGRATED THROUGH AUD-25.01 (merge `00b2b3c`, in the 9ebca03 baseline; carried into `phase3/consolidated-pre-playtest-integration`). Re-evaluated on the combined tree (2026-10-05): AUD-14.06 (BuyLicenseModal, PrivatePowerFlowModal, token confirm, route edits) and P3-N021 (the automatic presses' latch / serialisation order, OD-12 RED R1) are NOT STARTED -- no later slice closed either. Pre-Phase-4 lane E. Accepted LOW (RED R5): a held press can briefly re-arm once its own move lands if another seat's move landed meanwhile.",
   "W3-C": "COMPLETE — ACCEPTED and INTEGRATED on `phase3/wave3-i-w2i-w2j-w3c-v13cert-integration` (2026-10-04, merge `b32ef6e` of `phase3/w3-c-refusal-display` @ `3454daa`, parents `18d4762` / `3454daa`, its 7 commits carried unchanged). slice branch `phase3/w3-c-refusal-display` support `3c75394` + `bfec83c`, RED R1 `08d857b`, RED R5 `21d6b15`, implementation `6cb86e4`, review fix `6c28662` (from `phase3/wave3-i-w2i-w2j-v13cert-integration` @ `18d4762`). AUD-14.01, P3-N004, P3-N020 IMPLEMENTED. OD-12 followed: two RED commits, each its own and independently reviewed -- R1 (two lines: the landed-submission clear and the room branch's answer) and R5 (the server-link callbacks, the drain's catching-up clear and its divergence write; the latter two sit in R5 outside the plan's line range and are named by AUD-14.01's own source). Dependencies W2-J and W1-H integrated in the base. Recorded follow-ups (LOW): the client's own pre-send gates (turn, catching-up, link-down) answer `undefined` and roll nothing back (needs further R1 lines); a resync can settle a landed move null and roll back its shell state (the board stays authoritative); an `error` frame answering a submission is shown as a `transport` connection notice and is not retired by a landed move (unchanged from before); the App wiring of the rollbacks is source-pinned. Presentation only: no engine, server, rules-version or settlement change",
-  "W3-D": "PARTIAL — `phase3/w3-d` from `d29bb2f` (NOT integrated): OD-15(a) and OD-15(b) RULED 2026-10-04; AUD-13.05 and AUD-13.06 IMPLEMENTED (C -> B); AUD-13.04 BLOCKED ONLY ON W3-A INTEGRATION.",
+  "W3-D": "PARTIAL — INTEGRATED on `phase3/consolidated-pre-playtest-integration` (merge `a57b01a` of `phase3/w3-d` @ `746aa6f`): AUD-13.05 and AUD-13.06 IMPLEMENTED under OD-15 (cinematic takeovers, the shell root inert beneath them, one native modal architecture; ModalPortal kept as NativeModal's scaled destination). AUD-13.04 (TutorialModal as a native dialog) DEFERRED to the final tutorial pass (OD-5) -- the only open row.",
   "W3-E": "COMPLETE — `phase3/w3-manual-city-bypass` `07454d0` + review follow-ups `6d7cfa1`; integrated at the safe Wave-2 integration (`a860178`) under OD-11",
   "W3-F": "NOT STARTED",
   "W3-G": "COMPLETE — OWNER REVIEW ACCEPTED (2026-10-04) and INTEGRATED on `phase3/wave3-i-w2i-w2j-w3c-w3g-v13cert-integration` (merge `72ccd00` of `967e4e7`, parents `c0a44d7` / `967e4e7`): audit branch `phase3/w3-g-ui-parity-audit` (docs only, from `phase3/wave3-i-w2i-w2j-w3c-v13cert-integration` @ `c0a44d7`; audit `e86a933`, owner-review tracking on top); no product code. An accepted audit gate, not a product slice. AUD-00.01 and AUD-22.01 IMPLEMENTED (the audit is done); findings AUD-25.01 … AUD-25.15 accepted and preserved. Owner rulings: AUD-25.11 CLOSED — OBSOLETE / UNREACHABLE ARCHITECTURE (GR-1b); AUD-25.13 ruled item by item (FIX IN W3-J / RECORDED RESIDUAL / OBSOLETE); AUD-25.15 resolved (OD-3, OD-13, OD-14(d), OD-14(i) transcribed). OPEN remediation obligations: AUD-25.01 (MEDIUM) -> W3-B, AUD-25.02 (MEDIUM) -> W3-J, AUD-25.03 … 25.10 and 25.12 -> W3-J, AUD-25.14 -> W3-F; both MEDIUM rows must be fixed before W3-F closes Phase 3. W3-J is unblocked; owner-observed follow-up AUD-25.16 (HIGH, Watch opens a participant's seat on a stale, actionable board) added 2026-10-04 on `phase3/w3-g-watch-defect-triage` -- W3-J (parts (b), (c) unconditionally; part (a) per OD-19, RULED 2026-10-04: Watch = read-only spectator, always); the gate's accepted status is unchanged",
-  "W3-H": "COMPLETE on its slice branch `phase3/w3-h` (from `phase3/wave3-i-w2i-w2j-w3c-w3g-v13cert-integration` @ `d29bb2f`); NOT integrated. All 18 implement rows IMPLEMENTED (AUD-15.01, VF/C-7, C-10, D-12, D-13, D-16, D-17, D-21, D-30, D-35, E-5, E-6, F-5, H-6, I-8, J-5, K-4, K-6); the six owner-gated rows RULED by OD-14 (b)/(c)/(f)/(g)/(h) (transcribed on `phase3/owner-decision-reconciliation` @ `26bca3b`, not on this base): AUD-12.05, AUD-12.06 and VF/I-10 found already implemented and pinned, VF/J-6 implemented, VF/G-1 and VF/G-7 ruled out (no work). One OD-12 RED R2 commit (`9f88178`, one argument). Found and fixed under E-5: the full-motion float ceremony never played (`4c89333`). Independent review: APPROVE WITH FIXES (no HIGH; MEDIUM and narrow LOW/NIT fixed in `31580c1`).",
+  "W3-H": "PARTIAL — INTEGRATED on `phase3/consolidated-pre-playtest-integration` (merge `e931310` of `phase3/w3-h` @ `aa3896a`; RED R2 `9f88178`). `4c89333` (the full-motion float ceremony actually plays) APPROVED by the owner for Phase-4 playtesting. Every implement row IMPLEMENTED except VF/D-35, which the owner reclassified (2026-10-05) as REQUIRED PHASE-3 FLOURISH IMPLEMENTATION (pre-Phase-4 lane B). VF/D-17 is a Phase-4 performance observation (B -> D). OD-14(b), (c), (f), (g), (h) rows RULED. Recorded residual: a silent fog replacing an audible haunting holds the radio duck for up to ~6 s.",
   "W3-I": "COMPLETE — ACCEPTED and INTEGRATED on `phase3/wave3-i-v13cert-integration` (2026-10-04, merge `5a22e38` of `phase3/w3-i-offers` @ `92cdb5d`, parents `c3f43b7` / `92cdb5d`, its 3 commits carried unchanged): code `5c6d7f8` + review fixes `d663b1c` + tracking `92cdb5d` (from `phase3/wave2-bcgdf-v13cert-integration` @ `c3f43b7`). AUD-02.05, AUD-02.06, AUD-03.11, AUD-19.01 IMPLEMENTED. Dependencies W2-F and W2-H integrated in the base. A read-only queue accessor on the room link and one hook outside the drain (no RED region, no OD-12 edit); the par prompt and the three offer forms (Private Companies trade form, Buy Private Company, Buy Trains from a Corporation) read it. OWNER-ACCEPTED reading (2026-10-04): for AUD-03.11 / R4 a refused proposal may leave the form open with its typed values preserved so the player can correct and resend. Not taken (recorded follow-ups elsewhere, unchanged): the W2-F duplicate-waiting LOW and the two NITs. Presentation only: no engine, server, rules-version or settlement change",
-  "W3-J": "COMPLETE — on the slice branch `phase3/w3-j-u28-remediation` (from `phase3/wave3-i-w2i-w2j-w3c-w3g-v13cert-integration` @ `d29bb2f`); NOT integrated (integration and owner broad gate pending). AUD-25.02 … AUD-25.10, AUD-25.12 and AUD-25.16 IMPLEMENTED; every AUD-25.13 FIX IN W3-J item IMPLEMENTED (`aud_25_13_dispositions`). OD-12 RED commits, each one minimal logical edit, separately reviewed: R1 `6378dea`, `77b0b38`, `b9afbdf`, `b4c1714`; R5 `e769e51`, `7c4624f`, `8c5ff63`; no R2 / R3 / R4 edit. Independent reviews: no HIGH; the one MEDIUM (AUD-25.13 #3 in the real shell) and every LOW fixed and re-reviewed. AUD-25.01 (W3-B) not on this branch. No engine, server, contract, rules-version or settlement change; pins 13 / [13] / [10, 11, 12, 13]",
+  "W3-J": "COMPLETE — INTEGRATED on `phase3/consolidated-pre-playtest-integration` (merge `e62bd74` of `phase3/w3-j-u28-remediation` @ `789a3d0`, which contains the Watch triage / OD-19 branch `3be965d`): AUD-25.02 ... AUD-25.10, AUD-25.12, AUD-25.16 and every AUD-25.13 FIX item IMPLEMENTED; RED R1 `6378dea` `77b0b38` `b9afbdf` `b4c1714`, RED R5 `e769e51` `7c4624f` `8c5ff63` (OD-19: no owner re-confirmation). Integration follow-ups: `9b77f18` (three source-pin suites follow W3-J's own changes) and `f29d992` (AUD-25.02 copy-only correction: B-20 vs F-16). The third-seat emergency train-offer duplicate prompt W3-J found is P3-N027 (pre-Phase-4 lane C).",
   "W3-K": "COMPLETE — ACCEPTED (owner, 2026-10-04) and INTEGRATED on `phase3/wave2a-v13-integration` (2026-10-04): `phase3/w3-k-rules-v13` @ `be1fd10` merged `--no-ff` onto `phase3/wave2a-integration` @ `96ccb22`, its 9 commits carried unchanged (same SHAs). OD-2, SBS-3, SBS-4, OD-4 with the owner's 2026-10-04 rulings 1-5 and the four review findings. The ledger's PARTIAL (held only for the shared row AUD-03.04) lifted with W2-B's one-click \"Pass Turn\" control, integrated on `phase3/wave2-bcg-v13cert-integration` (merge `181e51e`). v13 settlement certification PASS / CERTIFIED and INTEGRATED there (merge `69c7496` of `phase3/v13-settlement-certification` @ `7916763`). RULES_ENGINE_VERSION 13; supported live [13]; settlement-certified [10, 11, 12, 13]. Not deployable until drained v12 rooms and the final integrated owner gate (W2-D / W2-F and other open slices are tracked separately)"
  },
- "owner_rulings_source": "The owner's Phase-3 Wave-1 integration brief (2026-10-03), in its words; instructions addressed to that integration turned into statements. OD-9 and OD-11: the owner's safe Wave-2 integration brief (2026-10-03), in its words. OD-4, OD-10 and OD-17: restated from the owner's W3-K rules-v13 brief (2026-10-03); instructions addressed to that slice turned into statements. The 2026-10-04 additions to OD-4 and OD-10 are restated from the owner's W3-K continuation brief (2026-10-04). OD-3, OD-13, OD-14(d) and OD-14(i): transcribed from the owner's W3-G owner-review brief (2026-10-04), in its words. OD-5 (tutorial ordering only), OD-9(b)'s asset policy, OD-14(b), (c), (e)–(h), OD-15, OD-16 and OD-18: supplied by the owner in prior conversations and never transcribed; transcribed from the owner's owner-decision reconciliation brief (2026-10-04), in its words, with the original ruling dates not recorded. OD-14(a): explicitly re-approved by the owner on 2026-10-04 (also transcribed on the unintegrated W1-I branch, `63fccca`). OD-15's cinematic-video clarification is the owner's later statement and supersedes the older modal reading. Owner-decision rule: owner decisions require explicit owner approval; assistant / Cowork recommendations, planning defaults, inferred choices and implementation decisions are NOT owner rulings. OD-5 (W3-A): transcribed from the owner's OD-5 decision brief for W3-A (2026-10-04), in its words. OD-15(a) and OD-15(b): the owner's W3-D decision briefs (2026-10-04) -- OD-15(a) as corrected by the owner the same day (the intro is a takeover, not a modal) and extended to the end-game film -- in their words. OD-19: the owner's OD-19 decision on the W3-G Watch-defect triage (2026-10-04), in its words.",
+ "owner_rulings_source": "The owner's Phase-3 Wave-1 integration brief (2026-10-03), in its words; instructions addressed to that integration turned into statements. OD-9 and OD-11: the owner's safe Wave-2 integration brief (2026-10-03), in its words. OD-4, OD-10 and OD-17: restated from the owner's W3-K rules-v13 brief (2026-10-03); instructions addressed to that slice turned into statements. The 2026-10-04 additions to OD-4 and OD-10 are restated from the owner's W3-K continuation brief (2026-10-04). OD-3, OD-13, OD-14(d) and OD-14(i): transcribed from the owner's W3-G owner-review brief (2026-10-04), in its words. OD-5 (tutorial ordering only), OD-9(b)'s asset policy, OD-14(b), (c), (e)–(h), OD-15, OD-16 and OD-18: supplied by the owner in prior conversations and never transcribed; transcribed from the owner's owner-decision reconciliation brief (2026-10-04), in its words, with the original ruling dates not recorded. OD-14(a): explicitly re-approved by the owner on 2026-10-04 (also transcribed on the unintegrated W1-I branch, `63fccca`). OD-15's cinematic-video clarification is the owner's later statement and supersedes the older modal reading. Owner-decision rule: owner decisions require explicit owner approval; assistant / Cowork recommendations, planning defaults, inferred choices and implementation decisions are NOT owner rulings. OD-5 (W3-A): transcribed from the owner's OD-5 decision brief for W3-A (2026-10-04), in its words. OD-15(a) and OD-15(b): the owner's W3-D decision briefs (2026-10-04) -- OD-15(a) as corrected by the owner the same day (the intro is a takeover, not a modal) and extended to the end-game film -- in their words. OD-19: the owner's OD-19 decision on the W3-G Watch-defect triage (2026-10-04), in its words. OD-0, OD-5 (canonical), OD-10(b), OD-14(a) (corrected), OD-15 (canonical), OD-16 (status), OD-18 (superseded in part), OD-19 (no re-confirmation), D-17, D-35, AUD-25.02, the third-seat emergency offer and the W3-H `4c89333` approval: the owner's Phase-3 consolidated-integration brief (2026-10-05), in its words.",
  "wave2_safe_integration": {
   "branch": "phase3/wave2-safe-integration",
   "base": "4e51cff7014632726de94f44024d66fc433b12cb (phase3/wave1-integration)",
@@ -5845,5 +5896,126 @@
    "OD-18: U-10's \"pause cap\" (not named by the ruling; owner may confirm it falls under the later placement)"
   ],
   "rule": "Owner decisions require explicit owner approval. Assistant / Cowork recommendations, planning defaults, inferred choices and implementation decisions are NOT owner rulings."
+ },
+ "consolidated_pre_playtest_integration": {
+  "branch": "phase3/consolidated-pre-playtest-integration",
+  "base": "9ebca03d0ddba240191c4508b603341d3cddf2ac (phase3/wave3-i-w2i-w2j-w3c-w3g-w3b-v13cert-integration), exactly",
+  "status": "PROVISIONAL — the current Phase-3 integration baseline (successor of 9ebca03 under OD-0); every completed Phase-3 branch integrated; no broad Phase-3 owner gate has been run; not merged to main (e1f1280 unmoved)",
+  "merge_order": [
+   "owner-decision reconciliation",
+   "W1-I",
+   "W2-M",
+   "W3-A",
+   "W3-D",
+   "W3-J",
+   "W3-H"
+  ],
+  "inputs": {
+   "owner-decision reconciliation": {
+    "branch": "phase3/owner-decision-reconciliation",
+    "head": "26bca3bc377e70454b54b68f2de7966804c741cf",
+    "merge": "b7a98f33ee1ce4d5a4503a2d9df60d5b88969e85",
+    "fully_integrated": true
+   },
+   "W1-I": {
+    "branch": "phase3/w1-i-completion",
+    "head": "5ffdfa5da45eee1bfc69b0976d3170d75461b4c9",
+    "merge": "4cf853bc990764fe836c427ad48c7f46feaa40b4",
+    "fully_integrated": true
+   },
+   "W2-M": {
+    "branch": "phase3/w2-m-wallet-dispute-ux",
+    "head": "d68602d09f5805c151b28b2a995ce5061c6d362c",
+    "merge": "dc6020a27f4cbda2e06c695d4cd3cdf65cb78b78",
+    "fully_integrated": true
+   },
+   "W3-A": {
+    "branch": "phase3/w3-a",
+    "head": "bb20225a8b3a5b050a16d453906932c71942a715",
+    "merge": "ead403470c647c1e2990b3c1042a5c97bba7cdbb",
+    "fully_integrated": true,
+    "note": "its sixth chain entry (Tutorial) corrected out by 15fd1d0"
+   },
+   "W3-D": {
+    "branch": "phase3/w3-d",
+    "head": "746aa6f5858251064fc63b33bf33d05b7fe1d1c6",
+    "merge": "a57b01aab50635a885ccde9283d34ca746361ca2",
+    "fully_integrated": true
+   },
+   "W3-J": {
+    "branch": "phase3/w3-j-u28-remediation",
+    "head": "789a3d0b6ab7943762789316807d9e3d8c9df522",
+    "merge": "e62bd74dbad30369c8ce990d922a864c25daa8a5",
+    "fully_integrated": true
+   },
+   "W3-H": {
+    "branch": "phase3/w3-h",
+    "head": "aa3896a09f6ebf904e9030b694240236b8669e0d",
+    "merge": "e93131052256b08507ebbf09f279b5f88d1c6d39",
+    "fully_integrated": true
+   },
+   "Watch triage / OD-19": {
+    "branch": "phase3/w3-g-watch-defect-triage",
+    "head": "3be965d631d887f828b2170b6f9a8427ad4c56de",
+    "merge": "not merged separately -- an ancestor of W3-J (merged there at d4a4ca1); every OD-19 record it carried (owner_rulings OD-19, the plan row and §7.3, the matrix row and summary, backlog U-56, README, canonical context) is present after W3-J; nothing was missing"
+   }
+  },
+  "method": "git merge --no-ff of each input in order onto the integration line; every input commit carried unchanged (same SHAs); no squash, rebase or source-branch move; main unmoved. Tracking conflicts resolved per row and field (the accounting JSON by a three-way semantic merge; the MD files by hand, keeping both sides) and normalised against the final tree.",
+  "conflicts": [
+   "Code: exactly ONE textual conflict -- frontend/src/App.tsx at the AppShell signature, W3-A x W3-J: W3-A's TUTORIAL_CHAIN_ORDER constant above it and W3-J's `watchOnly = false` prop in it; both kept, no side chosen (the constant itself later removed by correction B). Every other App.tsx hunk (W3-B latch, W3-A notice chain, W3-D inert spread, W3-J link / board-currency / Watch wiring, W3-H duck slot and Ledger props) merged textually clean, as the trial merges in four orders predicted.",
+   "Tracking: phase3_accounting.json (row statuses AUD-01.01 / 01.02 / 01.06 / 13.04 / 13.05 / 13.06 / 20.08 / 12.05 / 12.06 / VF G-1 G-7 I-10 J-6; owner_rulings OD-5 / OD-14 / OD-15; owner_rulings_source), PHASE3_AUDIT_RECONCILIATION.md (Totals; appended slice sections; the AUD-25.01..25.10 rows, each changed on one side only), PHASE3_EXECUTION_PLAN.md (OD table rows; §7.3 OD-5 / OD-14; slice status lines), README.md, PROJECT_CANONICAL_CONTEXT.md (the one long Phase-3 paragraph: every slice sentence kept), RULES_HARDENING_BACKLOG.md (the W3-G gate line: U-46 RESOLVED and the U-56 mention kept), VISUAL_FLOURISH_BACKLOG.md (OD-14 ruling text duplicated by the reconciliation and W3-H: de-duplicated, W3-H's sourced text kept). The accounting checker's W3-H extension auto-merged and passes on the combined tree."
+  ],
+  "integration_commits": {
+   "d4f7c53": "two source pins (buyTrainsPanel, uiScale) follow W1-I's probe removal (they failed on the W1-I head itself)",
+   "9b77f18": "three source-pin suites (pendingSeat, chatDisplayName, linkLifetime) follow W3-J's own changes (they failed on the W3-J head itself)",
+   "f29d992": "correction F -- AUD-25.02 Rules Reference copy tells B-20 from F-16 (owner-approved, copy-only, no engine change)",
+   "15fd1d0": "correction B -- Tutorial leaves the forced-notice chain (OD-5); AUD-01.06 kept as the interim auto-reset removal",
+   "tracking": "corrections A, C, D, E, G -- OD-14(a) inside the bar; AUD-20.08 ready, not owner-gated; OD-15 canonical; OD-19 recorded; the accounting normalised against the final tree; OD-0 / OD-10(b) / OD-18 / D-17 / D-35 / P3-N027 recorded"
+  },
+  "w3a_tutorial_reconciliation": "Tutorial removed from NOTICE_PRIORITY (five entries) and from the shell's chain (no TUTORIAL_CHAIN_ORDER, openTutorials, presentedTutorial; TutorialModal has no held / onOpenChange): the tutorial modals present exactly as before W3-A. Kept: the heading, the notice ledger, Fleet Loss replay prevention, focus return, one-at-a-time sequencing, NativeModalTurn, the registry, RED R4 e8b9504 and every review fix. AUD-01.06 = the zero-state auto-reset removed (DEFECT ONLY, INTERIM).",
+  "persistence_key_review": "SAFE (documented equivalence, no blocker): `1830juno.notice_ack.v1.<gameId>.<seatN|watcher>` keys by the public table position. After the deal the record's seats are exactly the deal's players (roster-mismatch / foreign-actor holds; a post-deal leave only unsubscribes), so a position names one principal for the game's life; the browser stores no principal (LIVE-2D). A Watch tab binds `watcher` through W3-J's projection. A new device is a late joiner (no backlog).",
+  "next_lanes_before_phase4": {
+   "A": "Live / Async clocks -- AUD-11.04 (no automatic forfeit / trade decline / host succession)",
+   "B": "D-35 OO reservation marker -- VF/D-35",
+   "C": "emergency train-offer third-seat duplicate prompt -- P3-N027 (first bugfix lane)",
+   "D": "Terms route / page shell + Terms / deposit links -- AUD-20.08 (no invented prose)",
+   "E": "W3-B latch residue -- AUD-14.06, P3-N021"
+  },
+  "not_before_phase4": [
+   "AUD-13.04 and the tutorial system: the final tutorial pass (OD-5(A))",
+   "VF/D-17: a Phase-4 observation",
+   "phone-width layout / keyboard map access: Phase 5 (OD-10(b))"
+  ],
+  "asset_pending": [
+   "the official Keplr logo (AUD-18.05)"
+  ],
+  "phase4_observation_added": [
+   "the float ceremony now actually visible (4c89333)",
+   "D-17 tile-lay smoothness / whole-board repaint",
+   "cinematic intro at several UI scales",
+   "cinematic outro at several UI scales",
+   "keyboard blocking under a cinematic takeover",
+   "Firefox / Safari modal / takeover behaviour",
+   "tile-ring first facing (AUD-05.04)",
+   "recovery R1-R12 (AUD-19.03)",
+   "Live / Async clock behaviour once lane A lands",
+   "the VF PLAYTEST entries"
+  ],
+  "owner_decisions_open": [],
+  "versions": {
+   "RULES_ENGINE_VERSION": 13,
+   "SUPPORTED_RULES_ENGINE_VERSIONS": [
+    13
+   ],
+   "SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS": [
+    10,
+    11,
+    12,
+    13
+   ],
+   "keys": "unchanged (dc1-e8d0b4792a7ba07e67199ad2 no escrow, dc1-32fcc4967978e78f10874490 the fixture pin)"
+  },
+  "validation": "PENDING -- recorded by the validation commit",
+  "independent_review": "PENDING -- recorded by the validation commit"
  }
 }

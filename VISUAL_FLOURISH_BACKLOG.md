@@ -1251,6 +1251,37 @@ The frame clock (#463's pattern) repaints the whole board canvas every animation
 — at most 1328 ms per lay (1600 ms before #1471, 850 ms before the re-timing). A proposal adds nothing: it is
 repainted only when the board is. Unmeasured on low-end devices.
 
+**W3-H evidence** — stays `OPEN` (the real low-end device is Phase 4's; this is the throttled trace, and it shows
+the cost is real). Real `HexGridRenderer` in headless Chromium 1243 (software raster, no GPU), standard board
+(`initialGridFor` + 15 accepted yellow lays), viewport 1366×900, flourish = the renderer's own transition
+started by a `mapGrid` change (H10 #57 → #14, 1328 ms), CPU throttled with CDP `Emulation.setCPUThrottlingRate`;
+two runs per configuration, rAF deltas over the flourish, an idle window on the same page first. Pooled
+frame times (median / p95 / max ms, effective fps, dropped frames of ~80 at 60 Hz):
+
+| CPU throttle | DPR (backing px) | median | p95 | max | fps | dropped | board repaints per run |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1× | 1 (1366×1078) | 16.7 | 16.7 | 16.8 | 60 | 0 | 81 |
+| 4× | 1 | 66.7 | 99.9 | 100.1 | 14.6 | 137 (2 runs) | 21 |
+| 6× | 1 | 100.0 | 166.7 | 166.7 | 10.7 | 152 (2 runs) | 13–15 |
+| 1× | 2 (2732×2156) | 33.3 | 33.4 | 50.0 | 39.1 | 62 (2 runs) | 51–53 |
+| 4× | 2 | 133.4 | 216.6 | 233.3 | 7.4 | 163 (2 runs) | 10–12 |
+| 6× | 2 | 233.4 | 333.3 | 333.3 | 5.4 | 172 (2 runs) | 6–7 |
+
+The idle window is 16.7 ms median at every setting, so the drop is the flourish's whole-board repaint and
+nothing else. At 4× the 1328 ms lay shows ~21 distinct frames, at 6× ~14, and at 6× on a 2× display ~7 — it
+plays as a slideshow. **Where the time goes** (one Chromium trace per rate, renderer main thread, 4× / 6×):
+`CanvasRenderingContext2D::FinalizeFrame` — the 2D canvas rasterising the frame's whole-board draw commands —
+median 45 / 69 ms per frame (943 / 840 ms of the 1428 ms window), against 11 / 22 ms median of JS per frame
+(frame clock + React render of HexGridRenderer + issuing the draw). The JS cost of issuing one repaint, timed
+from the board's `clearRect` to its last `restore()`, is 3.4 ms median unthrottled, 17–18 ms at 4×, 24–37 ms
+at 6×. So the bottleneck is rasterising the full board each frame, not the transition maths — the obvious
+lever is repainting only the transitioning hex (or caching the static board), which is a design change for
+whoever owns VF-5, not done here. Caveat: absolute numbers are this container's (software raster); a GPU-backed
+low-end phone may rasterise very differently, which is exactly why the real-device measurement stays open.
+Artifacts: `docs/phase3/evidence/w3h/d17_flourish_frame_times.json` (every run, raw deltas, repaint JS times,
+Long Animation Frame counts), `d17_trace_summary_rate4.json`, `d17_trace_summary_rate6.json` (raw traces ~2 MB
+each, not committed; `d17trace.mjs` regenerates them); harness `entries/d17.tsx`, `d17.mjs`, `d17trace.mjs`.
+
 ### D-18 · `OPEN` · Rules cross-reference: New York's four-slot city
 The brief described "two two-station cities → one four-station city". The four-slot #883 (Brown) is offered by
 the sandbox filter over the green #54 — two one-slot cities — while #62 (Brown, two two-slot cities) → #883,

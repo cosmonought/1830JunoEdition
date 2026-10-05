@@ -35,7 +35,18 @@ node k4.mjs     # VF/K-4  fallback capacity glyph
 node e5.mjs     # VF/E-5  float card vs sticky dock stacking (+ ref-cycle defect check)
 node c10.mjs    # VF/C-10 roster row-glide FLIP, per-frame transforms (trace -> $W3H_TRACE_DIR, not committed)
 node d16.mjs    # VF/D-16 tile flourish first/last frame vs static tile pass, pixel diffs
+node d17.mjs    # VF/D-17 board frame times during a lay flourish, CPU throttle 1/4/6, DPR 1/2 (~1 min)
+W3H_RATE=4 node d17trace.mjs   # VF/D-17 Chromium trace summary (raw trace -> $W3H_TRACE_DIR, not committed)
 ```
 
 Each driver overwrites its own PNG/JSON files under `docs/phase3/evidence/w3h/`. The JSON records the
 browser version, page errors, and every number quoted in the backlog ledger.
+
+## Notes
+
+- `d17.mjs` patches `CanvasRenderingContext2D.prototype.clearRect`/`restore` **inside the harness page only**
+  (`entries/d17.tsx`) to count whole-board repaints and time them; the product is not modified.
+- Traces (`c10_trace.zip`, `d17_trace_rate*.json`) exceed 1 MB and are not committed; the drivers write their
+  summaries into the evidence JSON. Set `W3H_TRACE_DIR` to keep them somewhere specific.
+- Absolute timings are the host's. The W3-H evidence was captured in headless Chromium 1243 with software
+  raster on a container, which is not a low-end device.

@@ -44,7 +44,7 @@ import * as path from "path";
 
 import { actingAddress, type GameStateResponse } from "../../../frontend/src/gameEngine/gameState";
 import { operatingTurnKey } from "../../../frontend/src/gameEngine/turnGuardKey";
-import { effectiveActions, revertTargetOf } from "../../../frontend/src/gameEngine/logRevert";
+import { revertTargetOf } from "../../../frontend/src/gameEngine/logRevert";
 import type { GameMode } from "../../../frontend/src/gameEngine/gameVariants";
 import type { RoomClockState, RoomClockView } from "../../../frontend/src/utils/clockProtocol";
 import type { ServerLogEntry } from "../../../frontend/src/utils/roomSession";
@@ -123,24 +123,27 @@ export interface ClockFacts {
   readonly watermark: number;
   /** The newest committed entry's server stamp (`at`), or `null` (no entries, or an unstamped legacy entry). */
   readonly lastAt: number | null;
-  /** The newest entry that still STANDS (an undo -- `RevertTo` -- takes entries back without removing them from the log):
-   *  below the running turn's `from_index`, the turn that began there was undone. */
-  readonly liveHead: number;
-  /** The newest move (non-derived, not an undo) by a seat OTHER than the acting one, or -1. A stored turn of the same key
-   *  is the same turn only if no other seat has moved since it began (Stock Round turns of one seat share a key). */
+  /** The newest undo that still STANDS (`RevertTo`: everything from `target` up to its own `index` did not happen), or
+   *  `null`. A running turn that began inside that range was undone. */
+  readonly undo: { readonly target: number; readonly index: number } | null;
+  /** The newest STANDING move (non-derived, not an undo, not taken back by one) by a seat OTHER than the acting one, or
+   *  -1. A stored turn of the same key is the same turn only if no other seat has moved since the server last saw it
+   *  running (Stock Round turns of one seat share a key; an off-turn answer the server saw is vouched for). */
   readonly lastForeignIndex: number;
   /** The server stamp of that move -- the hand-over that began the acting seat's current turn -- or, with none, of the
    *  first entry. The best durable evidence of when the turn began, for a restart that finds no record of it. */
   readonly handoverAt: number | null;
 }
 
-export const NO_CLOCK_FACTS: ClockFacts = Object.freeze({ dealt: false, ended: false, closed: false, seat: null, turnKey: null, watermark: -1, lastAt: null, liveHead: -1, lastForeignIndex: -1, handoverAt: null });
+export const NO_CLOCK_FACTS: ClockFacts = Object.freeze({ dealt: false, ended: false, closed: false, seat: null, turnKey: null, watermark: -1, lastAt: null, undo: null, lastForeignIndex: -1, handoverAt: null });
 
 const stampOf = (entry: ServerLogEntry | undefined): number | null =>
   entry !== undefined && typeof entry.at === "number" && Number.isSafeInteger(entry.at) && entry.at >= 0 ? entry.at : null;
 
-/** Whether an entry is an undo (`RevertTo`): an instruction about the log, never a move of the game. */
-const isUndo = (entry: ServerLogEntry): boolean => revertTargetOf(entry) !== null;
+/** An undo's target (`RevertTo`: an instruction about the log, never a move of the game), or `null`. The text test keeps
+ *  the scan from parsing every payload; `revertTargetOf` -- the one definition -- decides. */
+const UNDO_TEXT = /^\s*\{\s*"RevertTo"/;
+const undoTargetOf = (entry: ServerLogEntry): number | null => (UNDO_TEXT.test(entry.payload) ? revertTargetOf(entry) : null);
 
 /** The facts of a committed board. `board` is the server's own end / close reading (its test seam included). Never
  *  throws: a board that cannot be read is "no turn". */
@@ -159,30 +162,31 @@ export function clockFactsOf(input: { readonly state: GameStateResponse; readonl
   }
   if (seat !== null && (typeof seat !== "string" || seat === "")) seat = null;
   const turnKey = seat === null ? null : `${String(state.current_round_type)}|${operatingTurnKey(state)}|${seat}`;
-  /* The live head: the log's newest index, unless its newest move is an undo -- then the newest entry still standing
-     (`effectiveActions`, the one definition of what an undo takes back; asked only then, it reads every payload). */
-  let liveHead = watermark;
-  for (let at = entries.length - 1; at >= 0; at -= 1) {
-    if (entries[at].derived === true) continue;
-    if (isUndo(entries[at])) {
-      const standing = effectiveActions(entries);
-      liveHead = standing.length > 0 ? standing[standing.length - 1].index : -1;
-    }
-    break;
-  }
-  /* The newest other seat's move, scanning back from the end (it is normally a step or two away). */
+  /* ONE SCAN BACK FROM THE END, over what STANDS -- `effectiveActions`'s rule, read backwards: a standing undo takes back
+     every entry from its target up to itself; an undo inside another's range does nothing. It finds the newest standing
+     undo and the newest standing move by another seat (normally a step or two away). Every payload is tested as text;
+     only an undo's is parsed. */
+  const ranges: Array<readonly [number, number]> = [];
+  const taken = (index: number) => ranges.some(([target, upTo]) => index >= target && index < upTo);
+  let undo: { target: number; index: number } | null = null;
   let lastForeignIndex = -1;
   let handoverAt: number | null = stampOf(entries[0]);
-  if (seat !== null) {
-    for (let at = entries.length - 1; at >= 0; at -= 1) {
-      const entry = entries[at];
-      if (entry.derived === true || entry.actor === seat || isUndo(entry)) continue;
+  for (let at = entries.length - 1; at >= 0; at -= 1) {
+    const entry = entries[at];
+    if (taken(entry.index)) continue;
+    const target = undoTargetOf(entry);
+    if (target !== null) {
+      ranges.push([target, entry.index]);
+      if (undo === null) undo = { target, index: entry.index };
+      continue;
+    }
+    if (seat !== null && lastForeignIndex === -1 && entry.derived !== true && entry.actor !== seat) {
       lastForeignIndex = entry.index;
       handoverAt = stampOf(entry) ?? handoverAt;
-      break;
     }
+    if ((seat === null || lastForeignIndex !== -1) && undo !== null) break;
   }
-  return Object.freeze({ dealt, ended: board.ended, closed: board.closed, seat, turnKey, watermark, lastAt, liveHead, lastForeignIndex, handoverAt });
+  return Object.freeze({ dealt, ended: board.ended, closed: board.closed, seat, turnKey, watermark, lastAt, undo, lastForeignIndex, handoverAt });
 }
 
 /* ==================================================================
@@ -204,6 +208,9 @@ export interface ClockTurn {
   readonly paused_ms: number;
   /** When the server first saw this turn's allowance run out (instrumentation; `null`: not seen). */
   readonly expired_at: number | null;
+  /** The newest committed index the server SAW this turn continue through (an off-turn move by another seat -- an offer's
+   *  answer, say -- that left the turn where it was). A reload keeps the turn across moves up to here. */
+  readonly continued_to: number;
 }
 
 /** The standing pause. `since` is the accounting anchor (re-anchored to a turn's start if a turn begins while paused);
@@ -258,7 +265,7 @@ export interface GameClockRecord {
 
 const RECORD_KEYS = ["format", "version", "game_id", "revision", "mode", "allowance_ms", "turn", "history", "pause", "stopped_at", "created_at", "updated_at", "tally"];
 const PAST_KEYS = ["key", "seat", "from_index", "active_ms"];
-const TURN_KEYS = ["key", "seat", "started_at", "from_index", "paused_ms", "expired_at"];
+const TURN_KEYS = ["key", "seat", "started_at", "from_index", "paused_ms", "expired_at", "continued_to"];
 const PAUSE_KEYS = ["since", "asked_at", "by"];
 const TALLY_KEYS = ["turns", "pauses", "expiries"];
 
@@ -289,7 +296,9 @@ export function isGameClockRecord(value: unknown): value is GameClockRecord {
       Number.isSafeInteger(turn.from_index) &&
       (turn.from_index as number) >= -1 &&
       count(turn.paused_ms) &&
-      (turn.expired_at === null || time(turn.expired_at))
+      (turn.expired_at === null || time(turn.expired_at)) &&
+      Number.isSafeInteger(turn.continued_to) &&
+      (turn.continued_to as number) >= (turn.from_index as number)
     )
   ) {
     return false;
@@ -418,7 +427,7 @@ export function observeFacts(record: GameClockRecord, facts: ClockFacts, since: 
      has moved since it began -- else a turn of another seat came between, however the keeper missed it (a lost write,
      a restart, an older build's interval), and this is a new turn (review finding 2). An undo is never such a move. */
   const turn = record.turn;
-  if (record.stopped_at === null && turn !== null && turn.key === facts.turnKey && facts.lastForeignIndex <= turn.from_index) return { record, ended: null };
+  if (record.stopped_at === null && turn !== null && turn.key === facts.turnKey && facts.lastForeignIndex <= turn.continued_to) return { record, ended: null };
   /* No seat acts (dealt, nothing to time): the running turn ends, nothing starts. */
   if (facts.turnKey === null || facts.seat === null) {
     if (turn === null && record.stopped_at === null) return { record, ended: null };
@@ -431,8 +440,9 @@ export function observeFacts(record: GameClockRecord, facts: ClockFacts, since: 
   /* AN UNDO REACHED BACK INTO AN EARLIER TURN (the live head is below where the running turn began): that turn is
      RESUMED with the active time it had when it ended -- never a fresh allowance (review finding 1), never charged the
      time the undone turn ran. Only a turn this record still remembers can be resumed; anything older starts afresh. */
-  if (turn !== null && record.stopped_at === null && facts.liveHead < turn.from_index) {
-    const standing = record.history.filter((past) => past.from_index <= facts.liveHead);
+  if (turn !== null && record.stopped_at === null && undid(facts, turn.from_index)) {
+    const target = (facts.undo as { target: number }).target;
+    const standing = record.history.filter((past) => past.from_index < target);
     let found = -1;
     for (let at2 = standing.length - 1; at2 >= 0; at2 -= 1) {
       if (standing[at2].key === facts.turnKey) {
@@ -448,7 +458,7 @@ export function observeFacts(record: GameClockRecord, facts: ClockFacts, since: 
         record: {
           ...record,
           revision: record.revision + 1,
-          turn: { key: past.key, seat: past.seat, started_at: Math.max(0, at - past.active_ms), from_index: past.from_index, paused_ms: 0, expired_at: expired ? at : null },
+          turn: { key: past.key, seat: past.seat, started_at: Math.max(0, at - past.active_ms), from_index: past.from_index, paused_ms: 0, expired_at: expired ? at : null, continued_to: facts.watermark },
           history: standing.slice(0, found),
           pause: rebase(record.pause, at),
           updated_at: now,
@@ -465,7 +475,7 @@ export function observeFacts(record: GameClockRecord, facts: ClockFacts, since: 
     record: {
       ...record,
       revision: record.revision + 1,
-      turn: { key: facts.turnKey, seat: facts.seat, started_at: startAt, from_index: facts.watermark, paused_ms: 0, expired_at: null },
+      turn: { key: facts.turnKey, seat: facts.seat, started_at: startAt, from_index: facts.watermark, paused_ms: 0, expired_at: null, continued_to: facts.watermark },
       history: pushed(record, ended, facts),
       pause: rebase(record.pause, startAt),
       stopped_at: null,
@@ -476,11 +486,25 @@ export function observeFacts(record: GameClockRecord, facts: ClockFacts, since: 
   };
 }
 
+/** Whether the newest standing undo took back the batch that began a turn at `fromIndex`. (Judged by the undo's own
+ *  range, so derived entries the undo's batch appends after it never hide it -- review C.) */
+function undid(facts: ClockFacts, fromIndex: number): boolean {
+  return facts.undo !== null && fromIndex >= facts.undo.target && fromIndex < facts.undo.index;
+}
+
+/** The server saw the running turn continue through `facts` -- another seat moved and the turn did not change (an
+ *  offer's answer): it is vouched for up to here, so a reload keeps it (review A). `null` when there is nothing to vouch. */
+export function vouchTurn(record: GameClockRecord, facts: ClockFacts, now: number): GameClockRecord | null {
+  const turn = record.turn;
+  if (record.stopped_at !== null || turn === null || turn.key !== facts.turnKey || facts.lastForeignIndex <= turn.continued_to) return null;
+  return { ...record, revision: record.revision + 1, turn: { ...turn, continued_to: Math.max(turn.continued_to, facts.watermark) }, updated_at: now };
+}
+
 /** The history with the turn that just ended added (newest last, bounded), less any turn an undo has taken back. */
 function pushed(record: GameClockRecord, ended: TurnSummary | null, facts: ClockFacts): readonly ClockPastTurn[] {
-  const kept = record.history.filter((past) => past.from_index <= facts.liveHead);
+  const kept = record.history.filter((past) => !undid(facts, past.from_index));
   const turn = record.turn;
-  if (ended === null || turn === null || turn.from_index > facts.liveHead) return kept.slice(-CLOCK_HISTORY_LIMIT);
+  if (ended === null || turn === null || undid(facts, turn.from_index)) return kept.slice(-CLOCK_HISTORY_LIMIT);
   return [...kept, { key: turn.key, seat: turn.seat, from_index: turn.from_index, active_ms: ended.active_ms }].slice(-CLOCK_HISTORY_LIMIT);
 }
 

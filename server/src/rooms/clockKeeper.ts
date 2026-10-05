@@ -43,6 +43,7 @@ import {
   noteExpiry,
   observeFacts,
   pauseClock,
+  vouchTurn,
   resumeClock,
   unavailableClockView,
   CLOCK_STALE_REASON,
@@ -286,6 +287,21 @@ export function createClockKeeper(deps: ClockKeeperDeps) {
   }
 
   /** Bring the record in line with the newest served facts. `source` says where the turn's start comes from. */
+  /** Another seat moved and the turn did not change: the record vouches for the turn up to here, so a reload keeps it. */
+  async function vouch(entry: Entry): Promise<void> {
+    if (entries.get(entry.gameId) !== entry || entry.unreadable || entry.facts === null) return;
+    if (entry.stale) {
+      await settle(entry, "retry");
+      return;
+    }
+    const record = entry.record;
+    if (record === null) return;
+    const next = vouchTurn(record, entry.facts, now());
+    if (next === null) return;
+    entry.record = next;
+    await write(entry, next);
+  }
+
   async function settle(entry: Entry, source: "load" | "commit" | "retry"): Promise<void> {
     if (entries.get(entry.gameId) !== entry) return;
     if (entry.unreadable) return;
@@ -431,7 +447,11 @@ export function createClockKeeper(deps: ClockKeeperDeps) {
         void enqueue(entry, () => settle(entry, "commit")).catch((error) => deps.warn(`  clock: ${gameId}: a clock update threw -- ${describe(error)}`));
         return;
       }
+      const moved = entry.facts !== null && facts.lastForeignIndex !== entry.facts.lastForeignIndex;
       entry.facts = facts;
+      /* Another seat moved and the turn stayed (an offer's answer): vouch for the turn, so a reload does not take that
+         move for a hand-over (review A). */
+      if (moved) void enqueue(entry, () => vouch(entry)).catch((error) => deps.warn(`  clock: ${gameId}: a clock update threw -- ${describe(error)}`));
     },
 
     /** The host's pause (`by`: the host's player id), bound to the revision its tab saw. */

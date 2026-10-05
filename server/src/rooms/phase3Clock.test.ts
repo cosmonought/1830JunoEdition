@@ -284,6 +284,18 @@ describe("Phase 3 lane A: the gameplay clock through the server", () => {
       } finally {
         await stopServer(booted.server);
       }
+      /* And a restart after the undo keeps the resumed turn: the undone purchase is not a hand-over. */
+      await time.advance(5 * SEC);
+      const again = await boot(dir, time, TEST_POLICY);
+      try {
+        const games = (await createFileLogStore(dir, quiet).listGameLogs?.()) ?? [];
+        const gameId = games[0] as string;
+        const bob = await tab(again.port, BOB, gameId);
+        assert.equal(latestClock(bob)?.elapsedMs, 65 * SEC, "the restart did not reset the resumed turn");
+        await bob.close();
+      } finally {
+        await stopServer(again.server);
+      }
     }));
 
   test("a server restart does not reset the clock: the same turn keeps its start, its pause and its paused total", async () =>

@@ -27,6 +27,7 @@ import {
   noteExpiry,
   observeFacts,
   pauseClock,
+  vouchTurn,
   resumeClock,
   ClockUnreadableError,
   NO_APPROVED_CLOCK_POLICY,
@@ -180,6 +181,35 @@ describe("Phase 3 lane A: the record's transitions (pure, integer ms)", () => {
     assert.equal(elapsedOf(next, T0 + 5 * MIN), 0);
   });
 
+  test("an off-turn move by another seat that the server SAW leave the turn alone is vouched for: a reload keeps the turn", () => {
+    const record = started();
+    const answered: ClockFacts = { ...alice, watermark: alice.watermark + 1, lastForeignIndex: alice.watermark + 1 };
+    assert.notEqual(observeFacts(record, answered, T0 + MIN, T0 + MIN).record.turn?.started_at, T0, "unvouched, a reload would take the answer for a hand-over");
+    const vouched = vouchTurn(record, answered, T0 + MIN) as GameClockRecord;
+    assert.equal(vouched.turn?.continued_to, alice.watermark + 1);
+    assert.equal(observeFacts(vouched, answered, T0 + 5 * MIN, T0 + 5 * MIN).record, vouched, "the same turn, after any reload");
+    assert.equal(vouchTurn(vouched, answered, T0 + 2 * MIN), null, "vouched once");
+  });
+
+  test("a move an undo took back is not another seat's move (the scan reads only what stands)", () => {
+    const session = boardAfter(2); // deal, Alice a1, Bob b1: Alice on turn
+    const handover = session.entries.filter((entry) => entry.actor === BOB && entry.derived !== true).pop() as { index: number; at?: number };
+    const before = clockFactsOf({ state: session.state, entries: session.entries }, { ended: false, closed: false });
+    for (const [n, seat] of [[2, ALICE], [3, BOB]] as const) {
+      assert.equal(session.submit({ actor: seat, build: BUILD, msg: BUY as never, baseIndex: session.nextIndex - 1, submissionId: `buy-${n}` }).kind, "applied");
+    }
+    const moves = session.entries.filter((entry) => entry.derived !== true && entry.index > handover.index);
+    for (const move of [...moves].reverse()) {
+      const answer = session.submit({ actor: ALICE, build: BUILD, msg: { RevertTo: { index: move.index, player: ALICE, summary: "undo" } } as never, baseIndex: session.nextIndex - 1, submissionId: `undo-${move.index}`, host: ALICE, undoPolicy: { host_undo: "last-action" } });
+      assert.equal(answer.kind, "applied", JSON.stringify(answer));
+    }
+    const after = clockFactsOf({ state: session.state, entries: session.entries }, { ended: false, closed: false });
+    assert.equal(after.seat, ALICE);
+    assert.equal(after.turnKey, before.turnKey);
+    assert.equal(after.lastForeignIndex, before.lastForeignIndex, "Bob's undone purchase is not counted; the hand-over is still Bob's b1");
+    assert.equal(after.handoverAt, before.handoverAt);
+  });
+
   test("an undo that reaches back into an ended turn resumes it with the time it had used -- never a fresh allowance", () => {
     const session = boardAfter(1); // the deal, Alice's purchase: Bob on turn
     const aliceTurn = observeFacts(newClockRecord(gameId, "live", TEST_POLICY, T0), clockFactsOf({ state: boardAfter(0).state, entries: boardAfter(0).entries }, { ended: false, closed: false }), T0, T0).record;
@@ -191,7 +221,8 @@ describe("Phase 3 lane A: the record's transitions (pure, integer ms)", () => {
     assert.equal(undone.kind, "applied", JSON.stringify(undone));
     const back = clockFactsOf({ state: session.state, entries: session.entries }, { ended: false, closed: false });
     assert.equal(back.seat, ALICE);
-    assert.equal(back.liveHead < (bobTurn.turn?.from_index as number), true, "the live head fell below where Bob's turn began");
+    assert.equal(back.undo?.target, buy.index, "the standing undo takes back from Alice's purchase on");
+    assert.equal((bobTurn.turn?.from_index as number) >= buy.index, true, "Bob's turn began inside the undone range");
     const { record: resumed } = observeFacts(bobTurn, back, T0 + 100_000, T0 + 100_000);
     assert.equal(resumed.turn?.seat, ALICE);
     assert.equal(elapsedOf(resumed, T0 + 100_000), 90_000, "resumed with the 90 s it had used");
@@ -362,6 +393,25 @@ describe("Phase 3 lane A: the keeper, on controlled time", () => {
     await time.advance(10 * MIN);
     assert.equal(keeper.viewOf(gameId, { mode: "live", held: false, dealt: true })?.state, "paused", "no expiry while paused");
     assert.deepEqual(await keeper.resume(gameId, ALICE, keeper.recordOf(gameId)?.revision as number), { ok: true });
+  });
+
+  test("an off-turn answer seen live is vouched for durably: a fresh keeper (a reload) keeps the turn's start", async () => {
+    const store = createMemoryClockStore();
+    const { keeper, time } = keeperOn(store);
+    const gameId = mintGameId();
+    await keeper.load(gameId, { mode: "live", facts: null, held: false });
+    const dealt = factsAfter(0);
+    keeper.observe(gameId, dealt, false, "live");
+    await keeper.settled(gameId);
+    await time.advance(40_000);
+    const answered: ClockFacts = { ...dealt, watermark: dealt.watermark + 1, lastForeignIndex: dealt.watermark + 1, handoverAt: time.now() };
+    keeper.observe(gameId, answered, false, "live");
+    await keeper.settled(gameId);
+    assert.equal((await store.load(gameId))?.turn?.continued_to, dealt.watermark + 1, "vouched, durably");
+    const again = keeperOn(store);
+    await again.time.advance(60_000);
+    await again.keeper.load(gameId, { mode: "live", facts: answered, held: false });
+    assert.equal(again.keeper.viewOf(gameId, { mode: "live", held: false, dealt: true })?.turnStartedAt, T0, "the answer was not taken for a hand-over");
   });
 
   test("a failing clock store costs the clock, never a throw: the keeper rereads and the restart evidence holds", async () => {

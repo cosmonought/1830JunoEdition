@@ -80,11 +80,23 @@ for tok in sorted(set(re.findall(r'(?<!OD-)' + ID_RE, body))):
 
 # 5. VF rows vs ledger
 want = {}
+resolved = set()
 for line in open(os.path.join(ROOT, 'VISUAL_FLOURISH_BACKLOG.md'), encoding='utf-8'):
     m = re.match(r'^### ([A-Z]+-\d+) · `([A-Z ]+)`', line)
     if m and m.group(2) in ('PLAYTEST', 'OWNER DECISION', 'OPEN'):
         want['VF/' + m.group(1)] = m.group(2)
+    elif m and m.group(2) == 'RESOLVED':
+        resolved.add('VF/' + m.group(1))
 have = {r['key']: r for r in rows if r['key'].startswith('VF/')}
+# W3-H: a Phase-3 slice can now RESOLVE a ledger entry its row was accounted for. The row stays (every audit
+# item is accounted exactly once), and the pair must agree: a RESOLVED entry with a row is an IMPLEMENTED row,
+# or -- for an owner-gated (C) row the owner ruled in and the slice then built -- a RULED row (the C -> B letter
+# change is W3-F's bookkeeping). Entries resolved before Phase 3 have no row and are not wanted, as before.
+for k2 in sorted(resolved & set(have)):
+    want[k2] = 'RESOLVED'
+    status = have[k2].get('status', '')
+    if not (status.startswith('IMPLEMENTED') or (have[k2]['disp'] == 'C' and status.startswith('RULED'))):
+        errors.append(f'{k2}: RESOLVED in the ledger but its row is neither IMPLEMENTED nor a ruled-in C row')
 if set(want) != set(have):
     errors.append(f'VF rows differ from ledger: missing {sorted(set(want) - set(have))}, extra {sorted(set(have) - set(want))}')
 for k2, st in want.items():

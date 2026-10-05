@@ -22,7 +22,7 @@
 //
 // Design history: see `docs/ai_architecture/contract_economy.md`.
 
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ACTION_GREEN, ACTION_GREEN_BORDER, ACTION_GREEN_INK } from "../styles/palette";
 
 
@@ -712,6 +712,36 @@ export function TrainPurchasePanel({
   const linkHeld = linkQueue?.blocked === true;
   const canPropose =
     canTrade && !!selectedSeller && offerProblem === null && typeof offerPrice === "string" && !linkHeld;
+
+  /* ==================================================================
+      PHASE 3 W3-J (AUD-25.13 item 3; owner ruled FIX IN W3-J): THE TYPED OFFER IS KEPT
+     ==================================================================
+     Send closed the form at the press (`setSelection(null)`), so a proposal the link dropped -- or one the server
+     refused -- took the chosen seller and the typed price with it. W3-I's pattern (`PrivateCompaniesSection`'s
+     `OfferForm`, `ProposePrivatePurchase`'s `submitLatch`) now holds here too:
+       - THE PRESS DOES NOT CLOSE IT. While the link holds the submission (`linkQueue`, W3-I) the Send is greyed and
+         says so ("Queued — will send on reconnect." / the sending line); if the send does not land -- dropped, refused
+         -- the form is simply live again, with what was typed.
+       - THE BOARD CLOSES IT, when the proposal lands: an offer standing on the board raises the hold
+         (`blockedReason`), which withdraws every roster badge (`canTrade`), and a same-president sale that settled
+         moves the train, which changes the rosters the badge was read off. Either withdraws the opener the form was
+         opened from, so the form goes with it -- keyed on the board, never on the press. A board that has not moved
+         (a dropped or refused send) leaves it open.
+       - `sendLatch` covers the one window those cannot: a second press in the same task, before React has committed
+         the first. Released after the next commit (`setSendCommit` guarantees one follows the press). */
+  const sendLatch = useRef(false);
+  const [, setSendCommit] = useState(0);
+  useEffect(() => {
+    sendLatch.current = false;
+  });
+  const rostersKey = companies
+    .map((entry) => `${entry.company_id}:${entry.owned_trains == null ? "?" : entry.owned_trains.join(",")}`)
+    .join(";");
+  useEffect(() => {
+    /* Runs only when the board moved under the form (the hold arrived or left, or a train changed hands) -- a badge
+       click changes neither -- so any open form here was opened on a board that is gone. */
+    setSelection(null);
+  }, [canTrade, rostersKey]);
 
   return (
     <div
@@ -1602,7 +1632,9 @@ export function TrainPurchasePanel({
                     }}
                     disabled={!canPropose}
                     onClick={() => {
-                      if (!canPropose || !buyer || typeof offerPrice !== "string") return;
+                      if (!canPropose || !buyer || typeof offerPrice !== "string" || sendLatch.current) return;
+                      sendLatch.current = true;
+                      setSendCommit((count) => count + 1);
                       onProposeTrade({
                         sellerProtocolId: selectedSeller.company_id,
                         sellerTicker: selectedSeller.ticker,
@@ -1618,7 +1650,7 @@ export function TrainPurchasePanel({
                         // UR-4: the copy, only when the seller holds a gold-trimmed one of this model.
                         ...(selection.gilded === null ? {} : { gilded: selection.gilded }),
                       });
-                      setSelection(null);
+                      /* Phase 3 W3-J (AUD-25.13 item 3): latched, not closed -- see `sendLatch`. */
                     }}
                     title={
                       offerProblem ??

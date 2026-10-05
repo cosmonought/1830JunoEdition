@@ -31,6 +31,9 @@ import {
 import { MH_PRIVATE_ID } from "../gameEngine/privateExchange";
 import RulesReference, { type RulesReferenceProps } from "./RulesReference";
 import { DELAYED_AUCTION_STATUS_COPY, delayedAuctionStatus } from "../utils/delayedAuctionStatus";
+import { trainOfferRefusal } from "../utils/offerAuthorityView";
+import { dockHoldView } from "../utils/dockHoldView";
+import { apply, M } from "../utils/offerMatrix74Support";
 import type { GameStateResponse } from "../gameEngine/gameState";
 import { depotInventory, openDepotTiers } from "../gameEngine/gamePhase";
 import { trainPurchaseRefusal } from "../gameEngine/trainPurchaseGate";
@@ -389,5 +392,126 @@ describe("W3-J AUD-25.10 (e): the Rules Reference's Game Flow says cancelled, no
     mount({});
     expect(auctionStage().querySelector('[aria-label="completed"]')).not.toBeNull();
     expect(auctionStage().textContent).not.toContain("Cancelled");
+  });
+});
+
+/* ================================================================================================= */
+/* AUD-25.13 item 3 -- THE CORPORATE OFFER FORM KEEPS WHAT WAS TYPED                                  */
+/* ================================================================================================= */
+
+describe("W3-J AUD-25.13 item 3: Buy Trains from a Corporation keeps the typed offer until the board takes it", () => {
+  const LABELS: Record<string, string> = { [F.P1]: "Alice", [F.P2]: "Bob", [F.P3]: "Carol" };
+  const labelFor = (address: string) => LABELS[address] ?? address;
+  const QUEUED = linkQueueView({ unsent: 1, unsettled: 1, settled: 0, lastOutcome: null });
+  const textOf = (node: Element) => (node.textContent ?? "").replace(/\s+/g, " ").trim();
+
+  /** The roster exactly as the shell mounts it: the hold from `dockHoldView`, the sale's authority bound to the board. */
+  function drawRoster(state: GameStateResponse, onProposeTrade: (proposal: unknown) => void, linkQueue: LinkQueueView = IDLE_LINK_QUEUE_VIEW) {
+    const companies = state.public_companies as unknown as TrainPurchaseCompany[];
+    render(
+      <TrainPurchasePanel
+        depot={depotInventory(state)}
+        buyer={companies.find((entry) => entry.company_id === F.PRR) ?? null}
+        companies={companies}
+        sessionReady
+        canAct
+        blockedReason={dockHoldView({ state, labelFor }).proposeTrainPurchase}
+        onBuyFromBank={() => undefined}
+        openTiers={openDepotTiers(state)}
+        onProposeTrade={onProposeTrade}
+        offerRefusal={(offer) => trainOfferRefusal({ state, actor: F.P1, buyerId: F.PRR, labelFor }, offer)}
+        linkQueue={linkQueue}
+        labelForAddress={labelFor}
+        defaultCorporateOpen
+      />,
+    );
+  }
+  const priceInput = () => host.querySelector<HTMLInputElement>("#trade-price");
+  const send = () => buttons().find((node) => /^(Buy Now|Send Offer)$/.test(textOf(node)))!;
+  const queuedNote = () => host.querySelector('[data-testid="train-offer-link-queued"]')?.textContent ?? null;
+  /** Chooses NYC's first badge (its 3-train) and types `price`. */
+  function chooseAndType(price: string) {
+    const rows = Array.from(host.querySelectorAll("div")).filter((node) => node.querySelector("button") !== null && textOf(node).startsWith("NYC"));
+    click(rows[rows.length - 1].querySelector("button"));
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(priceInput()!, price);
+      priceInput()!.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  }
+
+  it("Send does not close the form: the seller and the typed price are still there", () => {
+    const sent: Array<Record<string, unknown>> = [];
+    const state = F.operatingBoard();
+    drawRoster(state, (proposal) => sent.push(proposal as Record<string, unknown>));
+    chooseAndType("150");
+    expect(send().disabled).toBe(false);
+    click(send());
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ sellerProtocolId: F.NYC, modelType: "3", price: "150" });
+    expect(priceInput()?.value).toBe("150");
+    expect(host.textContent).toContain("offers for NYC's");
+  });
+
+  it("a second Send in the same tick is ignored", () => {
+    const sent: unknown[] = [];
+    drawRoster(F.operatingBoard(), (proposal) => sent.push(proposal));
+    chooseAndType("150");
+    const button = send();
+    act(() => {
+      button.click();
+      button.click();
+    });
+    expect(sent).toHaveLength(1);
+  });
+
+  it("while the link holds it: the queued note shows and Send is greyed; dropped, the typed values are still there and live", () => {
+    const sent: unknown[] = [];
+    const state = F.operatingBoard();
+    const onPropose = (proposal: unknown) => sent.push(proposal);
+    drawRoster(state, onPropose);
+    chooseAndType("150");
+    click(send());
+    drawRoster(state, onPropose, QUEUED);
+    expect(queuedNote()).toBe(LINK_QUEUED_NOTE);
+    expect(send().disabled).toBe(true);
+    expect(priceInput()?.value).toBe("150");
+    click(send());
+    expect(sent).toHaveLength(1);
+    // The link gave the submission up (dropped): nothing landed, so the form is live again with what was typed.
+    drawRoster(state, onPropose, IDLE_LINK_QUEUE_VIEW);
+    expect(queuedNote()).toBeNull();
+    expect(priceInput()?.value).toBe("150");
+    expect(send().disabled).toBe(false);
+  });
+
+  it("when the offer stands on the board (the hold withdraws the openers) the form closes", () => {
+    const state = F.operatingBoard();
+    drawRoster(state, () => undefined);
+    chooseAndType("150");
+    click(send());
+    expect(priceInput()).not.toBeNull();
+    const offered = apply(state, M.proposeTrain(F.NYC, F.PRR, "3", "150"), F.P1);
+    expect(offered.train_purchase_offer).toBeTruthy();
+    expect(dockHoldView({ state: offered, labelFor }).proposeTrainPurchase).not.toBeNull();
+    drawRoster(offered, () => undefined);
+    expect(priceInput()).toBeNull();
+  });
+
+  it("a same-president sale that settled moves the train, and the form opened on it closes", () => {
+    const state = F.operatingBoard({
+      corps: [
+        { id: F.PRR, ticker: "PRR", president: F.P1, trains: ["2"], treasury: "500" },
+        { id: F.NYC, ticker: "NYC", president: F.P1, trains: ["3", "3"], treasury: "400", price: 90 },
+      ],
+    });
+    drawRoster(state, () => undefined);
+    chooseAndType("150");
+    expect(textOf(send())).toBe("Buy Now");
+    click(send());
+    expect(priceInput()?.value).toBe("150");
+    const settled = apply(state, M.buyTrain(F.PRR, F.NYC, "3", "150"), F.P1);
+    expect(settled.public_companies.find((entry) => entry.company_id === F.PRR)?.owned_trains).toEqual(["2", "3"]);
+    drawRoster(settled, () => undefined);
+    expect(priceInput()).toBeNull();
   });
 });

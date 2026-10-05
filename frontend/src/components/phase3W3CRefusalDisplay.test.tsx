@@ -26,6 +26,7 @@ import {
   noticeActionFor,
   roomNoticeLine,
   roomNoticesReducer,
+  connectionOf,
   type RoomNoticeAction,
   type RoomNotices,
 } from "../utils/roomNotices";
@@ -53,19 +54,20 @@ describe("AUD-14.01: two slots, and every clear names a kind", () => {
       { type: "refusal", text: SERVER_REFUSAL },
       { type: "connection", kind: "reconnecting", text: RECONNECTING_BANNER },
     );
-    expect(state).toEqual({ connection: { kind: "reconnecting", text: RECONNECTING_BANNER }, refusal: SERVER_REFUSAL });
+    // W3-J (AUD-25.13): the connection slot holds one notice PER KIND; the two-slot separation is unchanged.
+    expect(state).toEqual({ connections: [{ kind: "reconnecting", text: RECONNECTING_BANNER }], refusal: SERVER_REFUSAL });
     const later = roomNoticesReducer(state, { type: "refusal", text: TURN_REFUSAL });
-    expect(later.connection?.text).toBe(RECONNECTING_BANNER); // the link's fact stands
+    expect(connectionOf(later, "reconnecting")?.text).toBe(RECONNECTING_BANNER); // the link's fact stands
     expect(later.refusal).toBe(TURN_REFUSAL); // the newer refusal replaces the older one
   });
 
   it("the link's own clear retires its kind whatever the sentence -- a server-written pause reason included", () => {
     const paused = run({ type: "connection", kind: "room-status", text: "Maintenance until 14:05 CDT." });
-    expect(roomNoticesReducer(paused, { type: "clear-connection", kind: "room-status" }).connection).toBeNull();
+    expect(roomNoticesReducer(paused, { type: "clear-connection", kind: "room-status" }).connections).toEqual([]);
     // ... and a clear for another kind leaves it.
     expect(roomNoticesReducer(paused, { type: "clear-connection", kind: "reconnecting" })).toBe(paused);
     const reconnecting = run({ type: "connection", kind: "reconnecting", text: RECONNECTING_BANNER });
-    expect(roomNoticesReducer(reconnecting, { type: "clear-connection", kind: "reconnecting" }).connection).toBeNull();
+    expect(roomNoticesReducer(reconnecting, { type: "clear-connection", kind: "reconnecting" }).connections).toEqual([]);
   });
 
   it("the shell's bare-sentence writers are routed by the constants' identity; every other sentence is a refusal", () => {
@@ -77,16 +79,17 @@ describe("AUD-14.01: two slots, and every clear names a kind", () => {
     }
   });
 
-  it("the one-line surfaces (waiting room, gate) read the refusal first, then the link's notice", () => {
+  it("the one-line surfaces (waiting room, gate) read the link's notice and then the refusal (W3-J: no longer the refusal alone)", () => {
     expect(roomNoticeLine(NO_ROOM_NOTICES)).toBeNull();
     expect(roomNoticeLine(run({ type: "connection", kind: "resync", text: RESYNC_BANNER }))).toBe(RESYNC_BANNER);
-    expect(roomNoticeLine(run({ type: "connection", kind: "resync", text: RESYNC_BANNER }, { type: "refusal", text: STALE }))).toBe(STALE);
+    // W3-J (AUD-25.13, W3-C one-line NIT): the refusal no longer hides the standing connection notice.
+    expect(roomNoticeLine(run({ type: "connection", kind: "resync", text: RESYNC_BANNER }, { type: "refusal", text: STALE }))).toBe(`${RESYNC_BANNER} ${STALE}`);
   });
 
   it("leaving resets both slots; a new room op retires only the refusal", () => {
     const both = run({ type: "connection", kind: "reconnecting", text: RECONNECTING_BANNER }, { type: "refusal", text: STALE });
     expect(roomNoticesReducer(both, { type: "reset" })).toBe(NO_ROOM_NOTICES);
-    expect(roomNoticesReducer(both, { type: "clear-refusal" })).toEqual({ connection: both.connection, refusal: null });
+    expect(roomNoticesReducer(both, { type: "clear-refusal" })).toEqual({ connections: both.connections, refusal: null });
   });
 });
 
@@ -102,10 +105,10 @@ describe("P3-N004: a landed move retires the refusal -- any refusal -- and nothi
 
   it("the link's notices about other facts stand; catching-up and resync, which a landed move contradicts, go", () => {
     for (const kind of ["reconnecting", "room-status", "build-skew", "incompatible", "divergence", "transport"] as const) {
-      expect(run({ type: "connection", kind, text: `notice:${kind}` }, { type: "submission-landed" }).connection).toEqual({ kind, text: `notice:${kind}` });
+      expect(run({ type: "connection", kind, text: `notice:${kind}` }, { type: "submission-landed" }).connections).toEqual([{ kind, text: `notice:${kind}` }]);
     }
-    expect(run({ type: "connection", kind: "catching-up", text: CATCHING_UP_BANNER }, { type: "submission-landed" }).connection).toBeNull();
-    expect(run({ type: "connection", kind: "resync", text: RESYNC_BANNER }, { type: "submission-landed" }).connection).toBeNull();
+    expect(run({ type: "connection", kind: "catching-up", text: CATCHING_UP_BANNER }, { type: "submission-landed" }).connections).toEqual([]);
+    expect(run({ type: "connection", kind: "resync", text: RESYNC_BANNER }, { type: "submission-landed" }).connections).toEqual([]);
   });
 
   it("no stale refusal survives a transition: refused, then the room applies the next move", async () => {

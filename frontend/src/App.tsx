@@ -30,7 +30,31 @@ import { connectServerLink, type ServerLink } from "./utils/serverLink";
 import { linkQueueView, useLinkQueue } from "./utils/useLinkQueue";
 import { useActionLatch } from "./utils/actionLatch"; // Phase 3 W3-B (AUD-25.01)
 import { DelayedAuctionStatusChip } from "./components/DelayedAuctionStatusChip"; // Phase 3 W2-I (AUD-02.08)
+import { delayedAuctionStatus } from "./utils/delayedAuctionStatus"; // Phase 3 W3-J (AUD-25.10 (e))
 import { rollBackIfRefused, submissionRefused } from "./utils/submissionAnswer"; // Phase 3 W3-C (P3-N020)
+import {
+  errandAfterRefusedLay,
+  ghostAfterRefusedLay,
+  tabAfterRefusedErrandLay,
+} from "./utils/refusedPressRollback"; // Phase 3 W3-J (AUD-25.05, AUD-25.13 #8)
+import { paidStationRefusal } from "./utils/paidStationView"; // Phase 3 W3-J (AUD-25.08)
+import {
+  freeStationSettlement,
+  homePromptPending,
+  inFlightReleasedByBoard,
+  type FreeStationInFlight,
+} from "./utils/freeStationInFlight"; // Phase 3 W3-J (AUD-25.04)
+import {
+  BOARD_CURRENT,
+  WATCHING_NO_SEAT,
+  appliedPositionFor,
+  boardCurrencyFor,
+  boardSendRefusal,
+  type AppliedPosition,
+  type BoardCurrency,
+} from "./utils/boardCurrency"; // Phase 3 W3-J (AUD-25.16, OD-19)
+import { watcherRoomView } from "./utils/watchView"; // Phase 3 W3-J (OD-19)
+import { BoardBehindNotice } from "./components/BoardBehindNotice"; // Phase 3 W3-J (AUD-25.16)
 import { RoomNoticeSlots } from "./components/RoomNoticeSlots"; // Phase 3 W3-C (AUD-14.01)
 import { boardRulesVersion } from "./utils/buildStamp"; // Phase 3 W2-I / OD-6 (AUD-01.07)
 /* #1223: the alarm #1207 argued for and nobody connected. The comparison lives in its own module so it is
@@ -1051,6 +1075,10 @@ interface AppShellProps {
      answer (`RoomView.you`); there is no watch intent to carry, because entering a table never takes a seat on its
      own -- Host and Join took one at the server, Watch did not ask for one. */
   sandboxRoomSeed?: string | null;
+  /** PHASE 3 W3-J (OD-19, AUD-25.16): opened by the Lobby's Watch. The room view is presented as a watcher's -- no seat,
+   *  no host role, no money actions -- even for a principal the server seats at the table, and the shell sends no
+   *  gameplay move. */
+  watchOnly?: boolean;
   /** Returns to the Lobby. */
   onLeaveGame: () => void;
   /** Which of the three ways of looking at a board this is -- design note
@@ -1115,7 +1143,7 @@ function withSeededChart(
  *  when more than one is armed at once (the market lesson can arm during an Operating Round). */
 const TUTORIAL_CHAIN_ORDER: readonly string[] = ["waterfall-auction", "stock-round", "operating-round", "stock-market"];
 
-function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }: AppShellProps) {
+function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, watchOnly = false }: AppShellProps) {
   const wallet = useWallet();
   const session = useGameSession();
 
@@ -1200,7 +1228,15 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      view arrives and for a watcher, which no seat, turn or payout ever matches. It is PRESENTATION -- "your turn",
      your cash, your colour. It never authorizes anything: the server derives every move's actor itself (principal
      -> seat -> player id), and the submit frame names none. */
-  const [sandboxRoomDoc, setSandboxRoom] = useState<RoomView | null>(null);
+  const [sandboxRoomServerView, setSandboxRoom] = useState<RoomView | null>(null);
+  /* PHASE 3 W3-J (OD-19 RULED, AUD-25.16): A WATCH TAB PRESENTS THE VIEW AS A WATCHER'S. The server computes `you` for
+     the principal, so a principal seated here who opened the table with Watch got their seat (and, as host, the host's
+     controls). `watcherRoomView` keeps everything the room says and makes `you` a watcher's; every reader below --
+     `localId`, the pending-seat overlay, the waiting room, the host control, the settlement band -- sees no seat. */
+  const sandboxRoomDoc = useMemo(
+    () => (watchOnly ? watcherRoomView(sandboxRoomServerView) : sandboxRoomServerView),
+    [watchOnly, sandboxRoomServerView],
+  );
   /** LIVE-2D: this tab lost the table for good -- kicked, the table cancelled or expired, a private game dealt
    *  without it. Terminal; the shell says so and offers the lobby. */
   const [roomLost, setRoomLost] = useState<RoomLoss | null>(null);
@@ -1212,6 +1248,27 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   /** LIVE-2D: the seat id, for callbacks that must not rebuild when the view does. */
   const localIdRef = useRef(localId);
   localIdRef.current = localId;
+
+  /* ==================================================================
+      PHASE 3 W3-J (AUD-25.16, OD-19): IS THE BOARD ON SCREEN THE ROOM'S? (`boardCurrency.ts`)
+     ==================================================================
+     Two standing facts, each latched where it is learned: a drain pass for this room THREW (`drainFailedRoom`, set by
+     the drain's catch -- RED R5 -- and kept for the tab's life on the room, because later passes skip what it missed),
+     and the settle point's digest comparison DISAGREES (`boardDivergedAt`, mirrored from `divergenceReportedAtRef` after
+     each render; non-null while the last comparison disagreed, whether or not the boards ever agreed). Either one and
+     the board is not the room's: it is nobody's turn on it (`isMyTurn`), a forced notice covers the table
+     (`BoardBehindNotice`), the shell's send gate refuses (RED R1) and the link stamps nothing (`appliedPosition`). The
+     refs are the synchronous copies the send side reads at the click. */
+  const [drainFailedRoom, setDrainFailedRoom] = useState<string | null>(null);
+  const drainFailedRoomRef = useRef<string | null>(null);
+  const [boardDivergedAt, setBoardDivergedAt] = useState<number | null>(null);
+  const boardCurrency = useMemo<BoardCurrency>(
+    () =>
+      sandbox && sandboxRoomCode
+        ? boardCurrencyFor({ drainFailed: drainFailedRoom !== null && drainFailedRoom === sandboxRoomCode, divergedAt: boardDivergedAt })
+        : BOARD_CURRENT,
+    [sandbox, sandboxRoomCode, drainFailedRoom, boardDivergedAt],
+  );
 
   /* Design note #573: read synchronously by `handleUsePrivateAbility`, which
      must not name `viewerAddress` as a dependency -- it feeds
@@ -1499,6 +1556,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     const queued = gameState?.active_operating_order[gameState.active_corporation_index];
     return queued ?? MOCK_LAY_TILE_PROTOCOL_ID;
   }, [gameState]);
+  /* Phase 3 W3-J (AUD-25.13 #8, review NIT): mirrored for a refused lay's rollback, which runs when the room answers --
+     after the commit that built the handler. Written during render, as `gameStateRef` is: idempotent per render. */
+  const actingProtocolIdRef = useRef(actingProtocolId);
+  actingProtocolIdRef.current = actingProtocolId;
 
   /* ==================================================================
       DESIGN NOTE 896: THE TRAINS A CORPORATION LOST WHILE IT WAS NOT ACTING
@@ -1756,6 +1817,22 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   const [liveMapGrid, setMapGrid] = useState<MapGridResponse>(MOCK_MAP_GRID);
   // #1425: the replayed grid while scrubbing; the live one otherwise. Writers keep `setMapGrid`.
   const mapGrid = replaySnapshot?.grid ?? liveMapGrid;
+
+  /* Phase 3 W3-J (AUD-25.08): whether the acting corporation can place a PAID station now -- the token limit, the
+     treasury against the next station's cost and a reachable city (`paidStationRefusal`, the step predicate without the
+     D&H's free station). It greys the bar's "Place Station Token for $X" and refuses the board click that would stage a
+     paid token; the D&H's free station keeps the step open and is its own control. */
+  const paidStationRefusalNow = useMemo<string | null>(() => {
+    if ((gameState?.current_round_type ?? null) !== "OperatingRound" || orSubPhase !== "Tokens") return null;
+    if (!activeStationCompany) return null;
+    return paidStationRefusal({
+      mapGrid,
+      company: activeStationCompany,
+      allCompanies: gameState?.public_companies ?? [],
+      boardHexes: STATIC_BOARD_HEXES.map((hex) => [hex.q, hex.r] as const),
+      ticker: activeStationCompany.ticker,
+    });
+  }, [gameState, orSubPhase, activeStationCompany, mapGrid]);
 
   /* Design note #757: THE GRID GETS A REF, for #411's reason and #723's. An Undo replays the whole log in
      one burst, so a legality check reading React state would judge every lay in that burst against the board
@@ -2787,8 +2864,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   const isMyTurn = useMemo(() => {
     if (!viewerAddress || !gameState) return false;
     if (scrubbing) return false; // #1425: a past board is nobody's turn
+    if (!boardCurrency.current) return false; // W3-J (AUD-25.16, OD-19): nor is a board that is not the room's
     return actingAddress(gameState, waterfallState) === viewerAddress;
-  }, [viewerAddress, gameState, waterfallState, scrubbing]);
+  }, [viewerAddress, gameState, waterfallState, scrubbing, boardCurrency]);
 
   useDocumentTitleFlash(isMyTurn);
 
@@ -4528,6 +4606,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   /** #1223: whether the two halves have ever agreed. Until they have, a mismatch is this mechanism's fault
    *  rather than the room's, and belongs in the console rather than on the player's screen. */
   const divergenceEverAgreedRef = useRef(false);
+  /* PHASE 3 W3-J (AUD-25.16): the board-currency answers the RED regions read through refs (assigned after the drain).
+     `noteDrainFailureRef` is the drain's catch (R5); `appliedPositionRef` is what the room link stamps a submission
+     with (R5); `boardSendRefusalRef` is the shell's send gate (R1). Until assigned they refuse: nothing is sent from a
+     board nobody has vouched for. */
+  const noteDrainFailureRef = useRef<(roomCode: string, error: unknown) => void>(() => undefined);
+  const appliedPositionRef = useRef<() => AppliedPosition>(() => ({ notCurrent: CATCHING_UP_BANNER }));
+  const boardSendRefusalRef = useRef<() => string | null>(() => CATCHING_UP_BANNER);
   /** #1225: the server's per-field digests, so a divergence can be reported as a FIELD rather than as two
    *  opaque hashes. `null` unless the server was started to explain itself. */
   const serverFieldsRef = useRef<Record<string, string> | null>(null);
@@ -4603,7 +4688,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      ==================================================================
      `committedRouteRevenue` held the total this session watched a corporation commit at Run Routes, and
      `dividendDeclaration` preferred it over `last_route_revenue`. It existed because #492 found the field
-     singular -- one `RunManualRoute` per train, each overwriting the last -- so a three-train turn left only
+     singular -- one `RunManualRoute` per train (as a run was sent before #968), each overwriting the last -- so a three-train turn left only
      the third train's figure standing.
      BOTH OF ITS REASONS HAVE SINCE BEEN FIXED IN THE FIELD ITSELF. #903's arm accumulates across the batch
      instead of overwriting, and #777 clears the figure on the turn change so it can no longer carry a
@@ -4765,7 +4850,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     setRouteFeedback(null);
   }, []);
 
-  /* Auto Route pre-fills the manual builder and needs no chain; it is a suggestion, dispatched through the same RunManualRoute.
+  /* Auto Route pre-fills the manual builder and needs no chain; it is a suggestion, run by the same Run Routes press (one
+     `RunMultipleRoutes`, #968). Phase 3 W3-J (AUD-25.10 (g)): this said RunManualRoute, which no run sends any more.
      See docs/ai_architecture/routing_pathfinding.md - App.tsx #202 */
   const handleAutoRoute = useCallback(() => {
     const corporation = gameState?.public_companies.find(
@@ -6571,14 +6657,26 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         /* #1407: A BOARD MID-REPLAY IS NOBODY'S TURN TO JUDGE. After a reload the drain applies the whole log
            an action at a time, and a click that lands during it is gated against whichever historical board
            the drain has reached -- which is how a president on turn was told "It is not your turn". Said
-           honestly instead, and not sent: the player tries again a moment later on the settled board. */
+           honestly instead, and not sent: the player tries again a moment later on the settled board.
+           Phase 3 W3-J (AUD-25.13 W2-D item, OD-12 RED R1): a PLAYER decision sent `automatic` (the B&O par, the home
+           station, the M&H exchange, Undo) is about that historical board too; only the replay and the game's own
+           derived actions pass -- the same rule as the landed branch (AUD-25.03). */
         if (
           options?.isRemoteReplay !== true &&
-          options?.automatic !== true &&
+          options?.derived !== true &&
           replayingRef.current
         ) {
           setSandboxRoomError(CATCHING_UP_BANNER);
-          return;
+          return false; // Phase 3 W3-J (AUD-25.05, OD-12 RED R1): not sent -- the caller takes back what it set
+        }
+        /* Phase 3 W3-J (AUD-25.16, OD-19; OD-12 RED R1): a board that is not the room's -- a drain that failed, a
+           divergence unresolved -- or a Watch tab sends no move, whoever's turn its board shows (`boardCurrency.ts`). */
+        if (options?.isRemoteReplay !== true && options?.derived !== true) {
+          const notLive = boardSendRefusalRef.current();
+          if (notLive !== null) {
+            setSandboxRoomError(notLive);
+            return false;
+          }
         }
         const boardNow = sandboxStateRef.current;
         const onTurnNow =
@@ -6625,7 +6723,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             );
           }
           setSandboxRoomError(TURN_REFUSAL);
-          return;
+          return false; // Phase 3 W3-J (AUD-25.05, OD-12 RED R1): not sent -- the caller takes back what it set
         }
 
         /* The render gate guarantees a room, but the ref is typed nullable and narrowing here is cheaper than asserting.
@@ -6687,7 +6785,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             console.warn(`[link] ${Object.keys(msg)[0]} dispatched while the room link was down — not sent`);
             setSandboxRoomError("The room link is reconnecting — try that again in a moment.");
             setPendingAppendIndex((current) => (current === appendAt ? null : current));
-            return;
+            return false; // Phase 3 W3-J (AUD-25.05, OD-12 RED R1): not sent -- the caller takes back what it set
           }
 
           // #1218: cleared here so the callbacks below can claim it for THIS submission and no other.
@@ -6739,8 +6837,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                divergence verdict are about other facts and stand. */
             /* Phase 3 W3-C (AUD-14.01 / P3-N004, OD-12 RED R1): a landed move retires the REFUSAL SLOT -- any refusal,
                not only the turn refusal (a server `refused` or stale answer stayed up after the turn was played on) --
-               and the two connection kinds a landed move contradicts (`roomNotices.ts`). No sentence is compared. */
-            if (options?.automatic !== true) {
+               and the two connection kinds a landed move contradicts (`roomNotices.ts`). No sentence is compared.
+               Phase 3 W3-J (AUD-25.03, OD-12 RED R1): every PLAYER decision that lands retires it -- the B&O par, the home
+               station, the M&H exchange and Undo are sent `automatic` too; only the game's own derived actions are not. */
+            if (options?.derived !== true) {
               dispatchRoomNotice({ type: "submission-landed" });
             }
           }
@@ -9577,6 +9677,14 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     options?: ReadonlyArray<{ hexLabel: string; q: number; r: number }>;
   } | null>(null);
 
+  /* Phase 3 W3-J (AUD-25.04): the free placement sent and not yet settled -- see `freeStationInFlight.ts`. The press
+     clears the errand, so this is what keeps the home prompt from asking again while the room answers (or the link
+     holds the submission through an outage). Released by a refusal, or by the board once it stops owing the token. */
+  const [freeStationInFlight, setFreeStationInFlight] = useState<FreeStationInFlight | null>(null);
+  useEffect(() => {
+    if (inFlightReleasedByBoard(freeStationInFlight, pendingHomeToken)) setFreeStationInFlight(null);
+  }, [freeStationInFlight, pendingHomeToken]);
+
   /* ==================================================================
      DESIGN NOTE 818: THE FREE STATION, ASKED FOR
      ==================================================================
@@ -9803,7 +9911,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         placement.options?.find((option) => option.q === q && option.r === r)?.hexLabel ??
         placement.hexLabel;
       // Design note #550: through the log, so the token lands on every board.
-      void runGameplayActionRef.current?.(
+      // Phase 3 W3-J (AUD-25.04): and its answer is kept, so a refused placement takes back what this press set.
+      const answer = runGameplayActionRef.current?.(
         placement.kind === "home-station"
           ? `${ticker} places its home station token on ${hexLabel}.`
           : `${ticker} places a free station token on ${hexLabel} using the Delaware & Hudson.`,
@@ -9829,6 +9938,30 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       // Back where they came from -- see the state's own note on why this
       // is captured rather than hardcoded to the Stocks tab.
       setActiveMainTab(placement.returnTab);
+      /* Phase 3 W3-J (AUD-25.04): IN FLIGHT UNTIL THE ROOM ANSWERS. The marker keeps the home prompt from asking
+         again for the round trip; a refusal releases it and takes back the power key the press recorded, so the
+         D&H's flow asks again (its standing obligation) and the home prompt returns for a second try. An applied
+         placement holds the marker until the board stops owing the token (the effect above). */
+      const marker: FreeStationInFlight = {
+        companyId: placement.companyId,
+        kind: placement.kind === "home-station" ? "home-station" : "private-station",
+      };
+      setFreeStationInFlight(marker);
+      const spentKey = placement.abilityKey;
+      return Promise.resolve(answer).then((settled) => {
+        const settlement = freeStationSettlement(settled);
+        if (settlement === "hold" && marker.kind === "home-station") return settled;
+        setFreeStationInFlight((current) => (current === marker ? null : current));
+        if (settlement === "refused" && spentKey !== null) {
+          setUsedPrivateAbilities((prev) => {
+            if (!prev.has(spentKey)) return prev;
+            const next = new Set(prev);
+            next.delete(spentKey);
+            return next;
+          });
+        }
+        return settled;
+      });
     },
     // Design note #550: `logInfo` went with the local write. The log line is
     // written by the replay handler now, on every client rather than only on
@@ -10396,8 +10529,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       return;
     }
 
-    /* One RunManualRoute per train, awaited in sequence. Invalid drafts are skipped, not refused - the good
-       routes are not hostage to the bad one.
+    /* Every runnable draft goes in ONE `RunMultipleRoutes` (#968, below). Invalid drafts are skipped, not refused - the
+       good routes are not hostage to the bad one. Phase 3 W3-J (AUD-25.10 (g)): this said "one RunManualRoute per train,
+       awaited in sequence", the loop #968 retired.
        See docs/ai_architecture/routing_pathfinding.md - App.tsx #275
        Design note #883: BOTH RULES LEFT. Which drafts may run, and -- when none may -- which of several true
        complaints the player is shown, were a filter and four ordered `if`s inside this callback. The ORDER
@@ -11047,6 +11181,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       nodeX: number;
       nodeY: number;
     }) => {
+      /* Phase 3 W3-J (AUD-25.08): a paid token this corporation cannot pay for (or has none left of, or can reach no
+         city for) is refused at the click with that reason -- the geometry below never asked the treasury. */
+      if (paidStationRefusalNow !== null) {
+        showActionToast(paidStationRefusalNow);
+        return;
+      }
       /* evaluateStationPlacement applies the same three refusals the contract does, before a signature, and returns the sentence explaining which bit.
          See docs/ai_architecture/canvas_rendering.md - App.tsx #238 */
       const placement = activeStationCompany
@@ -11095,7 +11235,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         offsetY: nodeY,
       });
     },
-    [mapGrid, activeStationCompany, gameState, showActionToast],
+    [mapGrid, activeStationCompany, gameState, showActionToast, paidStationRefusalNow],
   );
 
   /** The green check. THIS is where the token is placed and the treasury
@@ -11114,12 +11254,17 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
        closes on the click and the city stays bare for the whole round trip.
        RECORDED HERE AND OVERLAID ONLY ON THE CANVAS -- see `boardCompanies`. The ring still closes at once,
        because the player answered it. */
-    setCommittedStation({
+    const committed = {
       companyId: pendingToken.companyId ?? actingProtocolId,
       q,
       r,
       cityIndex,
-    });
+    };
+    setCommittedStation(committed);
+    /* Phase 3 W3-J (AUD-25.05): A REFUSED TOKEN IS NOT DRAWN. The picture above is held until the board brings the
+       token or its 4 s clock runs out; when the room says the placement was not applied, the picture goes at once
+       (only this one -- a later press's picture is its own). */
+    const dropPicture = () => setCommittedStation((current) => (current === committed ? null : current));
     /* Design note #866: the standing request ends when the placement does. The board re-answers it on every
        view change, so a confirmed token that left the request set would immediately stage a second one. */
     setAutoStageStation(null);
@@ -11128,7 +11273,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
        See docs/ai_architecture/contract_economy.md - App.tsx #239 */
     if (kind === "free") {
       // Design note #560: the slot travels with the placement.
-      commitFreeStationPlacement({ q, r, cityIndex });
+      void rollBackIfRefused(commitFreeStationPlacement({ q, r, cityIndex }), dropPicture);
       return;
     }
 
@@ -11137,7 +11282,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     // is done -- the same "the action completes the step" rule the tile
     // lay follows. Routes is next in `OPERATING_SUB_PHASE_ORDER`.
     setLiveOrSubPhase("Routes");
-    runGameplayAction("PlaceStationToken", {
+      /* Phase 3 W3-J (AUD-25.05): the answer is kept. A refused placement leaves the step where it was: the local cursor
+       goes back to Tokens if this press moved it (and nothing has moved it since), and targeting is re-armed so the
+       player is where they were before pressing -- the step-change effect below disarms it again if the step is not
+       Tokens. Nothing is judged here; the refusal and its sentence are the room's. */
+    const placed = runGameplayAction("PlaceStationToken", {
       PlaceStationToken: {
         game_id: gameId,
         protocol_id: actingProtocolId,
@@ -11147,6 +11296,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
            See docs/ai_architecture/canvas_rendering.md - App.tsx #453 */
         ...(cityIndex === null ? {} : { city_index: cityIndex }),
       },
+    });
+    void rollBackIfRefused(placed, () => {
+      dropPicture();
+      setLiveOrSubPhase((current) => (current === "Routes" ? "Tokens" : current));
+      // Only for a seat still on turn; off the Tokens step the effect above disarms it again.
+      if (isMyTurnRef.current) setTokenTargetMode(true);
     });
   }, [pendingToken, gameId, runGameplayAction, actingProtocolId, commitFreeStationPlacement]);
 
@@ -12129,12 +12284,18 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       (gameState?.public_companies ?? []).some((c) => c.president === viewerAddress);
     const isFirstOperatingRound = (gameState?.macro_round_number ?? 0) <= 1;
 
-    handlePassTurn();
+    const passed = handlePassTurn();
     setLiveOrSubPhase("Track");
 
+    /* Phase 3 W3-J (AUD-25.05): THE LESSON FOLLOWS A TURN THAT ENDED. The navigation and the arm waited for nothing,
+       so a refused End Turn still took the president to the market lesson with their turn unfinished. They now run
+       once the room has answered, and not when it says the pass was not applied; the solo sandbox answers at once. */
     if (viewerIsPresident && isFirstOperatingRound) {
-      if (tutorialModeEnabled()) setActiveMainTab("stock");
-      setMarketTutorialArmed(true);
+      void Promise.resolve(passed).then((answer) => {
+        if (submissionRefused(answer)) return;
+        if (tutorialModeEnabled()) setActiveMainTab("stock");
+        setMarketTutorialArmed(true);
+      });
     }
   }, [handlePassTurn, viewerAddress, gameState]);
 
@@ -13052,6 +13213,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         replayingRef.current = false;
         // #1407: the catch-up notice was about this drain, which is over. W3-C: retired by its kind, not its text.
         dispatchRoomNotice({ type: "clear-connection", kind: "catching-up" });
+        /* Phase 3 W3-J (AUD-25.06, OD-12 RED R5): and the resync notice ("reloading the room's history") is about the
+           rebuild a resync asks for -- this drain, once the fresh catch-up has arrived -- so it is retired here too. It
+           was retired only by this tab's own landed move, so a seat not on turn kept it indefinitely. */
+        dispatchRoomNotice({ type: "clear-connection", kind: "resync" });
       }
     };
 
@@ -13077,6 +13242,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                authenticated at the upgrade, and the server derives this tab's seat for every move it submits. */
             gameId: sandboxRoomCode,
             build: CLIENT_BUILD_ID,
+            /* Phase 3 W3-J (AUD-25.16, OD-19; OD-12 RED R5): every submission is bound to the position this tab's BOARD
+               has applied -- not the one the link delivered -- so the server's staleness guard judges the board the
+               player saw; a board that is not current (or a Watch tab) sends nothing (`appliedPositionRef`). */
+            appliedPosition: () => appliedPositionRef.current(),
             onEntries: (entries, serverDigest, serverFields, source) => {
               // #1238: a batch with any catch-up in it is history. Consumed by the drain's next pass.
               if (source === "catch-up") serverBatchIsHistoryRef.current = true;
@@ -13088,7 +13257,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
               serverDigestRef.current = serverDigest;
               serverFieldsRef.current = serverFields; // #1225
               for (const entry of entries) accumulated.push(entry as SandboxAction);
-              void drain([...accumulated]);
+              /* Phase 3 W3-J (AUD-25.16, OD-12 RED R5): A PASS THAT THROWS IS SAID, NOT SWALLOWED. The cursor is past the
+                 entry that threw and nothing retries it, so the board rests behind the room; it was an unhandled
+                 rejection and nothing else. Now it latches this room's board as not current (`boardCurrency.ts`). */
+              drain([...accumulated]).catch((error: unknown) => noteDrainFailureRef.current(sandboxRoomCode, error));
             },
             /* Phase 3 W3-C (AUD-14.01, OD-12 RED R5): each callback names its slot and, for the link's own notices,
                their kind -- so a refusal no longer replaces the reconnecting banner, and no clear compares a sentence. */
@@ -13213,6 +13385,51 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   }, [sandbox, sandboxRoomCode]);
 
   /* ==================================================================
+      PHASE 3 W3-J (AUD-25.16, OD-19): THE BOARD'S CURRENCY, FOR THE DRAIN, THE LINK AND THE SEND GATE
+     ==================================================================
+     Assigned here, below the drain, because they read its refs (`replayingRef`) -- the RED regions reach them through
+     the refs declared beside the divergence refs, so neither R1 nor R5 holds any of this logic.
+       - the drain's catch (R5): a pass that THREW is latched for this room, synchronously (the ref) for the send side
+         and as state for the surfaces, and said once in the console with the error;
+       - the link's `appliedPosition` (R5): the last entry the last COMPLETED pass applied -- what a submission is bound
+         to -- or, when the board is not current or the tab only watches, nothing at all;
+       - the send gate (R1): why this tab may not send a gameplay move now, or `null`. */
+  const syncBoardCurrency = (): BoardCurrency =>
+    boardCurrencyFor({
+      drainFailed: drainFailedRoomRef.current !== null && drainFailedRoomRef.current === sandboxRoomRef.current,
+      divergedAt: divergenceReportedAtRef.current,
+    });
+  noteDrainFailureRef.current = (roomCode: string, error: unknown) => {
+    // eslint-disable-next-line no-console
+    console.error(`[drain] room ${roomCode}: a replayed entry could not be applied -- this tab's board is behind the room`, error);
+    drainFailedRoomRef.current = roomCode;
+    setDrainFailedRoom(roomCode);
+  };
+  appliedPositionRef.current = () =>
+    appliedPositionFor({
+      watchOnly,
+      currency: syncBoardCurrency(),
+      replaying: replayingRef.current,
+      log: sandboxLogRef.current,
+      catchingUpNotice: CATCHING_UP_BANNER,
+    });
+  boardSendRefusalRef.current = () => boardSendRefusal({ watchOnly, currency: syncBoardCurrency() });
+  /* The settle point writes its verdict into `divergenceReportedAtRef` (R5) inside the drain's pass, and the pass's own
+     state updates render; this mirrors the standing verdict into state after that render, so the surfaces follow it.
+     EVERY RENDER ON PURPOSE: a ref cannot be a dependency, and the functional update returns `current` unchanged when
+     nothing moved, so React bails out -- it cannot loop. */
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    const divergedAt = divergenceReportedAtRef.current;
+    setBoardDivergedAt((current) => (current === divergedAt ? current : divergedAt));
+  });
+  /* The standing notice, in the strip's connection slot (`board-behind`), for as long as the board is not current. */
+  useEffect(() => {
+    if (boardCurrency.current) dispatchRoomNotice({ type: "clear-connection", kind: "board-behind" });
+    else dispatchRoomNotice({ type: "connection", kind: "board-behind", text: boardCurrency.notice });
+  }, [boardCurrency]);
+
+  /* ==================================================================
       LIVE-2D: EVERY WAITING-ROOM CONTROL IS ONE NAMED OP, ANSWERED BY THE SERVER
      ==================================================================
      `room-op {gameId, op}` on the game's room socket. The server authorizes it against its committed record and
@@ -13229,6 +13446,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     async (op: RoomOpBody, options?: { busy?: boolean }): Promise<boolean> => {
       const gameIdNow = sandboxRoomRef.current;
       if (!gameIdNow) return false;
+      /* Phase 3 W3-J (OD-19): a room op acts for the signed-in principal, so a Watch tab -- a read-only view, whoever is
+         signed in -- sends none (its surfaces offer none; this is the backstop). */
+      if (watchOnly) {
+        setSandboxRoomError(WATCHING_NO_SEAT);
+        return false;
+      }
       if (options?.busy !== false) setSandboxRoomBusy(true);
       dispatchRoomNotice({ type: "clear-refusal" }); // W3-C: a new op retires the last refusal, not the link's notice
       try {
@@ -13242,7 +13465,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         if (options?.busy !== false) setSandboxRoomBusy(false);
       }
     },
-    [sayRoomRefusal],
+    [sayRoomRefusal, watchOnly, setSandboxRoomError],
   );
 
   /** Enter a table this principal was just seated at (or may watch): the game id is the only thing kept. */
@@ -13299,7 +13522,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
    *  forgets the table, so a refresh does not reopen it. The BOARD IS LEFT WHERE IT IS rather than reset. */
   const handleLeaveSandboxRoom = useCallback(() => {
     const leaving = sandboxRoomRef.current;
-    if (leaving && roomLost === null) void roomOp({ type: "leave" }, leaving);
+    /* Phase 3 W3-J (OD-19, AUD-25.16 review): a Watch tab leaves WITHOUT `room-op leave`. The op acts for the principal
+       -- on a waiting table it gives up the seat (and, for the host, hands the table on or cancels it) -- and a Watch tab
+       of a principal seated there is a read-only view that must not act as that seat. A watcher has nothing to give up. */
+    if (leaving && roomLost === null && !watchOnly) void roomOp({ type: "leave" }, leaving);
     // Design note #537b: release the roster, so a solo session afterwards
     // resolves the fixture's own names again rather than staying blank.
     clearRoomNicknames();
@@ -13310,7 +13536,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     dispatchRoomNotice({ type: "reset" }); // W3-C: nothing on the strip belongs to the next table
     appliedIndexRef.current = 0;
     setSandboxAppliedCount(0);
-  }, [roomLost]);
+    /* Phase 3 W3-J (OD-19, review fix): AND A WATCH TAB GOES BACK TO THE LOBBY. Leaving alone lands on the shell's own
+       gate (Host / Join), and a table hosted or joined from there would open in this Watch tab -- seated, but drawn as
+       a watcher's view, every room op and move refused, and a reload keeping it read-only. A seat is taken through the
+       participant path, which starts from the Lobby (OD-19). */
+    if (watchOnly) onLeaveGame();
+  }, [roomLost, watchOnly, onLeaveGame]);
 
   /** W1-N / A-12 (AUD-18.01): leave the table AND go to the Lobby -- Game Over's "Leave game". Leaving alone drops the
    *  player on the sandbox gate ("Open a room or join one"), a screen nobody at a finished table asked for; the
@@ -13629,6 +13860,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
        takes back exactly what this handler set for it: the power key added to the shell's fallback set, and the
        JK's arm (pressed again, it would have been armed). The board never recorded either -- it applied nothing. */
     const errandKey = errandClaimsLay(homeStationPlacement, q, r) ? homeStationPlacement?.abilityKey ?? null : null;
+    /* Phase 3 W3-J (AUD-25.13 #8): the errand this lay closed, so a refusal can reopen it. */
+    const closedErrand = errandClaimsLay(homeStationPlacement, q, r) ? homeStationPlacement : null;
     void rollBackIfRefused(layAnswer, () => {
       if (errandKey !== null) {
         setUsedPrivateAbilities((prev) => {
@@ -13639,6 +13872,21 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         });
       }
       if (spentAbility === JK_TILE_ABILITY_KEY) setJkLayArmed(true);
+      /* Phase 3 W3-J (AUD-25.05): the held ghost (#1145) is a claim the lay is on its way. The room said it is not,
+         so the picture goes now rather than on its 4 s clock -- and the lay controls it was holding busy come back. */
+      setPreviewTile((current) => ghostAfterRefusedLay(current, { q, r, tileId }));
+      /* Phase 3 W3-J (AUD-25.13 #8): A REFUSED ERRAND LAY REOPENS THE ERRAND. The lay closed the errand and sent the
+         player back to the tab it was armed from; the room did not apply it, so the errand stands again, exactly as
+         it was armed (its own return tab), and the map comes back if the player is still where the lay sent them.
+         Not over another errand the player has armed since, and not past its step (`errandSurvivesStep`). */
+      if (closedErrand !== null) {
+        const step = orSubPhaseRef.current;
+        const acting = actingProtocolIdRef.current;
+        setHomeStationPlacement((current) => errandAfterRefusedLay(closedErrand, current, step, acting));
+        if (errandAfterRefusedLay(closedErrand, null, step, acting) !== null) {
+          setActiveMainTab((tab) => tabAfterRefusedErrandLay(tab, closedErrand, "map"));
+        }
+      }
     });
     // Design note #1145: closes the ring, keeps the tile.
     handleRingConfirmed();
@@ -13934,7 +14182,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         onSetVisibility={isSandboxHost ? handleSetVisibility : undefined}
         onRotateCode={isSandboxHost ? handleRotateCode : undefined}
         onCancelRoom={isSandboxHost ? handleCancelRoom : undefined}
-        onTakeSeat={!seated && !sandboxRoom.you.kicked && sandboxRoom.joinable ? handleTakeSeat : undefined}
+        /* Phase 3 W3-J (OD-19): a Watch tab is read-only -- no "Take a seat" (a seat is taken with Join, or re-entered
+           from "Your tables"). */
+        onTakeSeat={!watchOnly && !seated && !sandboxRoom.you.kicked && sandboxRoom.joinable ? handleTakeSeat : undefined}
         onReleaseSeat={seated ? handleReleaseSeat : undefined}
         onLeave={() => {
           handleLeaveSandboxRoom();
@@ -14167,7 +14417,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
          over the board they were just asked to click would be the flow blocking its own final step.
          `pendingHomeToken` stays true throughout, which brings the prompt back if the placement is abandoned. */}
       <HomeStationPrompt
-        pending={homeStationPlacement ? null : pendingHomeToken}
+        /* Phase 3 W3-J (AUD-25.04): nor while that corporation's placement is in flight -- the board still owes it
+           until the entry arrives, and asking again then invites a second PlaceHomeStation. */
+        pending={homePromptPending(pendingHomeToken, homeStationPlacement !== null, freeStationInFlight)}
         presidentLabel={
           pendingHomeToken?.president
             ? sandboxPlayerLabel(pendingHomeToken.president) ??
@@ -14701,6 +14953,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
            ask the stock authority for what is still open. */
         onPlaceStationTokenHint={handlePlaceStationTokenHint}
         stationTokenCost={stationTokenCost}
+        paidStationRefusal={paidStationRefusalNow} // Phase 3 W3-J (AUD-25.08)
         /* Design note #707: the same probe the Routes panel's Auto Route runs, so the button and
            the search cannot disagree about whether a run exists. */
         maxRouteRevenue={maxRouteRevenue}
@@ -14858,6 +15111,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                 blockedReason: dockHold.proposeTrainPurchase,
                 // Phase 3 W2-A: the hold's refusal of `BuyHardwareFromPool`, for the depot's own Buy.
                 bankBlockedReason: dockHold.buyTrainFromBank,
+                board: gameState, // Phase 3 W3-J (AUD-25.10 (a)): the depot Buy asks `trainPurchaseRefusal` on this board.
                 // Phase 3 W2-C (AUD-09.02): the sale's own authority, on the roster and the offer form.
                 offerRefusal: trainOfferRefusalFor,
                 // Phase 3 W3-I (AUD-19.01): the room link's queue on the offer form.
@@ -15603,6 +15857,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
              the auction-complete flag lets the Overview mark a delayed auction as pending or done. */
           variants={tableVariants}
           auctionComplete={gameState?.private_auction_complete ?? null}
+          delayedAuctionStatus={delayedAuctionStatus(gameState)} // Phase 3 W3-J (AUD-25.10 (e)): cancelled is not completed.
           /* Phase 3 W2-I (AUD-11.03): the ended game is its own state, not "No live round" (the round type stays null --
              #898 above). OD-6 (AUD-01.07): the table's pinned rules version beside the build stamp, from the live
              board's own `rules_engine_version` (`null` on a legacy unpinned board, omitted with no board) -- the LIVE
@@ -15874,6 +16129,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         onAnswer={handleAnswerFundingPrivateOffer}
         actionInFlight={actionInFlight}
         waitingSentence={dockHold.turnHoldReason}
+        // Phase 3 W3-J (AUD-25.10 (b)): the answer's and the acceptance's verdicts, as the emergency modal reads them.
+        answerRefusal={gameState && fundingPrivateOffer ? fundingAnswerRefusalForViewer(gameState, mapGrid, viewerAddress) : null}
+        acceptRefusal={gameState && fundingPrivateOffer ? fundingAcceptRefusalForViewer(gameState, mapGrid, viewerAddress) : null}
+        // Phase 3 W3-J (AUD-25.13 #2): a seat with nothing to decide reads the emergency waiting card alone.
+        standAside={emergencyWaiting !== null}
       />
       <TrainDiscardPrompt
         due={pendingDiscard}
@@ -16136,6 +16396,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         />
       )}
 
+      {/* PHASE 3 W3-J (AUD-25.16, OD-19): a board that is not the room's is never offered as live -- a forced notice
+          (a native modal: everything behind it is inert) whose remedy is a reload. */}
+      <BoardBehindNotice
+        notice={sandbox && sandboxRoomCode && !boardCurrency.current ? boardCurrency.notice : null}
+        onReload={() => window.location.reload()}
+        onLeave={handleLeaveTableToLobby}
+      />
       {/* Design note #1083: the fifth and last item of the ruled order. `marginTop: auto` on its own style
          pins it to the bottom of the root's column on a short page and lets it follow the content on a long
          one -- see `appStyles` #1083 for why it is in the flow rather than fixed like the status dock. */}
@@ -16195,11 +16462,20 @@ function GameRouter() {
     writeActiveSandboxRoom(sandboxRoomCode);
   }, [sandboxRoomCode]);
 
-  /* LIVE-2D: one door for Host, Join and Watch -- the table's game id. There is no watch intent to carry: entering a
-     table never takes a seat by itself (the server seated a host or a joiner already; a watcher asked for none). */
+  /* LIVE-2D: one door for Host, Join and "Your tables" -- the table's game id. Entering a table never takes a seat by
+     itself (the server seated a host or a joiner already); the seat, if any, is the server's answer by principal. */
   const handleEnterSandbox = useCallback((gameIdToEnter: string) => {
     setSandboxRoomCode(gameIdToEnter);
     setActiveGame({ gameId: SANDBOX_GAME_ID, roomId: SANDBOX_ROOM_ID, mode: "sandbox" });
+  }, []);
+  /* PHASE 3 W3-J (OD-19 RULED, AUD-25.16): WATCH IS ITS OWN DOOR, AND IT IS READ-ONLY. It was the door above, so a
+     principal seated at the table pressed Watch and was put in their seat -- against the button's own promise ("Watch
+     this game. You will not have a seat."). The watch intent now travels with the table (`activeGame.watch`, persisted
+     so a reload stays a watch) and the shell presents a spectator view whoever is signed in; re-entering a seat is
+     "Your tables" / Open / Rejoin, through the door above. */
+  const handleWatchSandbox = useCallback((gameIdToWatch: string) => {
+    setSandboxRoomCode(gameIdToWatch);
+    setActiveGame({ gameId: SANDBOX_GAME_ID, roomId: SANDBOX_ROOM_ID, mode: "sandbox", watch: true });
   }, []);
 
   const handleLeaveGame = useCallback(() => setActiveGame(null), []);
@@ -16215,7 +16491,7 @@ function GameRouter() {
   if (!activeGame) {
     return (
       <>
-        <Lobby onEnterSandbox={handleEnterSandbox} />
+        <Lobby onEnterSandbox={handleEnterSandbox} onWatchSandbox={handleWatchSandbox} />
         <ModalLayerHost />
       </>
     );
@@ -16226,12 +16502,14 @@ function GameRouter() {
     <AppShell
       // Keyed on room and mode so a room change - or a spectator joining properly - gets a genuinely fresh shell.
       // See docs/ai_architecture/firebase_middleware.md - App.tsx #551
-      key={`${activeGame.gameId}:${activeGame.roomId}:${activeGame.mode}`}
+      key={`${activeGame.gameId}:${activeGame.roomId}:${activeGame.mode}${activeGame.watch ? ":watch" : ""}`}
       gameId={activeGame.gameId}
       roomId={activeGame.roomId}
       mode={activeGame.mode}
       // Design note #524: `null` for every mode but a joined sandbox room.
       sandboxRoomSeed={activeGame.mode === "sandbox" ? sandboxRoomCode : null}
+      // Phase 3 W3-J (OD-19): the Lobby's Watch -- a read-only spectator view, whoever is signed in.
+      watchOnly={activeGame.watch === true}
       onLeaveGame={handleLeaveGame}
     />
       <ModalLayerHost />

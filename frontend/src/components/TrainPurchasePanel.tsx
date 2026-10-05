@@ -22,7 +22,7 @@
 //
 // Design history: see `docs/ai_architecture/contract_economy.md`.
 
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ACTION_GREEN, ACTION_GREEN_BORDER, ACTION_GREEN_INK } from "../styles/palette";
 
 
@@ -58,6 +58,11 @@ import type { DieselExchangeOffer } from "../gameEngine/dieselExchange";
 import { WaitingOnLine } from "./WaitingOnLine";
 // Phase 3 W3-I (AUD-19.01): the room link's queue, as the shell reads it.
 import { type LinkQueueView } from "../utils/useLinkQueue";
+/* Phase 3 W3-J (AUD-25.10 (a)): the depot purchase's own authority -- the gameEngine gate the reducer asks, not the
+   unrelated same-named obligation helper in `utils/trainObligation.ts` -- and the limit the reducer judges by. */
+import { trainPurchaseRefusal } from "../gameEngine/trainPurchaseGate";
+import { limitInForce } from "../gameEngine/sandboxSession";
+import type { GameStateResponse } from "../gameEngine/gameState";
 export type { DieselExchangeOffer };
 
 /** The subset of a corporation both sections need. */
@@ -146,6 +151,11 @@ export interface TrainPurchasePanelProps {
   /** Phase 3 W2-A (OD-1): a standing authoritative hold's refusal of the depot's `BuyHardwareFromPool`, or `null`.
    *  Outranks every depot reason but the empty depot; absent is `null` (no hold). */
   bankBlockedReason?: string | null;
+  /** Phase 3 W3-J (AUD-25.10 (a)): the board the depot purchase is judged on, so the Buy asks the reducer's own gate
+   *  (`trainPurchaseRefusal`) for the train-limit and treasury verdict instead of restating them. Absent / `null`: the
+   *  panel states no limit or funds rule of its own -- only the empty depot and the hold grey -- and the dispatch is
+   *  judged at the door, exactly as the offer form does without `offerRefusal`. */
+  board?: GameStateResponse | null;
   /** One `BuyHardwareFromPool` -- design note #1255: one train per press. */
   onBuyFromBank: (tier: string) => void;
   /** Design note #1326: THE OPEN SHELF. The rows a corporation may buy from right now -- one in the printed
@@ -257,6 +267,7 @@ export function TrainPurchasePanel({
   canAct,
   blockedReason,
   bankBlockedReason = null,
+  board = null,
   onBuyFromBank,
   openTiers,
   endsTurnAtLimit = false,
@@ -559,33 +570,32 @@ export function TrainPurchasePanel({
     : `Pay $${bankTotal || (nextTier?.cost ?? 0)}${
         fillsTrainLimit && endsTurnAtLimit && !exchangeMayFollow ? " and End Turn" : ""
       }`;
+  /* ==================================================================
+      PHASE 3 W3-J (AUD-25.10 (a)): THE DEPOT BUY ASKS THE PURCHASE'S AUTHORITY
+     ==================================================================
+     The train-limit arm (#230 / #485 / #703) and the treasury arm here were this panel's copy of the rule the reducer
+     judges a `BuyHardwareFromPool` by (`trainPurchaseRefusal`, design note #1019) -- the same limit read through
+     `isTrainLocked` / `countableTrainCount`, the same `treasury < cost`, in the panel's own words ("... for this
+     phase."). Two statements of one rule is how the panel and the gate came to disagree before (#703, #979).
+     NOW THE BUTTON ASKS THE GATE, on the board the shell hands in, with the arguments the reducer passes it: the
+     chosen shelf row's price and the limit in force (`limitInForce`, #1530), funds required. Its sentence is shown as
+     it is. #485's point survives in the gate's own sentence, which names the lock and gives no instruction.
+     KEPT, because they are not the gate's to say: the empty depot (there is no row to price, so nothing to ask) and
+     the W2-A hold (`bankBlockedReason`), which outranks every depot reason. Without a board the panel states no limit
+     or funds rule of its own. The label / projection / ceiling caption still read `atTrainLimit`: display, not a
+     verdict. */
   const bankProblem: string | null =
     nextTier === null
       ? "The Bank Depot is empty — every printed train has been bought."
       : /* Phase 3 W2-A (OD-1): while a hold stands the purchase is refused with the hold's sentence, whatever else. */
         bankBlockedReason !== null
         ? bankBlockedReason
-        : atTrainLimit
-        ? /* Design note #230: the phase's own ceiling, named as such -- this
-             says what is true rather than asking for a smaller number.
-
-             Design note #485: it no longer says what to DO about it. Both
-             strings used to end by directing the president to sell or scrap
-             a train first, and 1830 permits neither: there is no voluntary
-             discard, and the Bank never buys a train back. A corporation at
-             its limit is simply train-locked. The only thing that can move a
-             train off its roster is ANOTHER corporation buying it, which is
-             that corporation's decision and not an action available on this
-             panel -- so an instruction here could not be followed even in
-             principle. Naming the lock and stopping is the honest end of the
-             sentence. */
-          /* Design note #703: ONE SENTENCE, because there is one rule. The `limitDropsOnPurchase` variant read
-             "Buying a 4-train would start the next phase and cut the limit to 3, and NNH already holds 3" --
-             a prohibition 1830 does not contain, and the only message on this panel that could fire while the
-             corporation was legally under its limit. */
-          `Train limit reached — ${buyer?.ticker ?? "this corporation"} already holds ${ownedTrainCount} of a maximum ${trainLimit} for this phase.`
-        : bankTotal > treasury
-          ? `${buyer?.ticker ?? "This corporation"}'s treasury holds $${treasury} — it cannot pay $${bankTotal}.`
+        : board !== null && buyer !== null
+          ? trainPurchaseRefusal(board, buyer.company_id, {
+              cost: nextTier.cost,
+              trainLimit: limitInForce(board) ?? nextTier.trainLimit,
+              requireFunds: true,
+            })
           : null;
 
   /* Design note #281: THE LIMIT IS A LIMIT ON HOLDINGS, NOT ON THE BANK. #230 had enforced the cap on the
@@ -702,6 +712,44 @@ export function TrainPurchasePanel({
   const linkHeld = linkQueue?.blocked === true;
   const canPropose =
     canTrade && !!selectedSeller && offerProblem === null && typeof offerPrice === "string" && !linkHeld;
+
+  /* ==================================================================
+      PHASE 3 W3-J (AUD-25.13 item 3; owner ruled FIX IN W3-J): THE TYPED OFFER IS KEPT
+     ==================================================================
+     Send closed the form at the press (`setSelection(null)`), so a proposal the link dropped -- or one the server
+     refused -- took the chosen seller and the typed price with it. W3-I's pattern (`PrivateCompaniesSection`'s
+     `OfferForm`, `ProposePrivatePurchase`'s `submitLatch`) now holds here too:
+       - THE PRESS DOES NOT CLOSE IT. While the link holds the submission (`linkQueue`, W3-I) the Send is greyed and
+         says so ("Queued — will send on reconnect." / the sending line); if the send does not land -- dropped, refused
+         -- the form is simply live again, with what was typed.
+       - THE BOARD CLOSES IT, when the proposal lands: an offer standing on the board raises the hold
+         (`blockedReason`), which withdraws every roster badge, and a same-president sale that settled moves the
+         train, which changes the rosters the badge was read off. Either withdraws the opener the form was opened
+         from, so the form goes with it -- keyed on the board, never on the press. A board that has not moved (a
+         dropped or refused send) leaves it open.
+         KEYED ON THE BOARD'S FACTS ALONE (W3-J review fix): `canAct` (the shell's seat fact -- at a table, always true),
+         the hold,
+         and the rosters -- NOT `canTrade`, which also carries `sessionReady`. The shell hands the bar
+         `sessionReady={controlsEnabled && isMyTurn && !actionInFlight}`, and the press itself sets `actionInFlight`,
+         so keying on `canTrade` closed the form on the very next commit -- the fix undone in the real shell. While the
+         session is not ready, `canPropose` (through `canTrade`) already greys Send.
+       - `sendLatch` covers the one window those cannot: a second press in the same task, before React has committed
+         the first. Released after the next commit (`setSendCommit` guarantees one follows the press). */
+  const sendLatch = useRef(false);
+  const [, setSendCommit] = useState(0);
+  useEffect(() => {
+    sendLatch.current = false;
+  });
+  const rostersKey = companies
+    .map((entry) => `${entry.company_id}:${entry.owned_trains == null ? "?" : entry.owned_trains.join(",")}`)
+    .join(";");
+  const boardHolds = blockedReason !== null;
+  useEffect(() => {
+    /* Runs only when the board moved under the form (the viewer's presidency, the hold arrived or left, or a train
+       changed hands) -- a badge click or a press changes none of them -- so any open form here was opened on a board
+       that is gone. */
+    setSelection(null);
+  }, [canAct, boardHolds, rostersKey]);
 
   return (
     <div
@@ -1592,7 +1640,9 @@ export function TrainPurchasePanel({
                     }}
                     disabled={!canPropose}
                     onClick={() => {
-                      if (!canPropose || !buyer || typeof offerPrice !== "string") return;
+                      if (!canPropose || !buyer || typeof offerPrice !== "string" || sendLatch.current) return;
+                      sendLatch.current = true;
+                      setSendCommit((count) => count + 1);
                       onProposeTrade({
                         sellerProtocolId: selectedSeller.company_id,
                         sellerTicker: selectedSeller.ticker,
@@ -1608,7 +1658,7 @@ export function TrainPurchasePanel({
                         // UR-4: the copy, only when the seller holds a gold-trimmed one of this model.
                         ...(selection.gilded === null ? {} : { gilded: selection.gilded }),
                       });
-                      setSelection(null);
+                      /* Phase 3 W3-J (AUD-25.13 item 3): latched, not closed -- see `sendLatch`. */
                     }}
                     title={
                       offerProblem ??
@@ -1809,6 +1859,19 @@ export interface FundingPrivateOfferPromptProps {
   actionInFlight?: boolean;
   /** Phase 3 W2-F (OD-1, U-6): the hold's own sentence (`dockHold.turnHoldReason`) for the one waiting line. */
   waitingSentence?: string | null;
+  /** Phase 3 W3-J (AUD-25.10 (b)): the authority's verdict on THIS viewer answering at all
+   *  (`fundingAnswerRefusalForViewer` -- `fundingPrivateAnswerRefusal` with `accept: false`), or `null`. While it
+   *  refuses, both Reject and Accept are greyed with its sentence. Absent is `null`: exactly as before. */
+  answerRefusal?: string | null;
+  /** Phase 3 W3-J (AUD-25.10 (b)): the authority's verdict on the ACCEPTANCE, re-validated in full against the board
+   *  (`fundingAcceptRefusalForViewer`), or `null`. While it refuses, Accept is greyed with its sentence; Reject stays
+   *  live. Absent is `null`. The same two verdicts the forced-purchase modal's answer already reads. */
+  acceptRefusal?: string | null;
+  /** Phase 3 W3-J (AUD-25.13 #2, the W2-F integration LOW): `true` while the emergency waiting card (W2-G, drawn
+   *  through W2-H's `WaitingStatusBanner`) is on screen. That card is the one waiting presentation for this offer on
+   *  every seat with nothing to decide, so the prompt -- a second waiting line and two dead buttons -- stands aside for
+   *  every viewer but the answering buyer president, whose controls these are. Absent is `false`: exactly as before. */
+  standAside?: boolean;
 }
 
 export function FundingPrivateOfferPrompt({
@@ -1817,9 +1880,23 @@ export function FundingPrivateOfferPrompt({
   onAnswer,
   actionInFlight = false,
   waitingSentence = null,
+  answerRefusal = null,
+  acceptRefusal = null,
+  standAside = false,
 }: FundingPrivateOfferPromptProps) {
-  if (!offer) return null;
+  if (!offer || (standAside && !viewerIsBuyerPresident)) return null;
   const canAnswer = viewerIsBuyerPresident && !actionInFlight;
+  /* ==================================================================
+      PHASE 3 W3-J (AUD-25.10 (b)): THE PROMPT ASKS THE ANSWER'S AUTHORITY
+     ==================================================================
+     Accept was live on `viewerIsBuyerPresident && !actionInFlight` alone, so an acceptance the authority would refuse
+     (the board moved under the offer, the buyer's treasury no longer covers it) was offered as a live button and
+     refused at the door. The shell now hands in the two verdicts the emergency modal already reads, and the buttons
+     carry them: the answer's refusal greys both, the acceptance's greys Accept. The role line ("Only X can answer.")
+     and the in-flight latch keep their place ahead of them -- those say who and when, not whether. */
+  const refusalShown = canAnswer ? (answerRefusal ?? acceptRefusal) : null;
+  const canReject = canAnswer && answerRefusal === null;
+  const canAccept = canReject && acceptRefusal === null;
   return (
     <div style={styles.promptRoot} role="alertdialog" aria-label="Private company offered">
       <div style={styles.promptHeader}>
@@ -1842,28 +1919,40 @@ export function FundingPrivateOfferPrompt({
         <button
           type="button"
           onClick={() => onAnswer(offer.privateId, false)}
-          disabled={!canAnswer}
-          style={{ ...styles.promptButton, ...(canAnswer ? styles.promptReject : styles.buttonDisabled) }}
-          title={viewerIsBuyerPresident && actionInFlight ? CONSENT_IN_FLIGHT_TITLE : undefined}
+          disabled={!canReject}
+          style={{ ...styles.promptButton, ...(canReject ? styles.promptReject : styles.buttonDisabled) }}
+          title={
+            viewerIsBuyerPresident && actionInFlight
+              ? CONSENT_IN_FLIGHT_TITLE
+              : canAnswer && answerRefusal !== null
+                ? answerRefusal
+                : undefined
+          }
         >
           Reject
         </button>
         <button
           type="button"
           onClick={() => onAnswer(offer.privateId, true)}
-          disabled={!canAnswer}
-          style={{ ...styles.promptButton, ...(canAnswer ? styles.promptAccept : styles.buttonDisabled) }}
+          disabled={!canAccept}
+          style={{ ...styles.promptButton, ...(canAccept ? styles.promptAccept : styles.buttonDisabled) }}
           title={
             !viewerIsBuyerPresident
               ? `Only ${offer.buyerPresidentLabel} can answer.`
               : actionInFlight
                 ? CONSENT_IN_FLIGHT_TITLE
-                : `Buy ${offer.privateName} for $${offer.price}.`
+                : (refusalShown ?? `Buy ${offer.privateName} for $${offer.price}.`)
           }
         >
           Accept
         </button>
       </div>
+      {/* Phase 3 W3-J (AUD-25.10 (b)): the dead control's reason, said beside it as well (#619). */}
+      {refusalShown !== null && (
+        <p style={styles.promptWho} data-testid="funding-offer-refusal">
+          {refusalShown}
+        </p>
+      )}
     </div>
   );
 }

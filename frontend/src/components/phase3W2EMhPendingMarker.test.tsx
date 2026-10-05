@@ -117,7 +117,8 @@ describe("1. the table marker reads `pending_mh_exchange`", () => {
     expect(found!.textContent).toBe("Exchange requested — pending");
     expect(found!.title).toBe(
       "Alice has requested to exchange the Mohawk & Hudson for a 10% share of NYC from the Bank Pool. " +
-        "Queued, not executed: it executes at the next turn boundary only if it is still legal then.",
+        // Phase 3 W3-J (AUD-25.10 (d)): OD-3's "requested", not "queued".
+        "Requested, not executed yet — it executes at the next turn boundary only if it is still legal then.",
     );
     // The M&H itself is still on the card: queued is not executed.
     expect(container.textContent).toContain("Mohawk & Hudson");

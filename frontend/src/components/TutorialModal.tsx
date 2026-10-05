@@ -209,8 +209,12 @@ export const STOCK_ROUND_TUTORIAL: readonly TutorialPage[] = [
   },
   {
     title: "Selling shares",
+    /* PHASE 3 W3-J (AUD-25.13, W2-B out-of-scope note): this page opened "Instead of buying shares, players can Sell"
+       -- the pre-v13 turn, where a sale and a purchase were alternatives. Under rules v13 a turn is Sell → Buy → Sell,
+       so the opening now quotes the Rules Reference's own Stock Round gotcha, verbatim (pinned by
+       `phase3W3JCopy.test.ts`). The bullets below were already true and are unchanged. */
     body:
-      "Instead of buying shares, players can Sell shares to the Bank Pool:\n" +
+      "Players can also Sell shares to the Bank Pool. The turn is Sell → Buy 1 certificate → Sell. You may sell after buying.\n" +
       "• Selling stock drops the corporation's market value by 1 vertical cell per share " +
       "sold (down to any ledge/plateau). The seller receives the market price before the drop.\n" +
       "• Selling shares in a corporation prohibits you from buying shares in that " +

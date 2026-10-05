@@ -23,6 +23,12 @@
 //
 // IT REPORTS. It does not refuse actions, and it does not rebuild the board. Both were considered:
 //
+//   PHASE 3 W3-J (AUD-25.16, OD-19 RULED 2026-10-04) SUPERSEDES THE FIRST HALF, ONE LAYER UP. This module still only
+//   reports; but the shell now reads its standing mismatch (`boardCurrency.ts`) as "this board is not the room's", and
+//   OD-19's stale-board safety requirement makes a board that is not current non-actionable (isMyTurn false, the send
+//   gate and the link refuse, a forced notice offers Reload). The false-positive cost argued below is accepted by that
+//   ruling and recorded as a residual: a mismatch that recurs on every load blocks the table until it is fixed.
+//
 //   REFUSING would turn a false positive into a bricked game, and the client is already prevented from doing
 //   real damage -- `turnAuthority` runs on the server, so a diverged client's bad move is refused there. The
 //   damage from divergence is that the SCREEN lies, and a screen that lies while saying so is strictly better

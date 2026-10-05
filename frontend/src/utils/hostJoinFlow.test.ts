@@ -310,7 +310,8 @@ describe("the client reads them back (design note #1415)", () => {
     }
     expect(app.match(/\{ type: "take-seat" \}/g) ?? []).toHaveLength(1);
     expect(app).toContain('const handleTakeSeat = useCallback(() => void runRoomOp({ type: "take-seat" }), [runRoomOp]);');
-    expect(app).toContain("onTakeSeat={!seated && !sandboxRoom.you.kicked && sandboxRoom.joinable ? handleTakeSeat : undefined}");
+    // Phase 3 W3-J (OD-19): and a Watch tab -- a read-only view -- offers none either.
+    expect(app).toContain("onTakeSeat={!watchOnly && !seated && !sandboxRoom.you.kicked && sandboxRoom.joinable ? handleTakeSeat : undefined}");
     /* The host is the server's answer (`you.role`), never "my id equals the document's hostId". */
     expect(app).toContain('const isSandboxHost = sandbox && sandboxRoom !== null && sandboxRoom.you.role === "host";');
     expect(app).toContain("onKick={isSandboxHost ? handleKickSandboxPlayer : undefined}");

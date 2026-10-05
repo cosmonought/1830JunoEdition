@@ -193,19 +193,23 @@ describe("a row offers what the server would allow (design note #1440)", () => {
     expect(watch.slice(0, watch.indexOf("},"))).toContain("INK_TEXT_MUTED");
   });
 
-  it("Watch opens the table by its game id and takes no seat -- there is no watch intent to carry (LIVE-2D)", () => {
+  it("Watch opens the table by its game id and takes no seat -- and (OD-19) a read-only view even for a seated principal", () => {
     /* #1441/#1442 carried a watch intent so the shell's auto-seat would not seat a viewer who pressed Watch. The
        auto-seat is gone: a seat is taken at the server by Host, Join or "Take a seat", never by entering a table --
-       so Watch is simply entering, by the id the server listed, with no op in front of it. */
+       so Watch is entering, by the id the server listed, with no op in front of it.
+       PHASE 3 W3-J (OD-19 RULED, AUD-25.16): entering by the seat door put a principal SEATED at the table in their
+       seat. Watch now has its own door, whose intent (`watchOnly`) makes the view a watcher's -- a different thing
+       from #1441's auto-seat guard, whose machinery stays gone. */
     const app = readShell();
-    for (const gone of ["sandboxWatchSeed", "sandboxWatchRoom", "writeSandboxWatchRoom", "readSandboxWatchRoom", "watchOnly"]) {
+    for (const gone of ["sandboxWatchSeed", "sandboxWatchRoom", "writeSandboxWatchRoom", "readSandboxWatchRoom"]) {
       expect([gone, app.includes(gone)]).toEqual([gone, false]);
     }
+    expect(app).toContain("watchOnly={activeGame.watch === true}");
     /* APP-TEST-0A: class A. The one door into a table is GameRouter's own handler, in the composition root. */
     expect(
       readAppRoot("GameRouter's handleEnterSandbox is the router's single door into a table, kept in the root file"),
     ).toContain("const handleEnterSandbox = useCallback((gameIdToEnter: string) => {");
-    expect(LOBBY).toContain("onWatch={(gameId) => onEnterSandbox(gameId)}");
+    expect(LOBBY).toContain("onWatch={(gameId) => (onWatchSandbox ?? onEnterSandbox)(gameId)}");
     expect(LIST).toContain("onClick={() => onWatch(row.gameId)}");
     // And the room they land in says why none of its controls are theirs.
     expect(WAITING).toContain("const isWatching = room !== null && me === null && !wasKicked;");

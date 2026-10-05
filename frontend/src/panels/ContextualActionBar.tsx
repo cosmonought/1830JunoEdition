@@ -61,7 +61,7 @@ import {
 import { desaturatedLiveryInk } from "../styles/corporationLivery";
 import type { StationTokenSlot } from "../gameEngine/stationTokens";
 import type { PrivateCompanyState } from "../gameEngine/gameState";
-import type { RoundType, TileColor } from "../gameEngine/gameState";
+import type { GameStateResponse, RoundType, TileColor } from "../gameEngine/gameState";
 import {
   type GamePhase,
   type TierRustOutlook,
@@ -707,6 +707,7 @@ export default function ContextualActionBar({
   turnActionTaken,
   onPlaceStationTokenHint,
   stationTokenCost,
+  paidStationRefusal = null,
   maxRouteRevenue = null,
   activeCorporation,
   pendingTreasury = null,
@@ -845,6 +846,10 @@ export default function ContextualActionBar({
    *  label. A number rather than a formatted string so the caller cannot
    *  quietly change the currency here. */
   stationTokenCost: number;
+  /** Phase 3 W3-J (AUD-25.08): why a PAID station cannot be placed now (`paidStationRefusal`: the token limit, the
+   *  treasury against the next station's cost, a reachable city), or `null`. The D&H's free station is its own control,
+   *  so this greys the paid button even while that station keeps the step open. Omitted reads as `null`. */
+  paidStationRefusal?: string | null;
   /** Design note #707: the best total `assignRouteSet` can find for the acting corporation -- `0` for
    *  "nothing to run", `null` for "could not tell". The Routes step's Skip is withdrawn on a positive figure
    *  and on nothing else; see `routeStep.ts` for why `null` must never block. */
@@ -1143,6 +1148,8 @@ export default function ContextualActionBar({
     blockedReason: string | null;
     /** Phase 3 W2-A (OD-1): the hold's refusal of the depot's `BuyHardwareFromPool`, forwarded. */
     bankBlockedReason?: string | null;
+    /** Phase 3 W3-J (AUD-25.10 (a)): the board the depot Buy asks `trainPurchaseRefusal` on, forwarded. */
+    board?: GameStateResponse | null;
     /** Phase 3 W2-C (AUD-09.02): the sale's authority, bound by the shell (`TrainPurchasePanel`'s `offerRefusal`). */
     offerRefusal?: (offer: TrainOfferIntent) => string | null;
     /** Phase 3 W3-I (AUD-19.01): the room link's queue (`linkQueueView`), forwarded to the offer form. */
@@ -1840,7 +1847,12 @@ export default function ContextualActionBar({
             // whose size the UI knew and did not say.
             label: `Place Station Token for $${stationTokenCost}`,
             onClick: onPlaceStationTokenHint,
-            title: `Costs $${stationTokenCost} from this corporation's treasury. Click a city hex on the Rail Map to place it.`,
+            // Phase 3 W3-J (AUD-25.08): the paid station's own verdict -- including the treasury while the D&H's free
+            // station keeps the step open.
+            disabled: paidStationRefusal !== null,
+            title:
+              paidStationRefusal ??
+              `Costs $${stationTokenCost} from this corporation's treasury. Click a city hex on the Rail Map to place it.`,
           },
         ];
         break;
@@ -4415,6 +4427,8 @@ export default function ContextualActionBar({
           blockedReason={trainPurchase.blockedReason}
           // Phase 3 W2-A (OD-1): the hold's refusal of the depot purchase.
           bankBlockedReason={trainPurchase.bankBlockedReason ?? null}
+          // Phase 3 W3-J (AUD-25.10 (a)): the board the depot Buy asks the purchase's own gate on.
+          board={trainPurchase.board ?? null}
           onBuyFromBank={trainPurchase.onBuyFromBank}
           openTiers={trainPurchase.openTiers}
           /* Design note #1101: resolved by the shell, which owns the step list -- see the panel's prop.

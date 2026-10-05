@@ -68,6 +68,8 @@ import {
 import { variantCueFor } from "./variantSfx";
 import { tileStock } from "./tileSupply";
 import { describeFleetLosses, describeReprieveExpiries } from "../gameEngine/sandboxSession";
+// Phase 3 W3-J (AUD-25.13 item 5): the authority's per-leg projection, which the reducer holds each v13 leg to.
+import { projectedPortfolioProceeds } from "../gameEngine/emergencyFunding";
 import { ACCOLADE_SPEC_BY_KEY, selectCeremony, unearned, type Accolade, type AccoladeKey } from "./accolades";
 import type { GameStateResponse, PublicCompanyState } from "../gameEngine/gameState";
 import type { SandboxAction } from "./sandboxRoom";
@@ -276,6 +278,72 @@ const ranked = (tally: Tally, direction: "highest" | "lowest" = "highest"): Arra
     .filter(([, value]) => value > 0)
     .sort((a, b) => (direction === "highest" ? b[1] - a[1] : a[1] - b[1]));
 const dollars = (n: number) => `$${Math.round(n).toLocaleString("en-US")}`;
+
+/* ==================================================================
+    PHASE 3 W3-J (AUD-25.13 item 5; W3-K's R2, owner ruled FIX IN W3-J): THE v13 SALES ARE SALES
+   ==================================================================
+   The trade statistics below read `BuyStock` / `SellStock` entries only. Rules revision 2 (v13, OD-4) sells shares in
+   two places no such entry carries: the ONE `EmergencySellPortfolio` entry, whose legs run inside the reducer
+   (`executeEmergencyLegs`), and the automatic bankruptcy, whose liquidation runs inside whatever entry proved it and is
+   recorded on the after-board as `bankruptcy_record` (`automaticBankruptcy`). So the legs were invisible to the Market
+   Manipulator, the Greater Fool / Human Stop-Loss / Capitalist Pig trades and the Train Robber.
+   This reads each such sale as SellStock's arm reads one: by the president who made it, in 10% blocks off the leg's
+   percentage, priced by what the seller's cash actually took in. ONE CASH FIGURE COVERS EVERY LEG of an entry, so the
+   per-leg figure is the authority's own projection (`projectedPortfolioProceeds`, which the reducer holds each leg of a
+   portfolio to exactly) when it accounts for the whole figure on this board, and otherwise the whole figure spread
+   evenly over the blocks -- exact in total, which is what the Capitalist Pig reads, and all a bankruptcy's legs are
+   ever judged by (nothing follows `GameEnd` for the next-Stock-Round judgements to compare against). No rule is
+   restated and nothing is decided: a refused portfolio moved no holding and books nothing. */
+interface EmergencySaleBooking {
+  seller: string;
+  legs: Array<{ companyId: number; blocks: number; proceeds: number }>;
+}
+
+function emergencySalesIn(
+  kind: string,
+  body: Record<string, unknown>,
+  before: GameStateResponse,
+  after: GameStateResponse,
+): EmergencySaleBooking | null {
+  const holding = (state: GameStateResponse, companyId: number, player: string) =>
+    companyById(state, companyId)?.player_holdings.find((h) => h.player === player)?.percentage ?? 0;
+  let seller: string | null = null;
+  let legs: Array<{ protocol_id: number; percentage: number }> = [];
+  let total = 0;
+  if (kind === "EmergencySellPortfolio") {
+    legs = (Array.isArray(body.sales) ? (body.sales as Array<Record<string, unknown>>) : [])
+      .map((leg) => ({ protocol_id: Number(leg.protocol_id), percentage: Number(leg.percentage) }))
+      .filter((leg) => Number.isFinite(leg.protocol_id) && Number.isFinite(leg.percentage) && leg.percentage > 0);
+    // The president who made it: the one seat every leg's holding fell by exactly that leg (none, when it was refused).
+    seller =
+      legs.length === 0
+        ? null
+        : (before.player_addresses.find((player) =>
+            legs.every((leg) => holding(before, leg.protocol_id, player) - holding(after, leg.protocol_id, player) === leg.percentage),
+          ) ?? null);
+    if (seller !== null) total = (cashOf(after, seller) ?? 0) - (cashOf(before, seller) ?? 0);
+  } else {
+    // The automatic liquidation, recorded where it happened -- once, by the entry that wrote the record.
+    const record = after.bankruptcy_record ?? null;
+    if (record === null || before.bankruptcy_record) return null;
+    seller = record.president;
+    legs = record.sold.map((leg) => ({ protocol_id: leg.company_id, percentage: leg.percentage })).filter((leg) => leg.percentage > 0);
+    total = record.liquidation_proceeds;
+  }
+  if (seller === null || legs.length === 0) return null;
+  const blocksOf = legs.map((leg) => leg.percentage / SHARE_BLOCK);
+  const allBlocks = blocksOf.reduce((sum, n) => sum + n, 0);
+  const projected = withRules(resolveVariants(before.variants), () => projectedPortfolioProceeds(before, legs));
+  const projectionHolds = projected.length === legs.length && projected.reduce((sum, n) => sum + n, 0) === total;
+  return {
+    seller,
+    legs: legs.map((leg, i) => ({
+      companyId: leg.protocol_id,
+      blocks: blocksOf[i],
+      proceeds: projectionHolds ? projected[i] : allBlocks > 0 ? (total * blocksOf[i]) / allBlocks : 0,
+    })),
+  };
+}
 
 function companyById(state: GameStateResponse, id: number): PublicCompanyState | undefined {
   return state.public_companies.find((company) => company.company_id === id);
@@ -730,6 +798,28 @@ export function gameHistoryFrom(log: readonly SandboxAction[], policy: ReplayPol
       }
     }
 
+    /* Phase 3 W3-J (AUD-25.13 item 5): the v13 portfolio's legs and the automatic liquidation, booked as the two arms
+       above book a `SellStock` -- see `emergencySalesIn`. The proving entry of a bankruptcy is never a `SellStock`
+       (OD-4: no sequential emergency sale), so nothing here is counted twice. */
+    const emergencySales = emergencySalesIn(kind, body, before, after);
+    if (emergencySales !== null) {
+      const { seller } = emergencySales;
+      for (const leg of emergencySales.legs) {
+        bump(sharesTraded, seller, leg.blocks);
+        if (leg.blocks > 0 && leg.proceeds > 0) {
+          trades.push({ actor: seller, companyId: leg.companyId, blocks: leg.blocks, perShare: leg.proceeds / leg.blocks, atIndex: entry.index, side: "sell" });
+        }
+        const was = companyById(before, leg.companyId);
+        const now = companyById(after, leg.companyId);
+        if (
+          was && now && was.president === seller && (was.owned_trains?.length ?? 0) === 0 && was.is_floated &&
+          now.president !== null && now.president !== seller
+        ) {
+          bump(dumps, seller, 1);
+        }
+      }
+    }
+
     /* GRAVEDIGGER and THE RUST BELT (#1422): trains rusted or discarded to the limit, read by the same diff
        the fleet-loss notices use -- which already leaves out a sold train (#1245) and one the Yellow Sign took
        (#1264), and under Gentle Rust reports the reprieve as the rust event (#979) -- which, since #1704, these
@@ -901,6 +991,20 @@ export function gameHistoryFrom(log: readonly SandboxAction[], policy: ReplayPol
       }
     }
 
+    /* ==================================================================
+        PHASE 3 W3-J (AUD-25.13 item 5; W3-K's R2): THE EMERGENCY CONTRIBUTION IS THE PRESIDENT'S
+       ==================================================================
+       The forced purchase's personal contribution was the cash the ENTRY'S ACTOR lost -- right while the president sent
+       `EmergencyBuyHardware` themself, wrong on v13's derived path, where the game appends it and the entry's actor can
+       be another seat (or none): that seat lost nothing, so the contribution vanished, or was booked to the wrong
+       player. Rulebook 6.6.3 makes it the obligated corporation's PRESIDENT's money, so it is read off the president on
+       the BEFORE board (the one who owed it as the purchase was made) -- for the fleet ledger's price, the corporation's
+       train spend and the Fundraiser alike. Nothing else about the purchase is read differently. */
+    const emergencyPayer =
+      kind === "EmergencyBuyHardware" ? (companyById(before, Number(body.protocol_id))?.president ?? null) : null;
+    const emergencyContribution =
+      emergencyPayer === null ? 0 : Math.max(0, (cashOf(before, emergencyPayer) ?? 0) - (cashOf(after, emergencyPayer) ?? 0));
+
     /* FLEET ADMIRAL, SALVAGER, EARLY ADOPTER: trains that joined a roster, and how. */
     /* ==================================================================
         UR-5 (OD-UR-6.3 -- owner ruling D-49; UR-F8): ACQUIRED IS NOT BOUGHT -- THE CARCOSA GIFT IS NOT A PURCHASE
@@ -938,10 +1042,8 @@ export function gameHistoryFrom(log: readonly SandboxAction[], policy: ReplayPol
          summarised as one message). The treasury drop plus, on a forced buy, the president's own cash. A gift costs
          nothing (UR-5). */
       const drop = Math.max(0, num(was?.treasury) - num(company.treasury));
-      const personal =
-        kind === "EmergencyBuyHardware" && actor && Number(body.protocol_id) === company.company_id
-          ? Math.max(0, (cashOf(before, actor) ?? 0) - (cashOf(after, actor) ?? 0))
-          : 0;
+      // Phase 3 W3-J (AUD-25.13 item 5): the president's own contribution, read off the president, not the entry's actor.
+      const personal = Number(body.protocol_id) === company.company_id ? emergencyContribution : 0;
       for (const model of gained) bump(ledgerCount, `${company.company_id}:${model}`, 1);
       for (const model of bought) bump(ledgerPaid, `${company.company_id}:${model}`, (drop + personal) / bought.length);
       if (firstDiesel === null && bought.some((model) => trainTier(model) === "D")) {
@@ -979,17 +1081,11 @@ export function gameHistoryFrom(log: readonly SandboxAction[], policy: ReplayPol
       const buyerId = Number(kind === "BuyTrainFromCorporation" ? body.buyer_protocol_id : body.protocol_id);
       const drop = num(companyById(before, buyerId)?.treasury) - num(companyById(after, buyerId)?.treasury);
       if (drop > 0) bump(trainSpend, String(buyerId), drop);
-      if (kind === "EmergencyBuyHardware" && actor) {
-        const personal = (cashOf(before, actor) ?? 0) - (cashOf(after, actor) ?? 0);
-        if (personal > 0) bump(trainSpend, String(buyerId), personal);
-      }
+      if (emergencyContribution > 0) bump(trainSpend, String(buyerId), emergencyContribution);
     }
 
-    /* FUNDRAISER: the president's own cash that went into a forced purchase. */
-    if (kind === "EmergencyBuyHardware" && actor) {
-      const paid = (cashOf(before, actor) ?? 0) - (cashOf(after, actor) ?? 0);
-      if (paid > 0) bump(outOfPocket, actor, paid);
-    }
+    /* FUNDRAISER: the president's own cash that went into a forced purchase -- booked to that president (W3-J). */
+    if (emergencyPayer !== null && emergencyContribution > 0) bump(outOfPocket, emergencyPayer, emergencyContribution);
 
     /* CORPORATE RAIDER: a purchase that took the presidency off somebody else. */
     if (kind === "BuyStock" && actor) {

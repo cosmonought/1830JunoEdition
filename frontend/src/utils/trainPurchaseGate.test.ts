@@ -368,8 +368,12 @@ describe("only an explicit confirm dispatches a purchase", () => {
   });
 
   it("refuses a purchase the corporation cannot pay for", () => {
-    // The panel's own arm for the reported case, so the button is dead before the reducer is ever asked.
-    expect(PANEL).toContain("bankTotal > treasury");
+    /* Phase 3 W3-J (AUD-25.10 (a)): the panel's own `bankTotal > treasury` arm is gone -- the button asks the
+       reducer's gate (`trainPurchaseRefusal`, funds required) on the shell's board, so it is still dead before the
+       reducer is ever asked, in the gate's words. The rendered behaviour is pinned in
+       `components/phase3W3JComponents.test.tsx`. */
+    expect(PANEL).toContain("trainPurchaseRefusal(board, buyer.company_id");
+    expect(PANEL).toContain("requireFunds: true");
   });
 
   it("opens panels without dispatching", () => {

@@ -303,8 +303,9 @@ export interface StockRoundPanelProps {
    *  stay governed by `purchaseBlockFor` and the bar's `passDisabledReason` as before. Absent reads as nothing owed. */
   mustSell?: MustSellBanner | null;
   /** Phase 3 W3-I (AUD-19.01 / AUD-03.11): the room link's queue (`linkQueueView`), forwarded to the Private Companies
-   *  section only -- its offer form shows "Queued — will send on reconnect." and takes no second press while the link
-   *  holds the last submission. Absent / idle: as before. */
+   *  section -- its offer form shows "Queued — will send on reconnect." and takes no second press while the link
+   *  holds the last submission. Phase 3 W3-J (AUD-25.10 (c)): also the TEXT of the share controls' in-flight line, so
+   *  the panel and the section say one thing about one held submission. Absent / idle: as before. */
   linkQueue?: LinkQueueView | null;
 }
 
@@ -3278,8 +3279,15 @@ export function StockRoundPanel({
         : /* Design note #1173: LAST in the precedence, because it is the only one of the four that is about
              to resolve itself. A player reading this is being told to wait a moment rather than that they
              may not act -- which is why it is phrased as a report on their own press. */
+          /* Phase 3 W3-J (AUD-25.10 (c)): ONE SUBMISSION, ONE LINE. For a press the link still holds, the Private
+             Companies section below put the link's own sentence first ("Queued — will send on reconnect.") while
+             this said "Sending ..." for the same held submission. The line now reads the same link-queue view with
+             the section's precedence -- the link's sentence, then the latch's. Only the text source moved: the flag
+             above, and so which controls grey and when, is unchanged. */
           actionInFlight
-          ? "Sending your last action — one moment."
+          ? linkQueue?.blocked === true && linkQueue.reason !== null
+            ? linkQueue.reason
+            : "Sending your last action — one moment."
           : null));
   /* Design note #396: the ACTIVE card -- the one whose action bar renders.
      Renamed from `expandedCompanyId`: it no longer expands anything, it

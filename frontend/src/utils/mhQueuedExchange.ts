@@ -31,6 +31,17 @@ import type { GameStateResponse, PendingMhExchange } from "../gameEngine/gameSta
 import { privateAcronym } from "./privateCatalog";
 import { exchangeSourceLabel } from "./privatePowerFlow";
 
+/* ==================================================================
+    PHASE 3 W3-J (AUD-25.10 (d)): THE M&H STATUS SAYS "REQUESTED", NOT "QUEUED"
+   ==================================================================
+   "Queued" meant two things on one screen: these M&H status lines ("is queued, not executed") and the W3-I link
+   note (`LINK_QUEUED_NOTE`, "Queued — will send on reconnect." -- a press waiting for a socket). OD-3's vocabulary
+   for the M&H is "requested" / "executed" with a generic "expired", so the toast, the marker / chip sentence and the
+   REQUESTED log line now say "requested, not executed yet" and keep their meaning (the turn-boundary condition, the
+   nothing-reserved clause) and the generic expiry word for word. The link note is the one "Queued" status line.
+   Rules Reference copy and the private catalogue's rules text are rules, not status, and are not changed here. The
+   module and function names keep "queued": they are code, not copy. */
+
 /** OD-3's generic cancellation line. Deliberately carries no reason: the engine retires an impossible request
  *  without recording why (design note #1630e), and a guessed reason would be a second rules engine. */
 export const MH_EXCHANGE_EXPIRED_SENTENCE = "M&H exchange request expired before it could execute.";
@@ -74,7 +85,7 @@ export function mhExchangeRequestedSentence(
 ): string {
   return (
     `M&H exchange REQUESTED — ${nameFor(pending.player)} asked to exchange ${exchangeClause(state, pending)}. ` +
-    "It is queued, not executed: it executes at the next turn boundary only if it is still legal then."
+    "It is requested, not executed yet — it executes at the next turn boundary only if it is still legal then."
   );
 }
 
@@ -166,7 +177,7 @@ export function mhQueuedAcknowledgement(
   if (created === null || pendingMhExchangeOf(before) !== null || created.player !== viewerAddress) return null;
   return (
     `Your M&H exchange request (a 10% ${tickerOf(after, created.company_id)} share from the ` +
-    `${exchangeSourceLabel(created.source)}) is queued, not executed. It executes at the next turn boundary only ` +
+    `${exchangeSourceLabel(created.source)}) is requested, not executed yet. It executes at the next turn boundary only ` +
     "if it is still legal then; nothing is reserved until it does."
   );
 }
@@ -196,7 +207,7 @@ export function pendingMhExchangeView(
     marker: "Exchange requested — pending",
     sentence:
       `${nameFor(pending.player)} has requested to exchange ${exchangeClause(state, pending)}. ` +
-      "Queued, not executed: it executes at the next turn boundary only if it is still legal then.",
+      "Requested, not executed yet — it executes at the next turn boundary only if it is still legal then.",
     chipLabel: `${acronym} exchange pending`,
   };
 }

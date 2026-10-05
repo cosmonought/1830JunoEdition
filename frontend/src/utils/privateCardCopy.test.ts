@@ -56,12 +56,15 @@ describe("the two share piles are named the way the rest of the app names them",
   it("still says the trade is available in either round type", () => {
     /* THE RULE THAT WAS NOT SUPPOSED TO CHANGE, pinned so a later tidy of this sentence cannot quietly
        narrow it. #548 lists this clause as one of the four things the verbatim text was carried for. */
-    expect(MH.ability).toContain("in either kind of round");
+    /* Phase 3 W3-J (AUD-25.12): the long form is now the Rules Reference M&H card's text verbatim, which says the same
+       thing as "in either round" -- the clause pinned here is the card's. */
+    expect(MH.ability).toContain("turns in either round");
   });
 
   it("keeps the 60% ceiling and the closure on the M&H", () => {
     expect(MH.ability).toContain("under 60%");
-    expect(MH.ability.toLowerCase()).toContain("closes the company");
+    // W3-J (AUD-25.12): the closure happens when the exchange EXECUTES (a queued request has closed nothing yet).
+    expect(MH.ability).toContain("closes Mohawk & Hudson when it executes");
   });
 
   it("never lowercases a pile name anywhere in the catalog", () => {

@@ -103,3 +103,22 @@ describe("holds without a slot are untouched (the opening titles and the outro)"
     expect(settle()).toBeCloseTo(full);
   });
 });
+
+describe("the shell's haunting takes its deep duck in the slot (W3-H, OD-12 RED R2: one argument)", () => {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { readShell } = require("./sourceScan") as typeof import("./sourceScan");
+  const SHELL = readShell();
+
+  it("the haunting's duck names HAUNTING_DUCK_SLOT, so the next haunting supersedes it", () => {
+    expect(SHELL).toMatch(/cue\.videoHasOwnAudio\s*\?\s*duckRadio\(DUCK_FOR_VIDEO,\s*HAUNTING_DUCK_SLOT\)/);
+  });
+
+  it("no shell hold of the deep duck is left without a slot", () => {
+    expect(SHELL).not.toMatch(/duckRadio\(DUCK_FOR_VIDEO\)/);
+  });
+
+  it("and the shell frees the slot when the board's clip is gone and when the table unmounts", () => {
+    expect(SHELL).toMatch(/if\s*\(haunting === null\)\s*releaseDuckSlot\(HAUNTING_DUCK_SLOT\)/);
+    expect(SHELL).toMatch(/clearTimeout\(hauntingAudioRef\.current\.timer\);[\s\S]{0,200}?releaseDuckSlot\(HAUNTING_DUCK_SLOT\)/);
+  });
+});

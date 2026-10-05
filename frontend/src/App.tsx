@@ -7890,7 +7890,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                    would silence the music to protect a silent film.
                    ASKED OF `videoHasOwnAudio`, not of the clip's name or its duration. */
                 const releaseHaunting = cue.videoHasOwnAudio
-                  ? duckRadio(DUCK_FOR_VIDEO)
+                  ? duckRadio(DUCK_FOR_VIDEO, HAUNTING_DUCK_SLOT)
                   : null;
                 hauntingTimerRef.current = window.setTimeout(() => {
                   setHaunting(null);

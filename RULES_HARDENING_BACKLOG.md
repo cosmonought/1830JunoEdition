@@ -4212,6 +4212,18 @@ hosted path: C&O's Gentle Rust grace turn retires its Final Run 2 and the Mark t
 trainless with a $40 run; the room appends the derived `DeclareDividends` $0 withhold, the reducer declines it (the board
 unchanged), and the president declares the $40 (`utils/unpredictableRevenueCertificationGame.test.ts`, "S10-27, reproduced
 live and not fixed here"). The pin is written against today's behaviour and says so; the repair above would change it.
+**Phase 3 derivation residues (2026-10-05, AUD-08.01, owner-placed in the pre-Phase-4 derivation lane): the APPEND half is
+`RESOLVED` on `phase3/preplaytest-derivation-residues` (not integrated).** The generic seam was the defect: `RoomEngine.settleOwed`
+minted, applied and returned every derived action without asking whether it landed. It now asks #1685's own definition
+(`authorityDeclined`: the authoritative atoms unchanged, for a message whose design is not a no-op) of each one; a declined
+derived action is rolled back in the engine (state, grid, the `emitted` keys it recorded) and retracted from the caller's store
+(`RoomSession` pops it -- still the last entry), so it is never appended, broadcast, hashed or counted and spends no turn key; its
+key is suppressed for the rest of that settle only, so the loop moves on deterministically and a later settle re-asks. The
+DERIVATION half (the fleet-based $0 answer at Dividends) is unchanged -- the room still asks, the reducer still declines, nothing
+is recorded. Replay: none -- `apply` is untouched, every stored derived no-op (the 18-file corpus holds dozens) replays as before
+(0 differences in 3,763 engine applications). The UR-7 pin was rewritten to the fixed behaviour
+(`unpredictableRevenueCertificationGame.test.ts`, "S10-27 / AUD-08.01"); evidence `phase3DerivationResidues.test.ts`,
+`phase3DerivedRefusalSeam.test.ts`.
 
 ---
 

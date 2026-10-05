@@ -151,6 +151,8 @@ import {
   type ShareHolder,
   type StockTransaction,
 } from "../utils/stockTransaction";
+// W3-H (VF C-7, E-6): a ceremony whose card nobody can see is not started -- see the module's note.
+import { useVisibleLaunch } from "../utils/surfaceVisibility";
 
 export interface StockRoundPanelProps {
   /** Design note #1451: the stock transaction that just landed, for the affected card's own presentation.
@@ -494,6 +496,17 @@ function stockCell(table: HTMLElement, holder: ShareHolder): HTMLElement | null 
   const cells = table.querySelectorAll<HTMLElement>("[data-stock-cell]");
   for (let index = 0; index < cells.length; index += 1) {
     if (cells[index].getAttribute("data-stock-cell") === holder) return cells[index];
+  }
+  return null;
+}
+
+/** The roster card for `companyId`, found by attribute inside `grid` -- the surface W3-H asks "can anyone see
+ *  this?" of. A loop over the grid's own cards, for `stockCell`'s reason: exact by construction. */
+function rosterCardNode(grid: HTMLElement | null, companyId: number): HTMLElement | null {
+  if (!grid) return null;
+  const cards = grid.querySelectorAll<HTMLElement>("[data-stock-card]");
+  for (let index = 0; index < cards.length; index += 1) {
+    if (cards[index].getAttribute("data-stock-card") === String(companyId)) return cards[index];
   }
   return null;
 }
@@ -1202,8 +1215,20 @@ function CorporationRoster({
      would only be a way for two cards to disagree about whose turn it is to glow.
      A NEW `token` SUPERSEDES WHATEVER WAS PLAYING. Rapid consecutive trades cannot corrupt anything: the
      timers are cleared, the stage index resets, and the holdings underneath were never waiting on any of it. */
-  const { sequence, stage, stageIndex, applied } = useStockTransferFocus(
+  /* The roster grid -- the float ceremony's centring target (below) and, for W3-H, where both focuses find
+     the card they would play on. Declared here because the transfer's launch gate reads it first. */
+  const floatGridRef = useRef<HTMLDivElement | null>(null);
+  /* W3-H (VF C-7): OFF-SCREEN WORK IS NOT STARTED (`utils/surfaceVisibility.ts`). A transaction whose card is
+     scrolled away, or whose page is in the background, is declined at launch: no proxy, no timers, no
+     staged board, no presidency cue -- the committed card is the A-3 fallback, and #1453/#1454's "a late
+     gesture is worse than none" rules out starting it when the card comes back. Reduced motion is exempt. */
+  const shownTransaction = useVisibleLaunch(
     transaction ?? null,
+    () => rosterCardNode(floatGridRef.current, transaction?.companyId ?? -1),
+    prefersReducedMotion(),
+  );
+  const { sequence, stage, stageIndex, applied } = useStockTransferFocus(
+    shownTransaction,
     onPresidencyCue,
   );
   /* The focused card's ownership table, for measuring inside it. Attached only to the card the sequence names
@@ -1242,8 +1267,16 @@ function CorporationRoster({
   const floatCue = useCallback(() => {
     if (floatCueGateRef.current) onFloatCue?.();
   }, [onFloatCue]);
-  const { sequence: floatSequence, stage: floatStage, applied: floatApplied } = useCorporationFloatFocus(
+  /* W3-H (VF E-6): the same launch gate as the transaction's above. A float whose card is off screen -- or
+     whose "corps" pane is mounted but hidden, a zero-size box -- never starts its timers or measures its
+     geometry, and so never reaches the stamp cue either: this note's own rule, one step earlier. */
+  const shownFloatEvent = useVisibleLaunch(
     floatEvent ?? null,
+    () => rosterCardNode(floatGridRef.current, floatEvent?.companyId ?? -1),
+    floatReducedMotion,
+  );
+  const { sequence: floatSequence, stage: floatStage, applied: floatApplied } = useCorporationFloatFocus(
+    shownFloatEvent,
     floatReducedMotion,
     floatCue,
   );
@@ -1255,8 +1288,7 @@ function CorporationRoster({
      within the Stock Round" per the approved centring target, rather than the literal viewport (which would
      need `window` geometry outside this component's own subtree) or the whole panel (which would pull the
      target up toward the sticky header this card must stay clear of -- see the report on why it naturally
-     does not). */
-  const floatGridRef = useRef<HTMLDivElement | null>(null);
+     does not). `floatGridRef` itself is declared above, beside the transaction's launch gate. */
   const floatTarget = useFloatCardTarget(floatCardRef, floatGridRef, floatSequence);
   floatCueGateRef.current =
     floatSequence !== null && (floatSequence.reducedMotion || floatTarget !== null);
@@ -1316,7 +1348,7 @@ function CorporationRoster({
              subject of, or a descriptor the shell could not build -- in all three `staged` is `null` and
              this is the committed company, unchanged, exactly as it renders today. */
           const focusedHere = sequence !== null && sequence.companyId === committed.company_id;
-          const staged = focusedHere ? stagedOwnership(transaction ?? null, applied) : null;
+          const staged = focusedHere ? stagedOwnership(shownTransaction, applied) : null;
           /* ==================================================================
               DESIGN NOTE (VF-3): A SECOND, INDEPENDENT OVERLAY, COMPOSED THE SAME WAY
              ==================================================================
@@ -2175,6 +2207,8 @@ function CorporationRoster({
             <div
               key={company.company_id}
               ref={floatFocusedHere ? floatCardRef : undefined}
+              /* W3-H: how the launch gates above find this card to ask whether anyone can see it. */
+              data-stock-card={company.company_id}
               className="app-stock-card"
               style={{
                 ...styles.rosterCard,

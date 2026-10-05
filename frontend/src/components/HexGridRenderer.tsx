@@ -226,6 +226,8 @@ import {
 /* Design note #1474: the transition's cues go through the helper every cue goes through (#1041), which owns the master
    switch's effect, the shared level, the concurrency cap, the radio's duck and the browser's refusals. */
 import { currentSfxEnabled, playVariantCue, preloadCues } from "../utils/audio";
+// W3-H (VF F-5): the route signal's frame clock stops while nobody can see the board.
+import { useSurfaceVisible } from "../utils/surfaceVisibility";
 
 /* Design note #1357: the herald artwork, cached per ticker for the canvas. `null` until loaded (or when the
    asset is missing -- the ticker disc stands in for good). Loading is kicked off on first ask; every mounted
@@ -1510,8 +1512,16 @@ export function HexGridRenderer({
      as the static route highlight standing in for the continuously moving signal -- there is no longer a
      persistent badge state left to keep drawing once the animation itself stops (VF-2 simplification pass). */
   const [routeSignalTick, setRouteSignalTick] = useState(0);
+  /* W3-H (VF F-5): OFF-SCREEN WORK IS NOT STARTED (`utils/surfaceVisibility.ts`). The clock -- and with it the
+     per-frame `pointOnRouteTrack` sampling in `draw` -- runs only while the board can be seen: the document
+     is not hidden and the board's box is on screen (an IntersectionObserver; with none, on screen). A
+     continuous animation PAUSES rather than declining: it re-arms when the board comes back, and since each
+     signal's phase is wall-clock (`routeSignalStartRef`) it resumes where it would have been. No cue rides
+     this clock, so there is no sound to decide about. */
+  const routeSignalVisible = useSurfaceVisible(containerRef, routeOverlays.length > 0);
   useEffect(() => {
     if (routeOverlays.length === 0) return undefined;
+    if (!routeSignalVisible) return undefined;
     if (typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
       return undefined;
     }
@@ -1522,7 +1532,7 @@ export function HexGridRenderer({
     };
     handle = requestAnimationFrame(step);
     return () => cancelAnimationFrame(handle);
-  }, [routeOverlays]);
+  }, [routeOverlays, routeSignalVisible]);
 
   /* Design note #1465: the running tile transitions, keyed "q,r", and the inputs of the last render they were
      diffed against. Refs, not state: the draw reads them, and a transition starting must not re-render anything

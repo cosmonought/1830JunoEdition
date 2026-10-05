@@ -1012,10 +1012,25 @@ categories are `turn`, `revenue` and `payouts`; a presidency is none of them, an
 this must not add another control. **Revisit only if** playtesters want it separable — that is a deliberate
 fourth category, not a bug fix.
 
-### C-7 · `OPEN` · An off-screen card still animates
+### C-7 · `RESOLVED` (W3-H, 2026-10-04) · An off-screen card still animates
 #1450's screen-space module carried a viewport check; it went with the module. The card-local proxy is now
 drawn whether or not the card is scrolled into view — harmless (nobody sees it) but the timers run for
 nothing. Low priority; it costs one `getBoundingClientRect` against the viewport to restore if it matters.
+
+**RESOLVED by W3-H** — restored the cheap way, as one fix shape shared with E-6 and F-5:
+`utils/surfaceVisibility.ts` (design note "W3-H: OFF-SCREEN WORK IS NOT STARTED") answers "can anyone see
+this?" with one `getBoundingClientRect` against `window.innerWidth/innerHeight` (a zero-size box — a
+`display: none` ancestor — is not visible) plus `document.visibilityState === "hidden"`. The roster gates the
+transaction through `useVisibleLaunch` before `useStockTransferFocus` sees it, decided once at launch in a
+layout effect: a transaction whose card is off screen or whose page is in the background is **declined** — no
+proxy, no timers, no staged board, the committed card as A-3's fallback — and is not started late when the
+card scrolls back (#1453/#1454: a late gesture is worse than none). **Cue decision:** a declined takeover
+sounds no presidency cue — #1457 ties the sound to the crown's own beat, and a crown never drawn has no beat;
+this matches VF-3's existing "no sound for a ceremony that never visibly played". On-screen behaviour,
+timings, staging order and cues are unchanged, and reduced motion is exempt from the gate (unchanged). In
+jsdom, where no element has a box, the gate stands aside, so the existing suites run as before. Pinned by
+`components/w3hOffscreenGating.test.tsx` ("C-7: VF-1's transfer proxy": on screen → proxy, timers, cue;
+scrolled away / page hidden → none; not launched late); each of those cases fails with the gate reverted.
 
 ### C-8 · `OWNER DECISION` · Staging covers the whole card, including the float badge
 The staged overlay is applied by rebinding `company` at the top of the card's `.map`, so *every* reader
@@ -1525,12 +1540,27 @@ intervening ancestor `z-index`) that the lifted card can never paint over the st
 screenshot confirming it in a live browser. **Watch:** the lifted card at the top of a scrolled Stock Round
 tab, to confirm it settles behind the sticky dock rather than over it.
 
-### E-6 · `OPEN` · Off-screen/inactive-tab cost, same shape as C-7
+### E-6 · `RESOLVED` (W3-H, 2026-10-04) · Off-screen/inactive-tab cost, same shape as C-7
 The float timers and the geometry measurement run whether or not the "corps" tab is the active main tab or
 the card is scrolled into view — `useFloatCardTarget`'s early return only catches a genuinely unmounted
 `cardRef`/`floatGridRef`, not an inactive-but-mounted one. Harmless (nobody sees it, and the A-3 fallback
 still degrades cleanly if the rects come back zero-sized on a `display: none` ancestor), but, as C-7 already
 notes for VF-1's own proxy, the timers run for nothing. Low priority.
+
+**RESOLVED by W3-H** — C-7's fix, applied to the float event: `useVisibleLaunch` (`utils/surfaceVisibility.ts`)
+declines a float whose card is off screen, whose page is hidden, or whose pane is mounted but `display: none`
+(a zero-size box), before `useCorporationFloatFocus` sees it — so none of the ceremony's timers is armed, no
+geometry is measured, and the stamp cue never fires (the existing "NO SOUND FOR A CEREMONY THAT NEVER VISIBLY
+PLAYED" rule, applied one step earlier). Reduced motion is exempt and unchanged: a reduced float still plays
+(and sounds) off screen — **open for the owner** whether an off-screen reduced-motion float, or VF-1 takeover,
+should also stay silent; it was left as it was by brief. Pinned by `components/w3hOffscreenGating.test.tsx`
+("E-6: VF-3's float ceremony": on screen → timers armed; scrolled away / zero-size box / page hidden → none);
+each fails with the gate reverted. **Found while closing this, not fixed (outside W3-H's rows):**
+`floatCardRef` is attached only when `floatFocusedHere`, which needs `floatTarget !== null`, which needs
+`floatCardRef` — so the full-motion card can never measure itself and every full-motion float takes the A-3
+fallback, in a real browser as well as in jsdom (E-1 may be watching for a ceremony that cannot currently
+play). A local probe attaching the ref whenever the float sequence names the card made the stamp appear and
+the cue fire.
 
 ## Part F — Open review items (VF-2)
 
@@ -1588,12 +1618,22 @@ speed, and if so whether it reads as "settling into place" (intended) or as jitt
 pop (117%) reads as distinctly one bigger hit rather than a different kind of badge state; and whether 120ms
 still feels right for "the same moment" now that the reaction it groups is a pop rather than a tint.
 
-### F-5 · `OPEN` · The traveling signal and per-hex badge lookup run whenever any route overlay exists
+### F-5 · `RESOLVED` (W3-H, 2026-10-04) · The traveling signal and per-hex badge lookup run whenever any route overlay exists
 Same shape as VF-1's C-7 and VF-3's E-6: the rAF clock and the per-frame `pointOnRouteTrack` sampling run for
 as long as `routeOverlays.length > 0`, whether or not the board is actually the visible/active surface.
 Harmless — the work is cheap unit-hex-space math, gated to skip entirely under reduced motion — but, as noted
 in those two prior entries, it is not currently short-circuited for an off-screen or inactive board. Low
 priority.
+
+**RESOLVED by W3-H** — the same visibility rule (`utils/surfaceVisibility.ts`), shaped for a continuous clock:
+`useSurfaceVisible` tracks `visibilitychange` and, where available, an IntersectionObserver on the board's
+wrapper (with no IntersectionObserver the board counts as on screen). The rAF effect in `HexGridRenderer.tsx`
+now also returns early while the board is not visible and depends on that flag, so it stops requesting frames
+— and the per-frame `pointOnRouteTrack` sampling and badge lookup in `draw` stop with it — and re-arms when the
+board comes back. Each signal's phase is wall-clock (`routeSignalStartRef`), so it resumes where it would have
+been, with no catch-up; no cue rides this clock. Reduced motion is unchanged. Pinned by
+`components/w3hOffscreenGating.test.tsx` ("F-5: VF-2's traveling route signal clock": visible → frames;
+document hidden / board off screen → none; resumes on return); each fails with the gate reverted.
 
 ---
 

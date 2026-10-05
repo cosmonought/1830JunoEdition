@@ -427,6 +427,7 @@ gates.
 #### W1-I
 **Dock hygiene and status facts** · L5 · **5–6.5 h**
 - **Status (Wave-1 integration, 2026-10-03):** PARTIAL — the unconditional portion is complete (L5 `9dcad19`, `b9fd1bf`, `82b93ca`, `beac07a`, `3904533`, `fee2f66`); OD-14(a) remains (the fit-probe removal, AUD-01.01, waits on it, and W1-I-b exists only if it is ruled in).
+- **Status (2026-10-04):** COMPLETE on its slice branch `phase3/w1-i-completion` @ `195755a` (from `phase3/wave3-i-w2i-w2j-w3c-w3g-v13cert-integration` @ `d29bb2f`); NOT integrated. OD-14(a) RULED (§7.3): keep the current step-panel placement and remove the probe; W1-I-b not opened. AUD-01.01 IMPLEMENTED (`1b76512` + review fix `195755a`: `useStickyFitProbe`, its readout and style removed; `stickyFitProbe.test.ts` deleted, its three non-probe blocks carried verbatim into `stepPanelCopy.test.ts`; `stickyTrap`, `stepJumpButton`, `stickyBarSplit` re-anchored); AUD-01.02 RULED — resolved by OD-14(a).
 - **Outcome:** no developer text or temporary instrument in front of players; the dock's height follows its content; the bank,
   build and current-step facts are true.
 - **Rows:** implements AUD-01.01 (U-16), AUD-01.04 (A-14), AUD-01.08, AUD-06.07, AUD-12.01 (K-23 / U-27), P3-N014 (draft NEW-5), P3-N015 (draft W1-I), P3-N016 (draft W1-I (U-34 note)); carries the owner-gated AUD-01.02 (U-16); is Phase-3 pre-work for the Phase-4 rows AUD-11.06 (U-34)
@@ -824,7 +825,7 @@ list is kept current in `docs/phase3/README.md` ("Still open").
 - Station refusals are shown through the existing `showActionToast` (W1-F).
 - The K-16 tooltip may state the rule rather than name a seat (W1-B).
 - The Rules Reference's game-over copy (W2-I) and the U-40 authority sentence (W1-L) are drafted by the slice and reviewed at the gate.
-- U-16's probe is removed in any case (Part C: "remove it either way"); only the panel placement is OD-14(a).
+- U-16's probe is removed in any case (Part C: "remove it either way"); only the panel placement is OD-14(a). (OD-14(a) RULED 2026-10-04: keep; the probe is removed by W1-I `1b76512`.)
 
 ### 7.2 Draft decisions eliminated or corrected
 
@@ -1089,7 +1090,7 @@ narrow runs, review fixes). Where one change resolves several audit items, it is
 | Integration, rebases and shared-pin repair (~42 landings) | 10–16 |
 | Diagnosing owner-gate failures (4 gates) | 5–9 |
 | **Total (unconditional)** | **≈ 160–231 h** |
-| Conditional, only if the owner rules them in | W3-E 5–8 (OD-11) · W1-I-b 3–5 (OD-14a) · W3-K 8–14 (OD-10a) |
+| Conditional, only if the owner rules them in | W3-E 5–8 (OD-11) · W1-I-b 3–5 (OD-14a; not opened — OD-14(a) RULED keep, 2026-10-04) · W3-K 8–14 (OD-10a) |
 
 *Comparison:* the audit's 70–115 h was a backlog sum without parallel-integration overhead. The draft's 115–150 h covered
 fewer items (it lost about 45). Neither is inherited.

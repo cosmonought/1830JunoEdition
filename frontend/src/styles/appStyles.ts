@@ -1089,20 +1089,6 @@ export const styles: Record<string, React.CSSProperties> = {
     color: "#6e6c68",
     margin: "0 0 4px",
   },
-  /* Design note #813: the sticky-fit probe's readout. Deliberately plain and deliberately ugly -- it is an
-     instrument, not a feature, and it should look like something that is going to be removed. Monospace and
-     tabular so the figures do not jitter as they update on every scroll frame. */
-  fitProbe: {
-    margin: "4px 0 0",
-    padding: "3px 8px",
-    borderRadius: RADIUS.control,
-    border: "1px dashed #4a4a4a",
-    backgroundColor: "#0f0f0f",
-    color: "#a8a6a0",
-    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-    fontSize: FONT_SIZE.micro,
-    fontVariantNumeric: "tabular-nums",
-  },
   canvasPane: {
     /* Design note #600: `flex: 1` MEANS `flex-basis: 0`, AND THAT IS THE BUG. A sticky element travels only
        within its PARENT'S BOX, and `flex: 1` expands to `1 1 0%` -- a basis of ZERO, grown to fill a flex line

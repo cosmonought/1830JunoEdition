@@ -421,10 +421,11 @@ describe("there is exactly one destination", () => {
     /* Design note #885: THE CLOSING BOUND WAS `<PrivatePowerPanel`, the next element after the wrapper.
        That panel is deleted, and an `indexOf` returning -1 for it would have produced a BACKWARDS slice --
        `""` -- which satisfies both `toContain`s below by containing nothing to contradict them. The bound is
-       now the probe that genuinely follows the wrapper, and it is pinned before the slice is taken so the
-       vacuity cannot come back the next time something between them moves. */
+       now the session hint that genuinely follows the wrapper, and it is pinned before the slice is taken so
+       the vacuity cannot come back the next time something between them moves. (It was #813's fit probe until
+       Phase 3 W1-I removed the probe under OD-14(a).) */
     const wrapperStart = CODE.indexOf("<div ref={stepPanelRef}");
-    const wrapperEnd = CODE.indexOf("{stickyFitProbe && (");
+    const wrapperEnd = CODE.indexOf("{!sessionReady && (");
     expect(wrapperStart).toBeGreaterThan(-1);
     expect(wrapperEnd).toBeGreaterThan(wrapperStart);
     const wrapper = CODE.slice(wrapperStart, wrapperEnd);

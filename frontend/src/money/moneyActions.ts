@@ -216,6 +216,11 @@ export async function linkWallet(ctx: TableContext, options: LinkOptions = {}): 
     if (options.expectReplaces !== undefined && (standing !== undefined ? standing : (you.link?.wallet ?? null)) !== options.expectReplaces) {
       return refuse("This seat's linked wallet changed since you were asked, so nothing was signed. Look at it again before replacing it.");
     }
+    /* Asked without a named wallet (the server's own question after a signature): now that the server names the
+       standing wallet, ask about THAT one before signing, rather than replace a wallet the player wasn't shown. */
+    if (options.expectReplaces === undefined && typeof standing === "string" && standing !== wallet) {
+      return { ok: false, reason: `This seat is linked to ${standing}. Replace it with ${wallet}?`, needs: "replace", replace: { from: standing, to: wallet } };
+    }
   } else if (standing !== undefined && standing !== null && standing !== wallet) {
     return { ok: false, reason: `This seat is linked to ${standing}. Replace it with ${wallet}?`, needs: "replace", replace: { from: standing, to: wallet } };
   }

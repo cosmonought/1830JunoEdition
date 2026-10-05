@@ -1214,8 +1214,9 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
     const wallet = canonicalJunoWallet(body.wallet);
     if (wallet === null) return refusal(400, "bad-wallet", "That isn't a Juno wallet address.");
     if (table.record.status !== "waiting" || dealtRecord(table.record)) return refusal(409, "wrong-state", "A wallet is linked before the game starts.");
-    /* W2-M (AUD-20.14): before the wallet signs, say which wallet this seat's standing link would be replaced (the
-       same test the link's `replace-required` makes), so the browser asks first and the wallet signs once. A hint only:
+    /* W2-M (AUD-20.14): before the wallet signs, say which wallet this seat's standing link would replace (the
+       standing-link half of the link's `replace-required` test; the link's earlier refusals and its relink of an own
+       deposit still decide first), so the browser asks first and the wallet signs once. A hint only:
        the challenge, its single use and the link's own decision are unchanged, and it names nothing the seat's own
        view doesn't already carry. A ledger that can't be read just now leaves it out (the link still decides). */
     let replaces: string | null | undefined;

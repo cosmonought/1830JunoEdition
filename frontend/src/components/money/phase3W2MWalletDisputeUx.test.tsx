@@ -446,6 +446,21 @@ describe("W2-M AUD-20.13, rendered: the server's proof time decides freshness af
     expect(byTestId("money-headline")?.textContent).toBe(`Wallet linked · ${shortWallet(TEST_WALLET)}`);
   });
 
+  it("near the limit by the server's time (inside the margin): an inference, so Deposit stays beside Re-prove", async () => {
+    const { services, port } = connectedWorld();
+    await render(<MoneyPanel room={room(provenMoney(T0 - 48 * HOUR, T0 - (24 * HOUR - 2 * 60_000)))} onStart={() => undefined} services={services} port={port} />);
+    expect(byTestId("money-headline")?.textContent).toMatch(/^Re-prove/);
+    expect(byTestId("money-action-open-review")?.textContent).toBe("Deposit 1 JUNOX");
+  });
+
+  it("the host's CreateGame needs no approval: a server-stale proof never hides the host's deposit", async () => {
+    const { services, port } = connectedWorld();
+    const hostMoney = moneyView({ you: linked([], { actions: ["open-escrow", "link-wallet"], link: { wallet: TEST_WALLET, epoch: 1, ticket: TICKET, linkedAt: T0 - 48 * HOUR, consentKeys: [], proofVerifiedAt: T0 - 48 * HOUR } }) });
+    await render(<MoneyPanel room={room(hostMoney, { hostId: "p-me", you: { role: "host", playerId: "p-me", kicked: false, canStart: false } })} onStart={() => undefined} services={services} port={port} />);
+    expect(byTestId("money-action-open-review")?.textContent).toBe("Open the table on Juno — deposit 1 JUNOX");
+    expect(byTestId("money-action-reprove")).toBeNull();
+  });
+
   it.each([
     ["absent (an older server)", undefined],
     ["not a number", "yesterday"],
@@ -497,6 +512,44 @@ describe("W2-M AUD-20.14, rendered: the wallet a link would replace is named bef
     await click(byTestId("money-action-link"));
     expect(signLinks(services.wallet.calls)).toHaveLength(1);
     expect(byTestId("money-replace-question")?.textContent).toMatch(/^This seat is linked to juno1q+nrql8a\. Replace it with this wallet\? .*once more\.$/);
+  });
+
+  it("the race, then a second change before the confirm: the fresh challenge names the wallet now standing and the player is asked about THAT one -- never a silent replace", async () => {
+    const third = "juno1qyqszqgpqyqszqgpqyqszqgpqyqszqgpjnp7du";
+    const { services, port } = connectedWorld(TEST_WALLET);
+    port.answer("money/wallet-challenge", 200, { ...challengeAnswer(TEST_WALLET), replaces: null });
+    port.answer("money/wallet-link", 409, { error: "replace-required", reason: `This seat is linked to ${OTHER_WALLET}. Replace it with this wallet?` });
+    port.answer("money/wallet-challenge", 200, { ...challengeAnswer(TEST_WALLET), replaces: third });
+    await render(<MoneyPanel room={room(moneyView())} onStart={() => undefined} services={services} port={port} />);
+    await click(byTestId("money-action-link"));
+    await click(byTestId("money-replace-confirm"));
+    expect(signLinks(services.wallet.calls)).toHaveLength(1);
+    expect(byTestId("money-replace-question")?.textContent).toMatch(new RegExp(`^This seat is linked to ${shortWallet(third)}\\. Replace it with ${shortWallet(TEST_WALLET)}\\?.*sign one link message\\.$`));
+    port.answer("money/wallet-challenge", 200, { ...challengeAnswer(TEST_WALLET), replaces: third });
+    port.answer("money/wallet-link", 200, { ok: true, mode: "issued", wallet: TEST_WALLET, epoch: 3, ticket: "cd".repeat(32) });
+    await click(byTestId("money-replace-confirm"));
+    expect(signLinks(services.wallet.calls)).toHaveLength(2);
+    expect(port.requests.at(-1)?.body.replace).toBe(true);
+  });
+
+  it("confirmed, but the link has gone meanwhile (the fresh hint is null): nothing signed, asked to look again", async () => {
+    const { services, port } = connectedWorld(TEST_WALLET);
+    port.answer("money/wallet-challenge", 200, { ...challengeAnswer(TEST_WALLET), replaces: OTHER_WALLET });
+    port.answer("money/wallet-challenge", 200, { ...challengeAnswer(TEST_WALLET), replaces: null });
+    await render(<MoneyPanel room={room(moneyView())} onStart={() => undefined} services={services} port={port} />);
+    await click(byTestId("money-action-link"));
+    await click(byTestId("money-replace-confirm"));
+    expect(byTestId("money-error")?.textContent).toMatch(/linked wallet changed since you were asked, so nothing was signed/);
+    expect(signLinks(services.wallet.calls)).toEqual([]);
+  });
+
+  it("Re-prove meets a link it didn't know of: the question names the standing wallet before anything is signed", async () => {
+    const { services, port } = connectedWorld(TEST_WALLET);
+    port.answer("money/wallet-challenge", 200, { ...challengeAnswer(TEST_WALLET), replaces: OTHER_WALLET });
+    await render(<MoneyPanel room={room(provenMoney(T0 - 48 * HOUR))} onStart={() => undefined} services={services} port={port} />);
+    await click(byTestId("money-action-reprove"));
+    expect(byTestId("money-replace-question")?.textContent).toMatch(new RegExp(`^This seat is linked to ${shortWallet(OTHER_WALLET)}\\.`));
+    expect(signLinks(services.wallet.calls)).toEqual([]);
   });
 
   it("the answer is read strictly: a malformed hint is a bad answer, and nothing is signed", async () => {

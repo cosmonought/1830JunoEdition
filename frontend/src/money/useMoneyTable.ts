@@ -36,7 +36,7 @@ import {
   type TableContext,
   type Verification,
 } from "./moneyActions";
-import { proofAgedOut, seatFlow, settlementFlow, type ActionKind, type DisputeRead, type SeatFlow, type SettlementActionKind, type SettlementFlow, type WalletState } from "./moneyFlow";
+import { proofAgedOut, seatFlow, WALLET_PROOF_MAX_AGE_MS, settlementFlow, type ActionKind, type DisputeRead, type SeatFlow, type SettlementActionKind, type SettlementFlow, type WalletState } from "./moneyFlow";
 import { bumpLocal, isConfirmed, moneyServices, moneySession, proofKey, updateMoneySession, useMoneySession, type MoneyServices } from "./moneySession";
 import type { PendingWalletTx } from "./pendingTx";
 
@@ -250,9 +250,14 @@ export function useMoneyTable(input: MoneyTableInput): MoneyTable {
       : proofRefusedFor !== null && proofRefusedFor === linkTag
         ? "refused"
         : verifiedAt !== null
-          ? proofAgedOut(Math.max(verifiedAt, renewedAt ?? Number.NEGATIVE_INFINITY), now)
+          ? /* Past the server's limit by its time (judged on this device's clock): its word. Inside the last five
+               minutes: an inference, so the deposit stays beside the re-proof and the server decides. (A clock hours
+               ahead still reads a proof as past the limit: one free re-proof, never a deposit taken.) */
+            now - Math.max(verifiedAt, renewedAt ?? Number.NEGATIVE_INFINITY) >= WALLET_PROOF_MAX_AGE_MS
             ? "refused"
-            : null
+            : proofAgedOut(Math.max(verifiedAt, renewedAt ?? Number.NEGATIVE_INFINITY), now)
+              ? "aged"
+              : null
           : proofAgedOut(Math.max(link.linkedAt, renewedAt ?? Number.NEGATIVE_INFINITY), now)
             ? "aged"
             : null;

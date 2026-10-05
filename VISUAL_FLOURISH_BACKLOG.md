@@ -1392,7 +1392,7 @@ lay depending on who laid it. Its tokens have no planned place (#1474): that pro
 board, so each token rides in from its seat with nothing waiting for it (D-34); it sounds the same cues as a confirmed
 proposal (D-24).
 
-### D-30 · `OPEN` · Clip antialiasing while the front crosses
+### D-30 · `RESOLVED` (W3-H, 2026-10-04) · Clip antialiasing while the front crosses
 Each side of the front is the same drawing under a clip, so nothing is stroked twice. A stroke clipped as it is
 drawn antialiases its clipped edge over whatever lies beneath it, and #1471's edge line covered the seam that left.
 Since #1473 the edge runs under the art, so the seam is closed instead: the committed side's clip reaches a pixel and
@@ -1402,6 +1402,13 @@ layer's edge meets only the other side's finished layer (where no scratch canvas
 it draws, as before). In harness zooms the faint line of lower strokes across stations and rails is gone. The value
 badge is still drawn clipped per side — a disc and a figure — so a faint seam across it, for the frames the front
 crosses it, is possible; if one is seen, look here.
+**RESOLVED by W3-H** — the value badge now crosses the front as the art does: each side's badge (disc and figure) is
+painted whole into the same scratch layers (`layOnSides`, generalised from #1473's `laySides` in
+`tileTransitionCanvas.ts`) and laid onto the board under its side's clip, so a clipped edge meets only the other side's
+finished badge. The committed side still claims the slot and the proposal's side still draws from the ledger as it
+stood before the claim; where no scratch layer can be had each side is clipped as it draws, as before. Pinned by
+`components/w3hTileFlourish.test.ts` (D-30 case: in every frame the front crosses Scranton's badge, both sides are
+drawn off the board and laid on with clipped images; with no scratch layer, both are drawn on the board, unlayered).
 
 ### D-31 · `OWNER DECISION` · The proposal replaced #822's ghost pass
 The preview is drawn in the tile pass, not over the finished board, so the passes a laid tile sits under now draw

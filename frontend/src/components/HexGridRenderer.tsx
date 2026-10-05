@@ -209,7 +209,7 @@ import {
   type TokenMotion,
   type Vec,
 } from "./tileTransition";
-import { drawTileTransitionArt, drawTileTransitionFill, withRevealSide } from "./tileTransitionCanvas";
+import { drawTileTransitionArt, drawTileTransitionFill, layOnSides, withRevealSide } from "./tileTransitionCanvas";
 /* Train Route Pulse / Revenue Badge Animation flourish: pure geometry (no canvas, no React) that turns the
    SAME authored track data drawRouteOverlays strokes into a sampleable travel path, plus which of a route's
    hexes are its priced revenue stops and which single reaction (if any) a badge shared by several arrivals
@@ -3261,12 +3261,13 @@ export function HexGridRenderer({
       // #1394/#1405: the tile's own rings, dits and sampled rails decide the slots, in place of the edge guess.
       const markerBlocked = slotsBlockedByTileMarkers(tile.tile_id, tile.orientation);
       const tileHit = badgeHitVisualForHex(tile.q, tile.r);
-      const paintTileBadge = (alpha: number, ledger: Map<string, Set<number>>) => {
-        ctx.save();
-        ctx.globalAlpha = alpha; // 1 everywhere but a proposal and a hex mid-transition (#1465, #1471)
-        withHexClip(ctx, center, hexSize, () => {
+      // W3-H (VF D-30): `target` is a scratch layer while the commit front crosses the badge; the board otherwise.
+      const paintTileBadge = (alpha: number, ledger: Map<string, Set<number>>, target: CanvasRenderingContext2D = ctx) => {
+        target.save();
+        target.globalAlpha = alpha; // 1 everywhere but a proposal and a hex mid-transition (#1465, #1471)
+        withHexClip(target, center, hexSize, () => {
           drawValueBadge(
-            ctx,
+            target,
             center,
             tile.q,
             tile.r,
@@ -3279,7 +3280,7 @@ export function HexGridRenderer({
             tileHit,
           );
         });
-        ctx.restore();
+        target.restore();
       };
       const printValue = (alpha: number, ledger: Map<string, Set<number>>) =>
         paintBadge(tileHit, () => paintTileBadge(alpha, ledger));
@@ -3299,8 +3300,18 @@ export function HexGridRenderer({
         // This overlap (a badge popping at the exact instant its own hex's tile-lay transition front is
         // crossing it) is narrow and rare enough in real play that the smallest-local fix is to simply not
         // elevate it here -- it keeps the pre-existing draw order (under tokens) for this one edge case only.
-        withRevealSide(ctx, center, hexSize, badge.front, "west", () => paintTileBadge(1, claimedHexSlots));
-        withRevealSide(ctx, center, hexSize, badge.front, "east", () => paintTileBadge(provisionalAlpha, before));
+        /* W3-H (VF D-30): the badge is a disc under a figure, and a stroke clipped as it is drawn antialiases its
+           clipped edge over whatever lies beneath it -- the faint seam the tile's art closed in #1473 by painting each
+           side whole into a scratch layer and laying it under its clip. The badge now crosses the same way: each
+           side's badge is finished first, so a clipped edge meets only the other side's finished badge. Where no
+           scratch layer can be had, each side is clipped as it draws, as before. */
+        const layered = layOnSides(ctx, center, hexSize, badge.front, (layer, side) =>
+          side === "committed" ? paintTileBadge(1, claimedHexSlots, layer) : paintTileBadge(provisionalAlpha, before, layer),
+        );
+        if (!layered) {
+          withRevealSide(ctx, center, hexSize, badge.front, "west", () => paintTileBadge(1, claimedHexSlots));
+          withRevealSide(ctx, center, hexSize, badge.front, "east", () => paintTileBadge(provisionalAlpha, before));
+        }
       }
     }
     /* #1390's padlock on final tiles was drawn here and is GONE by ruling ("remove the padlocks from the

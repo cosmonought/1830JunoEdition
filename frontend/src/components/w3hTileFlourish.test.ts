@@ -27,7 +27,7 @@ declare global {
 global.IS_REACT_ACT_ENVIRONMENT = true;
 
 /* ---- the board's printed-element primitives, wrapped to record what each was asked to paint ---- */
-type PrimitiveCall = { name: string; args: unknown[]; alpha: number };
+type PrimitiveCall = { name: string; args: unknown[]; alpha: number; onBoard: boolean };
 const mockPrimitiveCalls: PrimitiveCall[] = [];
 jest.mock("./hexCanvasPrimitives", () => {
   const actual = jest.requireActual("./hexCanvasPrimitives");
@@ -42,7 +42,9 @@ jest.mock("./hexCanvasPrimitives", () => {
     "drawValueBadge",
   ]) {
     wrapped[name] = (...args: unknown[]) => {
-      mockPrimitiveCalls.push({ name, args, alpha: (args[0] as { globalAlpha: number }).globalAlpha });
+      const target = args[0] as { globalAlpha: number; canvas?: { isConnected?: boolean } };
+      // The board's own canvas is in the document; a scratch layer never is.
+      mockPrimitiveCalls.push({ name, args, alpha: target.globalAlpha, onBoard: target.canvas?.isConnected === true });
       return (actual[name] as (...a: unknown[]) => unknown)(...args);
     };
   }
@@ -65,7 +67,7 @@ class StubPath2D {
 (global as unknown as { Path2D: unknown }).Path2D = StubPath2D;
 
 type Matrix = { a: number; b: number; c: number; d: number; e: number; f: number };
-type CtxCall = { ctx: number; name: string; args: unknown[]; alpha: number; transform: Matrix; clipped: number };
+type CtxCall = { ctx: number; onBoard: boolean; name: string; args: unknown[]; alpha: number; transform: Matrix; clipped: number };
 let ctxCalls: CtxCall[] = [];
 const contexts = new WeakMap<HTMLCanvasElement, unknown>();
 let nextContext = 0;
@@ -84,7 +86,7 @@ function recordingContext(canvas: HTMLCanvasElement): unknown {
   let state: State = { props: { globalAlpha: 1, lineWidth: 1, font: "10px sans-serif" }, transform: { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 }, clipped: 0 };
   const stack: State[] = [];
   const record = (name: string, args: unknown[]) =>
-    ctxCalls.push({ ctx: id, name, args, alpha: state.props.globalAlpha as number, transform: { ...state.transform }, clipped: state.clipped });
+    ctxCalls.push({ ctx: id, onBoard: canvas.isConnected, name, args, alpha: state.props.globalAlpha as number, transform: { ...state.transform }, clipped: state.clipped });
   const methods: Record<string, (...args: never[]) => unknown> = {
     save: () => {
       stack.push({ props: { ...state.props }, transform: { ...state.transform }, clipped: state.clipped });
@@ -188,9 +190,12 @@ let clock = 0;
 let frames: Array<{ id: number; run: FrameRequestCallback }> = [];
 let originalFrame: typeof window.requestAnimationFrame;
 let originalCancel: typeof window.cancelAnimationFrame;
+/** Whether a canvas off the document (a scratch layer) can have a context -- off for the no-scratch fallback. */
+let scratchAvailable = true;
 
 beforeEach(() => {
   clock = 10_000;
+  scratchAvailable = true;
   frames = [];
   ctxCalls = [];
   mockPrimitiveCalls.length = 0;
@@ -211,6 +216,7 @@ beforeEach(() => {
   jest.spyOn(window.HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
   jest.spyOn(window.HTMLMediaElement.prototype, "play").mockImplementation(() => Promise.resolve());
   jest.spyOn(window.HTMLCanvasElement.prototype, "getContext").mockImplementation(function (this: HTMLCanvasElement) {
+    if (!scratchAvailable && !this.isConnected) return null;
     let context = contexts.get(this);
     if (!context) {
       context = recordingContext(this);
@@ -356,5 +362,52 @@ describe("W3-H (VF D-12): on a lay nobody proposed here the printed icon, name a
     const settled = frameAt(startedAt, BEAT_MS.lead + 3 * FRAME_MS);
     expect(nameAt(settled.primitives)).toHaveLength(0);
     expect(compoundAt(settled.primitives)).toHaveLength(0);
+  });
+});
+
+/* ==================================================================
+    VF D-30: THE VALUE BADGE CROSSES THE FRONT AS THE ART DOES
+   ================================================================== */
+describe("W3-H (VF D-30): the value badge is finished per side in a scratch layer and laid under its clip", () => {
+  const F16 = hexAt("F16");
+  /** Every frame of an unproposed lay of #57 on Scranton in which the badge is drawn on both sides of the front. */
+  function crossingFrames() {
+    const o57 = facing("F16", { kind: "printed", label: "F16" }, 57);
+    board(grid());
+    const startedAt = (clock += 5_000);
+    board(grid(["F16", 57, o57]));
+    const crossing: Array<ReturnType<typeof frameAt>> = [];
+    for (let ms = BEAT_MS.lead + FRAME_MS; ms < 2_000; ms += FRAME_MS) {
+      const frame = frameAt(startedAt, ms);
+      const badges = frame.primitives.filter((call) => call.name === "drawValueBadge" && call.args[2] === F16.q && call.args[3] === F16.r);
+      if (badges.length === 2) crossing.push({ ...frame, primitives: badges });
+    }
+    return crossing;
+  }
+
+  it("paints both sides' badges off the board and lays each on under its clip -- and clips as it draws only without a scratch layer", () => {
+    const crossing = crossingFrames();
+    expect(crossing.length).toBeGreaterThan(0);
+    for (const frame of crossing) {
+      const [committed, provisional] = frame.primitives;
+      expect(committed.onBoard).toBe(false);
+      expect(provisional.onBoard).toBe(false);
+      expect(committed.alpha).toBe(1);
+      expect(provisional.alpha).toBeLessThan(1);
+      // The laying-on: images onto the board, each under a clip (the art's two and the badge's two).
+      const laid = frame.calls.filter((call) => call.onBoard && call.name === "drawImage" && call.clipped > 0);
+      expect(laid.length).toBeGreaterThanOrEqual(4);
+    }
+
+    // The fallback, unchanged: with no scratch layer to be had, each side is clipped as it is drawn on the board.
+    act(() => root.unmount());
+    root = createRoot(container);
+    scratchAvailable = false;
+    const fallback = crossingFrames();
+    expect(fallback.length).toBeGreaterThan(0);
+    for (const frame of fallback) {
+      for (const badge of frame.primitives) expect(badge.onBoard).toBe(true);
+      expect(frame.calls.filter((call) => call.name === "drawImage")).toHaveLength(0);
+    }
   });
 });

@@ -215,8 +215,11 @@ describe("every toast is mounted behind a rule", () => {
        Guarded on `!placement.allowed` -- listed below. (W1-G's dropped-draft note is a sixth, written on one line
        behind `droppedNote !== null`, which this line-start count does not see; it is pinned on its own below.)
        Re-pinned at the Wave-1 integration, which owns this multi-region suite. */
+    /* Phase 3 W3-J (AUD-25.08) ADDED THE SIXTH: a paid station click the treasury cannot pay for (or with no token
+       left, or no reachable city) is refused at the click in `paidStationRefusal`'s sentence, where before the board
+       staged a paid token the server refused. Guarded on `paidStationRefusalNow !== null` -- listed below. */
     const calls = APP.match(/^\s*showActionToast\(/gm) ?? [];
-    expect(calls).toHaveLength(5);
+    expect(calls).toHaveLength(6);
   });
 
   it("gates the receipt on the message deserving one", () => {
@@ -372,6 +375,7 @@ describe("every toast is mounted behind a rule", () => {
       "isMyTurnRef.current && isUpgradeDeadEnd(laidHere.tile_id)", // #1390
       "if (restrictedHere) {", // #1694: `restrictedHere` is null unless the acting viewer clicked a barred hex
       "if (!placement.allowed) {", // W1-F: only a station click the placement authority refused
+      "if (paidStationRefusalNow !== null) {", // W3-J AUD-25.08: only a paid station the authority's predicate refuses
     ];
     for (const guard of guards) {
       expect(APP).toContain(guard);

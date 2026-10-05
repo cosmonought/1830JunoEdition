@@ -407,7 +407,9 @@ describe("the shell wires both prompts through the one viewer policy", () => {
 
   it("the home station still asks W1-J's rule, and the President's errand still hides the card for the map (#440)", () => {
     const mount = sliceBetween(APP, "<HomeStationPrompt", "onPlace={handlePlaceHomeStation}");
-    expect(mount).toContain("pending={homeStationPlacement ? null : pendingHomeToken}");
+    // Phase 3 W3-J (AUD-25.04): the errand still hides the card (`homeStationPlacement !== null`), and so does that
+    // corporation's placement in flight (`homePromptPending`, phase3W3JRollbacks.test.ts).
+    expect(mount).toContain("pending={homePromptPending(pendingHomeToken, homeStationPlacement !== null, freeStationInFlight)}");
     expect(mount).toContain("viewerIsPresident={homeStationViewerIsPresident({");
   });
 });

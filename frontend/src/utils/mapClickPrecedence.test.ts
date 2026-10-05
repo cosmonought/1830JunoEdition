@@ -95,7 +95,8 @@ describe("W1-F (P3-N012): a refused station click explains itself on the map", (
   it("writes the evaluator's reason through the general action toast, not the Routes-only slot", () => {
     expect(HANDLER).toContain("if (!placement.allowed) {\n        showActionToast(\n          placement.reason ??");
     expect(HANDLER).not.toContain("setRouteFeedback(");
-    expect(HANDLER).toContain("[mapGrid, activeStationCompany, gameState, showActionToast]");
+    // Phase 3 W3-J (AUD-25.08): and the paid verdict the click now asks first.
+    expect(HANDLER).toContain("[mapGrid, activeStationCompany, gameState, showActionToast, paidStationRefusalNow]");
   });
 
   it("the sentence is still the evaluator's own", () => {

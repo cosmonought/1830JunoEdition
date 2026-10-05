@@ -1258,7 +1258,7 @@
    "od": "OD-18 (SUPERSEDED IN PART 2026-10-05: build the clock in Phase 3; no automatic forfeiture)",
    "p4": "—",
    "notes": "The audit says U-10 \"stays deferred\", but no owner ruling placing it later is on record, and Part F says deferral alone does not count. OD-18 asks the owner to confirm a later placement (then E) or scope it into Phase 3.",
-   "status": "OPEN — REQUIRED PHASE-3 IMPLEMENTATION, pre-Phase-4 lane A (owner ruling OD-18 / U-10, superseded in part 2026-10-05: the clock is BUILT in Phase 3 so Phase 4 can playtest it). Build: Live vs Async clock / timing infrastructure; visible clock state; the pause / resume semantics that clock model needs (U-10's \"pause cap\" belongs to this design, inside the ruling); durable / persistent timing state; reconnect / reload behaviour; server-authoritative timing where required; enough instrumentation / status to playtest it in Phase 4. NOT built: automatic forfeiture because a clock expires, automatic trade decline, host succession (deferred pending Phase-4 validation, AUD-19.04). A clock reaching zero must not create a forfeiture settlement; no Forfeit / Clemency settlement payload before clock / forfeit semantics are validated and separately authorised. Not built during the integration (no clock code in merge-conflict resolution). C -> B at the consolidated integration."
+   "status": "IMPLEMENTED — CLOCK INFRASTRUCTURE ONLY, on `phase3/preplaytest-live-async-clocks` (pre-Phase-4 lane A, from `b8d5246`; NOT integrated; design record `docs/phase3/LANE_A_LIVE_ASYNC_CLOCKS.md`). Built: server-authoritative clock (the engine's acting seat; a durable control-plane record `games/clocks/<id>.json` / `GAME#<g>/CLOCK`, never the log or the GameRecord); Live / Async from the existing `variants.mode` (absent = Live); host-only pause / resume of the CLOCK (never gameplay), durable before acknowledged, bound to the clock revision, no pause cap; reload / reconnect / restart / undo never reset a turn; the room strip's chip (\"Time expired\", never \"forfeited\"; no figure while the tab is not current); `clock.*` audit lines and status counters for Phase 4. NOT built (deferred pending Phase-4 validation, AUD-19.04): automatic forfeit, automatic trade decline, host succession, any Forfeit / Clemency settlement payload. OWNER DECISION OPEN: the Live and Async default durations (`GS_CLOCK_LIVE_TURN_SECONDS` / `GS_CLOCK_ASYNC_TURN_SECONDS`; unset = count up, never expire); defaults to confirm: who may pause (host), the off-turn decision's clock seat (turn holder), downtime / holds credited (no)."
   },
   {
    "key": "AUD-11.05",
@@ -6052,5 +6052,29 @@
    "P0: AUD-00.02 the roadmap-order docs update",
    "W3-F: closure bookkeeping (AUD-25.14), the Phase-4 checklist, the broad owner gate"
   ]
+ },
+ "preplaytest_lane_a_live_async_clocks": {
+  "branch": "phase3/preplaytest-live-async-clocks",
+  "base": "b8d5246c579d32ad4f9a2fccd7c293d1655ff81a",
+  "integrated": false,
+  "rows": {
+   "AUD-11.04": "IMPLEMENTED (clock infrastructure only)"
+  },
+  "deferred": [
+   "automatic forfeit on expiry",
+   "automatic trade decline",
+   "host succession (AUD-19.04)",
+   "Forfeit / Clemency settlement payload"
+  ],
+  "owner_decisions_open": [
+   "Live default duration (GS_CLOCK_LIVE_TURN_SECONDS)",
+   "Async default duration (GS_CLOCK_ASYNC_TURN_SECONDS)"
+  ],
+  "defaults_to_confirm": [
+   "who may pause / resume: host",
+   "clock seat during an off-turn decision: the turn holder (actingAddress)",
+   "server downtime / holds credited: no (wall time runs)"
+  ],
+  "versions": "unchanged: rules 13; settlement [10, 11, 12, 13]; hosted 1; financial 3; compatibility keys unchanged"
  }
 }

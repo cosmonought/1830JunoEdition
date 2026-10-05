@@ -824,7 +824,7 @@ The remaining Phase-3 work that MUST land before Phase-4 human playtesting, each
 
 | Lane | What | Rows | Hard limits |
 |---|---|---|---|
-| **A** | **Live / Async clocks (U-10, OD-18 superseded in part):** clock / timing infrastructure; visible clock state; pause / resume semantics the model needs (the "pause cap" is part of this design); durable timing state; reconnect / reload; server-authoritative timing where required; Phase-4 instrumentation / status | AUD-11.04 | NO automatic forfeiture on expiry, NO automatic trade decline, NO host succession (AUD-19.04, deferred pending Phase 4); no Forfeit / Clemency settlement payload; no settlement / escrow change |
+| **A** | **Live / Async clocks (U-10, OD-18 superseded in part):** clock / timing infrastructure; visible clock state; pause / resume semantics the model needs (the "pause cap" is part of this design); durable timing state; reconnect / reload; server-authoritative timing where required; Phase-4 instrumentation / status | AUD-11.04 | NO automatic forfeiture on expiry, NO automatic trade decline, NO host succession (AUD-19.04, deferred pending Phase 4); no Forfeit / Clemency settlement payload; no settlement / escrow change. **Status (2026-10-05): IMPLEMENTED on `phase3/preplaytest-live-async-clocks` (NOT integrated)** -- `docs/phase3/LANE_A_LIVE_ASYNC_CLOCKS.md`. No pause cap was built (none is approved). Owner decision open: the Live / Async default durations |
 | **B** | **D-35 OO reservation marker:** the marker follows its own city identity through the animated transition and resolves to the final city at commit | VF/D-35 | presentation only; no gameplay / state / rules change |
 | **C** | **Emergency `train-offer` third-seat duplicate prompt** (the first post-integration bugfix lane) | P3-N027 | narrow; prove one presentation, live controls only for the answering seat, status-only third seat, correct proposer status / rescind; server authority unchanged |
 | **D** | **Terms route / page shell and Terms / deposit link infrastructure** (OD-16) | AUD-20.08 | NO invented Terms prose -- an owner-copy slot only; final Terms are a Phase-7 / mainnet gate |
@@ -1153,6 +1153,11 @@ owner-decision blocker: AUD-20.08 is READY / OPEN IMPLEMENTATION (pre-Phase-4 la
 - A clock reaching zero must not silently create a forfeiture settlement unless a separately approved later rule authorises
   it. No Forfeit / Clemency settlement payload before clock / forfeit semantics are validated and authorised.
 - Not built inside the integration; one of the first post-integration lanes.
+- *Lane A status (2026-10-05, not a ruling):* the clock infrastructure is IMPLEMENTED on `phase3/preplaytest-live-async-clocks`
+  (`docs/phase3/LANE_A_LIVE_ASYNC_CLOCKS.md`); none of its consequences is built. No owner-approved Live or Async duration
+  exists: both slots ship unset (count up, never expire) and are owner-gated configuration. Built defaults the owner may
+  confirm: host-only pause / resume, no pause cap, the turn holder's clock during an off-turn decision, wall time across
+  server downtime / holds.
 
 **OD-19 — CONFIRMED.** Watch is ALWAYS a read-only spectator view, even for a signed-in seat owner; the owned seat is rejoined
 through Your Tables / Open / Rejoin. Stale-board safety at both layers: CLIENT controls non-actionable while replay /

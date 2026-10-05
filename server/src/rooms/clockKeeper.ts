@@ -319,7 +319,7 @@ export function createClockKeeper(deps: ClockKeeperDeps) {
       armExpiry(entry);
       return;
     }
-    const startedTurn = next.turn !== null && next.turn.key !== base.turn?.key;
+    const startedTurn = next.tally.turns > base.tally.turns; // a new turn (a same-key one included), never a resumed one
     entry.record = next;
     if (startedTurn) counters.turnsStarted += 1;
     auditTurn(entry, ended, source !== "commit");

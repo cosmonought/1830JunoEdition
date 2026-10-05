@@ -6762,7 +6762,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
              append leaves the position free for a retry. */
           const appendAt = appliedIndexRef.current;
           // Design note #1173a, whose reasoning is on `pendingAppendIndex`.
-          if (options?.automatic !== true) setPendingAppendIndex(appendAt);
+          /* Phase 3 W3-B (P3-N021, OD-12 RED R1): EVERY PLAYER PRESS TAKES THE LATCH, `automatic` ones included -- the
+             B&O par, Proceed, the M&H exchange, a home / D&H station, Undo and Close Room are decisions a hand can
+             repeat (#668). Only the game's own `derived` dispatches are not presses. */
+          if (options?.derived !== true) setPendingAppendIndex(appendAt);
 
           /* ==================================================================
               DESIGN NOTE 1213: THE GAME'S OWN ACTIONS ARE NOT THIS CLIENT'S TO SEND
@@ -6781,7 +6784,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
              dispatch stops here, and the action arrives from the server like any other. */
           const link = serverLinkRef.current;
           if (link && options?.derived === true) {
-            setPendingAppendIndex(null);
+            /* Phase 3 W3-B (P3-N021, OD-12 RED R1): returns WITHOUT touching the latch. A derived dispatch takes none,
+               so the `null` that stood here could only release a PLAYER's press still held -- an auto-skip or forced
+               withhold that fired while a later press was in flight (an earlier entry drained and moved the step)
+               re-armed the controls on a board one round trip old. */
             return;
           }
           /* #1242: A SERVER-PATH BUILD WITH NO LINK REFUSES; IT DOES NOT FALL BACK TO FIRESTORE. The two

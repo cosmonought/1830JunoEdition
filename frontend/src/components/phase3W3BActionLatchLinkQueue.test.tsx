@@ -175,8 +175,8 @@ interface ShellApi {
   board: GameStateResponse;
   actionInFlight: boolean;
   view: LinkQueueView;
-  /** A player's press, dispatched as `runGameplayAction` does (`automatic` presses take no latch -- #1173a). */
-  press: (msg: Msg, options?: { automatic?: boolean }) => void;
+  /** A press, dispatched as `runGameplayAction` does (every press but a `derived` one takes the latch -- P3-N021). */
+  press: (msg: Msg, options?: { automatic?: boolean; derived?: boolean }) => void;
 }
 
 /** The shell's composition: W3-I's one hook and view, W3-B's latch, the submit half's three latch lines and the
@@ -198,10 +198,10 @@ function Shell({
   const [board, setBoard] = useState(initial);
   const appliedIndexRef = useRef(0);
   const press = useCallback(
-    (msg: Msg, options?: { automatic?: boolean }) => {
+    (msg: Msg, options?: { automatic?: boolean; derived?: boolean }) => {
       const appendAt = appliedIndexRef.current;
-      // RED R1, as is: "Design note #1173a, whose reasoning is on `pendingAppendIndex`."
-      if (options?.automatic !== true) setPendingAppendIndex(appendAt);
+      // RED R1 (W3-B P3-N021): "Design note #1173a, whose reasoning is on `pendingAppendIndex`."
+      if (options?.derived !== true) setPendingAppendIndex(appendAt);
       void link.client.submit(msg as never).then((allocated) => {
         // RED R1, as is: "released -- nothing will advance the cursor past an action that never landed."
         if (allocated === null) setPendingAppendIndex((current) => (current === appendAt ? null : current));
@@ -761,7 +761,7 @@ describe("AUD-25.01 (10): the W2-G emergency action cannot duplicate", () => {
 
 /* ================================================================================================================ */
 describe("AUD-25.01 (11): only THIS tab's held gameplay submission busies the controls", () => {
-  it("a press that takes no latch (`automatic`: the par answer, the M&H exchange, a home station, Undo) is still held by the link", () => {
+  it("an `automatic` press (the par answer, the M&H exchange, a home station, Undo) is latched and held by the link", () => {
     const link = room();
     act(() => link.wire().open());
     act(() => link.wire().drop());
@@ -994,8 +994,8 @@ describe("the shell's wiring (source pins): one derived busy reason, read by eve
     expect(APP).toContain("inFlight: actionInFlight || previewTile?.committed === true,");
   });
 
-  it("the RED R1 submit half and the R5 drain release are exactly as before (the setter keeps its name and lines)", () => {
-    expect(APP).toContain("if (options?.automatic !== true) setPendingAppendIndex(appendAt);");
+  it("the RED R1 submit half and the R5 drain release (the setter keeps its name and lines; P3-N021's R1 latch rule)", () => {
+    expect(APP).toContain("if (options?.derived !== true) setPendingAppendIndex(appendAt);");
     expect(APP).toContain("setPendingAppendIndex((current) => (current === appendAt ? null : current));");
     expect(APP).toContain("current !== null && appliedIndexRef.current > current ? null : current,");
   });

@@ -32,6 +32,7 @@ import {
   type EmergencyTrainPurchaseModalProps,
 } from "./EmergencyTrainPurchaseModal";
 import { EmergencyPurchaseWaitingCard } from "./EmergencyPurchaseWaitingCard";
+import { FundingPrivateOfferPrompt } from "./TrainPurchasePanel"; // Phase 3 W3-J (AUD-25.13 #2)
 import { WAITING_STATUS_ATTRIBUTE } from "./WaitingStatusBanner";
 import { applySandboxAction } from "../gameEngine/sandboxSession";
 import {
@@ -1060,5 +1061,116 @@ describe("the shell's wiring", () => {
     expect(app).toContain("intercorporateStepFor(gameState, emergencyFunding, mapGrid, viewerAddress)");
     expect(app).toContain("fundingOfferDraftRefusal(gameState, emergencyFunding, viewerAddress, draft)");
     expect(app).toContain("actionInFlight={actionInFlight}");
+  });
+});
+
+/* ================================================================== */
+/*  Phase 3 W3-J (AUD-25.13 #2, the W2-F integration LOW): one waiting presentation per seat during a funding offer */
+/* ================================================================== */
+
+describe("W3-J AUD-25.13 #2: a funding private offer is presented once to a seat with nothing to decide", () => {
+  /** The shell's two mounts for one viewer, with App's own expressions (the surface, the waiting sentence's private-offer
+   *  arm with its "you", the prompt's offer, its buyer-president test, the hold sentence and the new stand-aside). */
+  function Slot({ board: current, viewer: who, spectator = false, onAnswer }: { board: GameStateResponse; viewer: string; spectator?: boolean; onAnswer: (id: number, accept: boolean) => void }) {
+    const plan = planOf(current);
+    const surface = emergencySurfaceFor({ sandbox: true, spectator, scrubbing: false, viewerAddress: who, plan });
+    const offer = current.private_purchase_offer?.funding ? current.private_purchase_offer : null;
+    const named = (address: string | null | undefined) => (!address ? "its president" : address === who ? "you" : label(address));
+    const buyerPresident = offer ? current.public_companies.find((entry) => entry.company_id === offer.buyer_protocol_id)?.president ?? null : null;
+    const waiting =
+      surface === "waiting"
+        ? emergencyWaitingSentence({
+            ticker: plan.corporationTicker,
+            presidentLabel: named(plan.presidentAddress),
+            privateOffer: offer ? { privateName: offer.private_name, buyerTicker: offer.buyer_ticker, buyerPresidentLabel: named(buyerPresident) } : null,
+            trainOffer: null,
+          })
+        : null;
+    const prompt = offer
+      ? { privateId: offer.private_id, privateName: offer.private_name, sellerLabel: label(offer.owner), buyerTicker: offer.buyer_ticker, buyerPresidentLabel: label(buyerPresident ?? ""), price: Number(offer.price) }
+      : null;
+    return (
+      <>
+        <EmergencyPurchaseWaitingCard sentence={waiting} />
+        <FundingPrivateOfferPrompt
+          offer={prompt}
+          viewerIsBuyerPresident={prompt !== null && buyerPresident === who}
+          onAnswer={onAnswer}
+          waitingSentence={dockHoldView({ state: current, mapGrid: CORRIDOR, labelFor: label }).turnHoldReason}
+          standAside={waiting !== null}
+        />
+      </>
+    );
+  }
+
+  const offered = () => apply(privateOnly("160"), OFFER(2, NYC, 200), P1);
+  let answers: Array<[number, boolean]>;
+  function draw(current: GameStateResponse, who: string, spectator = false) {
+    unmountAll();
+    mounted = true;
+    layerRoot = createRoot(document.createElement("div"));
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+    answers = [];
+    act(() => root.render(<Slot board={current} viewer={who} spectator={spectator} onAnswer={(id, accept) => answers.push([id, accept])} />));
+  }
+  const cards = () => host.querySelectorAll(`[${WAITING_STATUS_ATTRIBUTE}]`);
+  const prompt = () => host.querySelector('[aria-label="Private company offered"]');
+
+  it("the board is in the private-offer stage, NYC's president (Bob) must answer", () => {
+    const board = offered();
+    expect(emergencyStageFor(board, fundingOf(board))).toBe("private-offer");
+    expect(board.private_purchase_offer).toMatchObject({ funding: true, buyer_protocol_id: NYC });
+  });
+
+  it.each([
+    ["a third seat", P3, false],
+    ["a watcher (no seat)", "", false],
+    ["the obligated president in spectate mode", P1, true],
+  ])("%s reads ONE waiting presentation -- the card -- and no dead answer buttons", (_who, who, spectator) => {
+    draw(offered(), who, spectator);
+    expect(cards()).toHaveLength(1);
+    expect(cards()[0].textContent).toContain("Private 2 is on offer to NYC; waiting on Bob.");
+    expect(prompt()).toBeNull();
+    expect(host.querySelectorAll('[data-testid="waiting-on-line"]')).toHaveLength(0);
+    expect(host.querySelectorAll("button")).toHaveLength(0);
+  });
+
+  it("the answering buyer president keeps the prompt with live controls -- the card beside it is W2-G's design", () => {
+    draw(offered(), P2);
+    expect(prompt()).not.toBeNull();
+    expect(prompt()!.textContent).toContain("This is Bob's decision.");
+    const buttons = Array.from(prompt()!.querySelectorAll("button"));
+    const accept = buttons.find((button) => button.textContent === "Accept")!;
+    const reject = buttons.find((button) => button.textContent === "Reject")!;
+    expect(accept.disabled).toBe(false);
+    expect(reject.disabled).toBe(false);
+    act(() => accept.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    expect(answers).toEqual([[2, true]]);
+    expect(cards()[0].textContent).toContain("waiting on you.");
+    // The answer the controls send settles through the real reducer.
+    const settled = apply(offered(), { AnswerFundingPrivateOffer: { game_id: 1, private_id: 2, accept: true } }, P2);
+    expect(settled.private_purchase_offer ?? null).toBeNull();
+  });
+
+  it("with no waiting card standing, the prompt is exactly as before (it never leaves a seat with nothing)", () => {
+    unmountAll();
+    mounted = true;
+    layerRoot = createRoot(document.createElement("div"));
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+    const offer = { privateId: 2, privateName: "Private 2", sellerLabel: "Alice", buyerTicker: "NYC", buyerPresidentLabel: "Bob", price: 200 };
+    act(() => root.render(<FundingPrivateOfferPrompt offer={offer} viewerIsBuyerPresident={false} onAnswer={() => undefined} waitingSentence="held" />));
+    expect(prompt()).not.toBeNull();
+    expect(host.querySelectorAll('[data-testid="waiting-on-line"]')).toHaveLength(1);
+  });
+
+  it("the shell hands the prompt the card's own mount condition", () => {
+    const app = readShell();
+    const mount = app.slice(app.indexOf("<FundingPrivateOfferPrompt"), app.indexOf("/>", app.indexOf("<FundingPrivateOfferPrompt")));
+    expect(mount).toContain("standAside={emergencyWaiting !== null}");
+    expect(app).toContain("<EmergencyPurchaseWaitingCard sentence={emergencyWaiting} />");
   });
 });

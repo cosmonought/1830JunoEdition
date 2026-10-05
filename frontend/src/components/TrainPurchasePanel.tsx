@@ -1859,6 +1859,11 @@ export interface FundingPrivateOfferPromptProps {
    *  (`fundingAcceptRefusalForViewer`), or `null`. While it refuses, Accept is greyed with its sentence; Reject stays
    *  live. Absent is `null`. The same two verdicts the forced-purchase modal's answer already reads. */
   acceptRefusal?: string | null;
+  /** Phase 3 W3-J (AUD-25.13 #2, the W2-F integration LOW): `true` while the emergency waiting card (W2-G, drawn
+   *  through W2-H's `WaitingStatusBanner`) is on screen. That card is the one waiting presentation for this offer on
+   *  every seat with nothing to decide, so the prompt -- a second waiting line and two dead buttons -- stands aside for
+   *  every viewer but the answering buyer president, whose controls these are. Absent is `false`: exactly as before. */
+  standAside?: boolean;
 }
 
 export function FundingPrivateOfferPrompt({
@@ -1869,8 +1874,9 @@ export function FundingPrivateOfferPrompt({
   waitingSentence = null,
   answerRefusal = null,
   acceptRefusal = null,
+  standAside = false,
 }: FundingPrivateOfferPromptProps) {
-  if (!offer) return null;
+  if (!offer || (standAside && !viewerIsBuyerPresident)) return null;
   const canAnswer = viewerIsBuyerPresident && !actionInFlight;
   /* ==================================================================
       PHASE 3 W3-J (AUD-25.10 (b)): THE PROMPT ASKS THE ANSWER'S AUTHORITY

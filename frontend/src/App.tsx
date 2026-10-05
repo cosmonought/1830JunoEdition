@@ -15942,6 +15942,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
         // Phase 3 W3-J (AUD-25.10 (b)): the answer's and the acceptance's verdicts, as the emergency modal reads them.
         answerRefusal={gameState && fundingPrivateOffer ? fundingAnswerRefusalForViewer(gameState, mapGrid, viewerAddress) : null}
         acceptRefusal={gameState && fundingPrivateOffer ? fundingAcceptRefusalForViewer(gameState, mapGrid, viewerAddress) : null}
+        // Phase 3 W3-J (AUD-25.13 #2): a seat with nothing to decide reads the emergency waiting card alone.
+        standAside={emergencyWaiting !== null}
       />
       <TrainDiscardPrompt
         due={pendingDiscard}

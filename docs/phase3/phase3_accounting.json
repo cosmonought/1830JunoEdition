@@ -2226,7 +2226,7 @@
    "od": "—",
    "p4": "—",
    "notes": "S6-7 parity: the board path is correct (glow, click refusal, hex markers); only the copy contradicts it. Copy-only fix.",
-   "status": "OPEN — W3-J remediation obligation (MEDIUM; W3-G owner review accepted 2026-10-04); not implemented"
+   "status": "IMPLEMENTED — W3-J `a560721` on `phase3/w3-j-u28-remediation` (from `phase3/wave3-i-w2i-w2j-w3c-w3g-v13cert-integration` @ `d29bb2f`): the Operating Round gotcha (and the Track watch line that quotes it) now quotes the page's own authoritative sentences verbatim -- the track step's private-hex rule and the DH card's lapse sentence -- so it no longer says the CSL / DH hexes \"are not reserved\"; every claim pinned against `privateHexRefusal` (B20 barred while a player owns the C&SL; open when corporation-owned or closed) in `components/phase3W3JRulesReferenceReservation.test.ts`. Copy only. Recorded for the owner (LOW, independent review): read literally, the quoted private-hex sentence also covers F16 under a player-owned D&H, which the authority leaves open (#1694a); no sentence on the page states that exception and copy is not written from memory -- an owner wording decision. Not integrated"
   },
   {
    "key": "AUD-25.03",
@@ -2239,7 +2239,8 @@
    "disp": "B",
    "od": "OD-12 (RULED 2026-10-03: narrowly controlled RED fixes; one reviewed commit each)",
    "p4": "—",
-   "notes": "One-line RED R1 change (gate on `derived !== true`), its own reviewed commit."
+   "notes": "One-line RED R1 change (gate on `derived !== true`), its own reviewed commit.",
+   "status": "IMPLEMENTED — W3-J RED R1 `6378dea` (OD-12; one condition): the landed branch dispatches `submission-landed` for every player decision (`derived !== true`), so an automatic-flagged decision (the B&O par, PlaceHomeStation, ExchangePrivate, Undo's RevertTo) retires a standing refusal; the same distinction AUD-25.13 #9 uses (`77b0b38`) -- one rule, not two mechanisms. Pinned with each automatic dispatch site's flags in `utils/phase3W3JRed.test.ts`. Not integrated"
   },
   {
    "key": "AUD-25.04",
@@ -2252,7 +2253,8 @@
    "disp": "B",
    "od": "—",
    "p4": "—",
-   "notes": "Extends P3-N020's rollbacks (W3-C covered lay and run only); the latch half is W3-B's P3-N021."
+   "notes": "Extends P3-N020's rollbacks (W3-C covered lay and run only); the latch half is W3-B's P3-N021.",
+   "status": "IMPLEMENTED — W3-J `19539b2` (+ pin follow-up `6f26a79`; not RED): `commitFreeStationPlacement` keeps the room's answer and records the placement in flight (`utils/freeStationInFlight.ts`): refused -> released, and the spent key (`dh-token`) leaves the shell's fallback set, so the D&H flow asks again; applied -> the home marker holds until the board stops owing that corporation's home token (no flash between the acknowledgement and the entry); no room answer (solo) -> nothing held. HomeStationPrompt `pending` = `homePromptPending(...)`: not while the errand is armed (as before) nor while the placement is in flight, so it no longer re-pops for the round trip or an outage. The latch half stays W3-B's P3-N021. Tests `utils/phase3W3JRollbacks.test.ts` (real boards through the real reducer). Not integrated"
   },
   {
    "key": "AUD-25.05",
@@ -2265,7 +2267,8 @@
    "disp": "B",
    "od": "OD-12 (RULED 2026-10-03: narrowly controlled RED fixes; one reviewed commit each)",
    "p4": "—",
-   "notes": "The pre-send half needs RED R1 lines (return `false`); the rest is outside RED."
+   "notes": "The pre-send half needs RED R1 lines (return `false`); the rest is outside RED.",
+   "status": "IMPLEMENTED — the pre-send half RED R1 `b9afbdf` (OD-12; three one-token edits: the turn, catching-up and link-down gates answer `false`, so W3-C's rollbacks act on them); the rest W3-J `19539b2` (not RED): a refused lay drops its held ghost and a refused token drops its station picture at once (not on their 4 s clocks); a refused paid token restores the local step cursor (Routes -> Tokens) and re-arms targeting for a seat still on turn; End Turn's first-OR market lesson runs only once the pass is answered and not refused. Only a `false` answer rolls anything back. Not taken (not named by the row): the lay's own local step write, which the board's `operating_sub_phase` shadows on hosted rooms. Not integrated"
   },
   {
    "key": "AUD-25.06",
@@ -2278,7 +2281,8 @@
    "disp": "B",
    "od": "OD-12 (RULED 2026-10-03: narrowly controlled RED fixes; one reviewed commit each)",
    "p4": "—",
-   "notes": "Retire `resync` when the rebuild's drain settles (RED R5) and skip `onStale` when `onResync` fires (`serverLink.ts`)."
+   "notes": "Retire `resync` when the rebuild's drain settles (RED R5) and skip `onStale` when `onResync` fires (`serverLink.ts`).",
+   "status": "IMPLEMENTED — W3-J `a1ef9e5` (the link half: a resync no longer settles every submission on the wire `null` with the stale sentence beside the resync notice; the sent submissions become orphans the fresh catch-up reconciles -- landed resolves with its index, still committing stays in flight, not landed resolves `null` with the stale sentence once caught up) + RED R5 `e769e51` (OD-12; one dispatch: the rebuild's drain retires the resync notice) + review fix `11db86f` (between a resync and its fresh catch-up a consumer that binds its submissions sends nothing). Tests `utils/phase3W3JLink.test.ts`, `utils/phase3W3JRed.test.ts`. Not integrated"
   },
   {
    "key": "AUD-25.07",
@@ -2291,7 +2295,8 @@
    "disp": "B",
    "od": "—",
    "p4": "—",
-   "notes": "Server frame field only (no rule, no settlement): attach `inReplyTo` to a submit's internal error."
+   "notes": "Server frame field only (no rule, no settlement): attach `inReplyTo` to a submit's internal error.",
+   "status": "IMPLEMENTED — W3-J `a1ef9e5`: an unaddressed `internal` error past the hello orphans the sent submissions and says hello on the same socket; its catch-up settles them (a move committed before the throw resolves with its index), the sentence goes to the refusal slot; review fixes `11db86f` (hellos in flight counted, an earlier hello's catch-up during a resync dropped, a hello answered `internal` recycles the socket) and `d312706` (a hello answered by any other unaddressed error -- a maintenance hold, an unavailable store -- is consumed, so a later resync's catch-up is not dropped). The row's server-side remedy (attach `inReplyTo`) is not taken: W3-J does no server work and the client reconciliation needs none. Not integrated"
   },
   {
    "key": "AUD-25.08",
@@ -2304,7 +2309,8 @@
    "disp": "B",
    "od": "—",
    "p4": "—",
-   "notes": "Batch-3 station gate parity. Ask `stationPlacementRefusal` (or its treasury and allowance arms) for the paid control and the click."
+   "notes": "Batch-3 station gate parity. Ask `stationPlacementRefusal` (or its treasury and allowance arms) for the paid control and the click.",
+   "status": "IMPLEMENTED — W3-J `b74ffef` (+ pin follow-up `6f26a79`; not RED): `utils/paidStationView.ts` asks the engine's own `stationPlacementBlockReason` without the free station (token limit, treasury vs `nextStationTokenCost`, a reachable city); the bar greys \"Place Station Token for $X\" with that sentence and `handleTokenHexClick` refuses before staging a paid token; the D&H free station is untouched. No engine change. Tests `panels/phase3W3JPaidStation.test.tsx`. Not integrated"
   },
   {
    "key": "AUD-25.09",
@@ -2317,7 +2323,8 @@
    "disp": "B",
    "od": "—",
    "p4": "—",
-   "notes": "Phase-3 part: a property test over the route-oracle corpus (every exact Auto Route draft survives the filter) or judge drafts with `evaluateRouteSet`. The structural cleanup stays Phase 7 (GitHub issue #1, S6-13)."
+   "notes": "Phase-3 part: a property test over the route-oracle corpus (every exact Auto Route draft survives the filter) or judge drafts with `evaluateRouteSet`. The structural cleanup stays Phase 7 (GitHub issue #1, S6-13).",
+   "status": "IMPLEMENTED — the Phase-3 player-facing parity portion only: W3-J `28fbd85` (+ input pins `1495c42`), property test `routeOracle/phase3W3JRouteDraftParity.test.ts` -- over the route-oracle corpus and in BOTH orientations, every exact Auto Route draft survives `runnableDrafts` with the search's own price, the run is the search's total, and the set `handleRunTrains` would send passes `routeSetRefusal`; the #1554 corporation-blind terminus as a negative control; the re-derivation and its inputs pinned to App. No defect found; no production change. The structural cleanup (retiring the shell's local draft rules and `editRouteDraft`'s click rules) stays Phase 7 / GitHub issue #1 (S6-13). Not integrated"
   },
   {
    "key": "AUD-25.10",
@@ -2330,7 +2337,8 @@
    "disp": "B",
    "od": "—",
    "p4": "—",
-   "notes": "Each a small, local fix; none blocks play."
+   "notes": "Each a small, local fix; none blocks play.",
+   "status": "IMPLEMENTED — W3-J, one commit per NIT: (a) `3889482` the depot Buy asks `trainPurchaseRefusal`; (b) `cfb3e69` the off-turn funding prompt carries `fundingAnswerRefusalForViewer` / `fundingAcceptRefusalForViewer`; (c) `49501c7` one busy line for one held submission (the link's sentence first); (d) `dbe43a2` the M&H status says \"requested, not executed yet\" (+ `1495c42` / `130363c`: the catalog bullet says the timing without \"queued\"); (e) `01dc5ca` a cancelled delayed auction reads Cancelled, not a tick; (f) `00e91a2` the link-down pre-send line does not restate the reconnecting banner (+ `1495c42`: such a press clears an older refusal); (g) `a61a7c2` the stale RunManualRoute comments outside RED corrected (one present-tense sentence inside RED R2 left untouched: a comment is no reason for an OD-12 edit). Not integrated"
   },
   {
    "key": "AUD-25.11",
@@ -2357,7 +2365,8 @@
    "disp": "B",
    "od": "—",
    "p4": "—",
-   "notes": "Verify the text against OD-3 / W2-D's M&H behaviour and correct it if stale."
+   "notes": "Verify the text against OD-3 / W2-D's M&H behaviour and correct it if stale.",
+   "status": "IMPLEMENTED — W3-J `b6ab759` (+ `1495c42`, `130363c`): `privateCatalog.ts`'s M&H long form is the Rules Reference card's sentences verbatim (the owner's choice of pile, the Orange/Brown waiver, the certificate limit, the queued timing); the short bullet says the timing -- at once on the owner's Stock Round turn, else at the next turn boundary if legal -- and the closure, within the 100-character card limit. Pinned in `components/phase3W3JCopy.test.ts` against the card and `mhExchangeDisposition`. Not integrated"
   },
   {
    "key": "AUD-25.13",
@@ -2371,7 +2380,7 @@
    "od": "—",
    "p4": "—",
    "notes": "Owner ruling (owner review of the W3-G findings, 2026-10-04) applied item by item; every carried LOW / NIT has exactly one disposition (`aud_25_13_dispositions`). Not in this row because each has its own: W3-C LOWs (a) pre-send gates -> AUD-25.05, (b) resync rollback -> AUD-25.06, (c) `error` frame -> AUD-25.07; stale tracking prose -> AUD-25.14. The FIX IN W3-J items are W3-J work (disposition C kept: the row records the rulings, W3-J carries the fixes).",
-   "status": "RULED — owner, 2026-10-04 (no \"polish later\"): reachable and player-visible -> FIX IN W3-J; solely test coverage with no known runtime defect -> RECORDED RESIDUAL; unreachable / obsolete -> CLOSED OBSOLETE. FIX IN W3-J (10): scroll-to-card on the Stocks tab (W2-F, deferred LOW); duplicate waiting presentation during an emergency-funding private offer (W2-F); the Buy Trains from a Corporation form closes on Send -- queued-submission form retention / retype after a drop (W3-I); the #750 treasury diagnostic beside the float line on an M&H / C&A float (W2-J); post-game statistics miss the EmergencySellPortfolio legs and the automatic liquidation (`gameHistory.ts`; R2); W3-C one-slot NIT: one connection slot, so a later connection notice (e.g. reconnecting) replaces a room-status pause notice; W3-C one-line NIT: the one-slot surfaces (waiting room, gate pages) show the refusal before, and so hide, a standing connection notice; W3-C: a refused lay restores the power / JK arm but does not reopen the errand flow; W2-D deferred: an `automatic: true` dispatch bypasses the reload \"catching up\" guard; W2-B out-of-scope note: the tutorial's \"Instead of buying shares, players can Sell...\" copy. RECORDED RESIDUAL (8): W3-C LOW (d): the App.tsx rollback wiring is source-scanned rather than handler-executed; a weak `escrow3bAdversarial` uncertified-board assertion; `executeEmergencyLegs` fail-loud hardening; W2-J K-22 harness repeats the shell's float loop instead of running App.tsx (call site source-pinned); W2-D: the composition test mirrors App's memo (ordering source-pinned); W2-F NIT: the waitingSentence prop docs name `dockHold.turnHoldReason`; W3-I NIT: variable placement in `TrainPurchasePanel`; W2-I NIT: the legacy on-chain strip's \"On-chain game #<id>\" label. OBSOLETE (4): W2-G's now-unpassed `onEmergencyPurchase` / `emergencyAvailable` props on the bar and `TrainPurchasePanel`; W2-B review nit 3 / accepted limitation: on a legacy revision-1 board the first Pass Turn press walks that board's Sell -> Buy stage; W3-C: the no-server (Firestore) path's subscribe error is routed as a refusal; W2-B out-of-scope notes: Auto-Buy does not ask `dockHold.pass`; AutoBuyModal \"never passes for you\". Each item and its reason: `aud_25_13_dispositions`."
+   "status": "RULED — owner, 2026-10-04 (no \"polish later\"): reachable and player-visible -> FIX IN W3-J; solely test coverage with no known runtime defect -> RECORDED RESIDUAL; unreachable / obsolete -> CLOSED OBSOLETE. FIX IN W3-J (10): scroll-to-card on the Stocks tab (W2-F, deferred LOW); duplicate waiting presentation during an emergency-funding private offer (W2-F); the Buy Trains from a Corporation form closes on Send -- queued-submission form retention / retype after a drop (W3-I); the #750 treasury diagnostic beside the float line on an M&H / C&A float (W2-J); post-game statistics miss the EmergencySellPortfolio legs and the automatic liquidation (`gameHistory.ts`; R2); W3-C one-slot NIT: one connection slot, so a later connection notice (e.g. reconnecting) replaces a room-status pause notice; W3-C one-line NIT: the one-slot surfaces (waiting room, gate pages) show the refusal before, and so hide, a standing connection notice; W3-C: a refused lay restores the power / JK arm but does not reopen the errand flow; W2-D deferred: an `automatic: true` dispatch bypasses the reload \"catching up\" guard; W2-B out-of-scope note: the tutorial's \"Instead of buying shares, players can Sell...\" copy. RECORDED RESIDUAL (8): W3-C LOW (d): the App.tsx rollback wiring is source-scanned rather than handler-executed; a weak `escrow3bAdversarial` uncertified-board assertion; `executeEmergencyLegs` fail-loud hardening; W2-J K-22 harness repeats the shell's float loop instead of running App.tsx (call site source-pinned); W2-D: the composition test mirrors App's memo (ordering source-pinned); W2-F NIT: the waitingSentence prop docs name `dockHold.turnHoldReason`; W3-I NIT: variable placement in `TrainPurchasePanel`; W2-I NIT: the legacy on-chain strip's \"On-chain game #<id>\" label. OBSOLETE (4): W2-G's now-unpassed `onEmergencyPurchase` / `emergencyAvailable` props on the bar and `TrainPurchasePanel`; W2-B review nit 3 / accepted limitation: on a legacy revision-1 board the first Pass Turn press walks that board's Sell -> Buy stage; W3-C: the no-server (Firestore) path's subscribe error is routed as a refusal; W2-B out-of-scope notes: Auto-Buy does not ask `dockHold.pass`; AutoBuyModal \"never passes for you\". Each item and its reason: `aud_25_13_dispositions` -- W3-J: every FIX IN W3-J item IMPLEMENTED on `phase3/w3-j-u28-remediation` (not integrated): #1 `a6aa059`; #2 `8673b4e`; #3 `572ca8f` + review fix `a03034f` (MEDIUM: the form closed in the real shell); #4 `95e0b94`; #5 `f058c1f` (no RED R2 edit needed -- the statistics derive from the authoritative replay; OD-12's R2 grant unused); #6 and #7 `00e91a2`; #8 `19539b2` + `f583c95`; #9 RED R1 `77b0b38`; #22 `b6ab759`. RECORDED RESIDUAL (#10-#17) and OBSOLETE (#18-#21) untouched. Observed, not ruled (for the owner): the emergency `train-offer` stage has #2's shape for a third seat (TrainTradePrompt with dead buttons beside the waiting card)"
   },
   {
    "key": "AUD-25.14",
@@ -2412,7 +2421,7 @@
    "od": "OD-19",
    "p4": "—",
    "notes": "HIGH (owner-accepted 2026-10-04): a stale view can submit, the click reaches the server and can land (proven in memory; no live game touched). (A) OD-19 RULED: Watch always opens a READ-ONLY spectator view, even for a principal who holds a seat; it never silently reinterprets the viewer as their seated player; re-entering an owned seat is the participant path (\"Your tables\" / Open / Rejoin); the control keeps \"Watch this game. You will not have a seat.\" (B), (C) OPEN / W3-J under the stale-board safety requirement (status). Characterization tests `components/phase3W3GWatchDefect.test.tsx` stay as triage evidence: DEFECT tests flip in W3-J, KEEP tests (the Play / Rejoin seat path) stay.",
-   "status": "OPEN — HIGH; owner W3-J. Sub-problems: (A) Watch identity semantics -- RESOLVED BY OD-19 (Watch = read-only spectator, always; the read-only Watch itself is implemented in W3-J); (B) stale board can remain silently behind -- OPEN / W3-J; (C) stale board can present and submit live gameplay actions -- OPEN / W3-J, HIGH safety defect. STALE-BOARD SAFETY REQUIREMENT (owner, 2026-10-04; independent of spectator policy): a client whose locally APPLIED board state is behind the authoritative game state must never be allowed to submit a gameplay action as though its board were current. W3-J must address BOTH layers. CLIENT: while replay / catch-up / divergence remains unresolved, gameplay controls are non-actionable; stale local turn authority must not enable a move. SUBMISSION / SERVER: do not rely only on the browser hiding or disabling controls; the submission must carry / bind to the revision / log position actually APPLIED to the client's board, not merely the newest log position received; the server must reject a gameplay action whose client-applied position does not match the authoritative pre-action position. The exact protocol is W3-J's to investigate and review."
+   "status": "IMPLEMENTED — W3-J under OD-19 (triage `d3f9050` and ruling `3be965d` merged by `d4a4ca1`): (A) READ-ONLY WATCH -- `fd3bbda` (the Lobby's Watch is its own door, `activeGame.watch` persisted; `utils/watchView.ts` projects the room view as a watcher's: no seat, no host, no Start) + review fixes `e538039` (a Watch tab gives up no seat, offers no Take a seat, sends no room op) and `45272e6` (a Watch tab's Leave returns to the Lobby); (B) NOT SILENTLY BEHIND -- `utils/boardCurrency.ts` + RED R5 `7c4624f` (a drain pass that throws latches the board as not current) and the settle point's standing digest mismatch: isMyTurn false and a forced native-modal BoardBehindNotice (Reload / Back to the lobby); (C) NOT ACTIONABLE -- RED R1 `b4c1714` (the send gate refuses a board that is not current, or a Watch tab, before the turn gate) and RED R5 `8c5ff63` (each submission bound to the position the board APPLIED; the server's existing anchored staleness guard answers a behind board with a catch-up, nothing applied). No server, wire or engine change. The characterization DEFECT tests flipped, KEEP tests (the participant seat path) stay. Tests `components/phase3W3JWatchStaleBoard.test.tsx` (end to end through the real link and the real RoomSession: a move chosen on a board resting behind the room settles `null` and does not land), `utils/phase3W3JRed.test.ts`. Recorded residual (LOW, review): a latch whose cause recurs on every load keeps that table blocked until fixed -- OD-19's fail-safe, accepting #1223's false-positive cost. Not integrated"
   },
   {
    "key": "AUD-23.01",
@@ -4996,7 +5005,7 @@
   "W3-G": "COMPLETE — OWNER REVIEW ACCEPTED (2026-10-04) and INTEGRATED on `phase3/wave3-i-w2i-w2j-w3c-w3g-v13cert-integration` (merge `72ccd00` of `967e4e7`, parents `c0a44d7` / `967e4e7`): audit branch `phase3/w3-g-ui-parity-audit` (docs only, from `phase3/wave3-i-w2i-w2j-w3c-v13cert-integration` @ `c0a44d7`; audit `e86a933`, owner-review tracking on top); no product code. An accepted audit gate, not a product slice. AUD-00.01 and AUD-22.01 IMPLEMENTED (the audit is done); findings AUD-25.01 … AUD-25.15 accepted and preserved. Owner rulings: AUD-25.11 CLOSED — OBSOLETE / UNREACHABLE ARCHITECTURE (GR-1b); AUD-25.13 ruled item by item (FIX IN W3-J / RECORDED RESIDUAL / OBSOLETE); AUD-25.15 resolved (OD-3, OD-13, OD-14(d), OD-14(i) transcribed). OPEN remediation obligations: AUD-25.01 (MEDIUM) -> W3-B, AUD-25.02 (MEDIUM) -> W3-J, AUD-25.03 … 25.10 and 25.12 -> W3-J, AUD-25.14 -> W3-F; both MEDIUM rows must be fixed before W3-F closes Phase 3. W3-J is unblocked; owner-observed follow-up AUD-25.16 (HIGH, Watch opens a participant's seat on a stale, actionable board) added 2026-10-04 on `phase3/w3-g-watch-defect-triage` -- W3-J (parts (b), (c) unconditionally; part (a) per OD-19, RULED 2026-10-04: Watch = read-only spectator, always); the gate's accepted status is unchanged",
   "W3-H": "NOT STARTED",
   "W3-I": "COMPLETE — ACCEPTED and INTEGRATED on `phase3/wave3-i-v13cert-integration` (2026-10-04, merge `5a22e38` of `phase3/w3-i-offers` @ `92cdb5d`, parents `c3f43b7` / `92cdb5d`, its 3 commits carried unchanged): code `5c6d7f8` + review fixes `d663b1c` + tracking `92cdb5d` (from `phase3/wave2-bcgdf-v13cert-integration` @ `c3f43b7`). AUD-02.05, AUD-02.06, AUD-03.11, AUD-19.01 IMPLEMENTED. Dependencies W2-F and W2-H integrated in the base. A read-only queue accessor on the room link and one hook outside the drain (no RED region, no OD-12 edit); the par prompt and the three offer forms (Private Companies trade form, Buy Private Company, Buy Trains from a Corporation) read it. OWNER-ACCEPTED reading (2026-10-04): for AUD-03.11 / R4 a refused proposal may leave the form open with its typed values preserved so the player can correct and resend. Not taken (recorded follow-ups elsewhere, unchanged): the W2-F duplicate-waiting LOW and the two NITs. Presentation only: no engine, server, rules-version or settlement change",
-  "W3-J": "NOT STARTED",
+  "W3-J": "COMPLETE — on the slice branch `phase3/w3-j-u28-remediation` (from `phase3/wave3-i-w2i-w2j-w3c-w3g-v13cert-integration` @ `d29bb2f`); NOT integrated (integration and owner broad gate pending). AUD-25.02 … AUD-25.10, AUD-25.12 and AUD-25.16 IMPLEMENTED; every AUD-25.13 FIX IN W3-J item IMPLEMENTED (`aud_25_13_dispositions`). OD-12 RED commits, each one minimal logical edit, separately reviewed: R1 `6378dea`, `77b0b38`, `b9afbdf`, `b4c1714`; R5 `e769e51`, `7c4624f`, `8c5ff63`; no R2 / R3 / R4 edit. Independent reviews: no HIGH; the one MEDIUM (AUD-25.13 #3 in the real shell) and every LOW fixed and re-reviewed. AUD-25.01 (W3-B) not on this branch. No engine, server, contract, rules-version or settlement change; pins 13 / [13] / [10, 11, 12, 13]",
   "W3-K": "COMPLETE — ACCEPTED (owner, 2026-10-04) and INTEGRATED on `phase3/wave2a-v13-integration` (2026-10-04): `phase3/w3-k-rules-v13` @ `be1fd10` merged `--no-ff` onto `phase3/wave2a-integration` @ `96ccb22`, its 9 commits carried unchanged (same SHAs). OD-2, SBS-3, SBS-4, OD-4 with the owner's 2026-10-04 rulings 1-5 and the four review findings. The ledger's PARTIAL (held only for the shared row AUD-03.04) lifted with W2-B's one-click \"Pass Turn\" control, integrated on `phase3/wave2-bcg-v13cert-integration` (merge `181e51e`). v13 settlement certification PASS / CERTIFIED and INTEGRATED there (merge `69c7496` of `phase3/v13-settlement-certification` @ `7916763`). RULES_ENGINE_VERSION 13; supported live [13]; settlement-certified [10, 11, 12, 13]. Not deployable until drained v12 rooms and the final integrated owner gate (W2-D / W2-F and other open slices are tracked separately)"
  },
  "owner_rulings_source": "The owner's Phase-3 Wave-1 integration brief (2026-10-03), in its words; instructions addressed to that integration turned into statements. OD-9 and OD-11: the owner's safe Wave-2 integration brief (2026-10-03), in its words. OD-4, OD-10 and OD-17: restated from the owner's W3-K rules-v13 brief (2026-10-03); instructions addressed to that slice turned into statements. The 2026-10-04 additions to OD-4 and OD-10 are restated from the owner's W3-K continuation brief (2026-10-04). OD-3, OD-13, OD-14(d) and OD-14(i): transcribed from the owner's W3-G owner-review brief (2026-10-04), in its words. OD-19: the owner's OD-19 decision on the W3-G Watch-defect triage (2026-10-04), in its words.",
@@ -5436,47 +5445,56 @@
   {
    "item": "scroll-to-card on the Stocks tab (W2-F, deferred LOW)",
    "disposition": "FIX IN W3-J",
-   "reason": "reachable, player-visible"
+   "reason": "reachable, player-visible",
+   "implemented": "IMPLEMENTED — W3-J `a6aa059`: PrivateCompaniesSection scrolls the offer's card into view for the viewer who must answer it (the seat authority's counterparty), once per offer instance (#1597), with \"Show on Stocks\"'s options; no focus move; no App.tsx change; not integrated"
   },
   {
    "item": "duplicate waiting presentation during an emergency-funding private offer (W2-F)",
    "disposition": "FIX IN W3-J",
-   "reason": "named by the owner"
+   "reason": "named by the owner",
+   "implemented": "IMPLEMENTED — W3-J `8673b4e`: FundingPrivateOfferPrompt `standAside` while the emergency waiting card is on screen (`emergencyWaiting !== null`, the card's own mount condition) for every viewer but the answering buyer president; W2-F's one waiting line per prompt and W2-G / W2-H's card unchanged; not integrated"
   },
   {
    "item": "the Buy Trains from a Corporation form closes on Send -- queued-submission form retention / retype after a drop (W3-I)",
    "disposition": "FIX IN W3-J",
-   "reason": "named by the owner"
+   "reason": "named by the owner",
+   "implemented": "IMPLEMENTED — W3-J `572ca8f` + review fix `a03034f`: Send no longer closes the form; it is greyed while the link holds the submission (W3-I's queued note), a second same-tick press is dropped, and the form closes only on the board's facts (the hold, the rosters, the seat) -- never on the press; not integrated"
   },
   {
    "item": "the #750 treasury diagnostic beside the float line on an M&H / C&A float (W2-J)",
    "disposition": "FIX IN W3-J",
-   "reason": "named by the owner (where the duplication is player-visible)"
+   "reason": "named by the owner (where the duplication is player-visible)",
+   "implemented": "IMPLEMENTED — W3-J `95e0b94`: `describeTreasuryMoves` omits a corporation floating on the transition from an empty treasury -- the float line states it; RED R2's loop untouched; not integrated"
   },
   {
    "item": "post-game statistics miss the EmergencySellPortfolio legs and the automatic liquidation (`gameHistory.ts`; R2)",
    "disposition": "FIX IN W3-J",
-   "reason": "reachable, player-visible (post-game statistics); OD-12 RED R2 edit"
+   "reason": "reachable, player-visible (post-game statistics); OD-12 RED R2 edit",
+   "implemented": "IMPLEMENTED — W3-J `f058c1f`: `gameHistory.ts` books each EmergencySellPortfolio leg and the automatic liquidation (`bankruptcy_record`) as sales by the president, and the forced purchase's contribution to the corporation's president; App.tsx untouched (OD-12's R2 grant unused); not integrated"
   },
   {
    "item": "W3-C one-slot NIT: one connection slot, so a later connection notice (e.g. reconnecting) replaces a room-status pause notice",
    "disposition": "FIX IN W3-J",
-   "reason": "reachable, player-visible"
+   "reason": "reachable, player-visible",
+   "implemented": "IMPLEMENTED — W3-J `00e91a2`: one connection notice per kind; a later kind no longer replaces a standing room-status pause; not integrated"
   },
   {
    "item": "W3-C one-line NIT: the one-slot surfaces (waiting room, gate pages) show the refusal before, and so hide, a standing connection notice",
    "disposition": "FIX IN W3-J",
-   "reason": "reachable, player-visible"
+   "reason": "reachable, player-visible",
+   "implemented": "IMPLEMENTED — W3-J `00e91a2`: the one-line surfaces say every standing connection notice, then the refusal; not integrated"
   },
   {
    "item": "W3-C: a refused lay restores the power / JK arm but does not reopen the errand flow",
    "disposition": "FIX IN W3-J",
-   "reason": "named by the owner"
+   "reason": "named by the owner",
+   "implemented": "IMPLEMENTED — W3-J `19539b2` + `f583c95`: a refused errand lay reopens the errand it closed (its own return tab; not over another errand, not past its step, only for the corporation still acting) and brings the map back; not integrated"
   },
   {
    "item": "W2-D deferred: an `automatic: true` dispatch bypasses the reload \"catching up\" guard",
    "disposition": "FIX IN W3-J",
-   "reason": "reachable; player-visible as a refusal on a historical board; coordinate with AUD-25.03 (OD-12 RED R1)"
+   "reason": "reachable; player-visible as a refusal on a historical board; coordinate with AUD-25.03 (OD-12 RED R1)",
+   "implemented": "IMPLEMENTED — W3-J RED R1 `77b0b38` (OD-12): the #1407 catching-up guard exempts only the replay and the game's derived actions (`derived !== true`); not integrated"
   },
   {
    "item": "W3-C LOW (d): the App.tsx rollback wiring is source-scanned rather than handler-executed",
@@ -5541,7 +5559,8 @@
   {
    "item": "W2-B out-of-scope note: the tutorial's \"Instead of buying shares, players can Sell...\" copy",
    "disposition": "FIX IN W3-J",
-   "reason": "reachable, player-visible copy; must match the v13 sell / buy turn"
+   "reason": "reachable, player-visible copy; must match the v13 sell / buy turn",
+   "implemented": "IMPLEMENTED — W3-J `b6ab759`: the Stock Round tutorial's \"Selling shares\" page quotes the Rules Reference's Sell -> Buy -> Sell gotcha verbatim; not integrated"
   }
  ],
  "wave3_i_w2i_w2j_w3c_w3g_v13cert_integration": {
@@ -5584,5 +5603,44 @@
    "keys": "unchanged from 7916763 / 18d4762 (dc1-e8d0b4792a7ba07e67199ad2 no escrow, dc1-32fcc4967978e78f10874490 the fixture pin)"
   },
   "lanes": "W2-B, W2-C, W2-G, v13 settlement certification, W2-D, W2-F, W3-I, W2-I, W2-J and W3-C COMPLETE and INTEGRATED; the W3-G audit gate ACCEPTED and INTEGRATED; no accepted slice awaits integration; W3-J is unblocked from this baseline; not deployable until drained v12 rooms and the final integrated owner gate"
+ },
+ "w3j_u28_remediation": {
+  "branch": "phase3/w3-j-u28-remediation",
+  "base": "d29bb2f9485fe8127d9f6d9595313d1c6de99c4f (phase3/wave3-i-w2i-w2j-w3c-w3g-v13cert-integration)",
+  "status": "COMPLETE on the slice branch; NOT integrated; no broad owner gate",
+  "red_commits_od12": {
+   "R1": [
+    "6378dea AUD-25.03",
+    "77b0b38 AUD-25.13 #9",
+    "b9afbdf AUD-25.05 pre-send",
+    "b4c1714 AUD-25.16 send gate"
+   ],
+   "R5": [
+    "e769e51 AUD-25.06",
+    "7c4624f AUD-25.16 drain latch",
+    "8c5ff63 AUD-25.16 applied-position binding"
+   ],
+   "R2": "not used (AUD-25.13 #5 needed no shell edit)",
+   "R3": "none",
+   "R4": "none"
+  },
+  "od12_note": "AUD-25.03 / 25.05 / 25.06 and AUD-25.13 #9 are the RED lines W3-G named under OD-12. The three AUD-25.16 lines (b4c1714, 7c4624f, 8c5ff63) implement OD-19's stale-board safety requirement (both layers) under OD-12's controlled-edit procedure; recorded here for the owner / integrator to confirm (independent review LOW-5: not yet in the plan's RED table).",
+  "residuals": [
+   "AUD-25.02 (LOW, owner wording): the quoted private-hex sentence, read literally, also covers F16 under a player-owned D&H, which the authority leaves open (#1694a).",
+   "AUD-25.16 (LOW): a not-current latch whose cause recurs on every load keeps that table blocked until fixed (OD-19 fail-safe).",
+   "AUD-25.16 (NIT): Lobby's `onWatchSandbox ?? onEnterSandbox` falls back to the seat door if the prop is omitted (the shell always passes it).",
+   "AUD-25.16 (NIT): when boards drift after agreeing, the `divergence` and `board-behind` connection notices both stand (behind the forced modal).",
+   "AUD-25.16 (LOW, coverage): the shell's own appliedPosition wiring is source-pinned (`phase3W3JRed.test.ts`); the end-to-end test exercises the link and RoomSession with the shell's derivation.",
+   "AUD-25.07 (NIT): an `internal` error while a resync hello is outstanding recycles the socket rather than reconciling on it (safe; reconciles on reconnect).",
+   "AUD-25.10 (g) (NIT): one present-tense RunManualRoute sentence inside RED R2 (the apply half's dividend note) left untouched.",
+   "AUD-25.13 #2 (NIT): a third seat no longer reads the funding offer's price live (the waiting card omits it; the Activity Log has it).",
+   "AUD-25.13 #4 (NIT): any float from an empty treasury is omitted from #750 whatever the message; the float line still states the amount.",
+   "AUD-25.13 #5 (NIT): display-only statistics may show fractional dollars in the even-spread fallback (not authoritative money; as the existing SellStock arm).",
+   "#750 (pre-existing, not W3-J's): the shell suppresses explained movements per message, not per corporation."
+  ],
+  "observations_for_owner": [
+   "The emergency `train-offer` stage has AUD-25.13 #2's shape for a third seat: TrainTradePrompt with dead Reject / Accept beside the waiting card. Not in the ruled item; not changed."
+  ],
+  "integration_note": "W3-B's AUD-25.01 (`7efda71`, integrated at `9ebca03`) is not on this branch. Its handed-off copy NIT (\"Sending your last action\" vs \"Queued -- will send on reconnect.\") meets W3-J's AUD-25.10 (c) at integration: StockRoundPanel's busy line now reads the link's sentence first."
  }
 }

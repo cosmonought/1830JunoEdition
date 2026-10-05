@@ -178,7 +178,7 @@ estimate in §10.2 rises; the barrier figure is given there too.
 | R-DOCKOBS | status-dock `ResizeObserver` (`useState(96)`) | 3104–3123 | L5 | W1-I |
 | R-RECEIPT | "no upgrade" receipt | 3811 | L4 | W1-E |
 | R-PRIVEXCH | `runPrivateExchange`, `handlePowerFlowAct` | 5831–5885 | L2 | W1-C |
-| **RED R1 — submit half** | `runGameplayAction` (the callback opens at 6108) — submit half | 6227–6468 | none | only via OD-12 (W3-C: 6425–6427; W3-B: the `press:true` latch) |
+| **RED R1 — submit half** | `runGameplayAction` (the callback opens at 6108) — submit half | 6227–6468 | none | only via OD-12 (W3-C: 6425–6427; W3-B: the `press:true` latch; W3-J, used: `6378dea` AUD-25.03, `77b0b38` AUD-25.13 #9, `b9afbdf` AUD-25.05, `b4c1714` AUD-25.16 -- the last under OD-19, for owner confirmation) |
 | **RED R2 — apply half** | `runGameplayAction` apply | 6469–8758 | none | only via OD-12 (W2-J: 7111–7123; W1-N: 7828–7834; W3-H: 7580–7614 if needed) |
 | **RED R3 — rebuild** | `rebuildSandbox` | 8877–8965 | none | — |
 | R-UNDOLABEL | undo labels map (`WaterfallMiniAuctionPass`) | 8998 | L1 | W1-B |
@@ -191,7 +191,7 @@ estimate in §10.2 rises; the barrier figure is given there too.
 | R-TRAINPROP | train-proposal and chain-era trade handlers | 10945–11120 | L3 | W1-D |
 | **RED R4 — OR verdict / auto-skip** | the OR verdict block (incl. the fleet-loss prune 11295–11405) | 11136–11659 | none | only via OD-12 (W3-A, if the dismissal-store fix is not enough) |
 | R-TILELAY | `tileLayDisabledReason` and the lay helpers | 11742–12241 | L4 → L3 | W1-E → W2-A (hold arm only) |
-| **RED R5 — link drain** | link callbacks / drain | 12278–12681 | none | only via OD-12 (W3-C: 12567–12640; W3-I if a queue read cannot be done outside it) |
+| **RED R5 — link drain** | link callbacks / drain | 12278–12681 | none | only via OD-12 (W3-C: 12567–12640; W3-I if a queue read cannot be done outside it; W3-J, used: `e769e51` AUD-25.06, `7c4624f` and `8c5ff63` AUD-25.16 -- under OD-19, for owner confirmation) |
 | R-ROOMHANDLERS | room handlers after the drain: banner writers, `handleLeaveSandboxRoom` | 12682–13283 | L7 (wave 1) → L6 (wave 3) | W1-N (`handleLeaveSandboxRoom` 12768–12781) → W3-C (banner writers 12694–12778) |
 | R-GATEPAGES | early-return gate screens | 13284–13360 | none | — |
 | R-HOMEPROMPT | `HomeStationPrompt` / `AuctionPromptModal` mounts | 13510–13563 | L5 → L3 | W1-J → W2-H → W3-I (`AuctionPromptModal` queued-state props) |
@@ -776,6 +776,7 @@ gates.
   the stale-board safety requirement (§7.3 OD-19) on BOTH layers: non-actionable controls while replay / catch-up / divergence is
   unresolved, AND a submission bound to the client's APPLIED log position that the server rejects when it does not match the
   authoritative pre-action position. Characterization tests: `components/phase3W3GWatchDefect.test.tsx` (DEFECT tests flip; KEEP tests stay).
+- **Status (2026-10-05):** COMPLETE on the slice branch `phase3/w3-j-u28-remediation` (from `phase3/wave3-i-w2i-w2j-w3c-w3g-v13cert-integration` @ `d29bb2f`); NOT integrated. AUD-25.02 … AUD-25.10, AUD-25.12, AUD-25.16 and every AUD-25.13 FIX IN W3-J item IMPLEMENTED. OD-12 RED commits: R1 `6378dea`, `77b0b38`, `b9afbdf`, `b4c1714`; R5 `e769e51`, `7c4624f`, `8c5ff63` (no R2 / R3 / R4; AUD-25.13 #5 needed no R2 edit). AUD-25.16 (C) is met on both layers: the client gate and the submission bound to the applied position, judged by the server's existing staleness guard (no server change). Independent reviews: no HIGH; the MEDIUM and every LOW fixed. Record: `PHASE3_AUDIT_RECONCILIATION.md` "W3-J slice status".
 
 #### W3-K
 **v13 rules batch** · L2 (or L6) · **8–14 h planned; ~14–22 h with OD-4 and its certification (an estimate)**

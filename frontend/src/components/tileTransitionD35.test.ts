@@ -286,6 +286,28 @@ describe("VF D-35: an OO home's reservation markers each ride their own city", (
     });
   });
 
+  it("pairs the same under reduced motion and on a confirmed proposal, and lands each marker exactly on its own city", () => {
+    standard(() => {
+      const from = { tileId: 59, orientation: 0 };
+      const to = { tileId: 64, orientation: 2 };
+      const before = homePlaces(from);
+      const after = homePlaces(to);
+      const base = planTileTransition({ from: { kind: "tile", ...from }, to })!;
+      const expected = before.map((start) => reservationPlaceFor(base, start, after));
+      expect(expected).toEqual([1, 0]);
+      for (const variant of [{ reducedMotion: true }, { provisional: true }, { reducedMotion: true, provisional: true }]) {
+        const plan = planTileTransition({ from: { kind: "tile", ...from }, to, ...variant })!;
+        before.forEach((start, k) => {
+          const ride = rideOf(plan, start, after);
+          expect(ride.index).toBe(expected[k]);
+          expect(ride.at(1)).toEqual(after[expected[k]]);
+          // Never at the other city's place before the end.
+          for (const t of instants(plan).slice(0, -1)) expect(dist(ride.at(t), after[1 - expected[k]])).toBeGreaterThan(0.05);
+        });
+      }
+    });
+  });
+
   it("is pure: pairing and riding change nothing in the plan they read", () => {
     standard(() => {
       const plan = planTileTransition({ from: { kind: "tile", tileId: 59, orientation: 0 }, to: { tileId: 64, orientation: 2 } })!;

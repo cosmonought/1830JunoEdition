@@ -173,12 +173,15 @@ describe("AUD-25.16 (A): Watch identity", () => {
 /* ------------------------------------------------------------------ (B) STALE AT REST */
 
 describe("AUD-25.16 (B): a board can rest behind the room with no notice", () => {
-  it("DEFECT: the drain counts an entry applied BEFORE dispatching it, with no catch around the dispatch", () => {
+  it("FIXED (W3-J): the drain still counts an entry before dispatching it, but a pass that throws is no longer silent -- it latches the board", () => {
     const shell = readShell();
     const loop = sliceBetween(shell, "for (let at = appliedCountRef.current; at < history.length; at += 1) {", "if (live) setSandboxAppliedCount(appliedCountRef.current);");
     expectOrder(loop, "appliedCountRef.current = at + 1;", 'await runGameplayActionRef.current?.("Sandbox room", msg, {');
-    // try/finally only: a throw on the last entry ends the pass with the cursor already past it, and nothing retries it.
+    // The pass itself is unchanged (try/finally; nothing retries the entry). What changed: its rejection is caught
+    // where the drain is called (RED R5) and latches this room's board as not current -- isMyTurn false, the forced
+    // notice, the send gate and the link refuse (phase3W3JRed.test.ts, phase3W3JWatchStaleBoard.test.tsx).
     expect(loop).not.toMatch(/\bcatch\s*\(/);
+    expect(shell).toContain("drain([...accumulated]).catch((error: unknown) => noteDrainFailureRef.current(sandboxRoomCode, error));");
   });
 
   it("DEFECT: on a fresh entry the first board comparison is muted -- a mismatch is a console note, never a banner", () => {

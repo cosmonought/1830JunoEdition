@@ -13024,7 +13024,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
               serverDigestRef.current = serverDigest;
               serverFieldsRef.current = serverFields; // #1225
               for (const entry of entries) accumulated.push(entry as SandboxAction);
-              void drain([...accumulated]);
+              /* Phase 3 W3-J (AUD-25.16, OD-12 RED R5): A PASS THAT THROWS IS SAID, NOT SWALLOWED. The cursor is past the
+                 entry that threw and nothing retries it, so the board rests behind the room; it was an unhandled
+                 rejection and nothing else. Now it latches this room's board as not current (`boardCurrency.ts`). */
+              drain([...accumulated]).catch((error: unknown) => noteDrainFailureRef.current(sandboxRoomCode, error));
             },
             /* Phase 3 W3-C (AUD-14.01, OD-12 RED R5): each callback names its slot and, for the link's own notices,
                their kind -- so a refusal no longer replaces the reconnecting banner, and no clear compares a sentence. */

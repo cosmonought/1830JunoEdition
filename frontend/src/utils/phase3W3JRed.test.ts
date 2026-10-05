@@ -19,6 +19,8 @@ import {
   type RoomNotices,
 } from "./roomNotices";
 import { rollBackIfRefused } from "./submissionAnswer";
+import { BOARD_DRAIN_FAILED_NOTICE, appliedPositionFor, boardCurrencyFor } from "./boardCurrency";
+import { CATCHING_UP_BANNER } from "./roomNotices";
 
 const shell = readShell();
 const run = (...actions: RoomNoticeAction[]): RoomNotices => actions.reduce(roomNoticesReducer, NO_ROOM_NOTICES);
@@ -174,6 +176,65 @@ describe("RED R5 (AUD-25.06): the resync notice is retired when the rebuild's dr
     expect(connectionOf(notices, "resync")).toBeNull();
     await expect(move).resolves.toBeNull(); // it did not land -- and only now is that said
     expect(notices.refusal).toBe("The room had moved on — this tab has caught up. Try that again.");
+    link.close();
+  });
+});
+
+describe("RED R5 (AUD-25.16): a drain pass that throws is caught where the drain is called, and latches the board", () => {
+  it("the adapter catches the pass's rejection and hands it to the latch (assigned outside RED)", () => {
+    const adapter = sliceBetween(shell, "onEntries: (entries, serverDigest, serverFields, source) => {", "onRefused: (reason) => {");
+    expect(adapter).toContain("drain([...accumulated]).catch((error: unknown) => noteDrainFailureRef.current(sandboxRoomCode, error));");
+    expect(adapter).not.toContain("void drain([...accumulated]);");
+    const latch = sliceBetween(shell, "noteDrainFailureRef.current = (roomCode: string, error: unknown) => {", "};");
+    expect(latch).toContain("drainFailedRoomRef.current = roomCode;");
+    expect(latch).toContain("setDrainFailedRoom(roomCode);");
+  });
+
+  it("through the real link: a consumer whose pass throws is latched, and the move it would send next goes nowhere", async () => {
+    let drainFailed = false;
+    const wire: Array<Record<string, unknown>> = [];
+    const refusals: string[] = [];
+    const socket: SocketLike = { send: (data) => wire.push(JSON.parse(data)), close: () => {}, onopen: null, onmessage: null, onclose: null, onerror: null };
+    const applied: Array<{ index: number; id: string }> = [];
+    // The shell's drain, reduced: it applies entries in order and THROWS on index 1 (no catch inside the pass).
+    const drain = async (entries: ReadonlyArray<{ index: number; id: string }>) => {
+      for (const entry of entries) {
+        if (entry.index === 1) throw new Error("the reducer could not apply this entry");
+        applied.push(entry);
+      }
+    };
+    const link = connectServerLink({
+      url: "ws://test",
+      gameId: "g_0123456789abcdefghjkmnpqr0",
+      build: "b",
+      socketFactory: () => socket,
+      onRefused: (reason) => refusals.push(reason),
+      // The R5 wiring: the pass's rejection goes to the latch ...
+      onEntries: (entries) => {
+        drain(entries).catch(() => {
+          drainFailed = true;
+        });
+      },
+      // ... and the link's position comes from the board's currency (`appliedPositionRef`).
+      appliedPosition: () =>
+        appliedPositionFor({
+          watchOnly: false,
+          currency: boardCurrencyFor({ drainFailed, divergedAt: null }),
+          replaying: false,
+          log: applied,
+          catchingUpNotice: CATCHING_UP_BANNER,
+        }),
+    });
+    socket.onopen?.({});
+    socket.onmessage?.({ data: JSON.stringify({ kind: "catch-up", build: "b", digest: null, entries: [0, 1, 2].map((index) => ({ index, id: `e${index}`, actor: "a", payload: "{}" })) }) });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(drainFailed).toBe(true);
+    expect(link.appliedIndex).toBe(2); // delivered ...
+    expect(applied.map((entry) => entry.index)).toEqual([0]); // ... but applied only through 0
+    await expect(link.submit({ PassTurn: { game_id: 0 } } as never)).resolves.toBeNull();
+    expect(wire.filter((frame) => frame.kind === "submit")).toEqual([]);
+    expect(refusals).toEqual([BOARD_DRAIN_FAILED_NOTICE]);
     link.close();
   });
 });

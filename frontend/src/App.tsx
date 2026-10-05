@@ -1537,6 +1537,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
     const queued = gameState?.active_operating_order[gameState.active_corporation_index];
     return queued ?? MOCK_LAY_TILE_PROTOCOL_ID;
   }, [gameState]);
+  /* Phase 3 W3-J (AUD-25.13 #8, review NIT): mirrored for a refused lay's rollback, which runs when the room answers --
+     after the commit that built the handler. Written during render, as `gameStateRef` is: idempotent per render. */
+  const actingProtocolIdRef = useRef(actingProtocolId);
+  actingProtocolIdRef.current = actingProtocolId;
 
   /* ==================================================================
       DESIGN NOTE 896: THE TRAINS A CORPORATION LOST WHILE IT WAS NOT ACTING
@@ -13718,8 +13722,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
          Not over another errand the player has armed since, and not past its step (`errandSurvivesStep`). */
       if (closedErrand !== null) {
         const step = orSubPhaseRef.current;
-        setHomeStationPlacement((current) => errandAfterRefusedLay(closedErrand, current, step));
-        if (errandAfterRefusedLay(closedErrand, null, step) !== null) {
+        const acting = actingProtocolIdRef.current;
+        setHomeStationPlacement((current) => errandAfterRefusedLay(closedErrand, current, step, acting));
+        if (errandAfterRefusedLay(closedErrand, null, step, acting) !== null) {
           setActiveMainTab((tab) => tabAfterRefusedErrandLay(tab, closedErrand, "map"));
         }
       }

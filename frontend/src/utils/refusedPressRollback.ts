@@ -25,14 +25,17 @@ export function ghostAfterRefusedLay<
 }
 
 /** The errand that stands after a refused errand lay: the one the lay closed, reopened as it was armed -- unless the
- *  player has armed another since, or the step it belongs to has passed. The current errand when the lay closed none. */
-export function errandAfterRefusedLay<T extends ArmedErrand>(
+ *  player has armed another since, the step it belongs to has passed, or its corporation is no longer the one acting
+ *  (the turn moved on -- a host's undo, say). The current errand when the lay closed none. */
+export function errandAfterRefusedLay<T extends ArmedErrand & { companyId: number }>(
   closed: T | null,
   current: T | null,
   step: string | null,
+  acting: number | null,
 ): T | null {
   if (closed === null) return current;
   if (current !== null) return current;
+  if (closed.companyId !== acting) return null;
   return errandSurvivesStep(closed, step) ? closed : null;
 }
 

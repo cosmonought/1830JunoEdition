@@ -164,19 +164,23 @@ describe("AUD-25.13 #8: a refused errand lay reopens its errand", () => {
   const errand = { kind: "private-tile" as const, companyId: PRR, q: 7, r: 2, hexLabel: "F16", abilityKey: "dh-tile", returnTab: "corps" };
 
   it("the errand the lay closed stands again, as it was armed (its own return tab)", () => {
-    expect(errandAfterRefusedLay(errand, null, "Track")).toBe(errand);
+    expect(errandAfterRefusedLay(errand, null, "Track", PRR)).toBe(errand);
   });
 
   it("not over an errand the player has armed since, and not past its step", () => {
     const since = { ...errand, abilityKey: "csl-tile", hexLabel: "B20" };
-    expect(errandAfterRefusedLay(errand, since, "Track")).toBe(since);
-    expect(errandAfterRefusedLay(errand, null, "Tokens")).toBeNull();
-    expect(errandAfterRefusedLay(errand, null, null)).toBeNull();
+    expect(errandAfterRefusedLay(errand, since, "Track", PRR)).toBe(since);
+    expect(errandAfterRefusedLay(errand, null, "Tokens", PRR)).toBeNull();
+    expect(errandAfterRefusedLay(errand, null, null, PRR)).toBeNull();
+  });
+
+  it("(review) not for a corporation that is no longer the one acting -- the turn moved on", () => {
+    expect(errandAfterRefusedLay(errand, null, "Track", NYC)).toBeNull();
   });
 
   it("a lay that closed no errand changes nothing", () => {
-    expect(errandAfterRefusedLay(null, null, "Track")).toBeNull();
-    expect(errandAfterRefusedLay(null, errand, "Track")).toBe(errand);
+    expect(errandAfterRefusedLay(null, null, "Track", PRR)).toBeNull();
+    expect(errandAfterRefusedLay(null, errand, "Track", PRR)).toBe(errand);
   });
 
   it("the map comes back only if the player is still on the tab the lay sent them to", () => {
@@ -192,7 +196,8 @@ describe("AUD-25.05 / AUD-25.13 #8: the shell's call sites (outside every RED re
   it("the lay's rollback drops its ghost and reopens the errand it closed", () => {
     const rollback = sliceBetween(shell, "void rollBackIfRefused(layAnswer, () => {", "handleRingConfirmed();");
     expect(rollback).toContain("setPreviewTile((current) => ghostAfterRefusedLay(current, { q, r, tileId }));");
-    expect(rollback).toContain("setHomeStationPlacement((current) => errandAfterRefusedLay(closedErrand, current, step));");
+    expect(rollback).toContain("setHomeStationPlacement((current) => errandAfterRefusedLay(closedErrand, current, step, acting));");
+    expect(rollback).toContain("const acting = actingProtocolIdRef.current;");
     expect(rollback).toContain('setActiveMainTab((tab) => tabAfterRefusedErrandLay(tab, closedErrand, "map"));');
     expect(rollback).toContain("const step = orSubPhaseRef.current;");
     // W3-C's two takebacks are kept.

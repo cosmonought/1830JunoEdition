@@ -455,14 +455,13 @@ describe("the bar tells the player when it stops travelling (design note #861)",
     expect(BAR).not.toContain("if (!pinnable) node.scrollIntoView(");
   });
 
-  it("reports what the bar is actually doing, not only what the rule says", () => {
-    /* Design note #861a, for the half of the report I could not reproduce by reading: "when I closed that
-       Upcoming trains section, the Action Bar stayed pinned instead of becoming sticky again." `verdict` is
-       the rule's answer; `now` is the observed state. If a playtest shows them disagreeing, the fault is
-       between the measurement and the style. */
-    expect(BAR).toContain("? \"pinned\" : \"travelling\"");
-    /* `String.fromCharCode(36)` because a literal `${` in a plain string trips `no-template-curly-in-string`
-       -- the rule reads the literal, not the intent. Fourth time this session. */
-    expect(BAR).toContain("now " + String.fromCharCode(36) + "{now}");
+  it("no longer reports its pin state on screen: the fit probe's readout went with it (Phase 3 W1-I, OD-14(a))", () => {
+    /* Design note #861a's `verdict` / `now` readout lived in #813's temporary fit probe, an instrument for the
+       OD-14(a) question. The owner ruled OD-14(a) on 2026-10-04 -- keep the step panels where they are, remove
+       the probe -- and W1-I (`1b76512`) removed it, readout and all. Pinned as an absence so a stray instrument
+       does not come back. The behaviour #861a asked about is the hook's, and stays pinned by `stickyTrap.test.ts`.
+       `String.fromCharCode(36)` because a literal `${` in a plain string trips `no-template-curly-in-string`. */
+    expect(BAR).not.toContain("? \"pinned\" : \"travelling\"");
+    expect(BAR).not.toContain("now " + String.fromCharCode(36) + "{now}");
   });
 });

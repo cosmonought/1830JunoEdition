@@ -209,11 +209,13 @@ describe("a measured pixel is converted before it is written back as a length", 
        returns LAYOUT pixels (measured: "20px" for a `top: 20px` sticky inside `zoom: 0.7`), and it is compared
        against rect tops, which are visual. The bar is `top: 0` today and zero is zero in both spaces -- so
        this guards a rule rather than a symptom, which is the only moment it can be guarded at all.
-       ASSERTED AS A SINGLE READ PATH: two call sites, one helper, so the pair cannot drift. */
+       ASSERTED AS A SINGLE READ PATH: one helper and every caller goes through it, so no caller can drift.
+       Phase 3 W1-I (OD-14(a), 2026-10-04) removed the fit probe, which was the second caller; the hook is the
+       one left -- the helper's declaration plus one call. */
     expect(BAR).toContain("stickyTopOffset(window.getComputedStyle(node).top) * getUiScale()");
     const reads = BAR.split("stickyTopOffset(window.getComputedStyle").length - 1;
     expect(reads).toBe(1);
-    expect(BAR.split("measuredStickyTop(").length - 1).toBeGreaterThanOrEqual(3);
+    expect(BAR.split("measuredStickyTop(").length - 1).toBeGreaterThanOrEqual(2);
   });
 });
 

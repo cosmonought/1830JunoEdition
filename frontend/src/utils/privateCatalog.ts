@@ -204,8 +204,10 @@ export const PRIVATE_COMPANY_CATALOG: Readonly<Record<number, PrivateCatalogEntr
     abilityBullets: [
       "Owner may trade it in for a 10% NYC share from the IPO or the Bank Pool.",
       /* The card's bullets are held to two lines of at most 100 characters (`privateCardCopy.test.ts`), so this one is
-         the card's queued-timing and closure sentences said short; the long form below is the card's, verbatim. */
-      "Queued unless it is the owner's own Stock Round turn; it closes the M&H when it executes.",
+         the card's queued-timing and closure sentences said short; the long form below is the card's, verbatim.
+         W3-J review (AUD-25.10 (d)): said WITHOUT "queued" -- this row sits in the panel that shows the link's own
+         "Queued — will send on reconnect.", and one word should not mean both. */
+      "Executes at once on the owner's Stock Round turn, else at the next turn boundary; it closes the M&H.",
     ],
     ability:
       "A player owning Mohawk & Hudson may exchange it for one 10% share of New York Central. " +

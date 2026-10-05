@@ -56,7 +56,7 @@ import { tileEraFor } from "../gameEngine/gameConstants";
 import { routeBlockedCityReason, routePointsToWaypoints, routeTokenBlockReason, type RoutePoint } from "../utils/routeWaypoints";
 import { bypassedStationReason } from "../utils/manualBypass";
 import { runnableDrafts } from "../utils/runTrainsRules";
-import { readShell, sliceBetween } from "../utils/sourceScan";
+import { readShell, readStripped, sliceBetween } from "../utils/sourceScan";
 
 interface Job {
   board: CorpusBoard;
@@ -277,6 +277,37 @@ describe("AUD-25.09: the mirror above is App's own derivation (source pins)", ()
     ]) {
       expect([call, block.includes(call)]).toEqual([call, true]);
     }
+  });
+
+  it("(review) the INPUTS the mirror re-derives are App's too: tokens, the wall, the roster's order and the era", () => {
+    // `routeTokenHexes`: the acting corporation's `stationTokensOf`.
+    const tokens = sliceBetween(APP, "const routeTokenHexes = useMemo<ReadonlyArray<StationToken>>(", "const trainDrafts = useMemo<TrainRouteDraft[]>(");
+    expect(tokens).toContain("return corporation ? stationTokensOf(corporation) : [];");
+    // `blocksThroughCity`: `cityBlockerFor` with the slot count, the token's city and the barred hexes this test passes.
+    const wall = sliceBetween(APP, "const citySlotsAt = useCallback(", "blocksThroughCityRef.current = blocksThroughCity;");
+    for (const piece of [
+      "citySlotCount(mapGrid, q, r, cityIndex)",
+      "cityBlockerFor({",
+      "actingCompanyId: actingProtocolId,",
+      "tokenCityIndex(company as unknown as StationTokenCompany, q, r)",
+      "barredHexes: barredHexesFor(gameState, actingProtocolId),",
+    ]) {
+      expect([piece, wall.includes(piece)]).toEqual([piece, true]);
+    }
+    // `ownedTrainRoster`: the catalog's order, unknown models last (the sort this test repeats).
+    const roster = sliceBetween(APP, "const ownedTrainRoster = useMemo(() => {", "}, [");
+    expect(roster).toContain("MOCK_TRAIN_CATALOG.findIndex((train) => train.modelType === model)");
+    expect(roster).toContain(".sort((a, b) => (rank(a.model) < 0 ? 99 : rank(a.model)) - (rank(b.model) < 0 ? 99 : rank(b.model)));");
+    // The era: App's `eraForPhase(currentPhase, tableVariants)` with `currentPhase = derivePhase(gameState)` and
+    // `tableVariants = resolveVariants(gameState?.variants)` -- which is `tileEraFor(gameState)`, the test's.
+    expect(sliceBetween(APP, "const trainDrafts = useMemo<TrainRouteDraft[]>(", "return ownedTrainRoster.map(")).toContain(
+      "const era = eraForPhase(currentPhase, tableVariants);",
+    );
+    expect(APP).toContain("const currentPhase = useMemo(() => derivePhase(gameState), [gameState]);");
+    expect(APP).toContain("const tableVariants = useMemo(() => resolveVariants(gameState?.variants), [gameState]);");
+    expect(readStripped("gameEngine/gameConstants.ts")).toContain(
+      "return eraForPhase(derivePhase(state ?? null), resolveVariants(state?.variants));",
+    );
   });
 
   it("`handleRunTrains` sends `runnableDrafts(trainDrafts)` and asks `routeSetRefusal` first", () => {

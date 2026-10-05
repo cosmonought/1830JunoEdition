@@ -118,6 +118,17 @@ describe("W3-J AUD-25.10 (f): the link-down pre-send line does not restate the r
     expect(roomNoticesReducer(down, noticeActionFor(LINK_DOWN_NOT_SENT))).toBe(down);
   });
 
+  it("(review) an older refusal does not stay up beside the banner as the answer to this press", () => {
+    const down = run(
+      { type: "refusal", text: TURN_REFUSAL },
+      { type: "connection", kind: "reconnecting", text: RECONNECTING_BANNER },
+    );
+    expect(down.refusal).toBe(TURN_REFUSAL);
+    const pressed = roomNoticesReducer(down, noticeActionFor(LINK_DOWN_NOT_SENT));
+    expect(pressed.refusal).toBeNull();
+    expect(connectionOf(pressed, "reconnecting")?.text).toBe(RECONNECTING_BANNER);
+  });
+
   it("without the banner (#1242's should-be-unreachable case) the line is still said", () => {
     expect(run(noticeActionFor(LINK_DOWN_NOT_SENT)).refusal).toBe(LINK_DOWN_NOT_SENT);
   });

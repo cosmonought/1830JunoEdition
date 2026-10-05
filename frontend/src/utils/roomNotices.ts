@@ -115,8 +115,12 @@ export function roomNoticesReducer(state: RoomNotices, action: RoomNoticeAction)
       }
       /* W3-J (AUD-25.10, NIT): the link-down pre-send line only restated the reconnecting banner standing beside it
          ("The room link is reconnecting" next to "Connection to the room was lost — reconnecting…"). While that banner
-         stands it says everything the line would; without it (#1242's should-be-unreachable case) the line still shows. */
-      if (action.text === LINK_DOWN_NOT_SENT && connectionOf(state, "reconnecting") !== null) return state;
+         stands it says everything the line would; without it (#1242's should-be-unreachable case) the line still shows.
+         W3-J review (NIT): and an OLDER refusal does not stay up beside the banner as if it answered this press -- the
+         refusal slot answers the latest press, and the banner is this one's answer. */
+      if (action.text === LINK_DOWN_NOT_SENT && connectionOf(state, "reconnecting") !== null) {
+        return state.refusal === null ? state : { ...state, refusal: null };
+      }
       return state.refusal === action.text ? state : { ...state, refusal: action.text };
     case "clear-refusal":
       return state.refusal === null ? state : { ...state, refusal: null };

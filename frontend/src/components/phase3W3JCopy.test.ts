@@ -71,8 +71,10 @@ describe("W3-J AUD-25.12: the M&H catalog entry is the Rules Reference card's te
     // `privateCardCopy.test.ts` holds every private to two bullets of <= 100 characters, so the timing bullet is the
     // card's two sentences said short; the long form above is the card's, verbatim.
     expect(mh.abilityBullets).toHaveLength(2);
-    expect(mh.abilityBullets[1]).toMatch(/Queued unless it is the owner's own Stock Round turn/);
-    expect(mh.abilityBullets[1]).toMatch(/closes the M&H when it executes/);
+    expect(mh.abilityBullets[1]).toMatch(/Executes at once on the owner's Stock Round turn, else at the next turn boundary/);
+    expect(mh.abilityBullets[1]).toMatch(/it closes the M&H\.$/);
+    // W3-J review (AUD-25.10 (d)): not "queued" -- the link's own note in the same panel is "Queued — will send on reconnect."
+    expect(mh.abilityBullets[1]).not.toMatch(/queued/i);
     expect(MH_CARD).toContain("Requested at any other time, it is queued");
     expect(MH_CARD).toContain("The exchange closes Mohawk & Hudson when it executes.");
   });

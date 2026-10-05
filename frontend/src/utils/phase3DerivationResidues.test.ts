@@ -485,6 +485,9 @@ describe("AUD-08.01: a refused derived withhold is not appended (Gentle Rust's t
     expect(stateDigest(engine.snapshot.state)).toBe(start);
     engine.apply(stored[1]);
     expect(stateDigest(restored.state)).toBe(stateDigest(engine.snapshot.state));
+    // The stored no-op still spends its key on restore (#1208), exactly as before: the restored room re-owes nothing.
+    expect(emittedOf(restored)).toContain(turnGuardKey(seed, PRR, "Dividends"));
+    expect(engineOf(restored).settleOwed(() => { throw new Error("nothing is owed"); })).toEqual([]);
     // And the live (fixed) room reaches the same board with one entry fewer.
     const live = newRoom(seed);
     submit(live, P1, DECLARE_40());

@@ -4220,10 +4220,16 @@ derived action is rolled back in the engine (state, grid, the `emitted` keys it 
 (`RoomSession` pops it -- still the last entry), so it is never appended, broadcast, hashed or counted and spends no turn key; its
 key is suppressed for the rest of that settle only, so the loop moves on deterministically and a later settle re-asks. The
 DERIVATION half (the fleet-based $0 answer at Dividends) is unchanged -- the room still asks, the reducer still declines, nothing
-is recorded. Replay: none -- `apply` is untouched, every stored derived no-op (the 18-file corpus holds dozens) replays as before
-(0 differences in 3,763 engine applications). The UR-7 pin was rewritten to the fixed behaviour
+is recorded. Replay: none -- `apply` is untouched and no replay path settles, so every stored derived no-op (the corpus holds
+dozens) replays as before; re-measured on this branch: base `b8d5246` vs the branch, entry by entry over the owner's 18-file development corpus (4,105 stored / 3,731 applied / 374 dropped; 3,763 engine applications) -- 0 board-digest differences, 0 differences in what the derivation owes, 18/18 finals equal. Residual churn (NIT, open with the derivation half): while such a board stands, each
+submit re-mints, applies and retracts the declined withhold (twice: the crash-repair settle and the burst), and each attempt
+burns one server `mintId` (gaps in `s<tag>-N` ids, harmless); fixing the derivation half removes it. The UR-7 pin was rewritten to the fixed behaviour
 (`unpredictableRevenueCertificationGame.test.ts`, "S10-27 / AUD-08.01"); evidence `phase3DerivationResidues.test.ts`,
-`phase3DerivedRefusalSeam.test.ts`.
+`phase3DerivedRefusalSeam.test.ts`. **AUD-04.04 (DH-1), the same lane:** `dhFreeStationAvailableFor` now reads the board's
+one-turn window (`dh_station_pending`), so the server's derivation no longer holds the D&H owner's Tokens step on later turns.
+Residual (NIT, out of scope): the shell's own `stationPlacementBlock` in `App.tsx` (~11772) still feeds
+`dhPower.tokenAvailable` without the window; on the hosted path its dispatch is dropped and the live step is drawn, so it only
+matters on the legacy no-server path.
 
 ---
 

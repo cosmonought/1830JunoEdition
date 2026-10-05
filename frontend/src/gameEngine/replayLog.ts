@@ -631,8 +631,9 @@ export class RoomEngine {
     options?: SettleOwedOptions,
   ): ReplayEntry[] {
     const derived: ReplayEntry[] = [];
-    /* AUD-08.01: the keys THIS CALL derived and the authority refused (see the note at the refusal below). Asked
-       beside `emitted` so the loop moves past a refusal exactly as it always did, and never persisted. */
+    /* AUD-08.01: the keys this call derived and the authority refused on the CURRENT board (see the note at the refusal
+       below). Asked beside `emitted` so the loop moves past a refusal, cleared whenever an accepted action moves the
+       board, and never persisted. */
     const refused = new Set<string>();
     /* A CAP, AND IT IS NOT DEFENSIVE PROGRAMMING. Each answer is computed against the board the previous one
        produced, so a rule that failed to advance the cursor would spin forever and take the room with it --
@@ -680,9 +681,9 @@ export class RoomEngine {
            * the caller's `retract` takes the minted entry back out of its store (`RoomSession` pops it: it is
              still the last entry, nothing is minted in between), so no index or cursor advances for it;
            * it is not returned, so no frame carries it;
-           * its key is remembered for THIS CALL ONLY (`refused`), so the loop goes on to whatever else the board
-             owes -- deterministically, the order `nextDerivedAction` already gives -- instead of re-deriving the
-             same refusal; the guard below still caps the loop. The next settle asks afresh: the board may have
+           * its key is remembered only until the board next moves (`refused`, cleared by the next accepted action and
+             never persisted), so the loop goes on to whatever else the board owes -- deterministically, the order
+             `nextDerivedAction` already gives -- instead of re-deriving the same refusal; the guard caps the loop. The next settle asks afresh: the board may have
              changed so that the action now lands, and an unchanged board is simply refused again, appending nothing.
          An action that MOVES the board is unaffected, including a stale accepted-offer settlement whose refusal
          retires the offer (#1596): the board changed, so it is appended exactly as before. Stored logs are
@@ -706,6 +707,10 @@ export class RoomEngine {
         continue;
       }
       derived.push(minted);
+      /* A refusal judged on an older board says nothing about this one: the accepted action just moved it, so anything
+         refused earlier in this call is asked again (review finding, AUD-08.01). Still bounded: every accepted action
+         moves the board and the guard caps the call. */
+      refused.clear();
     }
 
     // The burst is over. THIS is the settle point, and the caller emits here and nowhere else.

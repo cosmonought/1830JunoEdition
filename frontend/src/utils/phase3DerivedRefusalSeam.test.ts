@@ -216,6 +216,22 @@ describe("AUD-08.01: the derived-action seam appends only what the authority acc
     expect(engine.snapshot.unparseable).toEqual([]);
   });
 
+  it("a refusal is re-asked once an accepted action has moved the board (never judged on a stale board), and still never appended", () => {
+    nextMock.mockImplementation(scripted("refused:reask", "before"));
+    const seed = { ...seedBoard(), operating_sub_phase: "Tokens" } as GameStateResponse;
+    const engine = new RoomEngine(providersFor(charted(seed)), { state: seed, waterfall: null });
+    const retracted: string[] = [];
+    let n = 0;
+    const derived = engine.settleOwed(
+      (msg, reason) => ({ index: n, id: `d${(n += 1)}`, actor: P1, payload: JSON.stringify(msg), derived: true, reason }) as ReplayEntry,
+      { retract: (entry) => retracted.push(Object.keys(JSON.parse(entry.payload))[0]) },
+    );
+    // Refused at Tokens; the Tokens skip lands; refused again at Routes (re-asked on the moved board); Routes is held.
+    expect(derived.map((e) => Object.keys(JSON.parse(e.payload))[0])).toEqual(["AdvanceOperatingSubPhase"]);
+    expect(retracted).toEqual(["DeclareDividends", "DeclareDividends"]);
+    expect(engine.snapshot.state.operating_sub_phase).toBe("Routes");
+  });
+
   it("NO INFINITE LOOP: a board that always 'owes' a refused action terminates within the cap, appending nothing", () => {
     let fresh = 0;
     nextMock.mockImplementation(() => REFUSED(`refused:fresh:${(fresh += 1)}`));

@@ -469,11 +469,12 @@ describe("2 + 3. OR 3.2 -- the Mark on C&O's Gentle Rust grace turn (OD-UR-1, OD
     const declared = A.find("3.2 C&O withholds $40");
     expect(declared.indices[0]).toBe(run.indices[0] + 1);
     expect(treasury(declared.after, CO) - treasury(declared.before, CO)).toBe(40);
-    // No declined derived entry anywhere in the game.
-    for (const entry of A.room.entries) {
-      if (!entry.derived) continue;
-      const at = A.room.entries.indexOf(entry);
-      expect(stateDigest(boardsOf(A)[at])).not.toBe(stateDigest(at === 0 ? G.certificationStart() : boardsOf(A)[at - 1]));
+    // No declined derived entry anywhere in either game.
+    for (const run of [A, B]) {
+      run.room.entries.forEach((entry, at) => {
+        if (!entry.derived || at === 0) return;
+        expect(stateDigest(boardsOf(run)[at])).not.toBe(stateDigest(boardsOf(run)[at - 1]));
+      });
     }
   });
 

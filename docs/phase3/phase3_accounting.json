@@ -597,7 +597,7 @@
    "od": "OD-10(a) (RULED 2026-10-03: one v13 batch; this item excluded from it)",
    "p4": "—",
    "notes": "Corrected by the v13 scope verification (§4.1): the earlier \"replay-affecting: v13\" does not hold. A derivation-only fix; it may land in any server/derivation slice with no version bump. Not a UI fix.",
-   "status": "RULED 2026-10-05 -- the owner placed it (with AUD-08.01) in the pre-Phase-4 derivation lane, \"PHASE 3 — DERIVATION RESIDUES\"; IMPLEMENTED on `phase3/preplaytest-derivation-residues` (from b8d5246; not integrated). Derivation-only as classified: no RULES_ENGINE_VERSION move, no settlement-certification move, stored logs replay unchanged (18-file corpus: 0 differences in 3,763 engine applications). Was: OPEN -- V13_SCOPE_VERIFICATION §4."
+   "status": "RULED 2026-10-05 -- the owner placed it (with AUD-08.01) in the pre-Phase-4 derivation lane, \"PHASE 3 — DERIVATION RESIDUES\"; IMPLEMENTED on `phase3/preplaytest-derivation-residues` (from b8d5246; not integrated). Derivation-only as classified: no RULES_ENGINE_VERSION move, no settlement-certification move, stored logs replay unchanged (re-measured on this branch: base b8d5246 vs the branch, entry by entry over the owner's 18-file development corpus (4,105 stored / 3,731 applied / 374 dropped; 3,763 engine applications) -- 0 board-digest differences, 0 differences in what the derivation owes, 18/18 finals equal). Was: OPEN -- V13_SCOPE_VERIFICATION §4."
   },
   {
    "key": "AUD-04.05",
@@ -924,7 +924,7 @@
    "od": "OD-10(a) (RULED 2026-10-03: one v13 batch; this item excluded from it)",
    "p4": "—",
    "notes": "Corrected by the v13 scope verification (§4.2): it is backlog S10-27, a derivation / append-policy fix, not v13. GR-1b (new: the shell's no-server forced-withhold sends the run's $40 as a withhold) is a UI-only defect, routed to a UI slice, not v13.",
-   "status": "RULED 2026-10-05 -- the owner placed it (with AUD-04.04) in the pre-Phase-4 derivation lane, \"PHASE 3 — DERIVATION RESIDUES\"; IMPLEMENTED on `phase3/preplaytest-derivation-residues` (from b8d5246; not integrated). Derivation-only as classified: no RULES_ENGINE_VERSION move, no settlement-certification move, stored logs replay unchanged (18-file corpus: 0 differences in 3,763 engine applications). Was: OPEN -- V13_SCOPE_VERIFICATION §4."
+   "status": "RULED 2026-10-05 -- the owner placed it (with AUD-04.04) in the pre-Phase-4 derivation lane, \"PHASE 3 — DERIVATION RESIDUES\"; IMPLEMENTED on `phase3/preplaytest-derivation-residues` (from b8d5246; not integrated). Derivation-only as classified: no RULES_ENGINE_VERSION move, no settlement-certification move, stored logs replay unchanged (re-measured on this branch: base b8d5246 vs the branch, entry by entry over the owner's 18-file development corpus (4,105 stored / 3,731 applied / 374 dropped; 3,763 engine applications) -- 0 board-digest differences, 0 differences in what the derivation owes, 18/18 finals equal). The S10-27 DERIVATION half (the fleet-based $0 answer at Dividends) stays OPEN in the backlog; only the append is fixed. Was: OPEN -- V13_SCOPE_VERIFICATION §4."
   },
   {
    "key": "AUD-08.02",

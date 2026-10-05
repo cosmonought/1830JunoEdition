@@ -47,6 +47,9 @@ export type PrivateCardOwner =
 /** The standing player <-> player trade offer, as one viewer sees it. */
 export interface PrivateTradeOfferView {
   privateId: number;
+  /** WHICH offer this is: the authority's instance id (`offer_serial` at the proposal, #1597), or `null` on an offer a
+   *  fixture wrote by hand. Phase 3 W3-J (AUD-25.13 #1): what the section's scroll-to-card is keyed on. */
+  instance: number | null;
   privateName: string;
   /** `sell`: the owner proposed (a sell offer); `buy`: the other player proposed (a buy offer). */
   direction: "sell" | "buy";
@@ -152,6 +155,7 @@ export function privateTradeOfferView(
   const refusal = answerPrivateTradeRefusal(state, { private_id: offer.private_id, accept: true }, counterparty);
   return {
     privateId: offer.private_id,
+    instance: offer.instance ?? null,
     privateName: offer.private_name,
     direction,
     proposer: offer.proposer,

@@ -128,8 +128,34 @@ export function PrivateCompaniesSection({
         ? "Sending your last action — one moment."
         : null;
 
+  /* Phase 3 W3-J (AUD-25.13 #1, W2-F's deferred LOW): THE OFFER COMES TO THE PLAYER WHO MUST ANSWER IT. This section is
+     mounted exactly where the player-trade pointer stands aside (I-3: the Stocks tab with a Stock Round model), and it
+     sits below the corporation listing -- so a recipient already on the Stocks tab lost the pointer and nothing brought
+     the offer's card into view. When an offer THIS viewer must answer appears (`viewerRole` -- the seat authority's
+     counterparty; a watcher or a scrubbed board is never one), its card is scrolled into view once per offer (the
+     authority's instance), as the pointer's "Show on Stocks" does. No focus is moved. jsdom has no scrollIntoView. */
+  const sectionRef = useRef<HTMLElement>(null);
+  const scrolledForRef = useRef<string | null>(null);
+  const answering = model.offer !== null && model.offer.viewerRole === "counterparty" ? model.offer : null;
+  const answerCardId = answering?.privateId ?? null;
+  const answerKey =
+    answering === null
+      ? null
+      : `${answering.privateId}:${answering.instance ?? `${answering.proposer}:${answering.price}`}`;
+  useEffect(() => {
+    if (answerKey === null || answerCardId === null) {
+      scrolledForRef.current = null;
+      return;
+    }
+    if (scrolledForRef.current === answerKey) return;
+    scrolledForRef.current = answerKey;
+    sectionRef.current
+      ?.querySelector<HTMLElement>(`[data-testid="private-trade-card-${answerCardId}"]`)
+      ?.scrollIntoView?.({ block: "center", behavior: "smooth" });
+  }, [answerKey, answerCardId]);
+
   return (
-    <section style={styles.section} aria-label="Private Companies" data-testid="private-companies-section">
+    <section ref={sectionRef} style={styles.section} aria-label="Private Companies" data-testid="private-companies-section">
       <div style={styles.sectionHeader}>
         <span style={styles.sectionTitle}>Private Companies</span>
         {!model.viewerSeated && <span style={styles.sectionHint}>Read only</span>}

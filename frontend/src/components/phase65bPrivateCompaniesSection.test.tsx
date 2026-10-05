@@ -425,3 +425,59 @@ describe("the Stock Round panel: the section below the listing, and the hold on 
     expect(q("private-companies-section")).toBeNull();
   });
 });
+
+/* ================================================================== */
+/* Phase 3 W3-J (AUD-25.13 #1, W2-F's deferred LOW): the offer's card is brought to the player who must answer it  */
+/* ================================================================== */
+
+describe("W3-J AUD-25.13 #1: scroll-to-card on the Stocks tab", () => {
+  const SELL_MH = (price: number) => ({ privateId: MH, seller: P1, buyer: P3, price });
+  let calls: Array<{ id: string; options: unknown }>;
+  const proto = Element.prototype as unknown as { scrollIntoView?: (options?: unknown) => void };
+  const had = Object.prototype.hasOwnProperty.call(proto, "scrollIntoView");
+  const original = proto.scrollIntoView;
+  beforeEach(() => {
+    calls = [];
+    proto.scrollIntoView = function (this: Element, options?: unknown) {
+      calls.push({ id: this.id, options });
+    };
+  });
+  afterEach(() => {
+    if (had) proto.scrollIntoView = original;
+    else delete proto.scrollIntoView;
+  });
+
+  it("the recipient's section scrolls the offer's card into view once, as 'Show on Stocks' does", () => {
+    const t = table(seedBoard());
+    t.drawFor(P3);
+    expect(calls).toEqual([]); // no offer, nothing to bring
+    t.submit(P1, T.proposePrivateTradeMsg(GAME, SELL_MH(150)));
+    t.drawFor(P3);
+    expect(calls).toEqual([{ id: `private-trade-card-${MH}`, options: { block: "center", behavior: "smooth" } }]);
+    // Re-renders of the same offer (a tick, the session key) do not scroll again.
+    t.drawFor(P3);
+    t.drawFor(P3, { sessionReady: false });
+    expect(calls).toHaveLength(1);
+  });
+
+  it("a new offer -- the authority's next instance, same parties, same price -- scrolls again", () => {
+    const t = table(seedBoard());
+    t.submit(P1, T.proposePrivateTradeMsg(GAME, SELL_MH(150)));
+    t.drawFor(P3);
+    expect(calls).toHaveLength(1);
+    // Rejected and re-offered between renders: the card's text is identical, the instance is not.
+    expect(t.submit(P3, T.answerPrivateTradeMsg(GAME, MH, false)).kind).toBe("applied");
+    expect(t.submit(P1, T.proposePrivateTradeMsg(GAME, SELL_MH(150))).kind).toBe("applied");
+    t.drawFor(P3);
+    expect(calls).toHaveLength(2);
+  });
+
+  it("the proposer, a third seat and a watcher have nothing to answer and are not moved", () => {
+    const t = table(seedBoard());
+    t.submit(P1, T.proposePrivateTradeMsg(GAME, SELL_MH(150)));
+    t.drawFor(P1);
+    t.drawFor(P2);
+    t.drawFor(null);
+    expect(calls).toEqual([]);
+  });
+});

@@ -133,6 +133,7 @@ import { sessionPort as appSessionPort, type SessionPort } from "./sessionBootst
 import { THIS_BUNDLE_ANNOUNCEMENT, withClientAnnouncement } from "./clientAnnouncement";
 import { CLIENT_ANSWER_CLOSE_CODE, CLIENT_ANSWER_SENTENCES, routeTargetOf, type ClientAnswerFrame } from "./clientAnswers";
 import { MAX_ROUTE_HOPS, clientUpdatePort, type ClientUpdatePort } from "./clientUpdate";
+import type { AppliedPosition } from "./boardCurrency";
 
 /** The slice of `WebSocket` this file uses. Injected so a test needs no browser and no server. */
 export interface SocketLike {
@@ -215,6 +216,14 @@ export interface ServerLinkOptions {
   /** LIVE-4 (L4-3): where a route to another bundle may lead -- this page's origin and this bundle's base path. The
    *  page's own when absent. */
   routeEnvironment?: { pageOrigin: string; bundleBase: string };
+  /** PHASE 3 W3-J (AUD-25.16, OD-19): the log position the CONSUMER's board has applied, asked as each submission goes
+   *  on the wire. `baseIndex` / `baseId` have always meant "the last entry the client has applied" to the server (its
+   *  two-sided, anchored staleness guard: behind -> catch-up, not applied; ahead -> `ahead`; another anchor ->
+   *  `resync`), but this link stamped the last entry it had DELIVERED -- so a board resting behind what it was handed
+   *  passed the guard and its click was judged on a board the player never saw. With this, a submission is bound to
+   *  the board's own position. `{ notCurrent }`: the board is not current (or the tab only watches) -- the link sends
+   *  nothing, settles the submission `null` and says why (`onRefused`). Absent: the delivered position, as before. */
+  appliedPosition?: () => AppliedPosition;
 }
 
 /* ==================================================================
@@ -424,16 +433,25 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
       noteQueue(); // Phase 3 W3-I: a submission made while the wire is down is queued -- the snapshot says so.
       return;
     }
-    for (const item of pending) {
+    for (const item of pending.slice()) {
       if (!item.sent) {
+        /* Phase 3 W3-J (AUD-25.16): bound to the position the board APPLIED, asked now -- for a submission queued while
+           the wire was down too, so it is judged against the board as it stands when it goes out (#1253's rule). */
+        const position = options.appliedPosition ? options.appliedPosition() : { index: appliedIndex, id: appliedId };
+        if ("notCurrent" in position) {
+          pending.splice(pending.indexOf(item), 1);
+          options.onRefused?.(position.notCurrent);
+          item.resolve(null);
+          continue;
+        }
         item.sent = true;
         socket.send(
           JSON.stringify({
             kind: "submit",
             build: options.build,
             msg: item.msg,
-            baseIndex: appliedIndex,
-            baseId: appliedIndex >= 0 ? appliedId : undefined,
+            baseIndex: position.index,
+            baseId: position.index >= 0 ? position.id : undefined,
             submissionId: item.id,
           }),
         );

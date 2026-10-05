@@ -94,6 +94,11 @@ export interface LobbyProps {
    *  readable by any signed-in profile). The shell opens the table's RoomView and log by that id; the seat, if
    *  any, is the server's answer in `RoomView.you`, never this screen's. */
   onEnterSandbox: (gameId: string) => void;
+  /** PHASE 3 W3-J (OD-19, AUD-25.16): the public list's Watch -- the table opened as a READ-ONLY spectator view, even
+   *  when this principal holds a seat at it ("Watch this game. You will not have a seat."). A seat is re-entered
+   *  through "Your tables", which keeps `onEnterSandbox`. Omitted: Watch falls back to `onEnterSandbox` (no caller
+   *  does this; it keeps the prop optional for the component's own tests). */
+  onWatchSandbox?: (gameId: string) => void;
 }
 
 /* ==================================================================
@@ -192,7 +197,7 @@ function titleBottomFor(scale: number, utilityRowPx: number): React.CSSPropertie
   };
 }
 
-export function Lobby({ onEnterSandbox }: LobbyProps) {
+export function Lobby({ onEnterSandbox, onWatchSandbox }: LobbyProps) {
   /* Design note #1294: the chrome scale, live. */
   const uiScale = useUiScale();
   /* Design note #1354: the utility row's measured height, for the title's safe line. */
@@ -568,8 +573,10 @@ export function Lobby({ onEnterSandbox }: LobbyProps) {
         refusal={roomRefusal}
         onJoin={(code) => void handleJoinListedRoom(code)}
         /* LIVE-2D: Watch needs no op -- a public table is readable by any signed-in profile; the shell opens its
-           RoomView and log by game id, and the viewer holds no seat and is never given one. */
-        onWatch={(gameId) => onEnterSandbox(gameId)}
+           RoomView and log by game id, and the viewer holds no seat and is never given one.
+           PHASE 3 W3-J (OD-19): its OWN door, so "never given one" holds for a principal who IS seated there too --
+           the shell opens a read-only spectator view. "Your tables" above stays the way back to a seat. */
+        onWatch={(gameId) => (onWatchSandbox ?? onEnterSandbox)(gameId)}
       />
 
       {/* Honest, specific banners -- never a silently empty screen. Each

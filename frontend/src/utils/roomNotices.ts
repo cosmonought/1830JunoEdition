@@ -44,6 +44,7 @@ export type ConnectionNoticeKind =
   | "build-skew" // this tab's build and the server's differ (#1206)
   | "incompatible" // the server does not continue this room (#1520)
   | "divergence" // the client's board hashed differently from the server's (#1223)
+  | "board-behind" // W3-J (AUD-25.16): this tab's board is not the room's (a failed drain, an unresolved divergence)
   | "transport"; // the link's own error sentence
 
 /** One connection notice: a fact about the link, with its kind. */
@@ -139,6 +140,7 @@ const CONNECTION_PRIORITY: readonly ConnectionNoticeKind[] = [
   "incompatible",
   "build-skew",
   "divergence",
+  "board-behind",
   "room-status",
   "reconnecting",
   "resync",

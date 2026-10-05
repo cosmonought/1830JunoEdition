@@ -31,6 +31,16 @@ import { linkQueueView, useLinkQueue } from "./utils/useLinkQueue";
 import { DelayedAuctionStatusChip } from "./components/DelayedAuctionStatusChip"; // Phase 3 W2-I (AUD-02.08)
 import { rollBackIfRefused, submissionRefused } from "./utils/submissionAnswer"; // Phase 3 W3-C (P3-N020)
 import { paidStationRefusal } from "./utils/paidStationView"; // Phase 3 W3-J (AUD-25.08)
+import {
+  BOARD_CURRENT,
+  appliedPositionFor,
+  boardCurrencyFor,
+  boardSendRefusal,
+  type AppliedPosition,
+  type BoardCurrency,
+} from "./utils/boardCurrency"; // Phase 3 W3-J (AUD-25.16, OD-19)
+import { watcherRoomView } from "./utils/watchView"; // Phase 3 W3-J (OD-19)
+import { BoardBehindNotice } from "./components/BoardBehindNotice"; // Phase 3 W3-J (AUD-25.16)
 import { RoomNoticeSlots } from "./components/RoomNoticeSlots"; // Phase 3 W3-C (AUD-14.01)
 import { boardRulesVersion } from "./utils/buildStamp"; // Phase 3 W2-I / OD-6 (AUD-01.07)
 /* #1223: the alarm #1207 argued for and nobody connected. The comparison lives in its own module so it is
@@ -1037,6 +1047,10 @@ interface AppShellProps {
      answer (`RoomView.you`); there is no watch intent to carry, because entering a table never takes a seat on its
      own -- Host and Join took one at the server, Watch did not ask for one. */
   sandboxRoomSeed?: string | null;
+  /** PHASE 3 W3-J (OD-19, AUD-25.16): opened by the Lobby's Watch. The room view is presented as a watcher's -- no seat,
+   *  no host role, no money actions -- even for a principal the server seats at the table, and the shell sends no
+   *  gameplay move. */
+  watchOnly?: boolean;
   /** Returns to the Lobby. */
   onLeaveGame: () => void;
   /** Which of the three ways of looking at a board this is -- design note
@@ -1097,7 +1111,7 @@ function withSeededChart(
   };
 }
 
-function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }: AppShellProps) {
+function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, watchOnly = false }: AppShellProps) {
   const wallet = useWallet();
   const session = useGameSession();
 
@@ -1182,7 +1196,15 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      view arrives and for a watcher, which no seat, turn or payout ever matches. It is PRESENTATION -- "your turn",
      your cash, your colour. It never authorizes anything: the server derives every move's actor itself (principal
      -> seat -> player id), and the submit frame names none. */
-  const [sandboxRoomDoc, setSandboxRoom] = useState<RoomView | null>(null);
+  const [sandboxRoomServerView, setSandboxRoom] = useState<RoomView | null>(null);
+  /* PHASE 3 W3-J (OD-19 RULED, AUD-25.16): A WATCH TAB PRESENTS THE VIEW AS A WATCHER'S. The server computes `you` for
+     the principal, so a principal seated here who opened the table with Watch got their seat (and, as host, the host's
+     controls). `watcherRoomView` keeps everything the room says and makes `you` a watcher's; every reader below --
+     `localId`, the pending-seat overlay, the waiting room, the host control, the settlement band -- sees no seat. */
+  const sandboxRoomDoc = useMemo(
+    () => (watchOnly ? watcherRoomView(sandboxRoomServerView) : sandboxRoomServerView),
+    [watchOnly, sandboxRoomServerView],
+  );
   /** LIVE-2D: this tab lost the table for good -- kicked, the table cancelled or expired, a private game dealt
    *  without it. Terminal; the shell says so and offers the lobby. */
   const [roomLost, setRoomLost] = useState<RoomLoss | null>(null);
@@ -1194,6 +1216,27 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   /** LIVE-2D: the seat id, for callbacks that must not rebuild when the view does. */
   const localIdRef = useRef(localId);
   localIdRef.current = localId;
+
+  /* ==================================================================
+      PHASE 3 W3-J (AUD-25.16, OD-19): IS THE BOARD ON SCREEN THE ROOM'S? (`boardCurrency.ts`)
+     ==================================================================
+     Two standing facts, each latched where it is learned: a drain pass for this room THREW (`drainFailedRoom`, set by
+     the drain's catch -- RED R5 -- and kept for the tab's life on the room, because later passes skip what it missed),
+     and the settle point's digest comparison DISAGREES (`boardDivergedAt`, mirrored from `divergenceReportedAtRef` after
+     each render; non-null while the last comparison disagreed, whether or not the boards ever agreed). Either one and
+     the board is not the room's: it is nobody's turn on it (`isMyTurn`), a forced notice covers the table
+     (`BoardBehindNotice`), the shell's send gate refuses (RED R1) and the link stamps nothing (`appliedPosition`). The
+     refs are the synchronous copies the send side reads at the click. */
+  const [drainFailedRoom, setDrainFailedRoom] = useState<string | null>(null);
+  const drainFailedRoomRef = useRef<string | null>(null);
+  const [boardDivergedAt, setBoardDivergedAt] = useState<number | null>(null);
+  const boardCurrency = useMemo<BoardCurrency>(
+    () =>
+      sandbox && sandboxRoomCode
+        ? boardCurrencyFor({ drainFailed: drainFailedRoom !== null && drainFailedRoom === sandboxRoomCode, divergedAt: boardDivergedAt })
+        : BOARD_CURRENT,
+    [sandbox, sandboxRoomCode, drainFailedRoom, boardDivergedAt],
+  );
 
   /* Design note #573: read synchronously by `handleUsePrivateAbility`, which
      must not name `viewerAddress` as a dependency -- it feeds
@@ -2770,8 +2813,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   const isMyTurn = useMemo(() => {
     if (!viewerAddress || !gameState) return false;
     if (scrubbing) return false; // #1425: a past board is nobody's turn
+    if (!boardCurrency.current) return false; // W3-J (AUD-25.16, OD-19): nor is a board that is not the room's
     return actingAddress(gameState, waterfallState) === viewerAddress;
-  }, [viewerAddress, gameState, waterfallState, scrubbing]);
+  }, [viewerAddress, gameState, waterfallState, scrubbing, boardCurrency]);
 
   useDocumentTitleFlash(isMyTurn);
 
@@ -4494,6 +4538,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   /** #1223: whether the two halves have ever agreed. Until they have, a mismatch is this mechanism's fault
    *  rather than the room's, and belongs in the console rather than on the player's screen. */
   const divergenceEverAgreedRef = useRef(false);
+  /* PHASE 3 W3-J (AUD-25.16): the board-currency answers the RED regions read through refs (assigned after the drain).
+     `noteDrainFailureRef` is the drain's catch (R5); `appliedPositionRef` is what the room link stamps a submission
+     with (R5); `boardSendRefusalRef` is the shell's send gate (R1). Until assigned they refuse: nothing is sent from a
+     board nobody has vouched for. */
+  const noteDrainFailureRef = useRef<(roomCode: string, error: unknown) => void>(() => undefined);
+  const appliedPositionRef = useRef<() => AppliedPosition>(() => ({ notCurrent: CATCHING_UP_BANNER }));
+  const boardSendRefusalRef = useRef<() => string | null>(() => CATCHING_UP_BANNER);
   /** #1225: the server's per-field digests, so a divergence can be reported as a FIELD rather than as two
    *  opaque hashes. `null` unless the server was started to explain itself. */
   const serverFieldsRef = useRef<Record<string, string> | null>(null);
@@ -13080,6 +13131,48 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   }, [sandbox, sandboxRoomCode]);
 
   /* ==================================================================
+      PHASE 3 W3-J (AUD-25.16, OD-19): THE BOARD'S CURRENCY, FOR THE DRAIN, THE LINK AND THE SEND GATE
+     ==================================================================
+     Assigned here, below the drain, because they read its refs (`replayingRef`) -- the RED regions reach them through
+     the refs declared beside the divergence refs, so neither R1 nor R5 holds any of this logic.
+       - the drain's catch (R5): a pass that THREW is latched for this room, synchronously (the ref) for the send side
+         and as state for the surfaces, and said once in the console with the error;
+       - the link's `appliedPosition` (R5): the last entry the last COMPLETED pass applied -- what a submission is bound
+         to -- or, when the board is not current or the tab only watches, nothing at all;
+       - the send gate (R1): why this tab may not send a gameplay move now, or `null`. */
+  const syncBoardCurrency = (): BoardCurrency =>
+    boardCurrencyFor({
+      drainFailed: drainFailedRoomRef.current !== null && drainFailedRoomRef.current === sandboxRoomRef.current,
+      divergedAt: divergenceReportedAtRef.current,
+    });
+  noteDrainFailureRef.current = (roomCode: string, error: unknown) => {
+    // eslint-disable-next-line no-console
+    console.error(`[drain] room ${roomCode}: a replayed entry could not be applied -- this tab's board is behind the room`, error);
+    drainFailedRoomRef.current = roomCode;
+    setDrainFailedRoom(roomCode);
+  };
+  appliedPositionRef.current = () =>
+    appliedPositionFor({
+      watchOnly,
+      currency: syncBoardCurrency(),
+      replaying: replayingRef.current,
+      log: sandboxLogRef.current,
+      catchingUpNotice: CATCHING_UP_BANNER,
+    });
+  boardSendRefusalRef.current = () => boardSendRefusal({ watchOnly, currency: syncBoardCurrency() });
+  /* The settle point writes its verdict into `divergenceReportedAtRef` (R5) inside the drain's pass, and the pass's own
+     state updates render; this mirrors the standing verdict into state after that render, so the surfaces follow it. */
+  useEffect(() => {
+    const divergedAt = divergenceReportedAtRef.current;
+    setBoardDivergedAt((current) => (current === divergedAt ? current : divergedAt));
+  });
+  /* The standing notice, in the strip's connection slot (`board-behind`), for as long as the board is not current. */
+  useEffect(() => {
+    if (boardCurrency.current) dispatchRoomNotice({ type: "clear-connection", kind: "board-behind" });
+    else dispatchRoomNotice({ type: "connection", kind: "board-behind", text: boardCurrency.notice });
+  }, [boardCurrency]);
+
+  /* ==================================================================
       LIVE-2D: EVERY WAITING-ROOM CONTROL IS ONE NAMED OP, ANSWERED BY THE SERVER
      ==================================================================
      `room-op {gameId, op}` on the game's room socket. The server authorizes it against its committed record and
@@ -15985,6 +16078,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         />
       )}
 
+      {/* PHASE 3 W3-J (AUD-25.16, OD-19): a board that is not the room's is never offered as live -- a forced notice
+          (a native modal: everything behind it is inert) whose remedy is a reload. */}
+      <BoardBehindNotice
+        notice={sandbox && sandboxRoomCode && !boardCurrency.current ? boardCurrency.notice : null}
+        onReload={() => window.location.reload()}
+        onLeave={handleLeaveTableToLobby}
+      />
       {/* Design note #1083: the fifth and last item of the ruled order. `marginTop: auto` on its own style
          pins it to the bottom of the root's column on a short page and lets it follow the content on a long
          one -- see `appStyles` #1083 for why it is in the flow rather than fixed like the status dock. */}
@@ -16044,11 +16144,20 @@ function GameRouter() {
     writeActiveSandboxRoom(sandboxRoomCode);
   }, [sandboxRoomCode]);
 
-  /* LIVE-2D: one door for Host, Join and Watch -- the table's game id. There is no watch intent to carry: entering a
-     table never takes a seat by itself (the server seated a host or a joiner already; a watcher asked for none). */
+  /* LIVE-2D: one door for Host, Join and "Your tables" -- the table's game id. Entering a table never takes a seat by
+     itself (the server seated a host or a joiner already); the seat, if any, is the server's answer by principal. */
   const handleEnterSandbox = useCallback((gameIdToEnter: string) => {
     setSandboxRoomCode(gameIdToEnter);
     setActiveGame({ gameId: SANDBOX_GAME_ID, roomId: SANDBOX_ROOM_ID, mode: "sandbox" });
+  }, []);
+  /* PHASE 3 W3-J (OD-19 RULED, AUD-25.16): WATCH IS ITS OWN DOOR, AND IT IS READ-ONLY. It was the door above, so a
+     principal seated at the table pressed Watch and was put in their seat -- against the button's own promise ("Watch
+     this game. You will not have a seat."). The watch intent now travels with the table (`activeGame.watch`, persisted
+     so a reload stays a watch) and the shell presents a spectator view whoever is signed in; re-entering a seat is
+     "Your tables" / Open / Rejoin, through the door above. */
+  const handleWatchSandbox = useCallback((gameIdToWatch: string) => {
+    setSandboxRoomCode(gameIdToWatch);
+    setActiveGame({ gameId: SANDBOX_GAME_ID, roomId: SANDBOX_ROOM_ID, mode: "sandbox", watch: true });
   }, []);
 
   const handleLeaveGame = useCallback(() => setActiveGame(null), []);
@@ -16064,7 +16173,7 @@ function GameRouter() {
   if (!activeGame) {
     return (
       <>
-        <Lobby onEnterSandbox={handleEnterSandbox} />
+        <Lobby onEnterSandbox={handleEnterSandbox} onWatchSandbox={handleWatchSandbox} />
         <ModalLayerHost />
       </>
     );
@@ -16075,12 +16184,14 @@ function GameRouter() {
     <AppShell
       // Keyed on room and mode so a room change - or a spectator joining properly - gets a genuinely fresh shell.
       // See docs/ai_architecture/firebase_middleware.md - App.tsx #551
-      key={`${activeGame.gameId}:${activeGame.roomId}:${activeGame.mode}`}
+      key={`${activeGame.gameId}:${activeGame.roomId}:${activeGame.mode}${activeGame.watch ? ":watch" : ""}`}
       gameId={activeGame.gameId}
       roomId={activeGame.roomId}
       mode={activeGame.mode}
       // Design note #524: `null` for every mode but a joined sandbox room.
       sandboxRoomSeed={activeGame.mode === "sandbox" ? sandboxRoomCode : null}
+      // Phase 3 W3-J (OD-19): the Lobby's Watch -- a read-only spectator view, whoever is signed in.
+      watchOnly={activeGame.watch === true}
       onLeaveGame={handleLeaveGame}
     />
       <ModalLayerHost />

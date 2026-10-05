@@ -45,6 +45,10 @@ export interface ActiveGame {
    *  without this would default to the most permissive mode and hand a
    *  watcher a playable board. */
   mode: BoardMode;
+  /** PHASE 3 W3-J (OD-19, AUD-25.16): opened by the Lobby's Watch -- a READ-ONLY spectator view, even for a principal
+   *  who holds a seat at the table (a seat is re-entered through "Your tables" / Open / Rejoin). Persisted for design
+   *  note #24's reason: a reload must not silently promote a watcher into a player. Absent on every other door. */
+  watch?: true;
 }
 
 
@@ -71,6 +75,8 @@ export function readActiveGame(): ActiveGame | null {
         gameId: (parsed as ActiveGame).gameId,
         roomId: (parsed as ActiveGame).roomId,
         mode: "sandbox",
+        // W3-J (OD-19): a Watch tab reloads as a Watch tab; anything but `true` is no watch.
+        ...((parsed as ActiveGame).watch === true ? { watch: true as const } : {}),
       };
     }
     return null;

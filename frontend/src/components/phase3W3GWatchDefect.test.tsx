@@ -8,10 +8,11 @@
    row in the Lobby's public list. The table opened in the owner's SEAT, one turn BEHIND the game, and offered
    the owner their turn from that stale position. The owner did not act.
 
-   THESE ARE CHARACTERIZATION TESTS: they PASS today because they pin the DEFECT as it stands (no product
-   code changes in this triage). W3-J's remediation flips the ones marked DEFECT; the ones marked KEEP pin
-   behaviour the fix must not break (the Play / Rejoin path's seat). Nothing here touches a live game: the
-   room is the in-memory `RoomSession`, the link a hand-driven fake socket, the shell read by source scan.
+   THESE WERE CHARACTERIZATION TESTS pinning the DEFECT (triage `d3f9050`). PHASE 3 W3-J flipped the ones marked
+   DEFECT into FIXED (OD-19 RULED: Watch is read-only; a board that is not current cannot send); the ones marked
+   KEEP pin behaviour the fix must not break (the Play / Rejoin path's seat, the server's staleness guard).
+   Nothing here touches a live game: the room is the in-memory `RoomSession`, the link a hand-driven fake socket,
+   the shell read by source scan. The behavioural cases are in `phase3W3JWatchStaleBoard.test.tsx`.
 
    Three separate facts (AUD-25.16 records them separately):
      (A) WATCH IDENTITY -- Watch and "Your tables" are ONE door (`onEnterSandbox(gameId)`); no watch intent
@@ -96,7 +97,7 @@ describe("AUD-25.16 (A): Watch identity", () => {
     lastActivityMs: 2,
   };
 
-  it("DEFECT: the Watch button promises no seat, yet hands the shell only the game id -- the same value the Play / Rejoin door hands it", () => {
+  it("FIXED (W3-J, OD-19): the Watch button keeps its promise and its wording; it and Play / Rejoin each hand their game id to their own door", () => {
     const watched: string[] = [];
     const opened: string[] = [];
     render(
@@ -110,36 +111,43 @@ describe("AUD-25.16 (A): Watch identity", () => {
     act(() => watch.click());
     const rejoin = host.querySelector('[data-testid="my-table-row"] button') as HTMLButtonElement;
     act(() => rejoin.click());
-    // One door: the same bare game id, no role, no intent. The seated principal's own table is listed in
-    // "Your tables" AND offered "Watch" in the public list, and the two cannot be told apart downstream.
+    // Each component hands its game id to its own callback; the Lobby wires the two to different doors (below), so the
+    // seated principal's table opened by Watch is a spectator view and opened from "Your tables" is the seat.
     expect(watched).toEqual([GAME]);
     expect(opened).toEqual([GAME]);
   });
 
-  it("DEFECT: the Lobby wires Watch and Your tables to the same `onEnterSandbox`, and the shell's door carries no watch intent", () => {
+  it("FIXED (W3-J, OD-19): the Lobby wires Watch to its own door, which carries the watch intent; Your tables keeps the seat door", () => {
     const lobby = readStripped("components/Lobby.tsx");
     expect(lobby).toContain("onOpen={(gameId) => onEnterSandbox(gameId)}");
-    expect(lobby).toContain("onWatch={(gameId) => onEnterSandbox(gameId)}");
+    expect(lobby).toContain("onWatch={(gameId) => (onWatchSandbox ?? onEnterSandbox)(gameId)}");
     const shell = readShell();
     const door = sliceBetween(shell, "const handleEnterSandbox = useCallback((gameIdToEnter: string) => {", "}, []);");
     expect(door).toContain("setSandboxRoomCode(gameIdToEnter);");
     expect(door).toContain('setActiveGame({ gameId: SANDBOX_GAME_ID, roomId: SANDBOX_ROOM_ID, mode: "sandbox" });');
-    // Every Lobby door opens `mode: "sandbox"`; the shell's `spectate` mode is never chosen by Watch.
-    expect(door).not.toContain('"spectate"');
+    const watchDoor = sliceBetween(shell, "const handleWatchSandbox = useCallback((gameIdToWatch: string) => {", "}, []);");
+    expect(watchDoor).toContain('setActiveGame({ gameId: SANDBOX_GAME_ID, roomId: SANDBOX_ROOM_ID, mode: "sandbox", watch: true });');
+    expect(shell).toContain("<Lobby onEnterSandbox={handleEnterSandbox} onWatchSandbox={handleWatchSandbox} />");
+    expect(shell).toContain("watchOnly={activeGame.watch === true}");
   });
 
-  it("DEFECT: the seat is the server's answer by principal, whatever door opened the table (`roomViewFor`)", () => {
+  it("FIXED (W3-J, OD-19): the seat is still the server's answer by principal (`roomViewFor`), and a Watch tab reads it as a watcher's", () => {
     const record = serverSource("rooms/gameRecord.ts");
     const view = sliceBetween(record, "export function roomViewFor(", "const insider =");
     expect(view).toContain("const seat = seatOf(record, principalId);");
     expect(view).toContain('const role: RoomView["you"]["role"] = host ? "host" : seat !== null ? "player" : member ? "member" : "viewer";');
-    // ... and the shell's identity is that answer: a seated principal is "player"/"host" and acts as the seat.
+    // ... the shell's identity is that answer on the seat path, and the watcher projection on a Watch tab.
     const shell = readShell();
+    expect(shell).toContain("() => (watchOnly ? watcherRoomView(sandboxRoomServerView) : sandboxRoomServerView),");
     expect(shell).toContain('const localId = sandboxRoomDoc?.you.playerId ?? "";');
     expect(shell).toContain("const viewerAddress = sandbox ? localId : wallet.address;");
   });
 
-  it("DEFECT: the log hello names no role -- nothing on the wire says this tab came to watch", () => {
+  it("BY DESIGN (W3-J): the log hello is unchanged -- read-only Watch is enforced where the tab sends, not by a new hello field", () => {
+    /* The control frames are CLOSED (LIVE-2 §11.2: an unknown field is `bad-frame`), so a `watch` field on the hello
+       would be refused by every server that predates it. A Watch tab never sends a gameplay move: its send gate refuses
+       (`boardSendRefusal`) and its link stamps no position (`appliedPosition` -> notCurrent) -- see
+       `phase3W3JWatchStaleBoard.test.tsx`. */
     const wire: string[] = [];
     const socket = { send: (data: string) => wire.push(data), close: () => {}, onopen: null, onmessage: null, onclose: null, onerror: null } as import("../utils/serverLink").SocketLike;
     const link = connectServerLink({ url: "ws://test", gameId: GAME, build: "build-1", onEntries: () => {}, socketFactory: () => socket });

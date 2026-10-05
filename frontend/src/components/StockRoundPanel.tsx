@@ -639,6 +639,35 @@ function useStockTransferFocus(
 }
 
 /* ==================================================================
+    W3-H (review fix): THE GATE DECLINES THE PICTURE, NOT THE PRESIDENCY'S SOUND
+   ==================================================================
+   The off-screen launch gate (VF C-7) skips a transfer nobody can see -- no proxy, no timers, no staged
+   board. Before it, the transfer's timers never depended on geometry, so a takeover sounded its presidency
+   cue (#1457) whether or not the card was in view; nobody ruled that it should stop. So a DECLINED takeover
+   still sounds the cue, once, on the beat its crown would have landed -- the same `buildFocusSequence`
+   application time the staged path uses, one timer, no state. The float stamp is deliberately NOT given the
+   same treatment: its full-motion ceremony never ran before W3-H (the ref defect fixed under E-5), so its
+   cue never sounded off-screen, and VF-3's own note rules out a sound with no ceremony behind it. */
+function useDeclinedPresidencyCue(
+  transaction: StockTransactionEvent | null,
+  shown: StockTransactionEvent | null,
+  onPresidencyCue?: () => void,
+): void {
+  const declined = transaction !== null && shown === null ? transaction : null;
+  const sequence = useMemo(() => buildFocusSequence(declined), [declined]);
+  // A ref, so a new callback identity on a busy re-render cannot tear the timer down and starve the cue.
+  const cueRef = useRef(onPresidencyCue);
+  cueRef.current = onPresidencyCue;
+  useEffect(() => {
+    if (!sequence || sequence.crownArrivesOn === null) return undefined;
+    const at = sequence.applications.find((application) => application.applies.includes("presidency"))?.at;
+    if (at === undefined) return undefined;
+    const timer = window.setTimeout(() => cueRef.current?.(), at);
+    return () => window.clearTimeout(timer);
+  }, [sequence]);
+}
+
+/* ==================================================================
     DESIGN NOTE (VF-3): THE FLOAT CEREMONY'S OWN PROGRESS, ONE FIELD WIDE
    ==================================================================
    `AppliedSteps` above has two fields because a takeover has two things that can land; a float has exactly
@@ -1220,7 +1249,7 @@ function CorporationRoster({
   const floatGridRef = useRef<HTMLDivElement | null>(null);
   /* W3-H (VF C-7): OFF-SCREEN WORK IS NOT STARTED (`utils/surfaceVisibility.ts`). A transaction whose card is
      scrolled away, or whose page is in the background, is declined at launch: no proxy, no timers, no
-     staged board, no presidency cue -- the committed card is the A-3 fallback, and #1453/#1454's "a late
+     staged board (the presidency cue still sounds on its beat: `useDeclinedPresidencyCue`) -- the committed card is the A-3 fallback, and #1453/#1454's "a late
      gesture is worse than none" rules out starting it when the card comes back. Reduced motion is exempt. */
   const shownTransaction = useVisibleLaunch(
     transaction ?? null,
@@ -1231,6 +1260,7 @@ function CorporationRoster({
     shownTransaction,
     onPresidencyCue,
   );
+  useDeclinedPresidencyCue(transaction ?? null, shownTransaction, onPresidencyCue);
   /* The focused card's ownership table, for measuring inside it. Attached only to the card the sequence names
      (below), so a query from here cannot reach another card's rows. */
   const focusTableRef = useRef<HTMLDivElement | null>(null);

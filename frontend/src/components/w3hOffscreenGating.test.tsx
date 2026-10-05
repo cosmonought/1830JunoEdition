@@ -7,8 +7,9 @@
 // `utils/surfaceVisibility.ts` gates three flourishes on whether anyone can see their surface. This suite
 // mounts each one and checks the work itself, not a source shape:
 //   C-7  VF-1's transfer: card on screen -> proxy drawn, timers armed, presidency cue sounds. Card scrolled
-//        away, or page in the background -> no proxy, no timers, no cue, and the committed board shown. Not
-//        launched late when the card comes back (#1453/#1454).
+//        away, or page in the background -> no proxy, no staging timers, the committed board shown -- and the
+//        presidency cue still sounds once, on its beat (one timer; W3-H review: the gate declines the picture,
+//        not the sound). Not launched late when the card comes back (#1453/#1454).
 //   E-6  VF-3's float: card on screen -> the ceremony's timers are armed. Card scrolled away, page hidden,
 //        or the pane mounted but `display: none` (a zero-size box) -> none are.
 //   F-5  VF-2's route signal: board visible -> frames are requested. Document hidden or board off screen ->
@@ -213,14 +214,14 @@ describe("the corporation roster's ceremonies", () => {
       expect(cues).toEqual(["presidency"]);
     });
 
-    it("scrolled away: no proxy, no timers, no cue -- the committed board, unstaged", () => {
+    it("scrolled away: no proxy, no staging timers -- the committed board -- but the presidency cue still sounds", () => {
       surfaceBox = BELOW_FOLD;
       render(takeover(2));
       expect(proxies()).toHaveLength(0);
       expect(shares(BOB)).toContain("50%");
-      expect(armedTimers()).toBe(0);
+      expect(armedTimers()).toBe(1); // the cue's single timer; none of the sequence's stage/apply timers
       tick(TRANSFER_MS * 4);
-      expect(cues).toEqual([]);
+      expect(cues).toEqual(["presidency"]);
     });
 
     it("page in the background: the same, though the card itself is on screen", () => {
@@ -228,9 +229,9 @@ describe("the corporation roster's ceremonies", () => {
       render(takeover(3));
       expect(proxies()).toHaveLength(0);
       expect(shares(BOB)).toContain("50%");
-      expect(armedTimers()).toBe(0);
+      expect(armedTimers()).toBe(1); // the cue's single timer
       tick(TRANSFER_MS * 4);
-      expect(cues).toEqual([]);
+      expect(cues).toEqual(["presidency"]);
     });
 
     it("is not launched late when the card scrolls back into view (#1453/#1454)", () => {
@@ -240,9 +241,9 @@ describe("the corporation roster's ceremonies", () => {
       surfaceBox = ON_SCREEN;
       render(declined);
       expect(proxies()).toHaveLength(0);
-      expect(armedTimers()).toBe(0);
+      expect(armedTimers()).toBe(1); // still only the declined takeover's cue timer
       tick(TRANSFER_MS * 4);
-      expect(cues).toEqual([]);
+      expect(cues).toEqual(["presidency"]); // once -- the scroll back neither launches nor re-sounds it
       // The NEXT transaction is a new launch and is judged afresh.
       render(takeover(5));
       expect(proxies()).toHaveLength(1);

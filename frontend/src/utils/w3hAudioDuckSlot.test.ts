@@ -53,14 +53,18 @@ describe("A-19: a lost haunting release no longer holds the bed down for good", 
     expect(first).toBeInstanceOf(Function);
   });
 
-  it("supersession does not open a gap: the bed never rises between the old hold and the new one", () => {
-    duckRadio(DUCK_FOR_VIDEO, HAUNTING_DUCK_SLOT);
-    const ducked = level();
-    const before = volumes.length;
-    duckRadio(DUCK_FOR_VIDEO, HAUNTING_DUCK_SLOT);
-    jest.advanceTimersByTime(DUCK_FADE_MS + 200);
-    // Nothing above the ducked level was written after the second hold was taken.
-    expect(Math.max(...volumes.slice(before))).toBeCloseTo(ducked);
+  it("the superseded hold's own release, arriving late from its timer, does not release the new hold", () => {
+    // (Replaces a "no gap" case the W3-H review showed passed for either ordering.) A guard against
+    // over-release: a supersession that dropped the count without retiring the first hold would let that
+    // hold's late release take the count to zero under the second haunting. (Supersession itself is bitten by
+    // the reported-sequence case above.)
+    const first = duckRadio(DUCK_FOR_VIDEO, HAUNTING_DUCK_SLOT);
+    const full = volumes[0] / DUCK_FOR_VIDEO;
+    const second = duckRadio(DUCK_FOR_VIDEO, HAUNTING_DUCK_SLOT);
+    first(); // the first clip's timer was not cleared after all, and fires
+    expect(settle()).toBeCloseTo(full * DUCK_FOR_VIDEO); // the second haunting still holds the bed down
+    second();
+    expect(settle()).toBeCloseTo(full);
   });
 
   it("releaseDuckSlot frees a slot whose timer was cleared without a new hold (the fog, or the table unmounting)", () => {

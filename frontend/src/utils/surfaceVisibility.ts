@@ -26,11 +26,12 @@
 // gesture is worse than none. A sequence that launched visibly runs to its end even if scrolled away -- the
 // same "measure once, no retry" rule, in the other direction.
 //
-// ITS CUE GOES WITH IT. A declined sequence sounds no ceremonial cue: no presidency cue (design note 1457 --
-// the sound rides the crown's own beat, and a crown that is never drawn has no beat) and no float stamp
-// (VF-3's "NO SOUND FOR A CEREMONY THAT NEVER VISIBLY PLAYED", which already silences a full-motion float
-// whose card could not be measured). Same reasoning as the gesture: a sound for a ceremony nobody saw is a
-// sound with nothing behind it.
+// ITS PICTURE GOES; THE PRESIDENCY'S SOUND DOES NOT (W3-H review). A declined transfer still sounds its
+// presidency cue (design note 1457), once, on the beat its crown would have landed (`useDeclinedPresidencyCue`
+// in `StockRoundPanel.tsx`): before this gate the transfer's timers never depended on geometry, so a takeover
+// was always heard, and nobody ruled that it should stop. A declined FLOAT sounds no stamp: VF-3's "NO SOUND
+// FOR A CEREMONY THAT NEVER VISIBLY PLAYED" already silences a full-motion float whose card could not be
+// measured, and that ceremony never ran at all before W3-H fixed its ref, so nothing audible is taken away.
 //
 // A CONTINUOUS CLOCK PAUSES AND RESUMES (`useSurfaceVisible`). The route signal is not a ceremony but a
 // standing animation, so it does not decline: it stops scheduling frames while the board is hidden and

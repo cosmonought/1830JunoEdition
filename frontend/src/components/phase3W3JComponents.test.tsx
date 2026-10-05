@@ -13,7 +13,8 @@ import React from "react";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 
-import TrainPurchasePanel, { type TrainPurchaseCompany } from "./TrainPurchasePanel";
+import TrainPurchasePanel, { FundingPrivateOfferPrompt, type TrainPurchaseCompany } from "./TrainPurchasePanel";
+import { CONSENT_IN_FLIGHT_TITLE } from "../utils/offerConsentView";
 import type { GameStateResponse } from "../gameEngine/gameState";
 import { depotInventory, openDepotTiers } from "../gameEngine/gamePhase";
 import { trainPurchaseRefusal } from "../gameEngine/trainPurchaseGate";
@@ -127,5 +128,74 @@ describe("W3-J AUD-25.10 (a): the depot Buy is greyed with the purchase authorit
 
     renderDepot(poor, { withBoard: false });
     expect(depotBuy().disabled).toBe(false);
+  });
+});
+
+/* ================================================================================================= */
+/* AUD-25.10 (b) -- THE FUNDING OFFER PROMPT ASKS THE ANSWER'S AUTHORITY                             */
+/* ================================================================================================= */
+
+describe("W3-J AUD-25.10 (b): FundingPrivateOfferPrompt greys its answer with the authority's verdicts", () => {
+  const OFFER = { privateId: 3, privateName: "Champlain & St.Lawrence", sellerLabel: "Alice", buyerTicker: "B&O", buyerPresidentLabel: "Bob", price: 40 };
+  const ACCEPT_REFUSAL = "B&O's treasury holds $30 — it cannot pay $40.";
+  const ANSWER_REFUSAL = "A train discard is owed first.";
+  function renderPrompt(props: { answerRefusal?: string | null; acceptRefusal?: string | null; actionInFlight?: boolean; viewerIsBuyerPresident?: boolean }) {
+    const onAnswer = jest.fn();
+    render(
+      <FundingPrivateOfferPrompt
+        offer={OFFER}
+        viewerIsBuyerPresident={props.viewerIsBuyerPresident ?? true}
+        onAnswer={onAnswer}
+        actionInFlight={props.actionInFlight ?? false}
+        answerRefusal={props.answerRefusal}
+        acceptRefusal={props.acceptRefusal}
+      />,
+    );
+    return onAnswer;
+  }
+  const accept = () => buttonByText(/^Accept$/)!;
+  const reject = () => buttonByText(/^Reject$/)!;
+  const shownRefusal = () => host.querySelector('[data-testid="funding-offer-refusal"]')?.textContent ?? null;
+
+  it("an acceptance the authority refuses: Accept disabled with its sentence as the title; Reject stays live", () => {
+    const onAnswer = renderPrompt({ acceptRefusal: ACCEPT_REFUSAL });
+    expect(accept().disabled).toBe(true);
+    expect(accept().title).toBe(ACCEPT_REFUSAL);
+    expect(shownRefusal()).toBe(ACCEPT_REFUSAL);
+    click(accept());
+    expect(onAnswer).not.toHaveBeenCalled();
+    expect(reject().disabled).toBe(false);
+    click(reject());
+    expect(onAnswer).toHaveBeenCalledWith(3, false);
+  });
+
+  it("an answer the authority refuses: both Reject and Accept disabled with that sentence", () => {
+    const onAnswer = renderPrompt({ answerRefusal: ANSWER_REFUSAL, acceptRefusal: ACCEPT_REFUSAL });
+    expect(reject().disabled).toBe(true);
+    expect(reject().title).toBe(ANSWER_REFUSAL);
+    expect(accept().disabled).toBe(true);
+    expect(accept().title).toBe(ANSWER_REFUSAL);
+    click(reject());
+    click(accept());
+    expect(onAnswer).not.toHaveBeenCalled();
+  });
+
+  it("without a refusal the prompt is unchanged: both live, Accept titled with the purchase", () => {
+    const onAnswer = renderPrompt({});
+    expect(reject().disabled).toBe(false);
+    expect(accept().disabled).toBe(false);
+    expect(accept().title).toBe("Buy Champlain & St.Lawrence for $40.");
+    expect(shownRefusal()).toBeNull();
+    click(accept());
+    expect(onAnswer).toHaveBeenCalledWith(3, true);
+  });
+
+  it("the role line and the in-flight latch keep their place ahead of the verdict", () => {
+    renderPrompt({ viewerIsBuyerPresident: false, acceptRefusal: ACCEPT_REFUSAL });
+    expect(accept().disabled).toBe(true);
+    expect(accept().title).toBe("Only Bob can answer.");
+    expect(shownRefusal()).toBeNull();
+    renderPrompt({ actionInFlight: true, acceptRefusal: ACCEPT_REFUSAL });
+    expect(accept().title).toBe(CONSENT_IN_FLIGHT_TITLE);
   });
 });

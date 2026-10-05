@@ -1819,6 +1819,14 @@ export interface FundingPrivateOfferPromptProps {
   actionInFlight?: boolean;
   /** Phase 3 W2-F (OD-1, U-6): the hold's own sentence (`dockHold.turnHoldReason`) for the one waiting line. */
   waitingSentence?: string | null;
+  /** Phase 3 W3-J (AUD-25.10 (b)): the authority's verdict on THIS viewer answering at all
+   *  (`fundingAnswerRefusalForViewer` -- `fundingPrivateAnswerRefusal` with `accept: false`), or `null`. While it
+   *  refuses, both Reject and Accept are greyed with its sentence. Absent is `null`: exactly as before. */
+  answerRefusal?: string | null;
+  /** Phase 3 W3-J (AUD-25.10 (b)): the authority's verdict on the ACCEPTANCE, re-validated in full against the board
+   *  (`fundingAcceptRefusalForViewer`), or `null`. While it refuses, Accept is greyed with its sentence; Reject stays
+   *  live. Absent is `null`. The same two verdicts the forced-purchase modal's answer already reads. */
+  acceptRefusal?: string | null;
 }
 
 export function FundingPrivateOfferPrompt({
@@ -1827,9 +1835,22 @@ export function FundingPrivateOfferPrompt({
   onAnswer,
   actionInFlight = false,
   waitingSentence = null,
+  answerRefusal = null,
+  acceptRefusal = null,
 }: FundingPrivateOfferPromptProps) {
   if (!offer) return null;
   const canAnswer = viewerIsBuyerPresident && !actionInFlight;
+  /* ==================================================================
+      PHASE 3 W3-J (AUD-25.10 (b)): THE PROMPT ASKS THE ANSWER'S AUTHORITY
+     ==================================================================
+     Accept was live on `viewerIsBuyerPresident && !actionInFlight` alone, so an acceptance the authority would refuse
+     (the board moved under the offer, the buyer's treasury no longer covers it) was offered as a live button and
+     refused at the door. The shell now hands in the two verdicts the emergency modal already reads, and the buttons
+     carry them: the answer's refusal greys both, the acceptance's greys Accept. The role line ("Only X can answer.")
+     and the in-flight latch keep their place ahead of them -- those say who and when, not whether. */
+  const refusalShown = canAnswer ? (answerRefusal ?? acceptRefusal) : null;
+  const canReject = canAnswer && answerRefusal === null;
+  const canAccept = canReject && acceptRefusal === null;
   return (
     <div style={styles.promptRoot} role="alertdialog" aria-label="Private company offered">
       <div style={styles.promptHeader}>
@@ -1852,28 +1873,40 @@ export function FundingPrivateOfferPrompt({
         <button
           type="button"
           onClick={() => onAnswer(offer.privateId, false)}
-          disabled={!canAnswer}
-          style={{ ...styles.promptButton, ...(canAnswer ? styles.promptReject : styles.buttonDisabled) }}
-          title={viewerIsBuyerPresident && actionInFlight ? CONSENT_IN_FLIGHT_TITLE : undefined}
+          disabled={!canReject}
+          style={{ ...styles.promptButton, ...(canReject ? styles.promptReject : styles.buttonDisabled) }}
+          title={
+            viewerIsBuyerPresident && actionInFlight
+              ? CONSENT_IN_FLIGHT_TITLE
+              : canAnswer && answerRefusal !== null
+                ? answerRefusal
+                : undefined
+          }
         >
           Reject
         </button>
         <button
           type="button"
           onClick={() => onAnswer(offer.privateId, true)}
-          disabled={!canAnswer}
-          style={{ ...styles.promptButton, ...(canAnswer ? styles.promptAccept : styles.buttonDisabled) }}
+          disabled={!canAccept}
+          style={{ ...styles.promptButton, ...(canAccept ? styles.promptAccept : styles.buttonDisabled) }}
           title={
             !viewerIsBuyerPresident
               ? `Only ${offer.buyerPresidentLabel} can answer.`
               : actionInFlight
                 ? CONSENT_IN_FLIGHT_TITLE
-                : `Buy ${offer.privateName} for $${offer.price}.`
+                : (refusalShown ?? `Buy ${offer.privateName} for $${offer.price}.`)
           }
         >
           Accept
         </button>
       </div>
+      {/* Phase 3 W3-J (AUD-25.10 (b)): the dead control's reason, said beside it as well (#619). */}
+      {refusalShown !== null && (
+        <p style={styles.promptWho} data-testid="funding-offer-refusal">
+          {refusalShown}
+        </p>
+      )}
     </div>
   );
 }

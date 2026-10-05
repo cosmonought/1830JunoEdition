@@ -15842,6 +15842,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
         onAnswer={handleAnswerFundingPrivateOffer}
         actionInFlight={actionInFlight}
         waitingSentence={dockHold.turnHoldReason}
+        // Phase 3 W3-J (AUD-25.10 (b)): the answer's and the acceptance's verdicts, as the emergency modal reads them.
+        answerRefusal={gameState && fundingPrivateOffer ? fundingAnswerRefusalForViewer(gameState, mapGrid, viewerAddress) : null}
+        acceptRefusal={gameState && fundingPrivateOffer ? fundingAcceptRefusalForViewer(gameState, mapGrid, viewerAddress) : null}
       />
       <TrainDiscardPrompt
         due={pendingDiscard}

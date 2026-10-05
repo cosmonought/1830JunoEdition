@@ -1579,6 +1579,33 @@ intervening ancestor `z-index`) that the lifted card can never paint over the st
 screenshot confirming it in a live browser. **Watch:** the lifted card at the top of a scrolled Stock Round
 tab, to confirm it settles behind the sticky dock rather than over it.
 
+**W3-H evidence** — stays `OPEN`: in a real browser the full-motion lift **never happens**, so the claim cannot
+be screenshotted on the product path. Harness (headless Chromium 1243, 1280×720): App.tsx's own shell
+(`styles.appRoot` + `chromeZoomFor(1)` > `styles.actionDock` sticky `zIndex: 50` > `styles.actionBar`, sibling
+`main` `styles.canvasPane` > real `StockRoundPanel`, eight floated corporations), scrolled so the roster
+grid's centre sits behind the dock, float event on the bottom-row B&O card.
+**Defect (reported, not fixed):** `ref={floatFocusedHere ? floatCardRef : undefined}` (StockRoundPanel.tsx
+~2177) attaches the ref only once `floatFocusedHere` is true, but in full motion `floatFocusedHere` requires
+`floatTarget !== null`, which `useFloatCardTarget` can only produce by measuring `floatCardRef.current` — a
+cycle that never starts. Measured over all 115 rAF frames of the 1800 ms sequence: card `transform` `none`
+throughout, no stamp, no flip wrapper, no muted livery, z-index `auto`, and 0 float cues fired (the A-3
+"no sound for a ceremony that never played" gate holds, so the float is silent too). Every full-motion float
+renders the plain card (`e5_fullmotion_midlift_nolift.png`). The jsdom suite reads this same outcome as the
+A-3 fallback, which is why it passes.
+**Stacking, as far as it can be shown:** (a) reduced motion (real product path, card's top 20 px tucked under
+the dock, at the stamp beat, inner `scale(1.12)` live, card z-index 5): 36/36 `elementFromPoint` samples in
+the dock/card overlap hit the dock; control point below the dock hits the card
+(`e5_reduced_stamp_under_dock.png`). (b) synthetic lift — the exact inline style the panel would apply
+(`useFloatCardTarget`'s formula: dx 403.3, dy −283.6, scale 1.5; `transition: transform 480ms ease-out`;
+`zIndex: 5`), set by the harness on the real card element because (A) cannot reach it: mid-lift (240 ms)
+36/36 and settled 36/36 overlap samples hit the dock, controls below the dock hit the card, which overlays its
+sibling cards (`e5_synthetic_midlift.png`, `e5_synthetic_lifted.png`). So the CSS reasoning holds — the
+lifted card settles behind the dock — but that is proven for the intended transform, not for the shipped code
+path, which does not lift. Re-run after the ref cycle is fixed. **Side observation:** in reduced motion the
+1.12 scale is applied to an inner wrapper inside `rosterCard`'s `overflow: hidden`, so the emphasis crops the
+card face at its edges (header text cut, visible in the screenshot) rather than growing the card. All numbers:
+`docs/phase3/evidence/w3h/e5_float_stacking.json`; harness `entries/e5.tsx`, `e5.mjs`.
+
 ### E-6 · `RESOLVED` (W3-H, 2026-10-04) · Off-screen/inactive-tab cost, same shape as C-7
 The float timers and the geometry measurement run whether or not the "corps" tab is the active main tab or
 the card is scrolled into view — `useFloatCardTarget`'s early return only catches a genuinely unmounted

@@ -14,6 +14,7 @@ D-17). Nothing here is part of the product build:
 | --- | --- |
 | `build.mjs` | Bundles every `entries/*.tsx` with esbuild into an output dir (`<name>.js` + `<name>.html`). |
 | `lib.mjs` | Static server over the bundle dir, Chromium launcher, JSON writer, frame-time stats. |
+| `fixtures.ts` | Shared corporation fixtures (shape of `stockCardFocus.test.tsx`). |
 | `entries/<row>.tsx` | One page per backlog row, mounting real components with fixtures. |
 | `<row>.mjs` | Playwright driver for that row: screenshots + measurements into `docs/phase3/evidence/w3h/`. |
 
@@ -31,6 +32,7 @@ export W3H_BUNDLE_DIR=$SCRATCH/out
 cd frontend/scripts/w3hEvidence
 ESBUILD=$SCRATCH/node_modules/esbuild node build.mjs $W3H_BUNDLE_DIR
 node k4.mjs     # VF/K-4  fallback capacity glyph
+node e5.mjs     # VF/E-5  float card vs sticky dock stacking (+ ref-cycle defect check)
 ```
 
 Each driver overwrites its own PNG/JSON files under `docs/phase3/evidence/w3h/`. The JSON records the

@@ -15,6 +15,11 @@ import { createRoot, type Root } from "react-dom/client";
 
 import TrainPurchasePanel, { FundingPrivateOfferPrompt, type TrainPurchaseCompany } from "./TrainPurchasePanel";
 import { CONSENT_IN_FLIGHT_TITLE } from "../utils/offerConsentView";
+import StockRoundPanel from "./StockRoundPanel";
+import type { RoundType } from "../gameEngine/gameState";
+import { IDLE_LINK_QUEUE_VIEW, LINK_QUEUED_NOTE, LINK_SENDING_NOTE, linkQueueView, type LinkQueueView } from "../utils/useLinkQueue";
+import * as T from "../utils/stockRoundPrivateTrade";
+import * as F from "../utils/offerFixtures74";
 import type { GameStateResponse } from "../gameEngine/gameState";
 import { depotInventory, openDepotTiers } from "../gameEngine/gamePhase";
 import { trainPurchaseRefusal } from "../gameEngine/trainPurchaseGate";
@@ -197,5 +202,73 @@ describe("W3-J AUD-25.10 (b): FundingPrivateOfferPrompt greys its answer with th
     expect(shownRefusal()).toBeNull();
     renderPrompt({ actionInFlight: true, acceptRefusal: ACCEPT_REFUSAL });
     expect(accept().title).toBe(CONSENT_IN_FLIGHT_TITLE);
+  });
+});
+
+/* ================================================================================================= */
+/* AUD-25.10 (c) -- ONE HELD SUBMISSION, ONE BUSY LINE                                               */
+/* ================================================================================================= */
+
+describe("W3-J AUD-25.10 (c): the Stock Round panel and its Private Companies section say one thing about one held press", () => {
+  const LABELS: Record<string, string> = { [F.P1]: "Alice", [F.P2]: "Bob", [F.P3]: "Carol" };
+  const label = (address: string) => LABELS[address] ?? address;
+  const srBoard = () =>
+    F.stockRoundBoard({
+      corps: [
+        { id: F.PRR, ticker: "PRR", president: F.P1, trains: ["3"], treasury: "500", holdings: [[F.P1, 30], [F.P2, 20]], ipo: 50 },
+        { id: F.NYC, ticker: "NYC", president: F.P2, trains: ["2"], treasury: "400", price: 90, holdings: [[F.P2, 30], [F.P3, 10]], ipo: 60 },
+      ],
+    });
+  const QUEUED = linkQueueView({ unsent: 1, unsettled: 1, settled: 0, lastOutcome: null });
+  const SENDING = linkQueueView({ unsent: 0, unsettled: 1, settled: 0, lastOutcome: null });
+
+  function drawPanel(linkQueue: LinkQueueView, actionInFlight = true) {
+    const state = srBoard();
+    render(
+      <StockRoundPanel
+        publicCompanies={state.public_companies}
+        privateCompanies={state.private_companies}
+        parValueFor={() => "90"}
+        onSelectParValue={() => undefined}
+        onBuyShare={() => undefined}
+        onSellShares={() => undefined}
+        sessionReady
+        isMyTurn
+        connectedAddress={F.P1}
+        macroRoundNumber={state.macro_round_number}
+        playerCash={300}
+        roundType={"StockRound" as RoundType}
+        privateTrade={T.privateTradeSectionModel(state, F.P1, label)}
+        privateTradeProposalRefusal={(intent) => T.privateTradeProposalRefusal(state, F.P1, intent, label)}
+        onProposePrivateTrade={() => undefined}
+        onAnswerPrivateTrade={() => undefined}
+        onRescindPrivateTrade={() => undefined}
+        actionInFlight={actionInFlight}
+        linkQueue={linkQueue}
+      />,
+    );
+    if (!host.querySelector('button[aria-label="PRR — hide share actions"]')) {
+      click(host.querySelector('button[aria-label="PRR — show share actions"]'));
+    }
+  }
+  /** The section's busy line, as its private opener carries it. */
+  const sectionLine = () => host.querySelector<HTMLButtonElement>(`[data-testid="private-trade-buy-${F.DH}"]`)!.title;
+  /** The panel's busy line, as the share Buy carries it. */
+  const panelLine = () =>
+    buttons().find((button) => /^Buy\b/.test(button.textContent ?? "") && !button.dataset.testid)!.title;
+
+  it("a press the link holds while queued: both say the link's queued sentence", () => {
+    drawPanel(QUEUED);
+    expect(sectionLine()).toBe(LINK_QUEUED_NOTE);
+    expect(panelLine()).toBe(LINK_QUEUED_NOTE);
+  });
+
+  it("a press the link is sending: both say the sending sentence; with an idle link the latch's line is unchanged", () => {
+    drawPanel(SENDING);
+    expect(sectionLine()).toBe(LINK_SENDING_NOTE);
+    expect(panelLine()).toBe(LINK_SENDING_NOTE);
+    drawPanel(IDLE_LINK_QUEUE_VIEW);
+    expect(sectionLine()).toBe("Sending your last action — one moment.");
+    expect(panelLine()).toBe("Sending your last action — one moment.");
   });
 });

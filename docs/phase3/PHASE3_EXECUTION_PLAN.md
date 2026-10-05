@@ -681,6 +681,7 @@ gates.
 - **App.tsx regions:** R-TUT, R-NOTICES (RED R4's prune only under OD-12). **Pins likely to move:** the Batch 4A/4B modal
   suites, `nativeModalBoundary`.
 - **Depends on:** W2-G, W2-H. **Gates:** OD-5 (+ OD-12 if needed). **Phase-4:** AUD-13.08.
+- **Status:** OD-5 RULED (2026-10-04, §7.3). COMPLETE on its slice branch `phase3/w3-a` (from `d29bb2f`: OD-5 transcription `9962745`, implementation `b70f087`, RED R4 `e8b9504`, review fixes `ac78dc9` + `ce705b2` + `ce6afe8`); **NOT INTEGRATED.** OD-12 followed: the one RED R4 edit (`e8b9504`) is its own independently audited commit. AUD-01.03, AUD-01.06, AUD-11.02, AUD-13.02, AUD-13.07, P3-N019 IMPLEMENTED.
 
 #### W3-B
 **Latch residue** · L2 · **3–4.5 h**

@@ -72,7 +72,8 @@
    "disp": "A",
    "od": "OD-5",
    "p4": "—",
-   "notes": "The heading is the forced-notice focus target that AUD-13.02 needs."
+   "notes": "The heading is the forced-notice focus target that AUD-13.02 needs.",
+   "status": "IMPLEMENTED — W3-A `b70f087`: a stable, visually hidden game-screen `<h1>` (`components/GameScreenHeading.tsx`, tabIndex -1, focused with preventScroll), mounted before the TopBar; the forced-notice focus target (OD-5(b)); NOT INTEGRATED"
   },
   {
    "key": "AUD-01.04",
@@ -113,7 +114,8 @@
    "disp": "A",
    "od": "OD-5 (re-arm policy)",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W3-A `b70f087`: the zero-state effect that cleared every tutorial's seen flag on each shell mount is removed; tutorials arm once per profile on `TutorialModal`'s per-topic localStorage flags (OD-5(d)); `replayTutorials` kept, uncalled, for an explicit control; NOT INTEGRATED"
   },
   {
    "key": "AUD-01.07",
@@ -1227,7 +1229,8 @@
    "disp": "A",
    "od": "OD-5",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W3-A `b70f087` + `ac78dc9` + `ce705b2`: `NoticeLedger` (`utils/noticeAcknowledgements.ts`) keeps per-game, per-seat (public table position, no player id) acknowledgements and the player's own witnessed-unanswered notices in `1830juno.notice_ack.v1.*`; Herald / Phase Three / Private Revenue come back after reload / new tab until answered, and an answer holds across reload, reconnect, new tab and remount; late joiners get no backlog (OD-5(a)); NOT INTEGRATED"
   },
   {
    "key": "AUD-11.03",
@@ -1403,7 +1406,8 @@
    "disp": "A",
    "od": "OD-5",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W3-A `b70f087`: when the forced-notice chain is exhausted, focus moves once to the game-screen heading (`utils/useNoticeChain.ts`), never during ordinary play and never into another open dialog (OD-5(b)); NOT INTEGRATED"
   },
   {
    "key": "AUD-13.03",
@@ -1468,7 +1472,8 @@
    "disp": "B",
    "od": "OD-5",
    "p4": "—",
-   "notes": "Not in the draft map. Policy = which notice yields; see OD-5."
+   "notes": "Not in the draft map. Policy = which notice yields; see OD-5.",
+   "status": "IMPLEMENTED — W3-A `b70f087` + RED R4 `e8b9504` + `ac78dc9`: the forced notices present one at a time in the ruled order Emergency > Fleet Loss > Private Revenue > Phase Three > Herald > Tutorial (`utils/noticeChain.ts`), every one waiting while a non-notice native dialog is open (`utils/nativeModalRegistry.ts`); dialogs that open themselves (Game Over, B&O par prompt, private power flow) wait for the screen (`components/NativeModalTurn.tsx`); no two native dialogs at once (OD-5(c)); NOT INTEGRATED"
   },
   {
    "key": "AUD-13.08",
@@ -3927,7 +3932,8 @@
    "disp": "A",
    "od": "OD-5; OD-12 if the prune region must change",
    "p4": "—",
-   "notes": "The draft placed this fix in 11295-11405 without flagging that the range is inside its own RED region 11136-11659. Prefer a fix in the dismissal store."
+   "notes": "The draft placed this fix in 11295-11405 without flagging that the range is inside its own RED region 11136-11659. Prefer a fix in the dismissal store.",
+   "status": "IMPLEMENTED — W3-A `b70f087` + `ac78dc9` + `ce705b2` + `ce6afe8`: Fleet Loss acknowledgements move from per-tab sessionStorage (#1107) to the per-player, per-game `NoticeLedger`; a fresh tab replays no answered or historical loss, including after a later Undo; fixed in the dismissal store, the RED R2 raiser unchanged; NOT INTEGRATED"
   },
   {
    "key": "P3-N020",
@@ -4973,7 +4979,7 @@
   "W2-K": "PARTIAL — `phase3/w2-money-copy` `e223f64` (exact SHA verified), integrated at the safe Wave-2 integration (`fb4eee5`): U-44 timestamps per OD-9(a) and the OD-14(i) bounded money-panel pass are done; the official Keplr logo is ASSET PENDING (OD-9(b), AUD-18.05)",
   "W2-L": "COMPLETE — `phase3/w2-postgame-statistics` `e16aa5a` (derived history only); integrated at the safe Wave-2 integration (`615e183`). AUD-12.07 stays owner-gated (\"traded\" kept); S10-21's non-UR remainder stays open",
   "W2-M": "NOT STARTED",
-  "W3-A": "NOT STARTED",
+  "W3-A": "COMPLETE — on its slice branch `phase3/w3-a` (from `phase3/wave3-i-w2i-w2j-w3c-w3g-v13cert-integration` @ `d29bb2f`; OD-5 transcription `9962745`, implementation `b70f087`, RED R4 `e8b9504`, review fixes `ac78dc9` + `ce705b2` + `ce6afe8`); NOT INTEGRATED (integration and owner broad gate pending). OD-5 RULED 2026-10-04. OD-12: one RED R4 commit (`e8b9504`, the #1049a payout-first hold, independently audited: APPROVE WITH NITS, nit folded in). Independent slice review: APPROVE WITH NITS after two fix rounds (all HIGH/MEDIUM fixed; nits fixed).",
   "W3-B": "NOT STARTED",
   "W3-C": "COMPLETE — ACCEPTED and INTEGRATED on `phase3/wave3-i-w2i-w2j-w3c-v13cert-integration` (2026-10-04, merge `b32ef6e` of `phase3/w3-c-refusal-display` @ `3454daa`, parents `18d4762` / `3454daa`, its 7 commits carried unchanged). slice branch `phase3/w3-c-refusal-display` support `3c75394` + `bfec83c`, RED R1 `08d857b`, RED R5 `21d6b15`, implementation `6cb86e4`, review fix `6c28662` (from `phase3/wave3-i-w2i-w2j-v13cert-integration` @ `18d4762`). AUD-14.01, P3-N004, P3-N020 IMPLEMENTED. OD-12 followed: two RED commits, each its own and independently reviewed -- R1 (two lines: the landed-submission clear and the room branch's answer) and R5 (the server-link callbacks, the drain's catching-up clear and its divergence write; the latter two sit in R5 outside the plan's line range and are named by AUD-14.01's own source). Dependencies W2-J and W1-H integrated in the base. Recorded follow-ups (LOW): the client's own pre-send gates (turn, catching-up, link-down) answer `undefined` and roll nothing back (needs further R1 lines); a resync can settle a landed move null and roll back its shell state (the board stays authoritative); an `error` frame answering a submission is shown as a `transport` connection notice and is not retired by a landed move (unchanged from before); the App wiring of the rollbacks is source-pinned. Presentation only: no engine, server, rules-version or settlement change",
   "W3-D": "NOT STARTED",

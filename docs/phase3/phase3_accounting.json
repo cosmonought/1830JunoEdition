@@ -45,7 +45,7 @@
    "od": "OD-14(a) (probe readout may inform it first)",
    "p4": "—",
    "notes": "Part C U-16: \"Decide, then remove it either way.\" The removal happens whatever OD-14(a) decides, but only after it is recorded, because the probe is the instrument for that decision (AUD-01.02).",
-   "status": "OPEN — W1-I's remaining part: the probe is removed only once OD-14(a) is recorded"
+   "status": "OPEN — OD-14(a) RULED (owner, 2026-10-04; owner_rulings OD-14): the probe is removed without moving the panels. The removal is implemented on the unintegrated W1-I slice branch (`phase3/w1-i-completion`, `1b76512`); on this line the row stays OPEN until W1-I is integrated"
   },
   {
    "key": "AUD-01.02",
@@ -59,7 +59,7 @@
    "od": "OD-14(a)",
    "p4": "—",
    "notes": "If OD-14(a) = move into the bar, lane 5 adds W1-I-b in wave 2 (3–5 h). If it = keep, no work.",
-   "status": "OPEN — OD-14(a)"
+   "status": "RULED — RESOLVED BY OD-14(a) (owner, 2026-10-04): keep the step panels outside the action bar and remove the temporary sticky-fit probe; the panels are not moved into the bar, so the conditional W1-I-b sub-scope has no work. See W1-I `63fccca` for its transcription note on where the panel wrapper renders"
   },
   {
    "key": "AUD-01.03",
@@ -113,7 +113,8 @@
    "disp": "A",
    "od": "OD-5 (re-arm policy)",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "OPEN — OD-5 tutorial ordering RULED (owner; transcribed 2026-10-04): tutorial work is deferred to the final tutorial/UI pass, after the shell/UI has stabilized. The re-arm POLICY (once per profile / per new game / never automatically) is still OPEN under OD-5"
   },
   {
    "key": "AUD-01.07",
@@ -1254,7 +1255,8 @@
    "disp": "C",
    "od": "OD-18",
    "p4": "—",
-   "notes": "The audit says U-10 \"stays deferred\", but no owner ruling placing it later is on record, and Part F says deferral alone does not count. OD-18 asks the owner to confirm a later placement (then E) or scope it into Phase 3."
+   "notes": "The audit says U-10 \"stays deferred\", but no owner ruling placing it later is on record, and Part F says deferral alone does not count. OD-18 asks the owner to confirm a later placement (then E) or scope it into Phase 3.",
+   "status": "RULED — OD-18 (owner; transcribed 2026-10-04): no move clock, automatic forfeit or automatic trade decline at this stage; reconsider only after Phase-4 human playtesting. U-10's \"pause cap\" is not named by the ruling and is not inferred (the owner may confirm it falls under this placement); the C → E move is left to W3-F"
   },
   {
    "key": "AUD-11.05",
@@ -1350,7 +1352,8 @@
    "disp": "C",
    "od": "OD-14(b)",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "RULED — OD-14(b) (owner; transcribed 2026-10-04): use the cash/payout player-color wash. Ruled in: W3-H extends the player-card wash to the cash slide-out and the payout modal; not started"
   },
   {
    "key": "AUD-12.06",
@@ -1363,7 +1366,8 @@
    "disp": "C",
    "od": "OD-14(c)",
    "p4": "—",
-   "notes": "The draft map assumed \"U-8 closed\"; that is an owner call and is not defaulted."
+   "notes": "The draft map assumed \"U-8 closed\"; that is an owner call and is not defaulted.",
+   "status": "RULED — OD-14(c) (owner; transcribed 2026-10-04): give the seventh LPF player a distinct color. Ruled in: W3-H widens the palette (contrast / livery separation per `seatColor.test.ts`); not started"
   },
   {
    "key": "AUD-12.07",
@@ -1429,7 +1433,8 @@
    "disp": "A",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "OPEN — OD-5 tutorial ordering RULED (owner; transcribed 2026-10-04): tutorial work, including tutorials as native dialogs, is deferred to the final tutorial/UI pass, after the shell/UI has stabilized"
   },
   {
    "key": "AUD-13.05",
@@ -1442,7 +1447,8 @@
    "disp": "C",
    "od": "OD-15(a)",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "RULED — OD-15(a) (owner; the later cinematic-video clarification, transcribed 2026-10-04): the intro video is a full-viewport cinematic takeover, not a NativeModal / <dialog>, not styled as a modal, filling the viewport independently of the gameplay UI scale; the `zoom: 1 / uiScale` counter-scale gives way to true viewport geometry (W3-D; the end-game video `GameOutroOverlay.tsx` likewise); not started"
   },
   {
    "key": "AUD-13.06",
@@ -1455,7 +1461,8 @@
    "disp": "C",
    "od": "OD-15(b)",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "RULED — OD-15(b) (owner; transcribed 2026-10-04): genuine modal UI continues on the established native dialog / top-layer approach; no second manual modal / inert architecture (W3-D); not started. Whether `ModalPortal` is retired is not stated by the ruling and is not inferred"
   },
   {
    "key": "AUD-13.07",
@@ -1822,7 +1829,7 @@
    "od": "OD-9(b)",
    "p4": "—",
    "notes": "—",
-   "status": "OPEN — ASSET PENDING (OD-9(b)): W2-K `e223f64` adds the empty `components/money/KeplrMark.tsx` slot (`KEPLR_OFFICIAL_LOGO = null`, renders nothing; textual \"Keplr\" kept); no logo drawn, approximated or scraped. Integrated `fb4eee5`"
+   "status": "OPEN — ASSET PENDING (OD-9(b) policy RULED: the official Keplr asset only, never fabricated/redrawn; not an owner-policy decision awaiting the owner): W2-K `e223f64` adds the empty `components/money/KeplrMark.tsx` slot (`KEPLR_OFFICIAL_LOGO = null`, renders nothing; textual \"Keplr\" kept); no logo drawn, approximated or scraped. Integrated `fb4eee5`. Closes when the official file is supplied"
   },
   {
    "key": "AUD-18.06",
@@ -1850,7 +1857,7 @@
    "od": "OD-14(e)",
    "p4": "—",
    "notes": "—",
-   "status": "OPEN — OD-14(e) (the waiting room's description line); W1-L's unconditional part is complete"
+   "status": "RULED — OD-14(e) (owner; transcribed 2026-10-04): keep/tighten the established waiting-room persistence presentation rather than replacing the model. The cited line (`SandboxWaitingRoom.tsx`:590 at `7b1a956`) is the seat-persistence sentence, so it stays (a tightening is allowed); W1-L's unconditional part is complete"
   },
   {
    "key": "AUD-18.08",
@@ -1917,7 +1924,8 @@
    "disp": "C",
    "od": "OD-18",
    "p4": "—",
-   "notes": "Recorded product limits. OD-18 asks the owner to confirm their later placement (then E)."
+   "notes": "Recorded product limits. OD-18 asks the owner to confirm their later placement (then E).",
+   "status": "RULED — OD-18 (owner; transcribed 2026-10-04): no host succession and no clock / automatic forfeit for an absent seat at this stage; reconsider only after Phase-4 human playtesting. The C → E move is left to W3-F"
   },
   {
    "key": "AUD-20.01",
@@ -2022,7 +2030,8 @@
    "disp": "C",
    "od": "OD-16",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "RULED — OD-16 (owner; transcribed 2026-10-04): W2-M builds the Terms route/page shell and the Terms/deposit link infrastructure; substantive Terms copy is owner-authored and is not invented; the final substantive Terms are a Phase-7/mainnet gate. Not built on this line (W2-M `19c021c` is unintegrated and predates this ruling)"
   },
   {
    "key": "AUD-20.09",
@@ -3558,7 +3567,8 @@
    "disp": "C",
    "od": "OD-14(f)",
    "p4": "—",
-   "notes": "Needs an owner-approved cue."
+   "notes": "Needs an owner-approved cue.",
+   "status": "RULED — OD-14(f) (owner; transcribed 2026-10-04): no phase-change sound effect in this phase; the flip stays silent in Phase 3 (no W3-H work)"
   },
   {
    "key": "VF/G-7",
@@ -3571,7 +3581,8 @@
    "disp": "C",
    "od": "OD-14(g)",
    "p4": "—",
-   "notes": "The ledger records it as acceptable; the owner either closes it as designed or asks for a replay."
+   "notes": "The ledger records it as acceptable; the owner either closes it as designed or asks for a replay.",
+   "status": "RULED — OD-14(g) (owner; transcribed 2026-10-04): do not replay stale flourish/celebration effects; the replay option is declined (no W3-H work)"
   },
   {
    "key": "VF/H-6",
@@ -3610,7 +3621,8 @@
    "disp": "C",
    "od": "OD-14(h)",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "RULED — OD-14(h) (owner; transcribed 2026-10-04): use the static rust icon treatment. Ruled in: W3-H; not started"
   },
   {
    "key": "VF/J-5",
@@ -3636,7 +3648,8 @@
    "disp": "C",
    "od": "OD-14(h)",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "RULED — OD-14(h) (owner; transcribed 2026-10-04): use the static discard icon treatment. Ruled in: W3-H; not started"
   },
   {
    "key": "VF/K-4",
@@ -4754,9 +4767,10 @@
     "APPROVED convention: persistent player UI: local absolute time + explicit time zone;",
     "server refusal copy: relative duration is acceptable because the server has no player time zone;",
     "machine evidence remains UTC.",
-    "Official Keplr logo remains ASSET PENDING; do not fabricate one."
+    "Official Keplr logo remains ASSET PENDING; do not fabricate one.",
+    "(b) Use the official Keplr branding/logo asset. Do not fabricate/redraw/fake the Keplr logo. (Transcribed 2026-10-04 from the owner's owner-decision reconciliation brief.)"
    ],
-   "effect": "From the owner's safe Wave-2 integration brief. OD-9(a) is ruled and implemented by W2-K (`e223f64`, integrated `fb4eee5`): AUD-20.01 C → B, IMPLEMENTED. OD-9(b) stays open: AUD-18.05 is ASSET PENDING (an empty official-logo slot, nothing fabricated)."
+   "effect": "From the owner's safe Wave-2 integration brief. OD-9(a) is ruled and implemented by W2-K (`e223f64`, integrated `fb4eee5`): AUD-20.01 C → B, IMPLEMENTED. OD-9(b): the policy is RULED -- the official Keplr asset only, never fabricated (the \"use the official asset\" approval was transcribed 2026-10-04 from the owner's owner-decision reconciliation brief; it had been supplied in a prior owner conversation and never transcribed). OD-9(b) is therefore ASSET PENDING, not an owner-policy decision awaiting the owner: AUD-18.05 stays OPEN until the official file is supplied (the empty `KeplrMark` slot renders nothing; nothing fabricated)."
   },
   "OD-4": {
    "title": "EMERGENCY FUNDING (AUTOMATIC BANKRUPTCY)",
@@ -4792,7 +4806,7 @@
     "Owner ruling 2 (2026-10-04): the Brown Bank Pool continuation is one contiguous multi-certificate purchase by the ACTIVE Stock Round player. Any accepted state-changing turn action by that player which is not another qualifying Brown Bank Pool purchase closes it (a sale, an accepted private trade, an M&H exchange, Pass Turn, any other stock-turn action). Another player's off-turn consent or answer, and derived / system bookkeeping, do not. Decided from actor / turn semantics, not log adjacency; a refused or no-op message closes nothing.",
     "Owner ruling 3 (2026-10-04): KEEP the existing Stock Round semantics for the M&H exchange: it is not a stock purchase or sale for turn_action_taken, the true-pass / all-pass streak, or Priority Deal / last-trader purposes. It can close an already-open Brown purchase (ruling 2) without becoming stock trading."
    ],
-   "effect": "W3-K implemented on `phase3/w3-k-rules-v13` (branch only). AUD-04.04 and AUD-08.01 leave W3-K (owner placement open; no version bump needed). P3-N023 and P3-N024 C/G → A, IMPLEMENTED. OD-10(b) stays open. The 2026-10-04 rulings 2 and 3 are implemented on the same branch."
+   "effect": "W3-K implemented on `phase3/w3-k-rules-v13` (branch only). AUD-04.04 and AUD-08.01 leave W3-K (owner placement open; no version bump needed). P3-N023 and P3-N024 C/G → A, IMPLEMENTED. OD-10(b) stays open. The 2026-10-04 rulings 2 and 3 are implemented on the same branch. Reconciliation (2026-10-04): the owner's historical approval (\"one consolidated v13 rules batch is allowed\") is OD-10(a), already recorded above. The historical proposal had no (b) subpart, and the current OD-10(b) (phone-width game layout, zoom-aware breakpoints and keyboard map access: Phase-3 target, Phase-4 observation or Phase-5 work) is a different question (layout / input scope, not rules-version scope); no equivalence is shown, so OD-10(b) stays OPEN."
   },
   "OD-17": {
    "title": "TILE-UPGRADE CROSS-REFERENCES",
@@ -4844,14 +4858,65 @@
    "effect": "OD-13: RULED — transcribed at the W3-G owner review (2026-10-04; AUD-25.15). The U-41 and U-43 (1)–(4) resolutions as implemented by W2-L (`e16aa5a`) are ratified. AUD-12.02 and AUD-12.03 IMPLEMENTED (unchanged)."
   },
   "OD-14": {
-   "title": "PRESENTATION CALLS — (d) AND (i) ONLY",
+   "title": "PRESENTATION CALLS — (a) THROUGH (i)",
    "date": "2026-10-04",
    "ruling": [
+    "(a) Keep the step panels OUTSIDE the action bar.",
+    "(a) Remove the temporary sticky-fit probe.",
+    "(b) Use the cash/payout player-color wash.",
+    "(c) Give the seventh LPF/player a distinct color.",
     "(d) For the first-Diesel trade-in presentation, keep the label: \"traded\". Earlier 4-trains rusted by the phase event remain rusted.",
+    "(e) Keep/tighten the established waiting-room persistence presentation rather than replacing the model.",
+    "(f) No phase-change sound effect in this phase.",
+    "(g) Do not replay stale flourish/celebration effects.",
+    "(h) Use static rust/discard icon treatment.",
     "(i) Phase 3 gets a bounded money-panel consistency pass. The goal is to make the money panel visually belong to the rest of the game and stop there.",
     "(i) W2-K / W2-M may extend the established styling while touching money UI, but this is NOT permission for a money-panel redesign or broader frontend refactor."
    ],
-   "effect": "OD-14(d) and OD-14(i): RULED — transcribed at the W3-G owner review (2026-10-04; AUD-25.15). (d): AUD-12.07 RULED, no change. (i): bounds W2-K's panel pass and any W2-M money-UI styling. OD-14(a)–(c) and (e)–(h) remain OPEN."
+   "effect": "OD-14 (a)–(i): RULED. (d) and (i): transcribed at the W3-G owner review (2026-10-04; AUD-25.15) -- (d): AUD-12.07 RULED, no change; (i): bounds W2-K's panel pass and any W2-M money-UI styling. (a): explicitly re-approved by the owner on 2026-10-04 (the owner reports an earlier, untranscribed approval); the W1-I slice branch `phase3/w1-i-completion` (probe removal `1b76512`; tracking `63fccca`, NOT integrated) also records (a), in its own words, with a transcription note on where the panel wrapper renders. Here: AUD-01.02 RULED (the panels are not moved into the bar; the conditional W1-I-b sub-scope has no work); AUD-01.01 stays OPEN on this line until W1-I is integrated. (b), (c), (e), (f), (g), (h): Provenance: supplied by the owner in a prior conversation and never transcribed into the repository (the 2026-10-04 history forensic pass found it in no branch, reflog, tracking commit or Project report); transcribed 2026-10-04 from the owner's owner-decision reconciliation brief, in its words. The original ruling date was not recorded. Effects: (b) AUD-12.05 / U-7 ruled in (W3-H); (c) AUD-12.06 / U-8 ruled in (W3-H); (e) AUD-18.07 RULED -- the audit's cited line (`components/SandboxWaitingRoom.tsx`:590 at `7b1a956`) is the seat-persistence sentence (\"Your seat is kept for your profile …\"), so the question and the ruling name the same presentation: keep (and may tighten) it, no replacement model; (f) VF/G-1 RULED -- no phase-change sound effect in Phase 3 (the flip stays silent); (g) VF/G-7 RULED -- the replay option is declined; (h) VF/I-10 and VF/J-6 ruled in (W3-H): the static rust / discard icon treatment."
+  },
+  "OD-5": {
+   "title": "NOTICES AND TUTORIALS — TUTORIAL ORDERING ONLY",
+   "date": "2026-10-04 (transcribed; original date not recorded)",
+   "ruling": [
+    "Tutorial work is deferred until the FINAL tutorial/UI pass, after the shell/UI has stabilized."
+   ],
+   "effect": "OD-5: ORDERING RULED ONLY. Provenance: supplied by the owner in a prior conversation and never transcribed into the repository (the 2026-10-04 history forensic pass found it in no branch, reflog, tracking commit or Project report); transcribed 2026-10-04 from the owner's owner-decision reconciliation brief, in its words. The original ruling date was not recorded. Effect: the tutorial rows (AUD-01.06, the re-arm effect; AUD-13.04, tutorials as native dialogs) are sequenced to the final tutorial/UI pass. This ruling does NOT answer OD-5's three policy questions -- (1) persist one-shot notices per game vs derive them from state; (2) the focus target and chaining / yield order for forced notices; (3) the tutorial re-arm policy -- which stay OPEN until the owner approves them separately (AUD-01.03, AUD-11.02, AUD-13.02, AUD-13.07, P3-N019 and the policy half of AUD-01.06 stay gated on OD-5)."
+  },
+  "OD-15": {
+   "title": "MODAL INFRASTRUCTURE AND THE CINEMATIC VIDEOS",
+   "date": "2026-10-04 (transcribed; the later clarification is current)",
+   "ruling": [
+    "Historical owner approval covered the modal/accessibility direction. The LATER explicit owner clarification below supersedes any interpretation that would turn the cinematic videos into modals.",
+    "Intro video = full-viewport cinematic takeover.",
+    "End-game video = full-viewport cinematic takeover.",
+    "Neither is NativeModal / <dialog>.",
+    "Neither should look like a modal.",
+    "Both fill the viewport independently of gameplay UI scale.",
+    "Remove inverse/counter-scale hacks in favor of true viewport geometry.",
+    "For genuine modal UI: continue using the established native dialog/top-layer approach rather than inventing a second manual modal/inert architecture."
+   ],
+   "effect": "OD-15: RULED. Provenance: supplied by the owner in a prior conversation and never transcribed into the repository (the 2026-10-04 history forensic pass found it in no branch, reflog, tracking commit or Project report); transcribed 2026-10-04 from the owner's owner-decision reconciliation brief, in its words; the owner names the cinematic-video clarification as the later, superseding statement. The original ruling date was not recorded. (a) AUD-13.05 RULED: the intro overlay (`components/GameIntroOverlay.tsx`) is a full-viewport cinematic takeover, not a NativeModal / <dialog>; its `zoom: 1 / uiScale` counter-scale gives way to true viewport geometry (W3-D). The same ruling covers the end-game video (`components/GameOutroOverlay.tsx`, which carries the same counter-zoom); it has no row of its own. It supersedes the older reading under which W3-D's \"replace the remaining `aria-modal` divs\" would have converted the intro overlay into a modal. (b) AUD-13.06 RULED: genuine modal UI keeps the established native dialog / top-layer approach; no second manual modal / inert architecture (no inert registry). The ruling does not itself say whether `ModalPortal` is retired; that is not inferred here."
+  },
+  "OD-16": {
+   "title": "TERMS PAGE (S10-12)",
+   "date": "2026-10-04 (transcribed; original date not recorded)",
+   "ruling": [
+    "Phase 3 builds the Terms route/page shell.",
+    "Phase 3 builds the relevant Terms/deposit link infrastructure.",
+    "Substantive Terms copy is OWNER-AUTHORED and must not be invented.",
+    "Final substantive Terms remain a Phase-7/mainnet gate."
+   ],
+   "effect": "OD-16: RULED. Provenance: supplied by the owner in a prior conversation and never transcribed into the repository (the 2026-10-04 history forensic pass found it in no branch, reflog, tracking commit or Project report); transcribed 2026-10-04 from the owner's owner-decision reconciliation brief, in its words. The original ruling date was not recorded. AUD-20.08 RULED: W2-M builds the Terms route / page shell and the Terms / deposit link infrastructure, with no invented Terms copy; the substantive Terms stay owner-authored and are a Phase-7 / mainnet gate. The unintegrated W2-M branch (`phase3/w2-m-wallet-dispute-ux` @ `19c021c`) still records AUD-20.08 as owner-gated with nothing hosted; that branch predates this transcription."
+  },
+  "OD-18": {
+   "title": "LIVE / ASYNC LIMITS (U-10) AND RECORDED LIMITS",
+   "date": "2026-10-04 (transcribed; original date not recorded)",
+   "ruling": [
+    "Do NOT add at this stage: move clock; automatic forfeit; automatic trade decline; host succession.",
+    "Reconsider these only after Phase-4 human playtesting."
+   ],
+   "effect": "OD-18: RULED. Provenance: supplied by the owner in a prior conversation and never transcribed into the repository (the 2026-10-04 history forensic pass found it in no branch, reflog, tracking commit or Project report); transcribed 2026-10-04 from the owner's owner-decision reconciliation brief, in its words. The original ruling date was not recorded. AUD-11.04 (U-10) and AUD-19.04 RULED: placed after Phase-4 human playtesting; not Phase-3 work. Transcription note: U-10 as the plan words it also names a \"pause cap\"; the ruling does not name it, and it is not inferred; the owner may confirm whether it falls under this later placement (README, \"Still open\"). The disposition move C → E that the plan's OD-18 row describes is left to W3-F's closure reconciliation; the rows stay C with status RULED."
   }
  },
  "wave1_integration": {
@@ -4970,7 +5035,7 @@
   "W3-J": "NOT STARTED",
   "W3-K": "COMPLETE — ACCEPTED (owner, 2026-10-04) and INTEGRATED on `phase3/wave2a-v13-integration` (2026-10-04): `phase3/w3-k-rules-v13` @ `be1fd10` merged `--no-ff` onto `phase3/wave2a-integration` @ `96ccb22`, its 9 commits carried unchanged (same SHAs). OD-2, SBS-3, SBS-4, OD-4 with the owner's 2026-10-04 rulings 1-5 and the four review findings. The ledger's PARTIAL (held only for the shared row AUD-03.04) lifted with W2-B's one-click \"Pass Turn\" control, integrated on `phase3/wave2-bcg-v13cert-integration` (merge `181e51e`). v13 settlement certification PASS / CERTIFIED and INTEGRATED there (merge `69c7496` of `phase3/v13-settlement-certification` @ `7916763`). RULES_ENGINE_VERSION 13; supported live [13]; settlement-certified [10, 11, 12, 13]. Not deployable until drained v12 rooms and the final integrated owner gate (W2-D / W2-F and other open slices are tracked separately)"
  },
- "owner_rulings_source": "The owner's Phase-3 Wave-1 integration brief (2026-10-03), in its words; instructions addressed to that integration turned into statements. OD-9 and OD-11: the owner's safe Wave-2 integration brief (2026-10-03), in its words. OD-4, OD-10 and OD-17: restated from the owner's W3-K rules-v13 brief (2026-10-03); instructions addressed to that slice turned into statements. The 2026-10-04 additions to OD-4 and OD-10 are restated from the owner's W3-K continuation brief (2026-10-04). OD-3, OD-13, OD-14(d) and OD-14(i): transcribed from the owner's W3-G owner-review brief (2026-10-04), in its words.",
+ "owner_rulings_source": "The owner's Phase-3 Wave-1 integration brief (2026-10-03), in its words; instructions addressed to that integration turned into statements. OD-9 and OD-11: the owner's safe Wave-2 integration brief (2026-10-03), in its words. OD-4, OD-10 and OD-17: restated from the owner's W3-K rules-v13 brief (2026-10-03); instructions addressed to that slice turned into statements. The 2026-10-04 additions to OD-4 and OD-10 are restated from the owner's W3-K continuation brief (2026-10-04). OD-3, OD-13, OD-14(d) and OD-14(i): transcribed from the owner's W3-G owner-review brief (2026-10-04), in its words. OD-5 (tutorial ordering only), OD-9(b)'s asset policy, OD-14(b), (c), (e)–(h), OD-15, OD-16 and OD-18: supplied by the owner in prior conversations and never transcribed; transcribed from the owner's owner-decision reconciliation brief (2026-10-04), in its words, with the original ruling dates not recorded. OD-14(a): explicitly re-approved by the owner on 2026-10-04 (also transcribed on the unintegrated W1-I branch, `63fccca`). OD-15's cinematic-video clarification is the owner's later statement and supersedes the older modal reading. Owner-decision rule: owner decisions require explicit owner approval; assistant / Cowork recommendations, planning defaults, inferred choices and implementation decisions are NOT owner rulings.",
  "wave2_safe_integration": {
   "branch": "phase3/wave2-safe-integration",
   "base": "4e51cff7014632726de94f44024d66fc433b12cb (phase3/wave1-integration)",
@@ -5600,5 +5665,33 @@
    "keys": "unchanged from 7916763 / 18d4762 (dc1-e8d0b4792a7ba07e67199ad2 no escrow, dc1-32fcc4967978e78f10874490 the fixture pin)"
   },
   "lanes": "W2-B, W2-C, W2-G, v13 settlement certification, W2-D, W2-F, W3-I, W2-I, W2-J and W3-C COMPLETE and INTEGRATED; the W3-G audit gate ACCEPTED and INTEGRATED; W3-B PARTIAL, INTEGRATED THROUGH AUD-25.01; no accepted slice awaits integration; not deployable until drained v12 rooms and the final integrated owner gate"
+ },
+ "owner_decision_reconciliation": {
+  "date": "2026-10-04",
+  "branch": "phase3/owner-decision-reconciliation",
+  "base": "phase3/wave3-i-w2i-w2j-w3c-w3g-w3b-v13cert-integration @ 9ebca03d0ddba240191c4508b603341d3cddf2ac",
+  "scope": "Docs / tracking only. No product code. No owner decision made here: only the owner-supplied rulings in the owner's 2026-10-04 reconciliation brief are transcribed.",
+  "forensic_basis": "The 2026-10-04 read-only history pass (all 99 remote branches, local clone / worktree reflogs, every Phase-3 Project report) found none of these rulings in any committed, pushed, local-only or reported form: they were supplied in prior owner conversation and never transcribed (failure mode NEVER COMMITTED).",
+  "transcribed": [
+   "OD-5 (tutorial ordering only)",
+   "OD-9(b) (asset policy; ASSET PENDING)",
+   "OD-14(a) (re-approved 2026-10-04)",
+   "OD-14(b)",
+   "OD-14(c)",
+   "OD-14(e)",
+   "OD-14(f)",
+   "OD-14(g)",
+   "OD-14(h)",
+   "OD-15 (later cinematic clarification supersedes)",
+   "OD-16",
+   "OD-18"
+  ],
+  "not_ruled": [
+   "OD-0 (historical evidence ambiguous)",
+   "OD-5 policy questions (notice persistence / derivation; focus target and yield order; tutorial re-arm policy)",
+   "OD-10(b) (not equivalent to the historical OD-10 approval)",
+   "OD-18: U-10's \"pause cap\" (not named by the ruling; owner may confirm it falls under the later placement)"
+  ],
+  "rule": "Owner decisions require explicit owner approval. Assistant / Cowork recommendations, planning defaults, inferred choices and implementation decisions are NOT owner rulings."
  }
 }

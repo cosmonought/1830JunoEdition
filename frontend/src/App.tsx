@@ -16110,6 +16110,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
         actionInFlight={actionInFlight}
         // Phase 3 W2-F (OD-1, U-6): the standing offer's own hold sentence (`describeStandingOffer`), on every seat.
         waitingSentence={dockHold.standingOffer}
+        /* Phase 3 P3-N027: during an emergency train offer a seat with nothing to decide reads the waiting card alone,
+           and the obligated president reads the presented forced modal alone; the seller president keeps the answer. */
+        standAside={emergencyWaiting !== null || (presentedNotice === "emergency" && emergencyModalPlan !== null)}
       />
       {/* #1530: the excess-train discard the game is waiting for. Same slot as the trade prompt; the two cannot
          stand at once (an offer cannot be made while a discard is owed). */}

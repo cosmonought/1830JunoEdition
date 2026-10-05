@@ -172,7 +172,7 @@ describe("AUD-25.16 (A): Watch identity", () => {
 
 /* ------------------------------------------------------------------ (B) STALE AT REST */
 
-describe("AUD-25.16 (B): a board can rest behind the room with no notice", () => {
+describe("AUD-25.16 (B): a board resting behind the room (W3-J: latched and said, no longer silent)", () => {
   it("FIXED (W3-J): the drain still counts an entry before dispatching it, but a pass that throws is no longer silent -- it latches the board", () => {
     const shell = readShell();
     const loop = sliceBetween(shell, "for (let at = appliedCountRef.current; at < history.length; at += 1) {", "if (live) setSandboxAppliedCount(appliedCountRef.current);");
@@ -184,11 +184,18 @@ describe("AUD-25.16 (B): a board can rest behind the room with no notice", () =>
     expect(shell).toContain("drain([...accumulated]).catch((error: unknown) => noteDrainFailureRef.current(sandboxRoomCode, error));");
   });
 
-  it("DEFECT: on a fresh entry the first board comparison is muted -- a mismatch is a console note, never a banner", () => {
+  it("FIXED (W3-J, OD-19): a fresh entry's first mismatch is still a console note in the verdict, but its standing `reportedAt` makes the board not current", () => {
     const first = divergenceVerdict({ serverDigest: "a".repeat(16), clientDigest: "b".repeat(16), appliedIndex: 41, reportedAt: null, everAgreed: false });
     expect(first.diverged).toBe(true);
-    expect(first.message).toBeNull();
+    expect(first.message).toBeNull(); // #1223's verdict is unchanged: no drift banner for a pair that never agreed ...
     expect(first.note).toMatch(/have not agreed/);
+    // ... but the shell reads the standing verdict (`divergenceReportedAtRef` <- `reportedAt`) as an unresolved divergence:
+    expect(first.reportedAt).toBe(41);
+    const { boardCurrencyFor } = require("../utils/boardCurrency") as typeof import("../utils/boardCurrency");
+    expect(boardCurrencyFor({ drainFailed: false, divergedAt: first.reportedAt })).toMatchObject({ current: false, reason: "diverged" });
+    // An agreement clears it (`reportedAt: null`), and the board is current again.
+    const agreed = divergenceVerdict({ serverDigest: "a".repeat(16), clientDigest: "a".repeat(16), appliedIndex: 42, reportedAt: 41, everAgreed: false });
+    expect(boardCurrencyFor({ drainFailed: false, divergedAt: agreed.reportedAt })).toEqual({ current: true });
   });
 });
 
@@ -223,7 +230,7 @@ function room() {
   return { session, submit };
 }
 
-describe("AUD-25.16 (C): controls stay live on a stale board, and a click reaches the server", () => {
+describe("AUD-25.16 (C): a stale board's controls and clicks (W3-J: refused at the gate, bound to the applied position at the link)", () => {
   it("FIXED (W3-J): the catching-up gate no longer lets an automatic player decision through; the turn gate reads the shell's own board", () => {
     const shell = readShell();
     // AUD-25.13 (W2-D deferred), RED R1: only the replay and the derived actions pass the catching-up gate.
@@ -233,7 +240,9 @@ describe("AUD-25.16 (C): controls stay live on a stale board, and a click reache
     expect(shell).toContain("actingAddress(boardNow, sandboxWaterfallRef.current) === viewerAddressRef.current");
   });
 
-  it("DEFECT: the link stamps a click with the index it RECEIVED, even when the shell never applied it", () => {
+  it("BY DESIGN without a consumer position (and FIXED in the shell, W3-J): a link given no `appliedPosition` stamps what it RECEIVED; the shell's link is given the board's", () => {
+    // AUD-25.16 / OD-19: the shell wires `appliedPosition` (RED R5) -- see phase3W3JWatchStaleBoard.test.tsx's end-to-end case.
+    expect(readShell()).toContain("appliedPosition: () => appliedPositionRef.current(),");
     const wire: string[] = [];
     const socket = { send: (data: string) => wire.push(data), close: () => {}, onopen: null, onmessage: null, onclose: null, onerror: null } as import("../utils/serverLink").SocketLike;
     let ids = 0;
@@ -266,7 +275,7 @@ describe("AUD-25.16 (C): controls stay live on a stale board, and a click reache
     expect(submit(first, BUY_LOWEST, 0).kind).toBe("catch-up");
   });
 
-  it("DEFECT: the same click stamped with the link's tip passes the staleness guard and is judged on a board the player never saw", () => {
+  it("KEEP (the server, unchanged): a click stamped with the tip is judged on the real board -- which is why the shell no longer stamps the tip for a board resting behind it (W3-J)", () => {
     const { session, submit } = room();
     expect(submit("p-owner", SETUP).kind).toBe("applied"); // 0
     const [first, second] = session.state.player_addresses;

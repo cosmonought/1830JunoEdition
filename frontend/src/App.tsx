@@ -13013,6 +13013,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
                authenticated at the upgrade, and the server derives this tab's seat for every move it submits. */
             gameId: sandboxRoomCode,
             build: CLIENT_BUILD_ID,
+            /* Phase 3 W3-J (AUD-25.16, OD-19; OD-12 RED R5): every submission is bound to the position this tab's BOARD
+               has applied -- not the one the link delivered -- so the server's staleness guard judges the board the
+               player saw; a board that is not current (or a Watch tab) sends nothing (`appliedPositionRef`). */
+            appliedPosition: () => appliedPositionRef.current(),
             onEntries: (entries, serverDigest, serverFields, source) => {
               // #1238: a batch with any catch-up in it is history. Consumed by the drain's next pass.
               if (source === "catch-up") serverBatchIsHistoryRef.current = true;

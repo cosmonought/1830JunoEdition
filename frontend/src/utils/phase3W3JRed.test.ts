@@ -238,3 +238,15 @@ describe("RED R5 (AUD-25.16): a drain pass that throws is caught where the drain
     link.close();
   });
 });
+
+describe("RED R5 (AUD-25.16, OD-19): the room link stamps each submission with the position the board APPLIED", () => {
+  it("the shell's link is handed the board's position (assigned outside RED from `boardCurrency.ts`)", () => {
+    const options = sliceBetween(shell, "const link = connectServerLink({", "onEntries: (entries, serverDigest, serverFields, source) => {");
+    expect(options).toContain("appliedPosition: () => appliedPositionRef.current(),");
+    const assigned = sliceBetween(shell, "appliedPositionRef.current = () =>", "boardSendRefusalRef.current =");
+    expect(assigned).toContain("log: sandboxLogRef.current,");
+    expect(assigned).toContain("replaying: replayingRef.current,");
+    expect(assigned).toContain("currency: syncBoardCurrency(),");
+    expect(assigned).toContain("watchOnly,");
+  });
+});

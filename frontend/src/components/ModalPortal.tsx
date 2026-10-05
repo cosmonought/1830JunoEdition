@@ -45,6 +45,35 @@
    what is open. Dismissal belongs to `useDialogDismissal` (#1641); the rest belongs to each dialog. This is a
    destination, not a primitive. */
 
+/* ==================================================================
+    PHASE 3 W3-D (OD-15(b), AUD-13.06): THE INERT LAYER WILL NOT BE BUILT; THIS IS `NativeModal`'S DESTINATION ONLY
+   ==================================================================
+   THE OWNER'S RULING. Modal UI converges on native `<dialog>` + `showModal()` through `NativeModal`; the browser's
+   top layer supplies the isolation; no global manual-inert system is added; and `ModalPortal` is retired once its
+   last legitimate modal consumer has migrated.
+
+   SO NOTE 1648'S PREMISE IS SUPERSEDED. It moved modal markup out of the screen so "a later batch" could make the
+   screen `inert`. That batch is ruled out: `showModal()` already makes everything outside the dialog inert, from
+   wherever the dialog sits in the DOM. Nothing in this file was ever inert machinery, and nothing will be.
+
+   WHAT STILL LEGITIMATELY USES IT, AND WHY. Exactly one consumer remains: `NativeModal` itself, which renders its
+   `<dialog>` here. Not for isolation -- for the SCALE and the INHERITANCE: the layer is the one place dialogs pick
+   up `zoom: uiScale` (note 1648's "applied once, here") and the one ancestor whose inherited styles every dialog
+   shares, whatever deep part of the shell opened it. The Lobby's standalone `<ModalPortal>` around Host Game, the
+   pilot's second route into this host, is removed (Host Game is a `NativeModal`). No other file may render
+   `ModalPortal`; `phase3W3DModalLayer.test.tsx` pins that.
+
+   WHAT DELETING THE REST TAKES (recorded, not done here): `NativeModal` rendering its `<dialog>` in place instead
+   of here; then this file, the two `<ModalLayerHost />` in `GameRouter`, and the `ModalLayerHost` mount in every
+   modal suite's harness go. ONE DEPENDENCY MUST MOVE FIRST: the OD-15(a) cinematic cover makes the shell root
+   `inert` (`CinematicTakeover.tsx`), and a dialog rendered in place inside an inert ancestor is inert itself, top
+   layer or not -- so before dialogs leave this layer, the cover must stop sitting on an ancestor of theirs (or the
+   dialogs that can open during a film must stay outside the shell root). It is not done in W3-D because (1) every dialog would then inherit styles from, and
+   bubble native DOM events through, the subtree that opened it -- fifteen mount sites that need a real-browser
+   pass, not jsdom; and (2) it rewrites the harnesses of suites other active lanes are editing (the W3-A notice
+   suites, the W2-M wallet suite). The cinematics never used this layer and are not counted as consumers: they
+   are viewport takeovers (`CinematicTakeover`, OD-15(a)). */
+
 import React from "react";
 import { createPortal } from "react-dom";
 

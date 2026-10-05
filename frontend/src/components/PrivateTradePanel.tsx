@@ -124,8 +124,10 @@ export function purchasablePrivatesInPlay(
 /* ------------------------------------------------------------------ */
 
 export interface ProposePrivatePurchaseProps {
-  /** Ignored when `embedded` -- the bar's own condition decides whether the step is on screen. */
-  open: boolean;
+  /** Phase 3 W3-D (AUD-13.06): NO LONGER READ. The panel has one shape, the embedded one (see the note at its
+   *  return); whether the step is on screen is the bar's own condition. Accepted so the bar's prop object is unchanged;
+   *  removing it, `embedded`, `buyerTicker` and `onClose` from the bar is a props cleanup, not a behaviour. */
+  open?: boolean;
   /** Design note #715: RENDER IN PLACE, not over the board.
    *
    *  REPORTED: "the modal that opens when you click 'Buy Private Company' should maybe be a subpanel like
@@ -135,9 +137,13 @@ export interface ProposePrivatePurchaseProps {
    *  furniture to be summoned, they ARE the step. A modal additionally hides the board behind it, which is
    *  the surface a president is weighing the purchase against.
    *  `embedded` drops the backdrop, the dialog role and the two chrome buttons -- there is nothing to close
-   *  and nothing to cancel when the panel is simply part of the bar. */
+   *  and nothing to cancel when the panel is simply part of the bar.
+   *
+   *  Phase 3 W3-D (AUD-13.06): NO LONGER READ -- embedded is the only shape. The floating shape it switched off was
+   *  never rendered (every caller passes `embedded`), and its `aria-modal` claimed a modality nothing had. */
   embedded?: boolean;
-  buyerTicker: string;
+  /** Phase 3 W3-D: no longer read; it titled the floating shape's header, which went with that shape. */
+  buyerTicker?: string;
   privates: readonly PrivateCompanyState[];
   /** Renders a wallet as a readable name. */
   labelForAddress: (address: string) => string;
@@ -151,7 +157,8 @@ export interface ProposePrivatePurchaseProps {
    *  for the bar's prop object, not a rule. */
   treasury: number;
   onPropose: (privateId: number, price: number) => void;
-  onClose: () => void;
+  /** Phase 3 W3-D: no longer read; it was the floating shape's `✖` and scrim click. */
+  onClose?: () => void;
   /** Phase 3 W2-A (OD-1): a standing authoritative hold's refusal of the proposal, or `null`. Greys every card's
    *  submit with that sentence; the cards still open, so the rules stay readable. Absent is `null` (no hold). */
   blockedReason?: string | null;
@@ -171,14 +178,10 @@ export interface ProposePrivatePurchaseProps {
 }
 
 export function ProposePrivatePurchase({
-  open,
-  embedded = false,
-  buyerTicker,
   privates,
   labelForAddress,
   colorForAddress,
   onPropose,
-  onClose,
   blockedReason: holdReason = null,
   proposalRefusal,
   actionInFlight = false,
@@ -252,10 +255,8 @@ export function ProposePrivatePurchase({
     });
   };
 
-  if (!embedded && !open) return null;
-
   const body = (
-      <div style={embedded ? styles.embeddedCard : styles.card}>
+      <div style={styles.embeddedCard}>
         {/* ==================================================================
              DESIGN NOTE 864: THE EMBEDDED FORM IS THE STEP, NOT A CARD ON IT
             ==================================================================
@@ -276,19 +277,8 @@ export function ProposePrivatePurchase({
 
             THE HEADING GOES BY THE SAME ARGUMENT AS #814 AND #810 -- both removed prose from this panel for
             restating something a player already had. `{buyerTicker} proposes a purchase` is the third.
-            THE MODAL KEEPS ALL OF IT. `styles.card` is untouched and the header still renders when it is not
-            embedded, because a floating window still needs its title and its close button. The two callers
-            genuinely need two shapes, which is what `embedded` has meant since #715. */}
-        {!embedded && (
-          <div style={styles.header}>
-            <span style={styles.heading}>{buyerTicker} proposes a purchase</span>
-            {/* Design note #715: no close button when embedded -- the panel is the step, and a control that
-                dismissed it would leave the player on a step with nothing on it. */}
-            <button type="button" style={styles.closeButton} onClick={onClose} aria-label="Close">
-              &#10006;
-            </button>
-          </div>
-        )}
+            [Phase 3 W3-D: the floating shape that kept a heading and a close button is gone -- see the note at the
+            return. There is one caller and one shape.] */}
 
         {/* Design note #814: THE INTRO PARAGRAPH IS GONE, and #810 removed its twin one report earlier.
            REQUESTED: "I think we can also remove this from the Buy Private Companies subpanel ... It is
@@ -612,30 +602,25 @@ export function ProposePrivatePurchase({
             the indirection that made two clicks necessary. Each card submits itself now.
             AND CANCEL GOES WITH IT, which costs nothing that is reachable: #715 already withdrew it when
             embedded ("Cancel is a modal's word"), and nothing in the app renders this panel any other way --
-            the bar passes `embedded` unconditionally and `onOpenPrivateTrade` is a no-op. The modal branch
-            below is vestigial and its header `✖` is its only dismissal. Recorded rather than deleted:
-            removing the branch is a separate change with its own props to unpick. */}
+            the bar passes `embedded` unconditionally and `onOpenPrivateTrade` is a no-op. [Phase 3 W3-D: the
+            vestigial modal branch this sentence described is now deleted; see the return.] */}
       </div>
   );
 
   /* Design note #715: EMBEDDED IS THE BODY ALONE. The backdrop is what makes a modal a modal -- the click
      target that dismisses it, the `aria-modal` that hides the rest of the app from a screen reader, and the
-     scrim over the board. None of them belong to a panel that lives inside the bar. */
-  if (embedded) return body;
+     scrim over the board. None of them belong to a panel that lives inside the bar.
 
-  return (
-    <div
-      style={styles.backdrop}
-      role="dialog"
-      aria-modal="true"
-      aria-label="Propose a private company purchase"
-      onClick={(event) => {
-        if (event.target === event.currentTarget) onClose();
-      }}
-    >
-      {body}
-    </div>
-  );
+     ==================================================================
+      PHASE 3 W3-D (OD-15(b), AUD-13.06): THE PANEL IS NOT A MODAL, SO IT NO LONGER SAYS IT IS ONE
+     ==================================================================
+     CLASSIFIED BY BEHAVIOUR, NOT BY MARKUP. In production this is a step of the action bar: rendered in place,
+     the board and the rest of the bar live beside it, nothing is scrimmed and nothing is trapped. The floating
+     shape -- a fixed scrim, `role="dialog"`, `aria-modal="true"`, a heading and a `✖` -- was reached only when a
+     caller omitted `embedded`, and none does (the bar and every test pass it). So OD-15(b)'s semantic rule
+     applies in its "not genuinely modal" arm: the false modal semantics are REMOVED, not wrapped in
+     `NativeModal`, and the shape that carried them goes with them rather than survive as an unreachable claim. */
+  return body;
 }
 
 /* ------------------------------------------------------------------ */
@@ -803,16 +788,8 @@ export function PrivateTradePrompt({
 /* ------------------------------------------------------------------ */
 
 const styles: Record<string, React.CSSProperties> = {
-  backdrop: {
-    position: "fixed",
-    inset: 0,
-    zIndex: 70,
-    backgroundColor: "rgba(6, 9, 16, 0.62)",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    padding: "24px",
-  },
+  /* Phase 3 W3-D (AUD-13.06): `backdrop`, `card`, `header`, `heading` and `closeButton` -- the floating shape's
+     scrim, frame and chrome -- are gone with it (see the note at `ProposePrivatePurchase`'s return). */
   /* Design note #715: the embedded twin. Same content, none of the chrome a floating card needs -- no fixed
      width fighting the bar's own, no drop shadow (nothing is floating), no scroll cap (the bar scrolls with
      the page). The border stays: it is what separates this block from the buttons above it, exactly as the
@@ -829,32 +806,6 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: "column",
     gap: "10px",
     marginTop: "6px",
-  },
-  card: {
-    width: "min(560px, 100%)",
-    maxHeight: "84vh",
-    overflowY: "auto",
-    display: "flex",
-    flexDirection: "column",
-    gap: "10px",
-    padding: "18px 20px",
-    borderRadius: RADIUS.layer,
-    border: "1px solid #3a3a3a",
-    backgroundColor: "#0f0f0f",
-    boxShadow: "0 12px 40px rgba(0,0,0,0.6)",
-  },
-  header: { display: "flex", flexDirection: "row", alignItems: "center", gap: "10px" },
-  heading: { fontSize: FONT_SIZE.heading, fontWeight: 800, color: "#f2f0eb" },
-  closeButton: {
-    marginLeft: "auto",
-    width: "30px",
-    height: "30px",
-    borderRadius: RADIUS.pill,
-    border: "1px solid #4a4a4a",
-    backgroundColor: "#1c1c1c",
-    color: "#c8c6c0",
-    fontFamily: "inherit",
-    cursor: "pointer",
   },
   /* Design note #661 sized this paragraph up from `small` to `body`, "because it states the 50-200% rule and
      that the owner must agree -- both load-bearing, and both were set at the size used for timestamps".

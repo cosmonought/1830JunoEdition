@@ -32,9 +32,9 @@ import React from "react";
 import { gameTypeOf, type GameType } from "../gameEngine/gameVariants";
 import { FONT_SIZE, RADIUS } from "../styles/typography";
 import { duckRadio, DUCK_FOR_VIDEO } from "../utils/audio";
-// Design note #1144: the chrome's scale, so this layer can divide back out of it.
-/* Design note #1294: the chrome scale, live, for the counter-zoom. */
-import { useUiScale } from "../utils/useUiScale";
+/* Phase 3 W3-D (OD-15(a)): the takeover layer. The counter-zoom this file used to read `useUiScale()` for is gone --
+   see `CinematicTakeover.tsx`. */
+import { CinematicTakeover } from "./CinematicTakeover";
 
 /** Served from `public/`, like the haunting clips. `video/` rather than `audio/`: those three live beside
  *  the variant SFX they belong to, and this is not a sound effect. */
@@ -278,8 +278,6 @@ export interface GameIntroOverlayProps {
 export function GameIntroOverlay({ onDone, sfxEnabled, gameType = "standard" }: GameIntroOverlayProps) {
   const cut = INTRO_CUTS[gameType];
   const creditCueSeconds = creditCueSecondsFor(gameType);
-  /* Design note #1294: the chrome scale, live. */
-  const uiScale = useUiScale();
   const [skipVisible, setSkipVisible] = React.useState(false);
 
   /* ONE `onDone`, HOWEVER IT ENDS. Four things can finish this -- the clip, the button, Escape, the backstop
@@ -343,7 +341,12 @@ export function GameIntroOverlay({ onDone, sfxEnabled, gameType = "standard" }: 
   }, [finish]);
 
   return (
-    <div style={{ ...styles.backdrop, zoom: 1 / uiScale }} role="dialog" aria-modal="true" aria-label="Opening titles">
+    /* Phase 3 W3-D (OD-15(a), AUD-13.05): A TAKEOVER, NOT A DIALOG. This was `role="dialog" aria-modal="true"`
+       on a div counter-zoomed by `1 / uiScale` inside the shell's scaled root. It now renders outside every
+       scaled root (`CinematicTakeover`), so it is the viewport at every UI scale with nothing to cancel, and it
+       claims no dialog semantics: the shell makes the game it covers `inert` instead. The film, the skip, the
+       credit, Escape, the duck and the backstop are unchanged. */
+    <CinematicTakeover style={styles.backdrop} testId="game-intro">
       <style>{SKIP_FADE_CSS}</style>
       {/* Design note #1166b: the stage is the rectangle the video paints into, so the two overlays below are
           positioned in the PICTURE's coordinates rather than the window's. The skip stays outside it -- that
@@ -359,6 +362,9 @@ export function GameIntroOverlay({ onDone, sfxEnabled, gameType = "standard" }: 
         playsInline
         muted={!sfxEnabled}
         loop={false}
+        /* W3-D review: the name the takeover gave up with `role="dialog"`, kept on the film itself -- an
+           announcement of what is playing, with no modal claim. */
+        aria-label="Opening titles"
         onEnded={holdEnded}
         onTimeUpdate={onTimeUpdate}
         /* A clip that will not decode must not become a ten-second black screen with a button on it. */
@@ -404,7 +410,7 @@ export function GameIntroOverlay({ onDone, sfxEnabled, gameType = "standard" }: 
           Skip intro
         </button>
       )}
-    </div>
+    </CinematicTakeover>
   );
 }
 
@@ -424,15 +430,19 @@ const styles: Record<string, React.CSSProperties> = {
        WHAT ACTUALLY SHRINKS IS EVERYTHING AUTHORED IN PIXELS INSIDE THE LAYER -- here, "Skip intro". The
        video is a raster stretched to a box that covers the window either way, so it is unaffected; the button
        is a control sized to a cinematic, and at 70% it becomes a small grey word on a full-screen picture.
-       COUNTER-ZOOMED RATHER THAN MOVED OUT OF THE TREE, which was the alternative: a portal would work and
-       would put this layer somewhere a reader does not expect to find it. `1 / UI_SCALE` is the same idiom
-       `boardPane` uses, and for the same reason -- this is ART sized to the window, not chrome sized to the
-       reader.
+       [SUPERSEDED BY OD-15(a), below: the paragraph that stood here chose a counter-zoom over moving the
+       layer out of the tree. The owner ruled the other way, and the portal is now the mechanism.]
        THE MODALS ARE DELIBERATELY NOT DOING THIS. A confirm dialog is chrome and should shrink with the rest
        of it; only the surfaces that are pictures at viewport size are exempt. */
-    /* Design note #1294: `zoom` is written per render as `1 / useUiScale()`. */
-    position: "fixed",
-    inset: 0,
+    /* ==================================================================
+        PHASE 3 W3-D (OD-15(a)): #1144'S EXEMPTION, NOW BY POSITION RATHER THAN BY ARITHMETIC
+       ==================================================================
+       #1144's finding stands -- a fixed layer inside a zoom still covers the window, and what the zoom
+       shrank was the PIXEL-AUTHORED controls (the skip at 63% became "a small grey word on a full-screen
+       picture"). Its remedy was a counter-zoom; the owner's ruling replaced it. The layer is now
+       rendered outside every scaled root, so the effective zoom is 1 without a reciprocal and the skip keeps
+       the size #1144 wanted. The viewport geometry (fixed, four edges at zero) is the takeover's own
+       contract and lives in `CINEMATIC_TAKEOVER_GEOMETRY`; this object is the surface laid under it. */
     zIndex: 40000,
     backgroundColor: "#080808",
     display: "flex",

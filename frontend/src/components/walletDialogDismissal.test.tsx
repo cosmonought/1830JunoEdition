@@ -365,8 +365,11 @@ describe("the four excluded candidates are untouched", () => {
     const source = readStripped("components/PrivateTradePanel.tsx");
     expect(source.includes("useDialogDismissal")).toBe(false);
     expect(source.includes('addEventListener("keydown"')).toBe(false);
-    /* `embedded` returns the body before the modal branch is reached, and the bar passes it unconditionally. */
-    expect(source.includes("if (embedded) return body;")).toBe(true);
+    /* Phase 3 W3-D (OD-15(b), AUD-13.06): this read `if (embedded) return body;` -- the body returned before the
+       never-reached modal branch. That branch, with its false `aria-modal`, is deleted; the panel has one shape,
+       and it is the body. */
+    expect(source.includes("return body;")).toBe(true);
+    expect(source.includes("aria-modal")).toBe(false);
   });
 
   it("leaves PrivatePowerFlowModal alone, which has no Escape today", () => {

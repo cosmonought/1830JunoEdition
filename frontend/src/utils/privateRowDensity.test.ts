@@ -276,7 +276,9 @@ describe("one click opens the card, and the card is the whole transaction", () =
        attribute, which is what happened here. */
     const start = CODE.indexOf("<div id={detailId} style={styles.cardBody}");
     expect(start).toBeGreaterThan(-1);
-    const card = CODE.slice(start, CODE.indexOf("if (embedded) return body;", start));
+    /* Phase 3 W3-D (AUD-13.06): the end anchor was `if (embedded) return body;`. The floating shape it guarded is
+       deleted, so the panel's one return is the end of the card now. */
+    const card = CODE.slice(start, CODE.indexOf("return body;", start));
     expect(card.length).toBeGreaterThan(0);
     expect(card).toContain("styles.cardRule");
     expect(card).toContain("styles.priceInput");
@@ -448,26 +450,22 @@ describe("the shell supplies the colour", () => {
 // THE MODAL KEEPS EVERYTHING. `styles.card` is untouched and the header still renders unembedded, so these
 // assertions are all about the EMBEDDED branch and say so.
 describe("the embedded panel is the step (design note #864)", () => {
-  it("drops the heading when embedded and keeps it in the modal", () => {
-    /* NOT DELETED OUTRIGHT. A floating window has to say whose it is; a subpanel under a bar that already
-       names the acting corporation does not. So the string survives behind `!embedded`, and this asserts
-       both halves -- a plain deletion would pass "the bar has no heading" and break the modal. */
-    expect(CODE).toContain("{buyerTicker} proposes a purchase");
-    const at = CODE.indexOf("{buyerTicker} proposes a purchase");
-    const before = CODE.slice(Math.max(0, at - 200), at);
-    expect(before).toContain("{!embedded && (");
+  /* ==================================================================
+      PHASE 3 W3-D (OD-15(b), AUD-13.06): THE FLOATING SHAPE IS GONE, SO ITS HALVES OF THESE CASES ARE TOO
+     ==================================================================
+     These two cases asserted "the heading and the close button are dropped when embedded AND kept in the modal".
+     The modal shape was never rendered -- every caller passes `embedded` -- and it carried `role="dialog"
+     aria-modal="true"` on a panel that is not modal. OD-15(b) removes false modal semantics rather than
+     wrapping them, and the heading and `✖` went with the shape that needed them. #864's embedded half -- no
+     heading, no close button on the step -- is what remains, and is what these now assert. */
+  it("has no heading on the step, and no floating shape to keep one in", () => {
+    expect(CODE).not.toContain("proposes a purchase");
+    expect(CODE).not.toContain("!embedded");
   });
 
-  it("keeps the close button inside the same guard", () => {
-    /* THE BUTTON WAS ALREADY `!embedded`; the header now is too, so the two cannot disagree about which shape
-       they are in. #715's rule -- no close button on a step you cannot leave -- is unchanged and is now
-       carried by the wrapper rather than restated inside it. */
-    const at = CODE.indexOf('aria-label="Close"');
-    expect(at).toBeGreaterThan(-1);
-    const guard = CODE.lastIndexOf("{!embedded && (", at);
-    expect(guard).toBeGreaterThan(-1);
-    // No second guard between them: one condition covers the header and its button.
-    expect(CODE.slice(guard, at)).toContain("styles.heading");
+  it("has no close button: there is nothing to close on a step (#715)", () => {
+    expect(CODE).not.toContain('aria-label="Close"');
+    expect(CODE).not.toContain("onClose()");
   });
 
   it("gives the embedded form no frame of its own", () => {
@@ -483,14 +481,13 @@ describe("the embedded panel is the step (design note #864)", () => {
     expect(body).not.toContain("backgroundColor");
   });
 
-  it("leaves the modal's own frame alone", () => {
-    /* THE NEGATIVE HALF OF THE PREVIOUS TEST. Stripping both would be the easy over-correction and would take
-       the floating window's edges with it. */
-    const at = CODE.indexOf("  card: {");
-    expect(at).toBeGreaterThan(-1);
-    const body = CODE.slice(at, CODE.indexOf("},", at));
-    expect(body).toContain("border");
-    expect(body).toContain("padding");
+  it("has no floating frame left behind (W3-D, AUD-13.06)", () => {
+    /* WAS "leaves the modal's own frame alone" -- the negative half guarding the floating window's edges. The
+       floating window is deleted (see above), so its frame is too; asserting it stays gone keeps a second shape
+       from growing back around the panel. */
+    expect(CODE).not.toContain("  card: {");
+    expect(CODE).not.toContain("styles.card}");
+    expect(CODE).not.toContain("styles.backdrop");
   });
 
   it("stops the open card sizing itself to its own sentence", () => {

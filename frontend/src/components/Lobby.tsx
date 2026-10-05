@@ -52,7 +52,6 @@ import { profileNickname } from "../utils/profileApi";
 // #1415: the host's setup card -- type, pace, visibility, then the house rules -- before the room exists; and
 // the join card, the code box for an unlisted table.
 import { HostSetupCard } from "./HostSetupCard";
-import { ModalPortal } from "./ModalPortal";
 import { JoinGameCard } from "./JoinGameCard";
 import { LobbyRoomList } from "./LobbyRoomList";
 import { roomLinkAvailable } from "../utils/roomLink";
@@ -510,21 +509,24 @@ export function Lobby({ onEnterSandbox }: LobbyProps) {
           the scene, and each card's backdrop says `pointerEvents: "auto"` itself so no ancestor can do this
           to them again. Enter "worked" only because the PIN field had focus and resubmitted the lookup. */}
       {/* #1415: the host's setup card, at the root for #1360's reason. */}
-      {/* #1648: the pilot for the modal layer. The mount lifecycle is unchanged -- `hostSetup` still decides
+      {/* [Superseded in part by W3-D, below: the wrapper this note describes is removed, and the "later batch" that
+          would make this screen `inert` is ruled out by OD-15(b).] #1648: the pilot for the modal layer. The mount lifecycle is unchanged -- `hostSetup` still decides
           whether the card exists, and closing still unmounts it, which is still what resets every selection.
           Only the DOM destination moved: the card now renders into the layer beside this screen rather than
           inside it, so a later batch can make this screen `inert` without disabling the dialog. React context
           and event bubbling follow the React tree, not the DOM, so everything this card is handed still
           arrives and `onClose` still runs here. */}
+      {/* Phase 3 W3-D (OD-15(b), AUD-13.06): THE PILOT'S WRAPPER IS GONE. `HostSetupCard` has been a `NativeModal` since
+          #1651, and `NativeModal` puts its own `<dialog>` in the layer -- so this outer `ModalPortal` was a second,
+          redundant route into the same host, and the last one outside `NativeModal`. The DOM is unchanged: the
+          dialog lands in the layer exactly as before, and `hostSetup` still decides whether the card exists. */}
       {hostSetup && (
-        <ModalPortal>
-          <HostSetupCard
-            busy={sandboxRoomBusy}
-            error={sandboxRoomError}
-            onClose={() => setHostSetup(false)}
-            onCreate={(variants, setup) => void handleHostSandboxRoom(variants, setup)}
-          />
-        </ModalPortal>
+        <HostSetupCard
+          busy={sandboxRoomBusy}
+          error={sandboxRoomError}
+          onClose={() => setHostSetup(false)}
+          onCreate={(variants, setup) => void handleHostSandboxRoom(variants, setup)}
+        />
       )}
       {/* Design note #1440: the code box alone -- the public list moved onto the page (`LobbyRoomList`).
           Watching a game is entering the room with no seat, which is the shell's own watcher path, so the

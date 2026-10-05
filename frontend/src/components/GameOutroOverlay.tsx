@@ -45,7 +45,8 @@ import React from "react";
 
 import { FONT_SIZE, RADIUS } from "../styles/typography";
 import { duckRadio, DUCK_FOR_VIDEO } from "../utils/audio";
-import { useUiScale } from "../utils/useUiScale";
+/* Phase 3 W3-D (OD-15(a)): the same full-viewport takeover as the intro; the `useUiScale()` counter-zoom is gone. */
+import { CinematicTakeover } from "./CinematicTakeover";
 
 export const GAME_OUTRO_SRC = `${process.env.PUBLIC_URL ?? ""}/video/game-over.mp4`;
 export const GAME_OUTRO_STILL = `${process.env.PUBLIC_URL ?? ""}/video/game-over-last.jpg`;
@@ -71,7 +72,6 @@ export interface GameOutroOverlayProps {
 }
 
 export function GameOutroOverlay({ onCue, cued, sfxEnabled }: GameOutroOverlayProps) {
-  const uiScale = useUiScale();
   const [skipVisible, setSkipVisible] = React.useState(false);
   const [failed, setFailed] = React.useState(false);
 
@@ -106,7 +106,13 @@ export function GameOutroOverlay({ onCue, cued, sfxEnabled }: GameOutroOverlayPr
   }, [cue]);
 
   return (
-    <div style={{ ...styles.backdrop, zoom: 1 / uiScale }} role="presentation" aria-hidden={cued} data-testid="game-outro">
+    /* Phase 3 W3-D (OD-15(a), AUD-13.05): THE END-GAME FILM IS A TAKEOVER TOO. It was a `zoom: 1 / uiScale` div
+       inside the shell's scaled root -- the intro's counter-zoom, copied. It now renders outside every scaled root
+       (`CinematicTakeover`), so it is the viewport at every UI scale with no reciprocal. It never claimed dialog
+       semantics and still claims none (`role="presentation"`, hidden once the modal is up); the shell makes the
+       game `inert` while it plays, up to the cue, and from the cue the Game Over dialog's `showModal()` blocks
+       everything outside it. Cue, skip, Escape, mute, duck and backstop are unchanged. */
+    <CinematicTakeover style={styles.backdrop} role="presentation" ariaHidden={cued} testId="game-outro">
       <style>{OUTRO_CSS}</style>
       {failed ? (
         <img src={GAME_OUTRO_STILL} alt="" style={styles.video} />
@@ -132,18 +138,21 @@ export function GameOutroOverlay({ onCue, cued, sfxEnabled }: GameOutroOverlayPr
           Skip
         </button>
       )}
-    </div>
+    </CinematicTakeover>
   );
 }
 
 export default GameOutroOverlay;
 
 const styles: Record<string, React.CSSProperties> = {
-  /* Under the Game Over modal (1600) and over the board and its toasts: the modal rises over THIS. */
+  /* Phase 3 W3-D: the viewport geometry is the takeover's (`CINEMATIC_TAKEOVER_GEOMETRY`); this is the surface.
+     W3-D REVIEW (L1): OVER THE WHOLE SHELL, AT THE INTRO'S TIER. This was 1500 under a note that the Game Over modal
+     sat at 1600. Since #1651 that modal is a `showModal()` dialog in the TOP LAYER, which rises over any z-index --
+     so the number no longer ordered the film against the modal, and 1500 left the status dock (3000), the waiting
+     banner (3900) and the toasts (4000) painted over a film OD-15(a) says fills the viewport. 40000 clears every
+     shell layer as the intro does; the modal still rises over it at the cue. */
   backdrop: {
-    position: "fixed",
-    inset: 0,
-    zIndex: 1500,
+    zIndex: 40000,
     backgroundColor: "#080808",
     display: "flex",
     alignItems: "center",

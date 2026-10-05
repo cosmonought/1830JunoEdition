@@ -721,6 +721,8 @@ import { CARCOSA_STAMP_STEP, carcosaEpitaph, cursedCompanies } from "./utils/car
 import { offerSettlesAsBloodPrice } from "./utils/saleCopyDisclosure";
 import AppFooter from "./components/AppFooter";
 import GameIntroOverlay from "./components/GameIntroOverlay";
+/* Phase 3 W3-D (OD-15(a)): the cinematics cover the game as takeovers, and the shell root goes `inert` under them. */
+import { cinematicTakeoverActive, inertWhileCovered } from "./components/CinematicTakeover";
 import GameOutroOverlay from "./components/GameOutroOverlay";
 import { CEREMONY_SOUNDS, ceremonySoundFor } from "./utils/ceremonySounds";
 import AuctionPromptModal from "./components/AuctionPromptModal";
@@ -14045,6 +14047,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
            too, and converting at the source would silently put that arithmetic in the wrong space instead. */
         paddingBottom: `${statusDockHeight / uiScale + 12}px`,
       }}
+      /* Phase 3 W3-D (OD-15(a), AUD-13.05): WHILE A CINEMATIC COVERS THE GAME, THE GAME IS INERT. The intro and the
+         end-game film render outside this root (`CinematicTakeover`), so this one attribute takes the board, the
+         bar and every control out of pointer and keyboard reach without giving either film dialog semantics --
+         and leaves the films themselves, and the modal layer beside this root, live. Absent otherwise. */
+      {...inertWhileCovered(cinematicTakeoverActive(introPlaying, outro))}
     >
       {/* Design note #18/item 4, made MANDATORY by #21: keyframes injected unconditionally (Chatbox.tsx
          #2's convention for this codebase's inline-style escape hatch) and the pulsing overlay mounts off bare

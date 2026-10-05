@@ -46,9 +46,9 @@ observation, decision or process item.
 
 | Block | Rows | Dispositions |
 |---|---|---|
-| Audit items (`AUD-*`) | 184 | A 61 · B 60 · C 16 · D 22 · E 2 · F 23 · G 0 |
+| Audit items (`AUD-*`) | 184 | A 61 · B 62 · C 14 · D 22 · E 2 · F 23 · G 0 |
 | Flourish-ledger items the audit counts (`VF/*`: 47 PLAYTEST, 21 recorded owner decisions, 23 OPEN) | 91 | A 0 · B 17 · C 6 · D 47 · E 0 · F 21 · G 0 |
-| **Substantive audit items, total** | **275** | A 61 · B 77 · C 22 · D 69 · E 2 · F 44 · G 0 |
+| **Substantive audit items, total** | **275** | A 61 · B 79 · C 20 · D 69 · E 2 · F 44 · G 0 |
 | Execution-map-only NEW-SOURCE-FINDINGS (`P3-N*`) | 26 | A 23 · B 0 · C 0 · D 0 · E 1 · F 2 · G 0 |
 
 - **G = 0 among the audit's own items.** Where the audit and source disagree, the source evidence was unambiguous and the
@@ -56,6 +56,7 @@ observation, decision or process item.
   (needs a precise reproduction); the v13 scope verification reproduced it precisely and W3-K implemented it (G → A).
 - **Totals after the Wave-1 integration (2026-10-03):** AUD-09.10 (RR-4) moved C → B when OD-7 was ruled and implemented as
   copy; P3-N024 moved C → G under OD-2. The planning-snapshot totals were A 61 · B 59 · C 23 (audit) and C 2 · G 0 (P3-N).
+- **Totals after W3-D (2026-10-04, `phase3/w3-d`, not integrated):** AUD-13.05 and AUD-13.06 moved C → B when OD-15(a) and OD-15(b) were ruled and W3-D implemented them. AUD-13.04 stays A, BLOCKED ONLY ON W3-A INTEGRATION.
 - **Totals after the safe Wave-2 integration (2026-10-03):** AUD-07.03 (K-06 / U-17) moved C → B when OD-11 was ruled (build) and W3-E landed; AUD-20.01 (U-44) moved C → B when OD-9(a) was ruled and W2-K landed. AUD-18.05 (the Keplr logo) stays C, ASSET PENDING.
 - **Totals after W3-K (rules v13, 2026-10-03):** P3-N023 (SBS-3) C → A and P3-N024 (SBS-4) G → A, both IMPLEMENTED on
   `phase3/w3-k-rules-v13`. The audit rows keep their dispositions (DH-1, GR-1, VF D-18 and D-22 stay C with updated
@@ -897,9 +898,9 @@ owner's W3-A brief). **COMPLETE on its slice branch; NOT integrated** (integrati
 | **AUD-13.01** · — · §13<br>Native dialog surfaces with focus traps and Escape policies. | [R] | RESOLVED — 14 `<NativeModal` call sites at 8e897f9 (the audit said 15). | — | **F** | — | — | — |
 | **AUD-13.02** · Batch 4B · §13<br>After acknowledging Private Revenue or Fleet Loss, focus lands on the page body; needs a notice-chaining policy and a heading. | [UX] ★ | CONFIRMED — `PrivateRevenueModal.tsx`:214, `FleetLossModal.tsx`:81 `restoreOpener={false}`. | W3-A | **A** | OD-5 | — | — |
 | **AUD-13.03** · — · §13<br>The seat PIN dialog is not a native dialog. | [UX] | RESOLVED (audit text stale) — seat PINs removed in LIVE-2D (`SandboxWaitingRoom.tsx`:497, `SandboxRoomBar.tsx`:205, `App.tsx`:13721). | W3-F (confirm at the final head) | **F** | — | — | — |
-| **AUD-13.04** · — · §13<br>Tutorials are not native dialogs. | [UX] | CONFIRMED — `components/TutorialModal.tsx`:593-597 `<div role="dialog">`. | W3-D | **A** | — | — | **OD-5 ordering RULED (transcribed 2026-10-04): tutorial work deferred to the final tutorial/UI pass.** |
-| **AUD-13.05** · — · §13<br>The intro overlay's scale contract is unsettled. | [UX] | CONFIRMED — `components/GameIntroOverlay.tsx`:346 `zoom: 1 / uiScale` on an `aria-modal` div. | W3-D | **C** | OD-15(a) | — | **RULED (transcribed 2026-10-04; OD-15(a), the owner's later cinematic clarification): the intro (and end-game) video is a full-viewport cinematic takeover, not a NativeModal / `<dialog>`; true viewport geometry replaces the counter-scale — W3-D.** |
-| **AUD-13.06** · — · §13<br>Whether the portal / inert layer is still needed is undecided. | [UX] | CONFIRMED — `components/ModalPortal.tsx`:6-11, 43-45 disowns inert and any open-modal registry. | W3-D | **C** | OD-15(b) | — | **RULED (transcribed 2026-10-04; OD-15(b) transcribed): genuine modals stay on the native dialog / top layer; no second manual modal / inert architecture — W3-D.** |
+| **AUD-13.04** · — · §13<br>Tutorials are not native dialogs. | [UX] | CONFIRMED — `components/TutorialModal.tsx`:593-597 `<div role="dialog">`. | W3-D | **A** | — | — | — |
+| **AUD-13.05** · — · §13<br>The intro overlay's scale contract is unsettled. | [UX] | CONFIRMED — `components/GameIntroOverlay.tsx`:346 `zoom: 1 / uiScale` on an `aria-modal` div. | W3-D (OD-15(a) ruled: viewport takeovers -- the intro and the end-game film; implemented on `phase3/w3-d`, not integrated) | **B** | OD-15(a) (RULED 2026-10-04) | — | IMPLEMENTED on `phase3/w3-d` — both cinematics render outside every scaled root (`CinematicTakeover`), no `zoom: 1 / uiScale`, no dialog role / `aria-modal` / NativeModal; the shell root is `inert` while one covers the game. |
+| **AUD-13.06** · — · §13<br>Whether the portal / inert layer is still needed is undecided. | [UX] | CONFIRMED — `components/ModalPortal.tsx`:6-11, 43-45 disowns inert and any open-modal registry. | W3-D (OD-15(b) ruled: native dialogs, `ModalPortal` retired with its last consumer; implemented on `phase3/w3-d`, not integrated) | **B** | OD-15(b) (RULED 2026-10-04) | — | IMPLEMENTED on `phase3/w3-d` — no manual inert; the Lobby's standalone `ModalPortal` removed, so `NativeModal` is its only consumer (as its scaled destination; the deletion path is recorded in `ModalPortal.tsx`); `PrivateTradePanel`'s unreachable `role="dialog"` / `aria-modal` shape deleted (a panel, not a modal). |
 | **AUD-13.07** · A-20 · §13<br>Several native modals can stack at once. | [D] | CONFIRMED — each `NativeModal` calls `showModal()` independently (`NativeModal.tsx`:202-204, 322-327); no stack manager. | W3-A | **B** | OD-5 | — | Not in the draft map. Policy = which notice yields; see OD-5. |
 | **AUD-13.08** · — · §13, Phase-4 list<br>Firefox and Safari dialog behaviour. | [PT] | NOT CODE. | — | **D** | — | Open every NativeModal on Firefox and Safari; check Escape, focus trap, restore. | — |
 

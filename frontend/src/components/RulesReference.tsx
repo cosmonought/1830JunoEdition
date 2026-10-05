@@ -1848,9 +1848,14 @@ const GOTCHAS: readonly { text: string; page: RulesSection }[] = [
        privates are listed but not where this rule lives.
        PHASE 3 W3-J (AUD-25.02): this line said the CSL and DH hexes "are not reserved" -- false for the CSL, whose
        B-20 the `LayTile` authority bars while a player owns it (`privateHexRefusal`; only the DH's F-16 is excepted,
-       #1694a). It now quotes this page's own authoritative sentences, verbatim: the track step's private-hex rule
-       and the DH card's lapse sentence (pinned by `phase3W3JRulesReferenceReservation.test.ts`). */
-    text: "A corporation may not place a tile on a hex containing a Private Company owned by a player. A hex containing a closed Private Company or a Private Company owned by a corporation may be tiled. If another corporation lays a tile on the DH starting hex under the ordinary rules, the DH special ability is no longer available.",
+       #1694a). W3-J quoted the track step's general rule and the DH card's lapse sentence; read literally, that
+       general rule still barred F-16 under a player-owned DH, which the authority never does.
+       PHASE 3 CONSOLIDATED INTEGRATION (owner-approved COPY-ONLY correction, 2026-10-05): the two hexes are told
+       apart, each as the authority answers it -- B-20 follows the general rule (barred while a player owns the CSL;
+       its owning corporation's extra lay is `cslBonusEntitlement`), F-16 is the exception (`privateHexRefusal` never
+       bars it; another corporation's ordinary lay forfeits the DH's power, `dhPowerState`). No engine change; pinned
+       by `phase3W3JRulesReferenceReservation.test.ts`. */
+    text: "A corporation may not place a tile on a hex containing a Private Company owned by a player; once a corporation owns that Private Company, or it closes, the hex may be tiled. The CSL hex (B-20) follows that rule: no corporation may tile it while a player owns the CSL, and the corporation that owns the CSL may make its extra CSL tile lay there. The DH starting hex (F-16) is the one exception: any corporation may tile it under the ordinary rules even while a player owns the DH. If another corporation does, the DH special ability is no longer available; until then, the corporation that owns the DH keeps its special DH placement there.",
     page: "operating",
   },
   { text: "Withheld revenue, dividends on Bank Pool shares, and a corporation-owned Private Company's revenue all go to the corporation's treasury — the last is never paid out as dividends.", page: "operating" },

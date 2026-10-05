@@ -1,0 +1,342 @@
+{
+  "row": "VF/E-5",
+  "date": "2026-10-04",
+  "browser": "153.0.8010.12",
+  "viewport": "1280x720",
+  "target": "B&O",
+  "fullMotion": {
+    "hitTestMidLift": {
+      "overlap": {
+        "x0": 223.4547576904297,
+        "x1": 726.3575286865234,
+        "y0": 2,
+        "y1": 68
+      },
+      "points": 36,
+      "dock": 36,
+      "card": 0,
+      "other": 0,
+      "samples": [
+        {
+          "x": 223,
+          "y": 2,
+          "hit": "dock",
+          "tag": "DIV"
+        },
+        {
+          "x": 223,
+          "y": 24,
+          "hit": "dock",
+          "tag": "DIV"
+        },
+        {
+          "x": 223,
+          "y": 46,
+          "hit": "dock",
+          "tag": "DIV"
+        },
+        {
+          "x": 223,
+          "y": 68,
+          "hit": "dock",
+          "tag": "DIV"
+        }
+      ],
+      "controlBelowDock": {
+        "x": 475,
+        "y": 100,
+        "hit": "card"
+      }
+    },
+    "hitTestLifted": {
+      "overlap": {
+        "x0": 348.50390625,
+        "x1": 931.49609375,
+        "y0": 2,
+        "y1": 68
+      },
+      "points": 36,
+      "dock": 36,
+      "card": 0,
+      "other": 0,
+      "samples": [
+        {
+          "x": 349,
+          "y": 2,
+          "hit": "dock",
+          "tag": "DIV"
+        },
+        {
+          "x": 349,
+          "y": 24,
+          "hit": "dock",
+          "tag": "DIV"
+        },
+        {
+          "x": 349,
+          "y": 46,
+          "hit": "dock",
+          "tag": "DIV"
+        },
+        {
+          "x": 349,
+          "y": 68,
+          "hit": "dock",
+          "tag": "DIV"
+        }
+      ],
+      "controlBelowDock": {
+        "x": 640,
+        "y": 100,
+        "hit": "card"
+      }
+    },
+    "scrollY": 655,
+    "geometryBefore": {
+      "card": {
+        "x": 41,
+        "y": 193.25,
+        "w": 391.328125,
+        "h": 251.625
+      },
+      "grid": {
+        "x": 41,
+        "y": -374,
+        "w": 1198,
+        "h": 818.875
+      },
+      "dock": {
+        "x": 0,
+        "y": 0,
+        "w": 1280,
+        "h": 70
+      },
+      "scrollY": 655
+    },
+    "constants": {
+      "FLOAT_LIFT_MS": 480,
+      "FLOAT_TOTAL_MS": 1800,
+      "FLOAT_SCALE": 1.5
+    },
+    "summary": {
+      "frames": 116,
+      "anyCardTransform": true,
+      "anyStamp": true,
+      "anyFlip": true,
+      "anyMuted": true,
+      "distinctInnerTransforms": [
+        "none"
+      ],
+      "distinctCardZ": [
+        "auto",
+        "5"
+      ]
+    },
+    "floatCuesFired": 1,
+    "firstFrames": [
+      {
+        "t": 1,
+        "cardTransform": "none",
+        "cardZ": "auto",
+        "innerTransform": "none",
+        "stamp": false,
+        "flip": false,
+        "muted": false,
+        "top": 193
+      },
+      {
+        "t": 34,
+        "cardTransform": "matrix(1, 0, 0, 1, 0, 0)",
+        "cardZ": "5",
+        "innerTransform": "none",
+        "stamp": false,
+        "flip": false,
+        "muted": true,
+        "top": 193
+      },
+      {
+        "t": 37,
+        "cardTransform": "matrix(1, 0, 0, 1, 0, 0)",
+        "cardZ": "5",
+        "innerTransform": "none",
+        "stamp": false,
+        "flip": false,
+        "muted": true,
+        "top": 193
+      }
+    ],
+    "pageErrors": [],
+    "screenshots": [
+      "docs/phase3/evidence/w3h/e5_fullmotion_midlift.png",
+      "docs/phase3/evidence/w3h/e5_fullmotion_lifted.png"
+    ]
+  },
+  "reducedMotion": {
+    "scrollY": 798,
+    "summary": {
+      "frames": 59,
+      "anyCardTransform": false,
+      "anyStamp": true,
+      "anyFlip": false,
+      "anyMuted": true,
+      "distinctInnerTransforms": [
+        "none",
+        "matrix(1.12, 0, 0, 1.12, 0, 0)",
+        "matrix(1.09999, 0, 0, 1.09999, 0, 0)",
+        "matrix(1.08157, 0, 0, 1.08157, 0, 0)",
+        "matrix(1.06458, 0, 0, 1.06458, 0, 0)",
+        "matrix(1.04914, 0, 0, 1.04914, 0, 0)"
+      ],
+      "distinctCardZ": [
+        "auto",
+        "5"
+      ]
+    },
+    "hitTestAtStamp": {
+      "overlap": {
+        "x0": 43,
+        "x1": 430.328125,
+        "y0": 52.25,
+        "y1": 68
+      },
+      "points": 36,
+      "dock": 36,
+      "card": 0,
+      "other": 0,
+      "samples": [
+        {
+          "x": 43,
+          "y": 52,
+          "hit": "dock",
+          "tag": "DIV"
+        },
+        {
+          "x": 43,
+          "y": 58,
+          "hit": "dock",
+          "tag": "DIV"
+        },
+        {
+          "x": 43,
+          "y": 63,
+          "hit": "dock",
+          "tag": "DIV"
+        },
+        {
+          "x": 43,
+          "y": 68,
+          "hit": "dock",
+          "tag": "DIV"
+        }
+      ],
+      "controlBelowDock": {
+        "x": 237,
+        "y": 100,
+        "hit": "card"
+      }
+    },
+    "floatCuesFired": 1,
+    "pageErrors": [],
+    "screenshot": "docs/phase3/evidence/w3h/e5_reduced_stamp_under_dock.png"
+  },
+  "syntheticLift": {
+    "scrollY": 655,
+    "target": {
+      "dx": 403.3359375,
+      "dy": -283.625,
+      "scale": 1.5
+    },
+    "computedTransformAtRest": "matrix(1.5, 0, 0, 1.5, 403.336, -283.625)",
+    "hitTestMidLift": {
+      "overlap": {
+        "x0": 289.82568359375,
+        "x1": 835.236572265625,
+        "y0": 2,
+        "y1": 68
+      },
+      "points": 36,
+      "dock": 36,
+      "card": 0,
+      "other": 0,
+      "samples": [
+        {
+          "x": 290,
+          "y": 2,
+          "hit": "dock",
+          "tag": "DIV"
+        },
+        {
+          "x": 290,
+          "y": 24,
+          "hit": "dock",
+          "tag": "DIV"
+        },
+        {
+          "x": 290,
+          "y": 46,
+          "hit": "dock",
+          "tag": "DIV"
+        },
+        {
+          "x": 290,
+          "y": 68,
+          "hit": "dock",
+          "tag": "DIV"
+        }
+      ],
+      "controlBelowDock": {
+        "x": 563,
+        "y": 100,
+        "hit": "card"
+      }
+    },
+    "hitTestLifted": {
+      "overlap": {
+        "x0": 348.50390625,
+        "x1": 931.49609375,
+        "y0": 2,
+        "y1": 68
+      },
+      "points": 36,
+      "dock": 36,
+      "card": 0,
+      "other": 0,
+      "samples": [
+        {
+          "x": 349,
+          "y": 2,
+          "hit": "dock",
+          "tag": "DIV"
+        },
+        {
+          "x": 349,
+          "y": 24,
+          "hit": "dock",
+          "tag": "DIV"
+        },
+        {
+          "x": 349,
+          "y": 46,
+          "hit": "dock",
+          "tag": "DIV"
+        },
+        {
+          "x": 349,
+          "y": 68,
+          "hit": "dock",
+          "tag": "DIV"
+        }
+      ],
+      "controlBelowDock": {
+        "x": 640,
+        "y": 100,
+        "hit": "card"
+      }
+    },
+    "pageErrors": [],
+    "screenshots": [
+      "docs/phase3/evidence/w3h/e5_synthetic_midlift.png",
+      "docs/phase3/evidence/w3h/e5_synthetic_lifted.png"
+    ]
+  }
+}

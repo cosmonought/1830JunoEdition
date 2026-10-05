@@ -426,7 +426,7 @@ describe("the overlay implements both treatments and the shell picks one", () =>
        silent film.
        ASKED OF THE CUE'S FIELD, not of the clip's name or its length. */
     expect(APP).toContain("cue.videoHasOwnAudio");
-    expect(APP).toContain("? duckRadio(DUCK_FOR_VIDEO)");
+    expect(APP).toContain("? duckRadio(DUCK_FOR_VIDEO, HAUNTING_DUCK_SLOT)"); // W3-H (A-19): + its slot
     expect(APP).toContain("releaseHaunting?.();");
   });
 });

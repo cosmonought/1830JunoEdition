@@ -1,0 +1,40 @@
+{
+  "rate": 4,
+  "dpr": 1,
+  "windowMs": 1428,
+  "traceFile": "(not committed) d17_trace_rate4.json",
+  "traceBytes": 2142121,
+  "perFrame": {
+    "beginMainFrame": {
+      "count": 20,
+      "totalMs": 124.3,
+      "median": 5.6,
+      "max": 13.3
+    },
+    "fireAnimationFrame": {
+      "count": 20,
+      "totalMs": 16.8,
+      "median": 0.9,
+      "max": 3.2
+    },
+    "jsFunctionCallOver1ms": {
+      "count": 28,
+      "totalMs": 350.6,
+      "median": 11.4,
+      "max": 45.9
+    },
+    "canvasFinalizeFrame": {
+      "count": 21,
+      "totalMs": 943.6,
+      "median": 45.1,
+      "max": 61.6
+    },
+    "minorGC": {
+      "count": 8,
+      "totalMs": 27.5,
+      "median": 3.9,
+      "max": 5.3
+    }
+  },
+  "note": "Renderer main thread only, wall-clock durations under CDP CPU throttling. FunctionCall = JS (the frame clock's setState, React's render of HexGridRenderer, the board draw issuing canvas commands). CanvasRenderingContext2D::FinalizeFrame = the 2D canvas flushing (rasterising) the frame's recorded draw commands, which runs on the main thread for this software-raster canvas."
+}

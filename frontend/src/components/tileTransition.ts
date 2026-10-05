@@ -714,6 +714,27 @@ export interface CityPlan {
   migrates: boolean;
 }
 
+/* W3-H (VF D-21): A TIE BETWEEN RAIL-LESS CENTRES IS BROKEN BY A STATED RULE, NOT BY FLOAT NOISE.
+   The printed OO circles and double-town dots pair nearest first, and at symmetric facings the candidate distances
+   are equal up to the catalog's six-decimal rounding (3e-8 to 2e-7 unit), so the sort was being decided by that
+   rounding. Now: distances within `PAIR_TIE` of the nearest open pair are one tie. The tie goes to the pair whose
+   destination lies the stated way round the hex centre from its source (`tieTurn`) -- counter-clockwise on screen for
+   a city, clockwise for a town -- and where the turns are equal within the same tolerance (a source on the centre
+   turns no way; two mirror pairs completing the same assignment turn alike), to the lower source, then destination,
+   index. The turn reads the same at every facing, so a tie resolves the same way turned with the hex.
+   The directions are not a principle: they are what the rounding happened to give at every tie the D-21 audit named
+   (OO -> #59 at 0 and 3, double town -> #55 at 2 and 5, OO -> #626 at 2 and 5, double town -> #633 at 0 and 3), and
+   with them no rail-less printed start the placement filter accepts on any board and tray changes its pairing. The
+   tolerance is five times the largest rounding difference found. */
+const PAIR_TIE = 1e-6;
+
+/** Which way round the hex centre `to` lies from `from`, as the tie-break above prefers it: negative is preferred.
+ *  Screen y runs down, so a positive cross product is a clockwise turn on screen. */
+function tieTurn(from: ArtMarker, to: ArtMarker): number {
+  const cross = from.at.x * to.at.y - from.at.y * to.at.x;
+  return from.kind === "town" ? -cross : cross;
+}
+
 function assignMarkers(fromArt: HexArt, fromPieces: readonly Piece[], toArt: HexArt, toPieces: readonly Piece[]): Array<number | null> {
   const fromEdges = markerEdges(fromArt, fromPieces);
   const toEdges = markerEdges(toArt, toPieces);
@@ -742,22 +763,27 @@ function assignMarkers(fromArt: HexArt, fromPieces: readonly Piece[], toArt: Hex
     if (best !== null) mapping[i] = (best as { j: number }).j;
   });
 
-  // Unconnected centres: nearest unclaimed of their kind, one to one, closest pairs first.
+  // Unconnected centres: nearest unclaimed of their kind, one to one, closest pairs first -- ties broken explicitly.
   const claimed = new Set<number>();
   mapping.forEach((j) => {
     if (j !== null) claimed.add(j);
   });
-  const pairs: Array<{ i: number; j: number; d: number }> = [];
+  const pairs: Array<{ i: number; j: number; d: number; turn: number }> = [];
   fromArt.markers.forEach((marker, i) => {
     if (mapping[i] !== null) return;
     toArt.markers.forEach((candidate, j) => {
-      if (candidate.kind === marker.kind && !claimed.has(j)) pairs.push({ i, j, d: dist(marker.at, candidate.at) });
+      if (candidate.kind !== marker.kind || claimed.has(j)) return;
+      pairs.push({ i, j, d: dist(marker.at, candidate.at), turn: tieTurn(marker, candidate) });
     });
   });
-  pairs.sort((a, b) => a.d - b.d || a.i - b.i || a.j - b.j);
   const usedFrom = new Set<number>();
-  for (const pair of pairs) {
-    if (usedFrom.has(pair.i) || claimed.has(pair.j)) continue;
+  for (;;) {
+    const open = pairs.filter((pair) => !usedFrom.has(pair.i) && !claimed.has(pair.j));
+    if (open.length === 0) break;
+    const nearest = Math.min(...open.map((pair) => pair.d));
+    const tied = open.filter((pair) => pair.d - nearest <= PAIR_TIE);
+    tied.sort((a, b) => (Math.abs(a.turn - b.turn) > PAIR_TIE ? a.turn - b.turn : a.i - b.i || a.j - b.j));
+    const pair = tied[0];
     mapping[pair.i] = pair.j;
     usedFrom.add(pair.i);
     claimed.add(pair.j);

@@ -1,0 +1,303 @@
+{
+  "row": "VF/K-4",
+  "date": "2026-10-04",
+  "browser": "153.0.8010.12",
+  "deviceScaleFactor": 2,
+  "screenshots": [
+    "docs/phase3/evidence/w3h/k4_capacity_marks.png",
+    "docs/phase3/evidence/w3h/k4_scale063_dsf1.png",
+    "docs/phase3/evidence/w3h/k4_scale063_dsf4.png"
+  ],
+  "note": "Product capsule styles (styles.phaseShiftBadge + Warn/Critical, pulse animation disabled for a stable frame). 'zoom' rows use chromeZoomFor(scale) (the product mechanism); 'font' rows scale the 11px label font-size instead. Rendered sizes for zoom mode are pre-zoom CSS px multiplied by the zoom in getBoundingClientRect.",
+  "pageErrors": [],
+  "measurements": [
+    {
+      "scale": 0.63,
+      "mode": "zoom",
+      "marks": {
+        "fallback": {
+          "element": "svg",
+          "markCssPx": {
+            "w": 7.97,
+            "h": 7.97
+          },
+          "badgeCssPx": {
+            "w": 117.05,
+            "h": 14.75
+          },
+          "labelFontSize": "11px",
+          "svgPaths": 2,
+          "textContent": ""
+        },
+        "figures": {
+          "element": "span",
+          "markCssPx": {
+            "w": 15.58,
+            "h": 8
+          },
+          "badgeCssPx": {
+            "w": 124.66,
+            "h": 14.75
+          },
+          "labelFontSize": "11px",
+          "svgPaths": null,
+          "textContent": "4→3"
+        },
+        "rust": {
+          "element": "svg",
+          "markCssPx": {
+            "w": 7.97,
+            "h": 7.97
+          },
+          "badgeCssPx": {
+            "w": 104.39,
+            "h": 14.75
+          },
+          "labelFontSize": "11px",
+          "svgPaths": 1,
+          "textContent": ""
+        }
+      }
+    },
+    {
+      "scale": 1,
+      "mode": "zoom",
+      "marks": {
+        "fallback": {
+          "element": "svg",
+          "markCssPx": {
+            "w": 12.64,
+            "h": 12.64
+          },
+          "badgeCssPx": {
+            "w": 184.81,
+            "h": 22
+          },
+          "labelFontSize": "11px",
+          "svgPaths": 2,
+          "textContent": ""
+        },
+        "figures": {
+          "element": "span",
+          "markCssPx": {
+            "w": 24.7,
+            "h": 13
+          },
+          "badgeCssPx": {
+            "w": 196.88,
+            "h": 22
+          },
+          "labelFontSize": "11px",
+          "svgPaths": null,
+          "textContent": "4→3"
+        },
+        "rust": {
+          "element": "svg",
+          "markCssPx": {
+            "w": 12.64,
+            "h": 12.64
+          },
+          "badgeCssPx": {
+            "w": 164.7,
+            "h": 22
+          },
+          "labelFontSize": "11px",
+          "svgPaths": 1,
+          "textContent": ""
+        }
+      }
+    },
+    {
+      "scale": 1.5,
+      "mode": "zoom",
+      "marks": {
+        "fallback": {
+          "element": "svg",
+          "markCssPx": {
+            "w": 18.97,
+            "h": 18.97
+          },
+          "badgeCssPx": {
+            "w": 276.22,
+            "h": 31
+          },
+          "labelFontSize": "11px",
+          "svgPaths": 2,
+          "textContent": ""
+        },
+        "figures": {
+          "element": "span",
+          "markCssPx": {
+            "w": 37.05,
+            "h": 19
+          },
+          "badgeCssPx": {
+            "w": 294.3,
+            "h": 31
+          },
+          "labelFontSize": "11px",
+          "svgPaths": null,
+          "textContent": "4→3"
+        },
+        "rust": {
+          "element": "svg",
+          "markCssPx": {
+            "w": 18.97,
+            "h": 18.97
+          },
+          "badgeCssPx": {
+            "w": 246.06,
+            "h": 31
+          },
+          "labelFontSize": "11px",
+          "svgPaths": 1,
+          "textContent": ""
+        }
+      }
+    },
+    {
+      "scale": 0.63,
+      "mode": "font",
+      "marks": {
+        "fallback": {
+          "element": "svg",
+          "markCssPx": {
+            "w": 7.97,
+            "h": 7.97
+          },
+          "badgeCssPx": {
+            "w": 123.73,
+            "h": 17
+          },
+          "labelFontSize": "6.93px",
+          "svgPaths": 2,
+          "textContent": ""
+        },
+        "figures": {
+          "element": "span",
+          "markCssPx": {
+            "w": 15.58,
+            "h": 8
+          },
+          "badgeCssPx": {
+            "w": 131.34,
+            "h": 17
+          },
+          "labelFontSize": "6.93px",
+          "svgPaths": null,
+          "textContent": "4→3"
+        },
+        "rust": {
+          "element": "svg",
+          "markCssPx": {
+            "w": 7.97,
+            "h": 7.97
+          },
+          "badgeCssPx": {
+            "w": 111.08,
+            "h": 17
+          },
+          "labelFontSize": "6.93px",
+          "svgPaths": 1,
+          "textContent": ""
+        }
+      }
+    },
+    {
+      "scale": 1,
+      "mode": "font",
+      "marks": {
+        "fallback": {
+          "element": "svg",
+          "markCssPx": {
+            "w": 12.64,
+            "h": 12.64
+          },
+          "badgeCssPx": {
+            "w": 184.81,
+            "h": 22
+          },
+          "labelFontSize": "11px",
+          "svgPaths": 2,
+          "textContent": ""
+        },
+        "figures": {
+          "element": "span",
+          "markCssPx": {
+            "w": 24.7,
+            "h": 13
+          },
+          "badgeCssPx": {
+            "w": 196.88,
+            "h": 22
+          },
+          "labelFontSize": "11px",
+          "svgPaths": null,
+          "textContent": "4→3"
+        },
+        "rust": {
+          "element": "svg",
+          "markCssPx": {
+            "w": 12.64,
+            "h": 12.64
+          },
+          "badgeCssPx": {
+            "w": 164.7,
+            "h": 22
+          },
+          "labelFontSize": "11px",
+          "svgPaths": 1,
+          "textContent": ""
+        }
+      }
+    },
+    {
+      "scale": 1.5,
+      "mode": "font",
+      "marks": {
+        "fallback": {
+          "element": "svg",
+          "markCssPx": {
+            "w": 18.97,
+            "h": 18.97
+          },
+          "badgeCssPx": {
+            "w": 267.22,
+            "h": 28
+          },
+          "labelFontSize": "16.5px",
+          "svgPaths": 2,
+          "textContent": ""
+        },
+        "figures": {
+          "element": "span",
+          "markCssPx": {
+            "w": 37.05,
+            "h": 19
+          },
+          "badgeCssPx": {
+            "w": 285.3,
+            "h": 28
+          },
+          "labelFontSize": "16.5px",
+          "svgPaths": null,
+          "textContent": "4→3"
+        },
+        "rust": {
+          "element": "svg",
+          "markCssPx": {
+            "w": 18.97,
+            "h": 18.97
+          },
+          "badgeCssPx": {
+            "w": 237.06,
+            "h": 28
+          },
+          "labelFontSize": "16.5px",
+          "svgPaths": 1,
+          "textContent": ""
+        }
+      }
+    }
+  ]
+}

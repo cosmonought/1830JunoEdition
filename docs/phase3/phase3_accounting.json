@@ -1355,7 +1355,7 @@
    "od": "OD-14(b)",
    "p4": "—",
    "notes": "—",
-   "status": "RULED — OD-14(b) (owner; transcribed 2026-10-04): use the cash/payout player-color wash. Ruled in: W3-H extends the player-card wash to the cash slide-out and the payout modal; not started"
+   "status": "RULED — OD-14(b) (owner; transcribed 2026-10-04 on `phase3/owner-decision-reconciliation` @ `26bca3b`): use the cash/payout player-colour wash. W3-H found it ALREADY IMPLEMENTED (#1347: `washedPlayerSurface` on `MoneyMachinePanel`'s player kind and `PrivateRevenueModal`'s player cards; Part C U-7's \"not yet reaching\" was stale) and pinned it behaviourally, `a2aaa31` (`components/w3hPlayerSurfaceWash.test.tsx`); NOT integrated; disposition letter left for W3-F"
   },
   {
    "key": "AUD-12.06",
@@ -1369,7 +1369,7 @@
    "od": "OD-14(c)",
    "p4": "—",
    "notes": "The draft map assumed \"U-8 closed\"; that is an owner call and is not defaulted.",
-   "status": "RULED — OD-14(c) (owner; transcribed 2026-10-04): give the seventh LPF player a distinct color. Ruled in: W3-H widens the palette (contrast / livery separation per `seatColor.test.ts`); not started"
+   "status": "RULED — OD-14(c) (owner; transcribed 2026-10-04 on `26bca3b`): give the seventh LPF/player a distinct colour. W3-H found it ALREADY IMPLEMENTED (#1344 Raspberry; seven-wide contrast/livery guards in `utils/seatColor.test.ts`) and pinned a full seven-seat table resolving to seven colours, `a2aaa31`; NOT integrated; disposition letter left for W3-F"
   },
   {
    "key": "AUD-12.07",
@@ -1587,7 +1587,8 @@
    "disp": "B",
    "od": "OD-12 (only if the fix must touch the apply half)",
    "p4": "—",
-   "notes": "Preferred fix is inside `utils/audio.ts` (a new duck supersedes the previous one), which needs no RED edit."
+   "notes": "Preferred fix is inside `utils/audio.ts` (a new duck supersedes the previous one), which needs no RED edit.",
+   "status": "IMPLEMENTED — W3-H `b3ed9c1` (`utils/audio.ts`: `duckRadio(depth, slot?)` -- a hold in a named slot is superseded by the next hold in that slot, counted first and released second; `releaseDuckSlot`; holds without a slot, the titles and the outro, unchanged; the shell frees the haunting's slot when the board's clip is gone and on unmount, outside every RED region) + the one OD-12 RED R2 commit `9f88178` (one argument: the haunting's `duckRadio(DUCK_FOR_VIDEO, HAUNTING_DUCK_SLOT)`; the audio-side fix alone could not tell the haunting's hold from the titles'/outro's) + pins `3913f9c`; NOT integrated. Residual (LOW, review): when the silent fog film replaces a haunting with its own audio, the deep duck is held until the fog clip ends (~6 s) instead of releasing at once -- bounded where it used to be permanent; a tighter fix needs a further RED edit"
   },
   {
    "key": "AUD-16.01",
@@ -3444,7 +3445,8 @@
    "disp": "B",
    "od": "—",
    "p4": "—",
-   "notes": "Gate the proxy on viewport visibility (one fix shape with E-6, F-5)."
+   "notes": "Gate the proxy on viewport visibility (one fix shape with E-6, F-5).",
+   "status": "IMPLEMENTED — W3-H `223c105` (`utils/surfaceVisibility.ts` `useVisibleLaunch`: a transfer whose card is off screen or whose page is hidden is declined at launch -- no proxy, no staging timers, the committed card) + review fix `31580c1` (a declined takeover still sounds its presidency cue on the crown's beat); NOT integrated"
   },
   {
    "key": "VF/C-10",
@@ -3457,7 +3459,8 @@
    "disp": "B",
    "od": "—",
    "p4": "—",
-   "notes": "W3-H records a real-browser trace (Playwright) of the FLIP; Phase 4 judges the feel."
+   "notes": "W3-H records a real-browser trace (Playwright) of the FLIP; Phase 4 judges the feel.",
+   "status": "IMPLEMENTED — W3-H real-browser evidence `d8c7cbd` (Chromium 1243: the presidency FLIP measured per frame, 21 → 0 px over 165 ms starting 493 ms after the event; `docs/phase3/evidence/w3h/`); NOT integrated; Phase 4 judges the feel"
   },
   {
    "key": "VF/D-12",
@@ -3470,7 +3473,8 @@
    "disp": "B",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W3-H `58a67df` (on an unproposed lay the printed terrain icon, name labels and terrain-cost badge fade on the printed value's clock instead of switching on the first frame; a confirmed proposal unchanged); NOT integrated"
   },
   {
    "key": "VF/D-13",
@@ -3483,7 +3487,8 @@
    "disp": "B",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W3-H `5f0ffd2` (route overlays and the travelling signal are held on a hex while its flourish runs and return on the first frame after it commits; veil and hover judged not misleading and left); NOT integrated"
   },
   {
    "key": "VF/D-16",
@@ -3496,7 +3501,8 @@
    "disp": "B",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W3-H real-browser evidence `cef8cb1` (first/last frames vs the static tile pass for all 33 accepted pairs at hex 40 and 64: only 1-px antialiasing fringes); NOT integrated"
   },
   {
    "key": "VF/D-17",
@@ -3509,7 +3515,8 @@
    "disp": "B",
    "od": "—",
    "p4": "Low-end device frame-rate during a lay.",
-   "notes": "Measure with a throttled-CPU trace in W3-H; Phase 4 adds a low-end device."
+   "notes": "Measure with a throttled-CPU trace in W3-H; Phase 4 adds a low-end device.",
+   "status": "IMPLEMENTED — W3-H's planned surface, the throttled-CPU trace, `4007462` (whole-board repaint during a lay: 60 fps unthrottled; 14.6 fps at 4×, 10.7 at 6×, 5.4 at 6× DPR 2; rasterising the full board dominates); NOT integrated. The ledger entry stays OPEN: the measured slowdown is a design question for the tile flourish (repaint only the transitioning hex / cache the static board), and the real low-end device is Phase 4's"
   },
   {
    "key": "VF/D-18",
@@ -3536,7 +3543,8 @@
    "disp": "B",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W3-H `b09c4d6` (rail-less centre ties within 1e-6 broken by a stated rule; every pairing the placement filter accepts is unchanged -- independently re-swept at review over 18,960 accepted placements); NOT integrated"
   },
   {
    "key": "VF/D-22",
@@ -3563,7 +3571,8 @@
    "disp": "B",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W3-H `41fe7f3` (the value badge crosses the commit front like the rest of the art: each side painted whole off-screen and laid under its clip; the no-scratch-canvas fallback kept); NOT integrated"
   },
   {
    "key": "VF/D-35",
@@ -3576,7 +3585,8 @@
    "disp": "B",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W3-H analysis `422a361` (no presentation fix exists in the current vocabulary: `anchoredRide` reduces to the same straight crossing for a marker on a centre/slot, and the placement rule is not presentation's to change); no code change; NOT integrated. Ledger header left OPEN for W3-F to reclassify as a Phase-4 watch (D); the one presentation option (ride, then swap at the commit front) is new behaviour for an owner ruling if Phase 4 finds the crossing reads as wrong"
   },
   {
    "key": "VF/E-5",
@@ -3589,7 +3599,8 @@
    "disp": "B",
    "od": "—",
    "p4": "—",
-   "notes": "W3-H takes the screenshot."
+   "notes": "W3-H takes the screenshot.",
+   "status": "IMPLEMENTED — W3-H evidence `be06aa9` found the full-motion float ceremony could never play (ref cycle); fixed `4c89333`; re-run on the shipped path `614172d`: the lifted card settles behind the sticky dock (36/36 overlap samples mid-lift and settled); NOT integrated"
   },
   {
    "key": "VF/E-6",
@@ -3602,7 +3613,8 @@
    "disp": "B",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W3-H `223c105` (the float ceremony is declined at launch when its card is off screen, its pane hidden (zero-size box) or the page hidden: no timers, no geometry, no stamp cue); NOT integrated"
   },
   {
    "key": "VF/F-5",
@@ -3615,7 +3627,8 @@
    "disp": "B",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W3-H `223c105` (`useSurfaceVisible`: the route signal's rAF clock stops while the board is hidden or off screen and re-arms when it returns); NOT integrated"
   },
   {
    "key": "VF/G-1",
@@ -3629,7 +3642,7 @@
    "od": "OD-14(f)",
    "p4": "—",
    "notes": "Needs an owner-approved cue.",
-   "status": "RULED — OD-14(f) (owner; transcribed 2026-10-04): no phase-change sound effect in this phase; the flip stays silent in Phase 3 (no W3-H work)"
+   "status": "RULED — OD-14(f) (owner; transcribed 2026-10-04 on `26bca3b`): no phase-change sound effect in this phase; recorded in the ledger by W3-H `422a361` (header left OPEN for W3-F); no work"
   },
   {
    "key": "VF/G-7",
@@ -3643,7 +3656,7 @@
    "od": "OD-14(g)",
    "p4": "—",
    "notes": "The ledger records it as acceptable; the owner either closes it as designed or asks for a replay.",
-   "status": "RULED — OD-14(g) (owner; transcribed 2026-10-04): do not replay stale flourish/celebration effects; the replay option is declined (no W3-H work)"
+   "status": "RULED — OD-14(g) (owner; transcribed 2026-10-04 on `26bca3b`): do not replay stale flourish/celebration effects; recorded in the ledger by W3-H `422a361` (header left OPEN for W3-F); no work"
   },
   {
    "key": "VF/H-6",
@@ -3656,7 +3669,8 @@
    "disp": "B",
    "od": "—",
    "p4": "—",
-   "notes": "Import `PRIVATE_POWER_GLOW_STOPS`."
+   "notes": "Import `PRIVATE_POWER_GLOW_STOPS`.",
+   "status": "IMPLEMENTED — W3-H `e10dc13` (the mini-auction ring interpolates `PRIVATE_POWER_GLOW_STOPS`); NOT integrated"
   },
   {
    "key": "VF/I-8",
@@ -3669,7 +3683,8 @@
    "disp": "B",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W3-H `887c4e5` (the Ledger's Corporation Assets rows receive the rust event; the depot tier list has no corporation); NOT integrated"
   },
   {
    "key": "VF/I-10",
@@ -3683,7 +3698,7 @@
    "od": "OD-14(h)",
    "p4": "—",
    "notes": "—",
-   "status": "RULED — OD-14(h) (owner; transcribed 2026-10-04): use the static rust icon treatment. Ruled in: W3-H; not started"
+   "status": "RULED — OD-14(h) (owner; transcribed 2026-10-04 on `26bca3b`): static rust icon treatment. W3-H verified it ALREADY IMPLEMENTED (`RustMark`, `crackPath(41, 3)`, built by the warning-marks pass; the ledger's OPEN was stale), `ce99b0d`; NOT integrated; disposition letter left for W3-F"
   },
   {
    "key": "VF/J-5",
@@ -3696,7 +3711,8 @@
    "disp": "B",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W3-H `887c4e5` (the Ledger's Corporation Assets rows receive the discard event); NOT integrated"
   },
   {
    "key": "VF/J-6",
@@ -3710,7 +3726,7 @@
    "od": "OD-14(h)",
    "p4": "—",
    "notes": "—",
-   "status": "RULED — OD-14(h) (owner; transcribed 2026-10-04): use the static discard icon treatment. Ruled in: W3-H; not started"
+   "status": "RULED — OD-14(h) (owner; transcribed 2026-10-04 on `26bca3b`): static discard icon treatment. Implemented by W3-H `ce99b0d` (`DiscardMark`: the rust tile parted by one straight blade from `discardCut(110)`, on the train-limit prompt's title); NOT integrated; disposition letter left for W3-F"
   },
   {
    "key": "VF/K-4",
@@ -3723,7 +3739,8 @@
    "disp": "B",
    "od": "—",
    "p4": "—",
-   "notes": "Render it in a harness screenshot."
+   "notes": "Render it in a harness screenshot.",
+   "status": "IMPLEMENTED — W3-H real-browser evidence `ce1d0dc` (the fallback capacity glyph rendered at uiScale 0.63/1.0/1.5 beside 4→3 and the rust mark); NOT integrated"
   },
   {
    "key": "VF/K-6",
@@ -3736,7 +3753,8 @@
    "disp": "B",
    "od": "—",
    "p4": "—",
-   "notes": "Add a guard test at the badge size."
+   "notes": "Add a guard test at the badge size.",
+   "status": "IMPLEMENTED — W3-H `ce99b0d` (badge-size guard: the rust mark rasterised at 12.6px must still read as a break; shown to fail for a straight slash, a lost fork and a bunched zig); NOT integrated"
   },
   {
    "key": "P3-N001",
@@ -5115,7 +5133,7 @@
   "W3-E": "COMPLETE — `phase3/w3-manual-city-bypass` `07454d0` + review follow-ups `6d7cfa1`; integrated at the safe Wave-2 integration (`a860178`) under OD-11",
   "W3-F": "NOT STARTED",
   "W3-G": "COMPLETE — OWNER REVIEW ACCEPTED (2026-10-04) and INTEGRATED on `phase3/wave3-i-w2i-w2j-w3c-w3g-v13cert-integration` (merge `72ccd00` of `967e4e7`, parents `c0a44d7` / `967e4e7`): audit branch `phase3/w3-g-ui-parity-audit` (docs only, from `phase3/wave3-i-w2i-w2j-w3c-v13cert-integration` @ `c0a44d7`; audit `e86a933`, owner-review tracking on top); no product code. An accepted audit gate, not a product slice. AUD-00.01 and AUD-22.01 IMPLEMENTED (the audit is done); findings AUD-25.01 … AUD-25.15 accepted and preserved. Owner rulings: AUD-25.11 CLOSED — OBSOLETE / UNREACHABLE ARCHITECTURE (GR-1b); AUD-25.13 ruled item by item (FIX IN W3-J / RECORDED RESIDUAL / OBSOLETE); AUD-25.15 resolved (OD-3, OD-13, OD-14(d), OD-14(i) transcribed). OPEN remediation obligations: AUD-25.01 (MEDIUM) -> W3-B, AUD-25.02 (MEDIUM) -> W3-J, AUD-25.03 … 25.10 and 25.12 -> W3-J, AUD-25.14 -> W3-F; both MEDIUM rows must be fixed before W3-F closes Phase 3. W3-J is unblocked; owner-observed follow-up AUD-25.16 (HIGH, Watch opens a participant's seat on a stale, actionable board) added 2026-10-04 on `phase3/w3-g-watch-defect-triage` -- W3-J (parts (b), (c) unconditionally; part (a) per OD-19, RULED 2026-10-04: Watch = read-only spectator, always); the gate's accepted status is unchanged",
-  "W3-H": "NOT STARTED",
+  "W3-H": "COMPLETE on its slice branch `phase3/w3-h` (from `phase3/wave3-i-w2i-w2j-w3c-w3g-v13cert-integration` @ `d29bb2f`); NOT integrated. All 18 implement rows IMPLEMENTED (AUD-15.01, VF/C-7, C-10, D-12, D-13, D-16, D-17, D-21, D-30, D-35, E-5, E-6, F-5, H-6, I-8, J-5, K-4, K-6); the six owner-gated rows RULED by OD-14 (b)/(c)/(f)/(g)/(h) (transcribed on `phase3/owner-decision-reconciliation` @ `26bca3b`, not on this base): AUD-12.05, AUD-12.06 and VF/I-10 found already implemented and pinned, VF/J-6 implemented, VF/G-1 and VF/G-7 ruled out (no work). One OD-12 RED R2 commit (`9f88178`, one argument). Found and fixed under E-5: the full-motion float ceremony never played (`4c89333`). Independent review: APPROVE WITH FIXES (no HIGH; MEDIUM and narrow LOW/NIT fixed in `31580c1`).",
   "W3-I": "COMPLETE — ACCEPTED and INTEGRATED on `phase3/wave3-i-v13cert-integration` (2026-10-04, merge `5a22e38` of `phase3/w3-i-offers` @ `92cdb5d`, parents `c3f43b7` / `92cdb5d`, its 3 commits carried unchanged): code `5c6d7f8` + review fixes `d663b1c` + tracking `92cdb5d` (from `phase3/wave2-bcgdf-v13cert-integration` @ `c3f43b7`). AUD-02.05, AUD-02.06, AUD-03.11, AUD-19.01 IMPLEMENTED. Dependencies W2-F and W2-H integrated in the base. A read-only queue accessor on the room link and one hook outside the drain (no RED region, no OD-12 edit); the par prompt and the three offer forms (Private Companies trade form, Buy Private Company, Buy Trains from a Corporation) read it. OWNER-ACCEPTED reading (2026-10-04): for AUD-03.11 / R4 a refused proposal may leave the form open with its typed values preserved so the player can correct and resend. Not taken (recorded follow-ups elsewhere, unchanged): the W2-F duplicate-waiting LOW and the two NITs. Presentation only: no engine, server, rules-version or settlement change",
   "W3-J": "COMPLETE — on the slice branch `phase3/w3-j-u28-remediation` (from `phase3/wave3-i-w2i-w2j-w3c-w3g-v13cert-integration` @ `d29bb2f`); NOT integrated (integration and owner broad gate pending). AUD-25.02 … AUD-25.10, AUD-25.12 and AUD-25.16 IMPLEMENTED; every AUD-25.13 FIX IN W3-J item IMPLEMENTED (`aud_25_13_dispositions`). OD-12 RED commits, each one minimal logical edit, separately reviewed: R1 `6378dea`, `77b0b38`, `b9afbdf`, `b4c1714`; R5 `e769e51`, `7c4624f`, `8c5ff63`; no R2 / R3 / R4 edit. Independent reviews: no HIGH; the one MEDIUM (AUD-25.13 #3 in the real shell) and every LOW fixed and re-reviewed. AUD-25.01 (W3-B) not on this branch. No engine, server, contract, rules-version or settlement change; pins 13 / [13] / [10, 11, 12, 13]",
   "W3-K": "COMPLETE — ACCEPTED (owner, 2026-10-04) and INTEGRATED on `phase3/wave2a-v13-integration` (2026-10-04): `phase3/w3-k-rules-v13` @ `be1fd10` merged `--no-ff` onto `phase3/wave2a-integration` @ `96ccb22`, its 9 commits carried unchanged (same SHAs). OD-2, SBS-3, SBS-4, OD-4 with the owner's 2026-10-04 rulings 1-5 and the four review findings. The ledger's PARTIAL (held only for the shared row AUD-03.04) lifted with W2-B's one-click \"Pass Turn\" control, integrated on `phase3/wave2-bcg-v13cert-integration` (merge `181e51e`). v13 settlement certification PASS / CERTIFIED and INTEGRATED there (merge `69c7496` of `phase3/v13-settlement-certification` @ `7916763`). RULES_ENGINE_VERSION 13; supported live [13]; settlement-certified [10, 11, 12, 13]. Not deployable until drained v12 rooms and the final integrated owner gate (W2-D / W2-F and other open slices are tracked separately)"

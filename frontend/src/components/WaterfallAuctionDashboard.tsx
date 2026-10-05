@@ -19,6 +19,7 @@ import { privateClosureTier } from "../utils/purchaseWarnings";
 import { PRIVATE_COMPANY_CATALOG } from "../utils/privateCatalog";
 import { SpecialPowerBlock, CARD_SECTION_CAPTION } from "./SpecialPowerBlock";
 import { seatColor } from "../utils/playerLabels";
+import { PRIVATE_POWER_GLOW_STOPS } from "../utils/privatePowerGlow"; // W3-H (VF H-6)
 import { washedPlayerSurface } from "../styles/palette";
 import {
   auctionFunds,
@@ -150,6 +151,9 @@ export interface WaterfallAuctionDashboardProps {
  *  fraction of (positioning area - image width), so at `background-size: 200%` the base is -W and `200%`
  *  resolves to -2W = one tile, with W cancelling at every card width. Change one 200% without the other
  *  and the loop stutters once per cycle. The palette's first and last stops match for the same reason. */
+/* W3-H (VF H-6): THE STOPS ARE THE SHARED ARRAY, interpolated exactly as `bankBreakFlourish.ts` does it. This card
+   spelled the eight stops out by hand, which is the drift #727 created `PRIVATE_POWER_GLOW_STOPS` to prevent:
+   the mini-auction ring, the power glow and the Bank ticket are one association only while they read one list. */
 const MINI_AUCTION_GLOW_KEYFRAMES = `
 @keyframes waterfall-miniauction-chase {
   from { background-position: 0 0, 0 0; }
@@ -168,8 +172,7 @@ const MINI_AUCTION_GLOW_KEYFRAMES = `
     linear-gradient(${CARD_SURFACE}, ${CARD_SURFACE}) padding-box,
     linear-gradient(
       90deg,
-      #ff4d4d, #ff9f1c, #ffd400, #4ade80, #22d3ee,
-      #4f7cff, #a855f7, #ff4dc4, #ff4d4d
+      ${PRIVATE_POWER_GLOW_STOPS.join(", ")}
     ) border-box;
   /* Design note #344: the 200% here and the 200% in the keyframe are ONE
      number -- one cycle must translate exactly one tile. */

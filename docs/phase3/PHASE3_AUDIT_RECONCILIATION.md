@@ -1129,6 +1129,35 @@ words, from the owner's reconciliation brief; no owner decision is made by this 
 
 Not ruled: **OD-0** (historical evidence ambiguous); **OD-5**'s policy questions; **OD-10(b)** (the historical OD-10 approval is (a); no
 equivalence shown). OD-18's "pause cap" is not named by the ruling (the owner may confirm it falls under the later placement). No disposition letter changed (the C → E moves OD-18 describes are W3-F's).
+## W3-H slice status (2026-10-04)
+
+**Branch** `phase3/w3-h` from `phase3/wave3-i-w2i-w2j-w3c-w3g-v13cert-integration` @ `d29bb2f` (the provisional baseline this slice was
+cut from; unchanged). **COMPLETE on its slice branch; NOT integrated** (integration and owner broad gate pending). Dependencies W1-I and
+W1-B integrated in the base; W3-G's findings add no W3-H dependency. OD-12: one RED R2 commit, isolated and reviewed.
+
+- **AUD-15.01 (A-19) — `b3ed9c1`, RED R2 `9f88178`, pins `3913f9c`:** a named duck slot in `utils/audio.ts` (a new hold in the slot
+  supersedes the old; titles/outro holds unslotted and unchanged); the shell frees the slot when the clip is gone and on unmount (outside
+  RED); one argument at the haunting's duck (RED R2). Residual LOW: a silent fog replacing an audible haunting holds the duck until the
+  fog ends (~6 s), bounded where it used to be permanent.
+- **VF C-7 / E-6 / F-5 — `223c105` (+ `31580c1`):** off-screen work is not started (`utils/surfaceVisibility.ts`): VF-1 transfers and
+  VF-3 floats declined at launch when their card or page cannot be seen; VF-2's route-signal clock pauses and resumes. A declined
+  takeover still sounds its presidency cue on its beat (review fix).
+- **VF D-12 `58a67df`, D-30 `41fe7f3`, D-13 `5f0ffd2`, D-21 `b09c4d6`:** printed terrain/name/cost fade on an unproposed lay; the value
+  badge laid per side from a scratch layer; route overlays held on a hex mid-flourish; rail-less centre ties broken by a stated rule
+  (every accepted pairing unchanged). **D-35 `422a361`:** analysis, no presentation lever; header OPEN for W3-F (→ D).
+- **Real-browser evidence (`docs/phase3/evidence/w3h/`, harness `frontend/scripts/w3hEvidence/`):** K-4 `ce1d0dc`, C-10 `d8c7cbd`,
+  D-16 `cef8cb1`, D-17 `4007462` (throttled trace: 14.6 fps at 4×, 10.7 at 6×; full-board raster dominates -- design follow-up, stays
+  OPEN for the Phase-4 device), E-5 `be06aa9` → defect → `4c89333` → re-run `614172d` (the lifted card settles behind the dock).
+- **Found and fixed under E-5 — `4c89333`:** the full-motion float ceremony could never play (its card's ref waited on the measurement
+  the ref provides). Now live: E-1's playtest can watch it.
+- **VF H-6 `e10dc13`, I-8 / J-5 `887c4e5`, K-6 `ce99b0d`:** the mini-auction ring reads the shared palette; the Ledger's corporation
+  rows receive the rust and discard events; a badge-size raster guard on the rust mark.
+- **Owner-gated rows (OD-14, transcribed on `phase3/owner-decision-reconciliation` @ `26bca3b`, not on this base):** (b) AUD-12.05 and
+  (c) AUD-12.06 found already implemented and pinned (`a2aaa31`); (h) VF/I-10 already implemented (`RustMark`), VF/J-6 implemented
+  (`DiscardMark`, `ce99b0d`); (f) VF/G-1 and (g) VF/G-7 ruled out -- no work. Disposition letters (C → B / F) left for W3-F.
+- **Accounting:** `check_phase3_accounting.py` learns that a Phase-3 slice can RESOLVE a ledger entry: a RESOLVED entry that keeps its
+  row must be IMPLEMENTED (or a ruled-in C row). **Not taken:** W3-B, W3-J, W2-M, W3-A, W3-F; rules version (13 / [13]) and
+  settlement ([10, 11, 12, 13]) unchanged. The four pre-existing meta-test failures are identical on `d29bb2f` and on this branch.
 
 ## Highest-risk systems (characterization carried as an item)
 

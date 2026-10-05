@@ -322,6 +322,7 @@ export function registerDuckTarget(target: DuckTarget | null): void {
   duckTarget = target;
   if (target === null) {
     duckDepth = 0;
+    slotHolds.clear(); // W3-H: the count they belonged to is gone; a stale slot would be released into the next one
     if (fadeTimer !== null) {
       clearInterval(fadeTimer);
       fadeTimer = null;
@@ -337,8 +338,51 @@ function stopFade(): void {
   fadeTimer = null;
 }
 
-/** Duck now; the returned function releases this hold. Safe to call when nothing is registered. */
-export function duckRadio(depth: number = DUCK_FOR_CUE): () => void {
+/* ==================================================================
+    DESIGN NOTE (W3-H, A-19): A HOLD IN A NAMED SLOT IS SUPERSEDED BY THE NEXT ONE IN THAT SLOT
+   ==================================================================
+   REPORTED (audit A-19): "background radio stays ducked." The haunting takes a deep duck and hands its release
+   to the clip's timer; a second haunting -- or the Carcosa fog -- clears that timer to start its own, and the
+   first release is never called. The count never returns to zero and the bed stays at 20% for the rest of the
+   session. The release was not lost here; it was lost by the one caller that keeps its release in a timer
+   another dispatch can cancel.
+   SO THAT CALLER NAMES ITS SLOT, and a new hold in a slot releases the hold already standing in it. The new
+   hold is counted BEFORE the old one is released, so a supersession never lets the count touch zero between
+   them and the bed does not start to rise for a frame. `releaseDuckSlot` lets the owner free a slot whose
+   timer it has lost without taking a new one (the clip replaced by a silent one; the table unmounting).
+   WHY NOT "EVERY NEW DUCK SUPERSEDES THE LAST", which is shorter: the opening titles and the outro hold
+   `DUCK_FOR_VIDEO` for exactly as long as they are mounted and always release on unmount, and another seat's
+   action can start a haunting while this seat is still watching the titles. A blanket supersession would end
+   the titles' hold when the haunting's ten seconds ran out and bring the music up under the titles. A hold
+   with no slot keeps today's semantics exactly. */
+const slotHolds = new Map<string, () => void>();
+
+/** Release the hold standing in `slot`, if any. Idempotent. */
+export function releaseDuckSlot(slot: string): void {
+  const release = slotHolds.get(slot);
+  if (release) release();
+}
+
+/** Duck now; the returned function releases this hold. Safe to call when nothing is registered.
+ *  With a `slot`, the hold supersedes whatever hold that slot already held (W3-H, A-19). */
+export function duckRadio(depth: number = DUCK_FOR_CUE, slot?: string): () => void {
+  const superseded = slot !== undefined ? slotHolds.get(slot) : undefined;
+  const release = takeDuck(depth);
+  if (slot === undefined) return release;
+  const slotted = () => {
+    if (slotHolds.get(slot) === slotted) slotHolds.delete(slot);
+    release();
+  };
+  slotHolds.set(slot, slotted);
+  // Counted first, released second: the bed never sees a zero between the two holds.
+  superseded?.();
+  return slotted;
+}
+
+/** The slot the board's haunting holds its deep duck in (W3-H, A-19). */
+export const HAUNTING_DUCK_SLOT = "haunting";
+
+function takeDuck(depth: number): () => void {
   duckDepth += 1;
   stopFade();
   /* Design note #1073: THE DEEPEST DUCK IN FLIGHT WINS. Two overlapping clips -- a coin clink during the

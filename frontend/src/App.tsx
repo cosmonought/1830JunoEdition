@@ -499,6 +499,9 @@ import {
   duckRadio,
   // Design note #1073: the deep duck, for the one clip that competes with the bed rather than sitting over it.
   DUCK_FOR_VIDEO,
+  // W3-H (A-19): the haunting's deep duck lives in a named slot, so a lost timer cannot strand it.
+  HAUNTING_DUCK_SLOT,
+  releaseDuckSlot,
   // Design note #1115: the station table, and the two helpers that persist a choice across sessions.
   loadRadioStation,
   playVariantCue,
@@ -2960,9 +2963,18 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
     () => () => {
       if (hauntingTimerRef.current !== null) window.clearTimeout(hauntingTimerRef.current);
       if (hauntingAudioRef.current?.timer != null) window.clearTimeout(hauntingAudioRef.current.timer);
+      // W3-H (A-19): the timer just cleared held the haunting's release; leaving mid-clip must not strand it.
+      releaseDuckSlot(HAUNTING_DUCK_SLOT);
     },
     [],
   );
+  /* W3-H (A-19): AND WHEN THE BOARD'S CLIP IS GONE, SO IS ITS DUCK. The haunting's release rides its clip's
+     timer, and the fog (or a second haunting with a silent film) clears that timer to start its own. Every
+     path that ends a clip sets `haunting` to null, so the slot is freed here whichever timer survived; the
+     surviving timer's own release, if any, is the same hold and is idempotent (`utils/audio.ts`). */
+  useEffect(() => {
+    if (haunting === null) releaseDuckSlot(HAUNTING_DUCK_SLOT);
+  }, [haunting]);
   /* Design note #1115: the station is the app's state and the URL is derived from it, rather than the other
      way round -- `useRadioStream` still takes a plain url and knows nothing about stations, which is what
      keeps the hook a transport. Seeded from `localStorage` in the initialiser so the first render already
@@ -8029,7 +8041,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
                    would silence the music to protect a silent film.
                    ASKED OF `videoHasOwnAudio`, not of the clip's name or its duration. */
                 const releaseHaunting = cue.videoHasOwnAudio
-                  ? duckRadio(DUCK_FOR_VIDEO)
+                  ? duckRadio(DUCK_FOR_VIDEO, HAUNTING_DUCK_SLOT)
                   : null;
                 hauntingTimerRef.current = window.setTimeout(() => {
                   setHaunting(null);
@@ -15813,6 +15825,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
           marketGrid={marketGrid}
           // Design note #405: names, not truncated addresses.
           playerLabel={sandbox ? sandboxPlayerLabel : undefined}
+          // W3-H (VF I-8 / J-5): the same rust and discard events the Round Detail table receives.
+          rust={rustEvent}
+          discard={discardEvent}
         />
       )}
 

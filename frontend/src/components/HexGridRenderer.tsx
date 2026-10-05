@@ -113,6 +113,7 @@ import {
   axialToPixel,
   boardHexLabel,
   claimHexSlotPreferring,
+  cornerAngleRad,
   deadEdgesAt,
   describeHex,
   describeHexDesignationForLog,
@@ -128,6 +129,7 @@ import {
   localCatalogPlacements,
   marginLabelReserve,
   pixelToAxial,
+  pointOnCircle,
   resolveSlotOverride,
   rotateConnections,
   singleNodeNameplateAnchor,
@@ -209,7 +211,7 @@ import {
   type TokenMotion,
   type Vec,
 } from "./tileTransition";
-import { drawTileTransitionArt, drawTileTransitionFill, withRevealSide } from "./tileTransitionCanvas";
+import { drawTileTransitionArt, drawTileTransitionFill, layOnSides, withRevealSide } from "./tileTransitionCanvas";
 /* Train Route Pulse / Revenue Badge Animation flourish: pure geometry (no canvas, no React) that turns the
    SAME authored track data drawRouteOverlays strokes into a sampleable travel path, plus which of a route's
    hexes are its priced revenue stops and which single reaction (if any) a badge shared by several arrivals
@@ -226,6 +228,8 @@ import {
 /* Design note #1474: the transition's cues go through the helper every cue goes through (#1041), which owns the master
    switch's effect, the shared level, the concurrency cap, the radio's duck and the browser's refusals. */
 import { currentSfxEnabled, playVariantCue, preloadCues } from "../utils/audio";
+// W3-H (VF F-5): the route signal's frame clock stops while nobody can see the board.
+import { useSurfaceVisible } from "../utils/surfaceVisibility";
 
 /* Design note #1357: the herald artwork, cached per ticker for the canvas. `null` until loaded (or when the
    asset is missing -- the ticker disc stands in for good). Loading is kicked off on first ask; every mounted
@@ -888,6 +892,10 @@ interface ActiveTileTransition {
     edges: readonly number[];
     blocked?: Set<number>;
   } | null;
+  /** W3-H (VF D-12): set on a lay nobody proposed here over a printed hex, whose terrain icon, name and terrain-cost
+   *  badge fade with its printed value instead of vanishing. `costDue` is the cost pass's own answer from the ledger
+   *  as it stood before the lay -- after it the fee is paid, and asking again would say "no badge" on frame one. */
+  printedFrom: { costDue: boolean } | null;
   /** Design note #1473: whether the flourish moves each of its pieces, asked once per piece. */
   moving: Map<string, boolean>;
   /** Design note #1474: the cues this transition sounds, in beat order, and how many of them it has dealt with. */
@@ -1096,8 +1104,10 @@ function beginTileTransition(input: {
   hexSize: number;
   /** Confirmed from the proposal drawn on this hex (#1471). */
   provisional: boolean;
+  /** W3-H (VF D-12): the terrain-fee ledger the previous render drew with. */
+  previousFeesPaid?: readonly string[] | null;
 }): ActiveTileTransition | null {
-  const { change, previousGrid, previousCommitted, previousCompanies, nextGrid, hexSize, provisional } = input;
+  const { change, previousGrid, previousCommitted, previousCompanies, nextGrid, hexSize, provisional, previousFeesPaid } = input;
   const { q, r } = change;
   const label = boardHexLabel(q, r);
 
@@ -1190,6 +1200,12 @@ function beginTileTransition(input: {
     /* Design note #1471: a confirmed proposal already printed its value where the lay puts it, washed, and it commits
        with its tile; only a lay nobody proposed here has an old value to fade. */
     badgeFrom: provisional ? null : outgoingValueBadge(previousLaid, label),
+    /* W3-H (VF D-12): a confirmed proposal already hid these at the proposal (#1471), and a hex that showed a tile
+       printed none of them; only a lay nobody proposed here over the printed hex has them to fade. */
+    printedFrom:
+      provisional || previousLaid
+        ? null
+        : { costDue: terrainFeeDue(previousFeesPaid, q, r, terrainBuildFeeAt) > 0 },
     moving: new Map(),
     cues: tileTransitionCues(plan),
     cuesDealt: 0,
@@ -1510,8 +1526,16 @@ export function HexGridRenderer({
      as the static route highlight standing in for the continuously moving signal -- there is no longer a
      persistent badge state left to keep drawing once the animation itself stops (VF-2 simplification pass). */
   const [routeSignalTick, setRouteSignalTick] = useState(0);
+  /* W3-H (VF F-5): OFF-SCREEN WORK IS NOT STARTED (`utils/surfaceVisibility.ts`). The clock -- and with it the
+     per-frame `pointOnRouteTrack` sampling in `draw` -- runs only while the board can be seen: the document
+     is not hidden and the board's box is on screen (an IntersectionObserver; with none, on screen). A
+     continuous animation PAUSES rather than declining: it re-arms when the board comes back, and since each
+     signal's phase is wall-clock (`routeSignalStartRef`) it resumes where it would have been. No cue rides
+     this clock, so there is no sound to decide about. */
+  const routeSignalVisible = useSurfaceVisible(containerRef, routeOverlays.length > 0);
   useEffect(() => {
     if (routeOverlays.length === 0) return undefined;
+    if (!routeSignalVisible) return undefined;
     if (typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
       return undefined;
     }
@@ -1522,7 +1546,7 @@ export function HexGridRenderer({
     };
     handle = requestAnimationFrame(step);
     return () => cancelAnimationFrame(handle);
-  }, [routeOverlays]);
+  }, [routeOverlays, routeSignalVisible]);
 
   /* Design note #1465: the running tile transitions, keyed "q,r", and the inputs of the last render they were
      diffed against. Refs, not state: the draw reads them, and a transition starting must not re-render anything
@@ -1539,6 +1563,8 @@ export function HexGridRenderer({
     publicCompanies: StationTokenCompany[];
     boardId: string;
   } | null>(null);
+  // W3-H (VF D-12): see the layout effect that keeps it, just after the one that starts a transition.
+  const drawnFeesPaidRef = useRef<readonly string[] | null | undefined>(terrainFeesPaid);
   const [tileTransitionEpoch, setTileTransitionEpoch] = useState(0);
   const [tileTransitionTick, setTileTransitionTick] = useState(0);
 
@@ -1586,6 +1612,7 @@ export function HexGridRenderer({
         nextGrid: mapGrid,
         hexSize,
         provisional,
+        previousFeesPaid: drawnFeesPaidRef.current,
       });
     } catch {
       started = null; // presentation only: an unexpected shape simply draws the authoritative tile
@@ -1594,6 +1621,11 @@ export function HexGridRenderer({
     transitions.set(`${change.q},${change.r}`, started);
     setTileTransitionEpoch((epoch) => epoch + 1);
   }, [mapGrid, previewTile, publicCompanies, boardId, hexSize]);
+  /* W3-H (VF D-12): the terrain-fee ledger the last render drew with. Declared AFTER the effect above, so a transition
+     starting there still reads the ledger the player was looking at -- the one the cost badge was drawn from. */
+  useLayoutEffect(() => {
+    drawnFeesPaidRef.current = terrainFeesPaid;
+  }, [terrainFeesPaid]);
 
   /* The frame clock, running only while a transition does -- #463's pattern. A finished transition is removed
      here and the tick after it repaints the hex as the authority's. */
@@ -1768,6 +1800,40 @@ export function HexGridRenderer({
       }
     };
 
+    /* W3-H (VF D-12): WHAT A PRINTED HEX SHOWED BESIDE ITS VALUE FADES WITH IT. On a lay nobody proposed here the hex
+       counts as laid from the first frame, so the printed terrain icon, name and terrain-cost badge used to vanish
+       there while the printed value faded under the arriving proposal. Each now fades on the value's own clock and
+       curve (`badgePresentationAt(...).outgoingAlpha`), laid out as the printed hex laid them out: against the grid
+       without the new tile (`printedGrid`) and on a scratch ledger of their own (`printedLedger`), which the outgoing
+       value shares, so nothing takes a slot from the incoming tile and nothing jumps as it fades. A confirmed
+       proposal is untouched: it hid these at the proposal, and its transition carries no `printedFrom`. */
+    const printedFade = new Map<string, { alpha: number; costDue: boolean }>();
+    tileTransitionsRef.current.forEach((transition, key) => {
+      if (!transition.printedFrom) return;
+      const [q, r] = key.split(",").map(Number);
+      const staged = transitionAt(q, r);
+      if (!staged || staged.transition !== transition) return;
+      const alpha = badgePresentationAt(transition.plan, staged.t).outgoingAlpha;
+      if (alpha > 0) printedFade.set(key, { alpha, costDue: transition.printedFrom.costDue });
+    });
+    const printedFadeAt = (q: number, r: number) => printedFade.get(`${q},${r}`);
+    const printedGrid: MapGridResponse =
+      printedFade.size === 0
+        ? mapGrid
+        : { ...mapGrid, tiles: mapGrid.tiles.filter((tile) => !printedFade.has(`${tile.q},${tile.r}`)) };
+    const printedLedger = new Map<string, Set<number>>();
+    /** Paints a printed element over the tile at its fade (#1465's outgoing value, W3-H). */
+    const fadingBy = (fade: { alpha: number } | undefined, paint: () => void) => {
+      if (!fade) {
+        paint();
+        return;
+      }
+      ctx.save();
+      ctx.globalAlpha *= fade.alpha;
+      paint();
+      ctx.restore();
+    };
+
     // Used by every label pass below (moved up from its previous spot
     // right before the landmark labels, since the new terrain-icon labels
     // pass now needs it earlier too).
@@ -1814,12 +1880,16 @@ export function HexGridRenderer({
       if (hex.type !== "Mountain" && hex.type !== "River") continue;
       // A LAID TILE COVERS THE PREPRINT. The isComplexHex test already skipped most tiled hexes as a SIDE EFFECT -- it asks "is this busy", not "is it covered".
       // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #150
-      if (hexHasLaidTile(presentedGrid, hex.q, hex.r)) continue;
+      /* W3-H (VF D-12): a fading printed hex still shows its icon. It is drawn at full strength because it sits UNDER
+         the tile pass, whose arriving proposal fill rises on the same curve the value fades on -- so what shows of it
+         is exactly the value's fade; drawing it at the fade as well would square it. */
+      const fadingIcon = printedFadeAt(hex.q, hex.r);
+      if (!fadingIcon && hexHasLaidTile(presentedGrid, hex.q, hex.r)) continue;
       const terrainType = hex.type;
       const center = axialToPixel(hex.q, hex.r, hexSize);
       const isComplexHex =
-        archetypeForHex(mapGrid, hex.q, hex.r) !== "Plain" ||
-        liveEdgesForHex(mapGrid, hex.q, hex.r).length > 0;
+        archetypeForHex(printedGrid, hex.q, hex.r) !== "Plain" ||
+        liveEdgesForHex(printedGrid, hex.q, hex.r).length > 0;
       if (isComplexHex) continue;
       // Rail Map Overhaul (design note #42): Hex Boundary Clipping Mask --
       // the terrain icon itself never bleeds past this hex's own border.
@@ -2049,15 +2119,51 @@ export function HexGridRenderer({
       return landmark?.label;
     };
 
-    routeHitRef.current = drawRouteOverlays(
-      ctx,
-      hexSize,
-      emphasised,
-      tilesAtForRoutes,
-      // Endpoints resolve to a single authored rail, so no branch needs to know how a hex was drawn. #215: the printed label, so a route across a gray hex lights the ONE rail it runs along.
-      // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #226
-      printedLabelAtForRoutes,
-    );
+    /* W3-H (VF D-13): A ROUTE IS NOT DRAWN ALONG RAIL STILL UNDER CONSTRUCTION. Routes are read from authoritative
+       state, so over a hex mid-flourish the overlay -- and the travelling signal along it -- would run along rail the
+       frame has not built yet. Their drawing is held on that hex, by a clip that leaves it out, until its flourish
+       commits; everywhere else, and the pointer's hit geometry, are unchanged. Reduced motion's 240 ms fade builds
+       nothing piecemeal and holds nothing. The veil and hover are left as they are: a tint and a nameplate style,
+       neither draws rail, so neither shows the unfinished tile as anything it is not. */
+    const routesHeldAt: Array<{ x: number; y: number }> = [];
+    tileTransitionsRef.current.forEach((transition, key) => {
+      if (transition.plan.reducedMotion) return;
+      const [q, r] = key.split(",").map(Number);
+      if (transitionAt(q, r)?.transition === transition) routesHeldAt.push(axialToPixel(q, r, hexSize));
+    });
+    const withRoutesHeld = (paint: () => void) => {
+      if (routesHeldAt.length === 0) {
+        paint();
+        return;
+      }
+      ctx.save();
+      ctx.beginPath();
+      const reach = 1e6; // board units: past any board, pan or zoom
+      ctx.rect(-reach, -reach, reach * 2, reach * 2);
+      for (const held of routesHeldAt) {
+        for (let corner = 0; corner < 6; corner += 1) {
+          const at = pointOnCircle(held, hexSize, cornerAngleRad(corner));
+          if (corner === 0) ctx.moveTo(at.x, at.y);
+          else ctx.lineTo(at.x, at.y);
+        }
+        ctx.closePath();
+      }
+      ctx.clip("evenodd");
+      paint();
+      ctx.restore();
+    };
+
+    withRoutesHeld(() => {
+      routeHitRef.current = drawRouteOverlays(
+        ctx,
+        hexSize,
+        emphasised,
+        tilesAtForRoutes,
+        // Endpoints resolve to a single authored rail, so no branch needs to know how a hex was drawn. #215: the printed label, so a route across a gray hex lights the ONE rail it runs along.
+        // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #226
+        printedLabelAtForRoutes,
+      );
+    });
 
     /* ==================================================================
         TRAIN ROUTE PULSE / REVENUE BADGE ANIMATION
@@ -2132,7 +2238,8 @@ export function HexGridRenderer({
         const bandSpan = Math.min(track.totalLength * 0.14, 0.4);
         const head = pointOnRouteTrack(track, distance, hexSize);
         const tail = pointOnRouteTrack(track, distance - bandSpan, hexSize);
-        if (head && tail) drawRouteSignalBand(ctx, hexSize, tail, head, overlay.color);
+        // W3-H (VF D-13): held on a hex mid-flourish, with the route line it travels along.
+        if (head && tail) withRoutesHeld(() => drawRouteSignalBand(ctx, hexSize, tail, head, overlay.color));
       }
     }
 
@@ -2563,19 +2670,21 @@ export function HexGridRenderer({
       if (!showCityNames) continue;
       // Dynamic City Nameplate Suppression: a laid tile physically covers the printed name. The name stays available on hover, which is why describeHex was extended to cover every named hex.
       // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #47
-      if (hexHasLaidTile(presentedGrid, landmark.q, landmark.r)) continue;
+      // W3-H (VF D-12): a fading printed hex keeps its name, at the value's fade, laid out as it was printed.
+      const fadingName = printedFadeAt(landmark.q, landmark.r);
+      if (!fadingName && hexHasLaidTile(presentedGrid, landmark.q, landmark.r)) continue;
       const center = axialToPixel(landmark.q, landmark.r, hexSize);
       const isHovered = Boolean(
         hoveredHexCoord && hoveredHexCoord.q === landmark.q && hoveredHexCoord.r === landmark.r,
       );
-      const archetype = archetypeForHex(mapGrid, landmark.q, landmark.r);
+      const archetype = archetypeForHex(printedGrid, landmark.q, landmark.r);
       // Design note #78: the nameplate shows `displayName` when the landmark
       // has one (New York -> "New York & Newark"), falling back to the real
       // structural `name` otherwise -- see that field's own doc comment.
       const displayName = landmark.displayName ?? landmark.name;
       // withHexClip extended to nameplate text -- a name near a hex's edge could bleed into the neighbour.
       // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #53
-      withHexClip(ctx, center, hexSize, () => {
+      fadingBy(fadingName, () => withHexClip(ctx, center, hexSize, () => {
         if (archetype === "DoubleCity") {
           const parts = displayName.split(" & ");
           if (parts.length === 2) {
@@ -2588,14 +2697,14 @@ export function HexGridRenderer({
           const anchor = singleNodeNameplateAnchor(
             center,
             hexSize,
-            mapGrid,
+            printedGrid,
             landmark.q,
             landmark.r,
-            claimedHexSlots,
+            fadingName ? printedLedger : claimedHexSlots,
           );
           drawSingleNodeNameplate(ctx, displayName, anchor, hexFlatWidth * 0.92, isHovered);
         }
-      });
+      }));
     }
 
     // Gray hex names, upper third. The four OO hexes are excluded here and get their own split-label pass -- one centred string through a hex with two stations is what that pass exists to stop.
@@ -2616,7 +2725,9 @@ export function HexGridRenderer({
       // landmark pass above -- identical skip, applied here for every
       // remaining `NAMED_HEX_LABELS` city (Washington, Toledo, Providence,
       // Albany, Cleveland, Altoona, and the rest).
-      if (hexHasLaidTile(presentedGrid, hex.q, hex.r)) continue;
+      // W3-H (VF D-12): a fading printed hex keeps its name, at the value's fade, laid out as it was printed.
+      const fadingName = printedFadeAt(hex.q, hex.r);
+      if (!fadingName && hexHasLaidTile(presentedGrid, hex.q, hex.r)) continue;
       const center = axialToPixel(hex.q, hex.r, hexSize);
       const isHovered = Boolean(
         hoveredHexCoord && hoveredHexCoord.q === hex.q && hoveredHexCoord.r === hex.r,
@@ -2629,10 +2740,10 @@ export function HexGridRenderer({
       const anchor =
         layout?.name !== undefined
           ? plateSlotPoint(center, layout.name, layout.nameInset ?? 0)
-          : singleNodeNameplateAnchor(center, hexSize, mapGrid, hex.q, hex.r, claimedHexSlots);
+          : singleNodeNameplateAnchor(center, hexSize, printedGrid, hex.q, hex.r, fadingName ? printedLedger : claimedHexSlots);
       // Design note #53: Hex Boundary Clipping Mask, extended to nameplate
       // text -- see the landmark pass above for the full reasoning.
-      withHexClip(ctx, center, hexSize, () => {
+      fadingBy(fadingName, () => withHexClip(ctx, center, hexSize, () => {
         const words = name.split(" ");
         /* Design note #1288: a turned name (the Coalfields', laid along its lower-left edge) draws about its
            anchor under a rotation; everything else draws where it always did. */
@@ -2649,7 +2760,7 @@ export function HexGridRenderer({
           drawSingleNodeNameplate(ctx, name, at, hexFlatWidth * 0.92, isHovered);
         }
         if (turn !== 0) ctx.restore();
-      });
+      }));
     }
 
     // OO names are SPLIT and STACKED at true hex centre: with the two circles on a diagonal, the open space is the middle of the hex, not the top. Side-by-side squeezed each half into less than half the hex's width.
@@ -2663,7 +2774,9 @@ export function HexGridRenderer({
       // Dynamic City Nameplate Suppression (design note #47): see the
       // landmark pass above -- UNCHANGED by design note #49, which only
       // repositions where this nameplate sits, not whether it persists.
-      if (hexHasLaidTile(presentedGrid, hex.q, hex.r)) continue;
+      // W3-H (VF D-12): a fading printed hex keeps its name, at the value's fade.
+      const fadingName = printedFadeAt(hex.q, hex.r);
+      if (!fadingName && hexHasLaidTile(presentedGrid, hex.q, hex.r)) continue;
       const [primaryName, secondaryName] = name.split(" & ");
       if (!primaryName || !secondaryName) continue; // defensive -- every real OO name is "A & B"
       const center = axialToPixel(hex.q, hex.r, hexSize);
@@ -2673,9 +2786,9 @@ export function HexGridRenderer({
       const lineMaxWidth = hexFlatWidth * 0.85;
       // Line spacing is derived inside drawStackedNameLabel from the same constant, no longer computed at this call site.
       // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #84
-      withHexClip(ctx, center, hexSize, () => {
+      fadingBy(fadingName, () => withHexClip(ctx, center, hexSize, () => {
         drawStackedNameLabel(ctx, [primaryName, secondaryName], center, lineMaxWidth, isHovered);
-      });
+      }));
     }
 
     // The three double-town hexes split the same "A & B" way as the OO pass, for the same readability reason.
@@ -2689,7 +2802,9 @@ export function HexGridRenderer({
       if (!name) continue;
       // Dynamic City Nameplate Suppression (design note #47): see the
       // landmark pass above.
-      if (hexHasLaidTile(presentedGrid, hex.q, hex.r)) continue;
+      // W3-H (VF D-12): a fading printed hex keeps its name, at the value's fade.
+      const fadingName = printedFadeAt(hex.q, hex.r);
+      if (!fadingName && hexHasLaidTile(presentedGrid, hex.q, hex.r)) continue;
       const [primaryName, secondaryName] = name.split(" & ");
       if (!primaryName || !secondaryName) continue; // defensive -- every real double-town name is "A & B"
       const center = axialToPixel(hex.q, hex.r, hexSize);
@@ -2699,9 +2814,9 @@ export function HexGridRenderer({
       const lineMaxWidth = hexFlatWidth * 0.85;
       // Moved to TRUE HEX CENTRE, mirroring #49's OO repositioning -- with the dits now diagonal, centre is the open channel between them.
       // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #54
-      withHexClip(ctx, center, hexSize, () => {
+      fadingBy(fadingName, () => withHexClip(ctx, center, hexSize, () => {
         drawStackedNameLabel(ctx, [primaryName, secondaryName], center, lineMaxWidth, isHovered);
-      });
+      }));
     }
 
     // Name lines and revenue badge lay out as ONE combined block centred on the hex, replacing two fixed offsets that only looked adjacent for a one-line name.
@@ -2855,7 +2970,10 @@ export function HexGridRenderer({
          predicates agree on every hex today, which is exactly why nobody noticed the third disagreed: the
          badge and the preview were consistent with each other and both wrong about the debit. All three now
          ask `terrainFeeDue`. */
-      if (terrainFeeDue(terrainFeesPaid, hex.q, hex.r, terrainBuildFeeAt) <= 0) continue;
+      /* W3-H (VF D-12): on a fading printed hex the lay has just paid the fee, so the ledger now says "no badge"; the
+         badge the player was looking at is the ledger's answer from before the lay, and it fades with the value. */
+      const fadingCost = printedFadeAt(hex.q, hex.r);
+      if (fadingCost ? !fadingCost.costDue : terrainFeeDue(terrainFeesPaid, hex.q, hex.r, terrainBuildFeeAt) <= 0) continue;
       // Design notes #1465/#1471: a tile a preview puts on the hex -- a proposal, or the sent lay -- is the lay that pays
       // this fee; its price is not advertised over it.
       if (drawnPreview && drawnPreview.q === hex.q && drawnPreview.r === hex.r) continue;
@@ -2869,11 +2987,11 @@ export function HexGridRenderer({
       // The SAME isComplexHex test the icon pass uses, so the two always agree on which hexes are complex.
       // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #87
       const isComplexHex =
-        archetypeForHex(mapGrid, hex.q, hex.r) !== "Plain" ||
-        liveEdgesForHex(mapGrid, hex.q, hex.r).length > 0;
+        archetypeForHex(printedGrid, hex.q, hex.r) !== "Plain" ||
+        liveEdgesForHex(printedGrid, hex.q, hex.r).length > 0;
       // Slot-resolved rather than a fixed lower-third literal. A simple hex prefers the true bottom point -- byte-identical direction to the old fixed offset -- and a complex hex the SE edge. #87: ONE claim for the whole compound badge.
       // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #70
-      const blockedCostSlots = hexBlockedSlots(mapGrid, hex.q, hex.r);
+      const blockedCostSlots = hexBlockedSlots(printedGrid, hex.q, hex.r);
       const deadCostSlots = slotsBlockedByEdges(deadEdgesAt(hex.q, hex.r), false);
       const costOverride = resolveSlotOverride(hex.q, hex.r, "terrain");
       const costSlotPreference = withSlotReserve(
@@ -2883,7 +3001,7 @@ export function HexGridRenderer({
         isComplexHex ? COMPLEX_HEX_TERRAIN_SLOT_PREFERENCE : [10, 4, 3, 11, 9],
       );
       const costSlot = claimHexSlotPreferring(
-        claimedHexSlots,
+        fadingCost ? printedLedger : claimedHexSlots,
         hex.q,
         hex.r,
         costOverride,
@@ -2903,7 +3021,7 @@ export function HexGridRenderer({
         x: center.x + costDirection.x * hexSize * COMPOUND_BADGE_OFFSET,
         y: center.y + costDirection.y * hexSize * COMPOUND_BADGE_OFFSET,
       };
-      withHexClip(ctx, center, hexSize, () => {
+      fadingBy(fadingCost, () => withHexClip(ctx, center, hexSize, () => {
         if (isComplexHex) {
           // ONE compound [icon+cost] pill; the standalone icon pass already skipped this hex, so this is the only place its terrain icon renders.
           // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #87
@@ -2931,7 +3049,7 @@ export function HexGridRenderer({
           fillStyle: "#E53E3E",
           cornerRadiusPx: 2,
         });
-      });
+      }));
     }
 
     // A hex in HEX_START_VALUE_OVERRIDE uses its real sourced figure; an exact $0 SKIPS the badge entirely rather than printing "$0". terrainBaseValue is flat and terrain-only -- a hex's value never changes with the colour tier.
@@ -3137,7 +3255,8 @@ export function HexGridRenderer({
               hexSize,
               outgoingBadge.value,
               outgoingBadge.edges,
-              new Map(),
+              // W3-H (VF D-12): the printed hex's own scratch ledger, where its fading name and cost already stand.
+              printedLedger,
               outgoingBadge.blocked,
               outgoingHit,
             );
@@ -3181,12 +3300,13 @@ export function HexGridRenderer({
       // #1394/#1405: the tile's own rings, dits and sampled rails decide the slots, in place of the edge guess.
       const markerBlocked = slotsBlockedByTileMarkers(tile.tile_id, tile.orientation);
       const tileHit = badgeHitVisualForHex(tile.q, tile.r);
-      const paintTileBadge = (alpha: number, ledger: Map<string, Set<number>>) => {
-        ctx.save();
-        ctx.globalAlpha = alpha; // 1 everywhere but a proposal and a hex mid-transition (#1465, #1471)
-        withHexClip(ctx, center, hexSize, () => {
+      // W3-H (VF D-30): `target` is a scratch layer while the commit front crosses the badge; the board otherwise.
+      const paintTileBadge = (alpha: number, ledger: Map<string, Set<number>>, target: CanvasRenderingContext2D = ctx) => {
+        target.save();
+        target.globalAlpha = alpha; // 1 everywhere but a proposal and a hex mid-transition (#1465, #1471)
+        withHexClip(target, center, hexSize, () => {
           drawValueBadge(
-            ctx,
+            target,
             center,
             tile.q,
             tile.r,
@@ -3199,7 +3319,7 @@ export function HexGridRenderer({
             tileHit,
           );
         });
-        ctx.restore();
+        target.restore();
       };
       const printValue = (alpha: number, ledger: Map<string, Set<number>>) =>
         paintBadge(tileHit, () => paintTileBadge(alpha, ledger));
@@ -3219,8 +3339,18 @@ export function HexGridRenderer({
         // This overlap (a badge popping at the exact instant its own hex's tile-lay transition front is
         // crossing it) is narrow and rare enough in real play that the smallest-local fix is to simply not
         // elevate it here -- it keeps the pre-existing draw order (under tokens) for this one edge case only.
-        withRevealSide(ctx, center, hexSize, badge.front, "west", () => paintTileBadge(1, claimedHexSlots));
-        withRevealSide(ctx, center, hexSize, badge.front, "east", () => paintTileBadge(provisionalAlpha, before));
+        /* W3-H (VF D-30): the badge is a disc under a figure, and a stroke clipped as it is drawn antialiases its
+           clipped edge over whatever lies beneath it -- the faint seam the tile's art closed in #1473 by painting each
+           side whole into a scratch layer and laying it under its clip. The badge now crosses the same way: each
+           side's badge is finished first, so a clipped edge meets only the other side's finished badge. Where no
+           scratch layer can be had, each side is clipped as it draws, as before. */
+        const layered = layOnSides(ctx, center, hexSize, badge.front, (layer, side) =>
+          side === "committed" ? paintTileBadge(1, claimedHexSlots, layer) : paintTileBadge(provisionalAlpha, before, layer),
+        );
+        if (!layered) {
+          withRevealSide(ctx, center, hexSize, badge.front, "west", () => paintTileBadge(1, claimedHexSlots));
+          withRevealSide(ctx, center, hexSize, badge.front, "east", () => paintTileBadge(provisionalAlpha, before));
+        }
       }
     }
     /* #1390's padlock on final tiles was drawn here and is GONE by ruling ("remove the padlocks from the

@@ -206,6 +206,22 @@ function sideLayer(index: number, width: number, height: number): CanvasRenderin
 /** Lays each side's finished art under its side of the front. False when the context cannot say where it draws or no
  *  scratch layer can be had -- and the caller clips each side as it draws, as before. */
 function laySides(ctx: CanvasRenderingContext2D, center: Point, size: number, frame: TileTransitionFrame, front: number): boolean {
+  return layOnSides(ctx, center, size, front, (layer, side) => {
+    drawArtSide(layer, center, size, frame, side);
+  });
+}
+
+/** Paints each side of a commit front whole into a scratch layer and lays it on under that side's clip (#1473).
+ *  W3-H (VF D-30): exported so the board's value badge -- a disc under a figure, two strokes deep like the art --
+ *  crosses the front the same way, instead of antialiasing each clipped edge over what lies beneath it. False when
+ *  the context cannot say where it draws or no scratch layer can be had; the caller then clips as it draws. */
+export function layOnSides(
+  ctx: CanvasRenderingContext2D,
+  center: Point,
+  size: number,
+  front: number,
+  drawSide: (layer: CanvasRenderingContext2D, side: "committed" | "provisional") => void,
+): boolean {
   const transform = typeof ctx.getTransform === "function" ? ctx.getTransform() : null;
   if (!transform) return false;
   const corners = [-1, 1].flatMap((dx) => [-1, 1].map((dy) => ({ x: center.x + dx * size, y: center.y + dy * size })));
@@ -219,9 +235,9 @@ function laySides(ctx: CanvasRenderingContext2D, center: Point, size: number, fr
   const committed = sideLayer(0, width, height);
   const provisional = sideLayer(1, width, height);
   if (!committed || !provisional) return false;
-  const paint = (layer: CanvasRenderingContext2D, side: Side, reveal: "west" | "east") => {
+  const paint = (layer: CanvasRenderingContext2D, side: "committed" | "provisional", reveal: "west" | "east") => {
     layer.setTransform(transform.a, transform.b, transform.c, transform.d, transform.e - left, transform.f - top);
-    drawArtSide(layer, center, size, frame, side);
+    drawSide(layer, side);
     withRevealSide(ctx, center, size, front, reveal, () => {
       ctx.save();
       ctx.setTransform(1, 0, 0, 1, 0, 0);

@@ -151,6 +151,8 @@ import {
   type ShareHolder,
   type StockTransaction,
 } from "../utils/stockTransaction";
+// W3-H (VF C-7, E-6): a ceremony whose card nobody can see is not started -- see the module's note.
+import { useVisibleLaunch } from "../utils/surfaceVisibility";
 
 export interface StockRoundPanelProps {
   /** Design note #1451: the stock transaction that just landed, for the affected card's own presentation.
@@ -499,6 +501,17 @@ function stockCell(table: HTMLElement, holder: ShareHolder): HTMLElement | null 
   return null;
 }
 
+/** The roster card for `companyId`, found by attribute inside `grid` -- the surface W3-H asks "can anyone see
+ *  this?" of. A loop over the grid's own cards, for `stockCell`'s reason: exact by construction. */
+function rosterCardNode(grid: HTMLElement | null, companyId: number): HTMLElement | null {
+  if (!grid) return null;
+  const cards = grid.querySelectorAll<HTMLElement>("[data-stock-card]");
+  for (let index = 0; index < cards.length; index += 1) {
+    if (cards[index].getAttribute("data-stock-card") === String(companyId)) return cards[index];
+  }
+  return null;
+}
+
 /** The staged board before any beat has landed: `before`, whole. */
 const NOTHING_APPLIED: AppliedSteps = { transfer: false, presidency: false };
 
@@ -624,6 +637,35 @@ function useStockTransferFocus(
     stageIndex: live.stageIndex,
     applied: live.applied,
   };
+}
+
+/* ==================================================================
+    W3-H (review fix): THE GATE DECLINES THE PICTURE, NOT THE PRESIDENCY'S SOUND
+   ==================================================================
+   The off-screen launch gate (VF C-7) skips a transfer nobody can see -- no proxy, no timers, no staged
+   board. Before it, the transfer's timers never depended on geometry, so a takeover sounded its presidency
+   cue (#1457) whether or not the card was in view; nobody ruled that it should stop. So a DECLINED takeover
+   still sounds the cue, once, on the beat its crown would have landed -- the same `buildFocusSequence`
+   application time the staged path uses, one timer, no state. The float stamp is deliberately NOT given the
+   same treatment: its full-motion ceremony never ran before W3-H (the ref defect fixed under E-5), so its
+   cue never sounded off-screen, and VF-3's own note rules out a sound with no ceremony behind it. */
+function useDeclinedPresidencyCue(
+  transaction: StockTransactionEvent | null,
+  shown: StockTransactionEvent | null,
+  onPresidencyCue?: () => void,
+): void {
+  const declined = transaction !== null && shown === null ? transaction : null;
+  const sequence = useMemo(() => buildFocusSequence(declined), [declined]);
+  // A ref, so a new callback identity on a busy re-render cannot tear the timer down and starve the cue.
+  const cueRef = useRef(onPresidencyCue);
+  cueRef.current = onPresidencyCue;
+  useEffect(() => {
+    if (!sequence || sequence.crownArrivesOn === null) return undefined;
+    const at = sequence.applications.find((application) => application.applies.includes("presidency"))?.at;
+    if (at === undefined) return undefined;
+    const timer = window.setTimeout(() => cueRef.current?.(), at);
+    return () => window.clearTimeout(timer);
+  }, [sequence]);
 }
 
 /* ==================================================================
@@ -1203,10 +1245,23 @@ function CorporationRoster({
      would only be a way for two cards to disagree about whose turn it is to glow.
      A NEW `token` SUPERSEDES WHATEVER WAS PLAYING. Rapid consecutive trades cannot corrupt anything: the
      timers are cleared, the stage index resets, and the holdings underneath were never waiting on any of it. */
-  const { sequence, stage, stageIndex, applied } = useStockTransferFocus(
+  /* The roster grid -- the float ceremony's centring target (below) and, for W3-H, where both focuses find
+     the card they would play on. Declared here because the transfer's launch gate reads it first. */
+  const floatGridRef = useRef<HTMLDivElement | null>(null);
+  /* W3-H (VF C-7): OFF-SCREEN WORK IS NOT STARTED (`utils/surfaceVisibility.ts`). A transaction whose card is
+     scrolled away, or whose page is in the background, is declined at launch: no proxy, no timers, no
+     staged board (the presidency cue still sounds on its beat: `useDeclinedPresidencyCue`) -- the committed card is the A-3 fallback, and #1453/#1454's "a late
+     gesture is worse than none" rules out starting it when the card comes back. Reduced motion is exempt. */
+  const shownTransaction = useVisibleLaunch(
     transaction ?? null,
+    () => rosterCardNode(floatGridRef.current, transaction?.companyId ?? -1),
+    prefersReducedMotion(),
+  );
+  const { sequence, stage, stageIndex, applied } = useStockTransferFocus(
+    shownTransaction,
     onPresidencyCue,
   );
+  useDeclinedPresidencyCue(transaction ?? null, shownTransaction, onPresidencyCue);
   /* The focused card's ownership table, for measuring inside it. Attached only to the card the sequence names
      (below), so a query from here cannot reach another card's rows. */
   const focusTableRef = useRef<HTMLDivElement | null>(null);
@@ -1243,8 +1298,16 @@ function CorporationRoster({
   const floatCue = useCallback(() => {
     if (floatCueGateRef.current) onFloatCue?.();
   }, [onFloatCue]);
-  const { sequence: floatSequence, stage: floatStage, applied: floatApplied } = useCorporationFloatFocus(
+  /* W3-H (VF E-6): the same launch gate as the transaction's above. A float whose card is off screen -- or
+     whose "corps" pane is mounted but hidden, a zero-size box -- never starts its timers or measures its
+     geometry, and so never reaches the stamp cue either: this note's own rule, one step earlier. */
+  const shownFloatEvent = useVisibleLaunch(
     floatEvent ?? null,
+    () => rosterCardNode(floatGridRef.current, floatEvent?.companyId ?? -1),
+    floatReducedMotion,
+  );
+  const { sequence: floatSequence, stage: floatStage, applied: floatApplied } = useCorporationFloatFocus(
+    shownFloatEvent,
     floatReducedMotion,
     floatCue,
   );
@@ -1256,8 +1319,7 @@ function CorporationRoster({
      within the Stock Round" per the approved centring target, rather than the literal viewport (which would
      need `window` geometry outside this component's own subtree) or the whole panel (which would pull the
      target up toward the sticky header this card must stay clear of -- see the report on why it naturally
-     does not). */
-  const floatGridRef = useRef<HTMLDivElement | null>(null);
+     does not). `floatGridRef` itself is declared above, beside the transaction's launch gate. */
   const floatTarget = useFloatCardTarget(floatCardRef, floatGridRef, floatSequence);
   floatCueGateRef.current =
     floatSequence !== null && (floatSequence.reducedMotion || floatTarget !== null);
@@ -1317,7 +1379,7 @@ function CorporationRoster({
              subject of, or a descriptor the shell could not build -- in all three `staged` is `null` and
              this is the committed company, unchanged, exactly as it renders today. */
           const focusedHere = sequence !== null && sequence.companyId === committed.company_id;
-          const staged = focusedHere ? stagedOwnership(transaction ?? null, applied) : null;
+          const staged = focusedHere ? stagedOwnership(shownTransaction, applied) : null;
           /* ==================================================================
               DESIGN NOTE (VF-3): A SECOND, INDEPENDENT OVERLAY, COMPOSED THE SAME WAY
              ==================================================================
@@ -2175,7 +2237,15 @@ function CorporationRoster({
           return (
             <div
               key={company.company_id}
-              ref={floatFocusedHere ? floatCardRef : undefined}
+              /* W3-H (found answering VF E-5): THE REF FOLLOWS THE SEQUENCE, NOT THE MEASUREMENT. It was attached
+                 only once `floatFocusedHere` was true -- but in full motion that needs `floatTarget`, which
+                 `useFloatCardTarget` can only produce by measuring THIS ref. The cycle never started: every
+                 full-motion float rendered the plain card, silently (real-browser trace, 115 frames, no lift).
+                 The card the sequence names is the card to measure; A-3's fallback is unchanged, because a
+                 measurement that fails still returns `null` and `floatFocusedHere` still waits for it. */
+              ref={floatSequence !== null && floatSequence.companyId === committed.company_id ? floatCardRef : undefined}
+              /* W3-H: how the launch gates above find this card to ask whether anyone can see it. */
+              data-stock-card={company.company_id}
               className="app-stock-card"
               style={{
                 ...styles.rosterCard,

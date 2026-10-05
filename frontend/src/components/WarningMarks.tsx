@@ -29,6 +29,7 @@
 import React from "react";
 
 import { crackPath } from "./trainRustFlourish";
+import { discardCut } from "./trainDiscardFlourish"; // W3-H (VF J-6)
 import { FONT_SIZE } from "../styles/typography";
 
 /* ==================================================================
@@ -139,6 +140,63 @@ export function RustMark(): React.JSX.Element {
         strokeLinecap="round"
         strokeLinejoin="round"
       />
+    </svg>
+  );
+}
+
+/* ==================================================================
+    W3-H (VF J-6, OD-14(h)): THE DISCARD MARK -- VF-8'S BLADE, AT A FIXED SEED, AGAINST THE CRACK
+   ==================================================================
+   OD-14(h) RULED "use static rust/discard icon treatment". The rust half is `RustMark` above (VF-7's I-10,
+   built by the warning-marks pass). J-6 said what the discard half should be made of: "`discardCut` is the
+   piece that pass would reuse -- it produces a position and a slant from a seed, so a badge can be the same
+   blade at a fixed seed, and the contrast with VF-7's `crackPath` badge (I-10) is already built in: a
+   straight line against a fracture." Taken literally, like the rust mark: the same tile, the same weights,
+   and inside it ONE straight blade where the rust mark has a forked fracture.
+   AND THE TILE IS PARTED AT THE BLADE. A lone near-vertical stroke in a square reads as a divider or a pause
+   glyph at 12px; a tile in two pieces with the blade between them says "this train was cut", which is what a
+   discard is (it goes to the Bank Pool intact -- no fracture, no debris). The gap is the J-3 "part" beat,
+   frozen. The two marks therefore differ in the one property the two vocabularies exist to keep apart: a
+   fracture that branches versus a clean straight cut. */
+const DISCARD_BADGE_SEED = 110; // `discardCut(110)`: x 50%, slant +3% -- centred, at the generator's largest lean
+/** Half the parting between the two halves of the tile, in mark units. */
+const DISCARD_PART_HALF = 1.1;
+
+/** The blade and the two half-tiles, in the mark's 0..MARK_BOX space. Exported for the harness. */
+export function discardMarkGeometry(): { blade: string; left: string; right: string } {
+  const { xPercent, slantPercent } = discardCut(DISCARD_BADGE_SEED);
+  const at = (percent: number) => Math.round((MARK_INSET + (percent / 100) * MARK_SPAN) * 10) / 10;
+  // The blade leans by `slantPercent` of the span across the tile's height, centred on `xPercent`.
+  const top = at(xPercent + slantPercent / 2);
+  const bottom = at(xPercent - slantPercent / 2);
+  const y0 = 1.1;
+  const y1 = MARK_BOX - 1.1;
+  const blade = `M${top} ${MARK_INSET - 1.5} L${bottom} ${MARK_BOX - MARK_INSET + 1.5}`;
+  const x0 = 1.1;
+  const x1 = MARK_BOX - 1.1;
+  const r = 4;
+  const round1 = (value: number) => Math.round(value * 10) / 10;
+  // Each half is the tile's outline cut along the blade line, pulled DISCARD_PART_HALF away from it.
+  const lt = round1(top - DISCARD_PART_HALF);
+  const lb = round1(bottom - DISCARD_PART_HALF);
+  const rt = round1(top + DISCARD_PART_HALF);
+  const rb = round1(bottom + DISCARD_PART_HALF);
+  const left = `M${lt} ${y0} L${x0 + r} ${y0} Q${x0} ${y0} ${x0} ${y0 + r} L${x0} ${y1 - r} Q${x0} ${y1} ${x0 + r} ${y1} L${lb} ${y1}`;
+  const right = `M${rt} ${y0} L${x1 - r} ${y0} Q${x1} ${y0} ${x1} ${y0 + r} L${x1} ${y1 - r} Q${x1} ${y1} ${x1 - r} ${y1} L${rb} ${y1}`;
+  return { blade, left, right };
+}
+
+const DISCARD_MARK = discardMarkGeometry();
+
+/** Discard: a train chip cut cleanly in two. */
+export function DiscardMark(): React.JSX.Element {
+  return (
+    <svg viewBox={`0 0 ${MARK_BOX} ${MARK_BOX}`} style={markStyle} aria-hidden="true" focusable="false">
+      {/* The two halves, at the rust tile's own weight and opacity, so the pair reads as one family. */}
+      <path d={DISCARD_MARK.left} fill="none" stroke="currentColor" strokeWidth={1.2} opacity={0.4} />
+      <path d={DISCARD_MARK.right} fill="none" stroke="currentColor" strokeWidth={1.2} opacity={0.4} />
+      {/* The blade, at the fracture's weight: the mark is the cut. Straight, unbranched, edge to edge. */}
+      <path d={DISCARD_MARK.blade} fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" />
     </svg>
   );
 }

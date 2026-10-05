@@ -1012,10 +1012,29 @@ categories are `turn`, `revenue` and `payouts`; a presidency is none of them, an
 this must not add another control. **Revisit only if** playtesters want it separable — that is a deliberate
 fourth category, not a bug fix.
 
-### C-7 · `OPEN` · An off-screen card still animates
+### C-7 · `RESOLVED` (W3-H, 2026-10-04) · An off-screen card still animates
 #1450's screen-space module carried a viewport check; it went with the module. The card-local proxy is now
 drawn whether or not the card is scrolled into view — harmless (nobody sees it) but the timers run for
 nothing. Low priority; it costs one `getBoundingClientRect` against the viewport to restore if it matters.
+
+**RESOLVED by W3-H** — restored the cheap way, as one fix shape shared with E-6 and F-5:
+`utils/surfaceVisibility.ts` (design note "W3-H: OFF-SCREEN WORK IS NOT STARTED") answers "can anyone see
+this?" with one `getBoundingClientRect` against `window.innerWidth/innerHeight` (a zero-size box — a
+`display: none` ancestor — is not visible) plus `document.visibilityState === "hidden"`. The roster gates the
+transaction through `useVisibleLaunch` before `useStockTransferFocus` sees it, decided once at launch in a
+layout effect: a transaction whose card is off screen or whose page is in the background is **declined** — no
+proxy, no timers, no staged board, the committed card as A-3's fallback — and is not started late when the
+card scrolls back (#1453/#1454: a late gesture is worse than none). **Cue decision (revised at the W3-H
+review):** a declined takeover still sounds its presidency cue, once, on the beat its crown would have landed
+(`useDeclinedPresidencyCue`, one timer, no state) — before the gate the transfer's timers never depended on
+geometry, so a takeover was always heard, and nobody ruled that off-screen players should stop hearing it. (A
+declined float sounds no stamp: VF-3's "no sound for a ceremony that never visibly played", and that ceremony
+never ran before W3-H's ref fix, so nothing audible is removed.) On-screen behaviour,
+timings, staging order and cues are unchanged, and reduced motion is exempt from the gate (unchanged). In
+jsdom, where no element has a box, the gate stands aside, so the existing suites run as before. Pinned by
+`components/w3hOffscreenGating.test.tsx` ("C-7: VF-1's transfer proxy": on screen → proxy, timers, cue;
+scrolled away / page hidden → no proxy, no staging timers, the cue once; not launched late); the off-screen
+cases fail with the gate reverted, and with the cue hook removed.
 
 ### C-8 · `OWNER DECISION` · Staging covers the whole card, including the float badge
 The staged overlay is applied by rebinding `company` at the top of the card's `.map`, so *every* reader
@@ -1029,10 +1048,28 @@ figures still advance on the same clock, simply unchased by a chip. Drops the tr
 glide. **Open:** whether that still reads as a transaction to someone using the preference, or as figures
 changing on their own.
 
-### C-10 · `OPEN` · The row glide has never been observed
+### C-10 · `RESOLVED` (W3-H evidence, 2026-10-04) · The row glide has never been observed
 jsdom reports every `offsetTop` as 0, so the FLIP cannot be exercised in a test: the suite asserts that the
 roster *order* changes on the right beat, but the transition itself is unverified. It is the single largest
 untested surface in VF-1 and the first thing to watch in playtest.
+
+**W3-H evidence** — observed in headless Chromium 1243 (real `StockRoundPanel`, fixture = `stockCardFocus.test.tsx`'s
+"a buy that takes the presidency" plus a 10% bystander, CAROL), sampling every row's computed `transform` on
+every animation frame (56 rAF samples over 900 ms, mean frame 16.5 ms), with a CDP screencast and a Playwright
+trace. **The FLIP runs and lands.** At the crown handover (first displaced frame 492.6 ms after the event =
+the presidency stage at `TRANSFER_MS` 260 + `HANDOVER_AT_MS` 215 + one frame of commit latency) BOB and ALICE
+swap rows: BOB's computed translateY per frame `21, 15.29, 10.40, 6.79, 4.30, 2.59, 1.47, 0.73, 0.29, 0.06, 0`
+and ALICE's the mirror (`−21 … −0.06, 0`), monotonic, ending at 657.6 ms — 165 ms, i.e. `HANDOVER_MS`, on the
+`cubic-bezier(0.22, 0.61, 0.36, 1)` curve; visual tops move 94.0 → 73.0 px and 73.2 → 94.2 px inside the table.
+The bystander row does not take part in the swap. Two things a reader may notice: (1) the swapping rows
+pass straight through each other, so for ~2–3 frames mid-glide the two names and figures overprint
+(`c10_glide_2_early.png`) — no z-order or opacity treatment; a PLAYTEST question, not a fault. (2) At the
+presidency stage start (~275 ms) the outgoing president's row grows ~1.2 px, and the FLIP inverts that too as
+a 1 px glide (`−1 → 0` over 165 ms) on BOB's and CAROL's rows; invisible, and up to 0.5 px of it is lost to
+`offsetTop`'s integer rounding (the rows' real tops are fractional, e.g. 93.19). One presidency cue fired.
+Artifacts: `docs/phase3/evidence/w3h/c10_row_glide.json` (per-frame sequences, visual tops, timings),
+`c10_glide_1_before.png` … `c10_glide_4_after.png` (487 ms, 523 ms, 565 ms, settled); the trace (~1.0 MB,
+screencast + DOM snapshots) is not committed and regenerates with `frontend/scripts/w3hEvidence/c10.mjs`.
 
 ### C-11 · `OWNER DECISION` · A mid-sequence remount replays the whole presentation
 The corps tab is conditionally rendered, so switching away and back inside the ~730 ms window unmounts and
@@ -1125,17 +1162,35 @@ ghost is drawn by the tile pass exactly as the laid tile will be, so nothing shi
 the grid lands (the ghost's fixed-corner revenue display, #486, went with the ghost pass). A refused lay is not withdrawn by the room: the flourish plays in full on the sent picture, and the
 hex returns to its old tile when the ghost's four-second clock releases it (see D-20 for a late arrival).
 
-### D-12 · `OPEN` · What switches on the first frame
+### D-12 · `RESOLVED` (W3-H, 2026-10-04) · What switches on the first frame
 A proposal counts as laid for every printed pass (#1471), so on a confirmed proposal nothing switches at the
 confirm but the rim's dashes and the lay's moving parts. A lay nobody proposed here counts as laid from its first
 frame: its printed value fades out as the proposal arrives, and the frame redraws the printed track, stations and
 dits it starts from, but the printed terrain icon, the printed name label and the terrain-cost badge disappear on
 the first frame rather than fading.
+**RESOLVED by W3-H** — on a lay nobody proposed here over a printed hex, the terrain icon, every printed name pass
+(landmark, single, OO and double-town) and the terrain-cost badge (plain box or compound pill) now fade on the printed
+value's own clock and curve (`badgePresentationAt(...).outgoingAlpha`: out over the 128 ms lead, or the reduced-motion
+crossfade). They are laid out as the printed hex laid them out — against the grid without the new tile, on a scratch
+slot ledger they share with the outgoing value — so nothing jumps and nothing takes a slot from the incoming tile. The
+cost badge asks the fee ledger as the previous render held it (after the lay the fee is paid). The icon is drawn whole
+because it sits under the tile pass, whose arriving proposal fill rises on that same curve; names and cost, over the
+tile, are painted at the fade. A confirmed proposal is unchanged (its transition carries no printed start). Pinned by
+`components/w3hTileFlourish.test.ts` (D-12 cases: C17's icon and cost box, Scranton's name and compound badge, each
+at the value's alpha and in its printed slot; a confirmed proposal shows neither).
 
-### D-13 · `OPEN` · Overlays are not staged
+### D-13 · `RESOLVED` (W3-H, 2026-10-04) · Overlays are not staged
 Route overlays, the focus veil and hover highlights draw from authoritative state over a hex mid-flourish, so a
 route could be drawn along rail still under construction. Routes are planned after the lay, so this should be
 rare.
+**RESOLVED by W3-H** — route overlays and the travelling route signal are now held on a hex mid-flourish: both are
+drawn under an even-odd clip that leaves out every hex whose flourish is still running, so no route is drawn along
+rail the frame has not built; the hex gets its route back on the first frame after its flourish commits. Everywhere
+else, and the pointer's route hit geometry, are unchanged; the route-signal frame clock is untouched. Reduced motion's
+240 ms fade builds nothing piecemeal and holds nothing (unchanged). The focus veil and hover were reviewed and left as
+they are: the veil is a tint and hover only restyles a nameplate — neither draws rail, so neither shows the unfinished
+tile as anything it is not. Pinned by `components/w3hTileFlourish.test.ts` (D-13 case: mid-flourish the route line is
+drawn with Scranton held out, after it with nothing held out, and under reduced motion with nothing held out).
 
 ### D-14 · `PLAYTEST` · Reservation markers ride with their city
 Since #1473 a home reservation marker is a piece in its city, as a token is (D-32), on every lay — a confirmed
@@ -1158,7 +1213,7 @@ city new — are rules-illegal under fixed OO (D-22), so there is no intended em
 the 67,308 currently accepted transitions nothing else produces one. The description keeps its emerge event
 (it describes whatever pair it is handed); nothing was added for #59.
 
-### D-16 · `OPEN` · The hand-over at pixel level
+### D-16 · `RESOLVED` (W3-H evidence, 2026-10-04) · The hand-over at pixel level
 First and last frames stroke every line exactly once (tested) and match the tile pass to rasterisation noise:
 curved rail is drawn as polylines (within 0.04 px of the curve at hex size 64) and a pill's outline as a fattened
 stroke rather than a capsule path. One difference is by design: rail carried over from a green crossing tile
@@ -1169,10 +1224,67 @@ If a flicker is ever seen as a flourish starts or ends, look here first. Since #
 proposal's first frame differs from the proposal only inside its moving parts' footprint, and a lay nobody
 proposed here starts on #1470's first frame (checked on every 7th currently accepted transition).
 
+**W3-H evidence** — rasterised in headless Chromium 1243 on real canvases, for all 33 distinct accepted pairs that
+`tileTransition.test.ts`'s walk reaches (standard rules, its ten city/town labels; 11 of them tile → tile),
+at hex size 40 @1× and 64 @2×. The static side is HexGridRenderer.tsx's per-tile loop body copied statement for
+statement (fill `ERA_TILE_FILL`, 2 px `COLOR_TIER_STROKE` rim, `drawTrackPath(…, false, undefined, false)` under
+`withHexClip`); the flourish side is the renderer's own staged branch (`drawTileTransitionFill` +
+`withHexClip(drawTileTransitionArt)`); per-pixel max RGB delta on an opaque background. **The hand-over is
+rasterisation noise.** Last frame (t = 1) vs the new tile pass: at 40 @1× median 260 / max 503 of 8,464 pixels
+differ at all, median 16 / max 73 by more than 32 levels, max channel delta 103, at most 1 pixel over 96; at
+64 @2× median 1,385 / max 2,045 of 87,616 differ, median 71 / max 286 over 32, max delta 92, none over 96. The
+last frame the board's clock actually paints (t = 1 − 16.7 ms/duration) is within the same band (40 @1×: max
+delta 85, 0 px over 96; 64 @2×: max delta 108, 1 px over 96). First frame (t = 0) vs the old tile pass, 11
+tile → tile pairs: 40 @1× max delta 103, median 1 / max 25 px over 32; 64 @2× max delta 82, median 60 / max
+173 px over 32, none over 96. Every difference is a one-pixel fringe along curved rail (the polyline-vs-arc
+note above) and station outlines (fattened stroke vs path); none is a missing, extra or displaced element
+(`d16_handover_montage.png`: static | frame | |diff|×4 for the two worst last frames, two worst first frames, and
+a median of each). Worst cases: `printed:G7→#1` / `printed:F20→#1` last frame, `#54→#62` first frame. **One
+deliberate difference, now seen:** a confirmed proposal's t = 0 frame against the proposal drawn solid
+(`proposedTileFrame`) differs exactly in its moving parts — the old tile's cities reappear in full colour at
+their old positions over the washed proposal and then migrate (up to 704 px at 40 @1×, 6,890 at 64 @2×, max
+delta 245–255, worst `#59→#64/#65/#66`; identical for 4 of 33 pairs with nothing moving;
+`d16_proposal_montage.png`). That is the behaviour this entry describes ("differs from the proposal only inside
+its moving parts' footprint"), but at the confirm click it is a visible pop of two full-colour stations onto a
+washed tile; flagged for playtest, not a hand-over fault. Scope: a lone hex (no neighbours, value-badge pass
+not included). Numbers: `docs/phase3/evidence/w3h/d16_handover_pixels.json` (per transition); harness
+`entries/d16.tsx`, `d16.mjs`.
+
 ### D-17 · `OPEN` · Whole-board repaint while a flourish runs
 The frame clock (#463's pattern) repaints the whole board canvas every animation frame while any transition runs
 — at most 1328 ms per lay (1600 ms before #1471, 850 ms before the re-timing). A proposal adds nothing: it is
 repainted only when the board is. Unmeasured on low-end devices.
+
+**W3-H evidence** — stays `OPEN` (the real low-end device is Phase 4's; this is the throttled trace, and it shows
+the cost is real). Real `HexGridRenderer` in headless Chromium 1243 (software raster, no GPU), standard board
+(`initialGridFor` + 15 accepted yellow lays), viewport 1366×900, flourish = the renderer's own transition
+started by a `mapGrid` change (H10 #57 → #14, 1328 ms), CPU throttled with CDP `Emulation.setCPUThrottlingRate`;
+two runs per configuration, rAF deltas over the flourish, an idle window on the same page first. Pooled
+frame times (median / p95 / max ms, effective fps, dropped frames of ~80 at 60 Hz):
+
+| CPU throttle | DPR (backing px) | median | p95 | max | fps | dropped | board repaints per run |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1× | 1 (1366×1078) | 16.7 | 16.7 | 16.8 | 60 | 0 | 81 |
+| 4× | 1 | 66.7 | 99.9 | 100.1 | 14.6 | 137 (2 runs) | 21 |
+| 6× | 1 | 100.0 | 166.7 | 166.7 | 10.7 | 152 (2 runs) | 13–15 |
+| 1× | 2 (2732×2156) | 33.3 | 33.4 | 50.0 | 39.1 | 62 (2 runs) | 51–53 |
+| 4× | 2 | 133.4 | 216.6 | 233.3 | 7.4 | 163 (2 runs) | 10–12 |
+| 6× | 2 | 233.4 | 333.3 | 333.3 | 5.4 | 172 (2 runs) | 6–7 |
+
+The idle window is 16.7 ms median at every setting, so the drop is the flourish's whole-board repaint and
+nothing else. At 4× the 1328 ms lay shows ~21 distinct frames, at 6× ~14, and at 6× on a 2× display ~7 — it
+plays as a slideshow. **Where the time goes** (one Chromium trace per rate, renderer main thread, 4× / 6×):
+`CanvasRenderingContext2D::FinalizeFrame` — the 2D canvas rasterising the frame's whole-board draw commands —
+median 45 / 69 ms per frame (943 / 840 ms of the 1428 ms window), against 11 / 22 ms median of JS per frame
+(frame clock + React render of HexGridRenderer + issuing the draw). The JS cost of issuing one repaint, timed
+from the board's `clearRect` to its last `restore()`, is 3.4 ms median unthrottled, 17–18 ms at 4×, 24–37 ms
+at 6×. So the bottleneck is rasterising the full board each frame, not the transition maths — the obvious
+lever is repainting only the transitioning hex (or caching the static board), which is a design change for
+whoever owns VF-5, not done here. Caveat: absolute numbers are this container's (software raster); a GPU-backed
+low-end phone may rasterise very differently, which is exactly why the real-device measurement stays open.
+Artifacts: `docs/phase3/evidence/w3h/d17_flourish_frame_times.json` (every run, raw deltas, repaint JS times,
+Long Animation Frame counts), `d17_trace_summary_rate4.json`, `d17_trace_summary_rate6.json` (raw traces ~2 MB
+each, not committed; `d17trace.mjs` regenerates them); harness `entries/d17.tsx`, `d17.mjs`, `d17trace.mjs`.
 
 ### D-18 · `OPEN` · Rules cross-reference: New York's four-slot city
 The brief described "two two-station cities → one four-station city". The four-slot #883 (Brown) is offered by
@@ -1249,7 +1361,7 @@ lay never arrives) and on a board change; a new ghost is a new send and plays. P
 in `tileTransitionStaging.test.ts`. **Still as #1145 left it:** a dropped ghost shows the old tile until the lay
 lands.
 
-### D-21 · `OPEN` · Rail-less printed centres pair by position, and some facings tie
+### D-21 · `RESOLVED` (W3-H, 2026-10-04) · Rail-less printed centres pair by position, and some facings tie
 Centres with rails correspond uniquely — across the 67,308 currently accepted transitions (what the placement
 filter's walk accepts on the three tables; accepted is not a claim of rules legality) the audit found no tie and
 no split, and every anchored token's game destination matched the flourish. **Merge evidence, re-run without
@@ -1267,6 +1379,20 @@ printed double town → #633 at 0 and 3. Deterministic, and the two answers are 
 wrong. **The token half:** a token on a printed OO circle has no rails, so the game lets the president choose its
 city (#824, #878); it rides to that city whatever the circles do, and can leave the circle it stood in.
 Presentation only; nothing changed.
+**RESOLVED by W3-H** — the nearest-first pairing of rail-less centres now breaks ties by a stated rule instead of
+float noise (`assignMarkers` in `tileTransition.ts`): candidate distances within `PAIR_TIE` (1e-6 unit, five times the
+largest rounding difference above) of the nearest open pair are one tie; the tie goes to the pair whose destination
+lies counter-clockwise on screen about the hex centre from its source for a city, clockwise for a town (`tieTurn`, a
+reading that turns with the hex), and where turns are equal within the same tolerance to the lower source, then
+destination, index. The directions are not a principle but what the rounding happened to give, so every pairing is
+preserved: the eight named tie facings keep their outcome, and a one-off comparison of old and new over every
+rail-less printed start the placement filter accepts (standard, expanded and LPF boards with their trays, plus the
+18XX+ tray on the standard board and the standard tray on the expanded: 5,865 transitions) changed none. Outside the
+accepted set some pairings the filter never offers do change — a single centred printed or yellow centre handed a
+two-centre tile (e.g. #5 → #54, printed single city → #35), and printed OO → brown #68, which skips green — where the
+old answer was equally the rounding's. Pinned by `components/w3hTileFlourish.test.ts` (D-21 case: the eight named
+facings keep today's pairing, and seeded noise of up to 2e-7 per coordinate on the printed centres — which flips
+raw nearest-first — does not flip it).
 
 ### D-22 · `OPEN` · Rules cross-reference: #59 → brown OO facings that break fixed OO
 This implementation plays fixed OO; the optional Variable OO Cities rule is not used and was never requested.
@@ -1367,7 +1493,7 @@ lay depending on who laid it. Its tokens have no planned place (#1474): that pro
 board, so each token rides in from its seat with nothing waiting for it (D-34); it sounds the same cues as a confirmed
 proposal (D-24).
 
-### D-30 · `OPEN` · Clip antialiasing while the front crosses
+### D-30 · `RESOLVED` (W3-H, 2026-10-04) · Clip antialiasing while the front crosses
 Each side of the front is the same drawing under a clip, so nothing is stroked twice. A stroke clipped as it is
 drawn antialiases its clipped edge over whatever lies beneath it, and #1471's edge line covered the seam that left.
 Since #1473 the edge runs under the art, so the seam is closed instead: the committed side's clip reaches a pixel and
@@ -1377,6 +1503,13 @@ layer's edge meets only the other side's finished layer (where no scratch canvas
 it draws, as before). In harness zooms the faint line of lower strokes across stations and rails is gone. The value
 badge is still drawn clipped per side — a disc and a figure — so a faint seam across it, for the frames the front
 crosses it, is possible; if one is seen, look here.
+**RESOLVED by W3-H** — the value badge now crosses the front as the art does: each side's badge (disc and figure) is
+painted whole into the same scratch layers (`layOnSides`, generalised from #1473's `laySides` in
+`tileTransitionCanvas.ts`) and laid onto the board under its side's clip, so a clipped edge meets only the other side's
+finished badge. The committed side still claims the slot and the proposal's side still draws from the ledger as it
+stood before the claim; where no scratch layer can be had each side is clipped as it draws, as before. Pinned by
+`components/w3hTileFlourish.test.ts` (D-30 case: in every frame the front crosses Scranton's badge, both sides are
+drawn off the board and laid on with clipped images; with no scratch layer, both are drawn on the board, unlayered).
 
 ### D-31 · `OWNER DECISION` · The proposal replaced #822's ghost pass
 The preview is drawn in the tile pass, not over the finished board, so the passes a laid tile sits under now draw
@@ -1438,6 +1571,8 @@ the marker has no seat to ride and moves straight across the hex (0.4 to 1 hex u
 did before #1473 (756 of 3,466 markers). Nothing pairs it with a city instead: which city a reservation marks is the
 board's placement rule, unchanged. **Watch:** whether a reservation crossing the hex reads as wrong; the lever would
 be that placement rule, which is not presentation's to change.
+
+**W3-H analysis (2026-10-04) — no presentation fix exists inside the current vocabulary; header left `OPEN` for W3-F to reclassify as a Phase-4 watch (`PLAYTEST`, disposition D).** The flourish already has a fallback for a piece with no seat (`anchoredRide`), but a reservation marker stands on its city's centre or slot, so that fallback reduces to the same straight line across the hex it already takes. There is no existing "ride the source city, then hand over to a different one" behaviour, and which city a reservation marks is the board's placement rule, which presentation must not change (unchanged here). So nothing was changed, and the open question is the visual one this entry already names. **If Phase 4 finds the crossing reads as wrong**, the one presentation-side option is new behaviour needing an owner ruling: the marker rides the city its old circle becomes through the migration, then reappears at its new place as the commit front sweeps it (reduced motion's "swap rather than two see-through stations" rule, borrowed).
 
 ### D-36 · `RESOLVED` (asset trim, 2026-09-16) · `mutation.mp3` was silent for its first 1.37 s
 Was: as supplied, the clip was 1,337 ms of digital silence and a lead-in below -44 dBFS, first above -40 dBFS at
@@ -1518,19 +1653,77 @@ other. **Nobody has watched the two run on the same card at once** — a purchas
 crosses 60% would show the ownership-transfer border/proxy and the float lift/stamp/flip simultaneously.
 Recorded so a busy-looking card in that exact moment is read as this deliberate choice, not as a bug.
 
-### E-5 · `OPEN` · The stacking-context claim is reasoned, not screenshotted
+### E-5 · `RESOLVED` (W3-H, 2026-10-04) · The stacking-context claim is reasoned, not screenshotted
 The report accompanying this batch reasons from the CSS spec (a `transform`-bearing element opens its own
 stacking context; the sticky action dock's `zIndex: 50` lives in a separate branch of the tree with no
 intervening ancestor `z-index`) that the lifted card can never paint over the sticky header without a
 screenshot confirming it in a live browser. **Watch:** the lifted card at the top of a scrolled Stock Round
 tab, to confirm it settles behind the sticky dock rather than over it.
 
-### E-6 · `OPEN` · Off-screen/inactive-tab cost, same shape as C-7
+**W3-H evidence** — stays `OPEN`: in a real browser the full-motion lift **never happens**, so the claim cannot
+be screenshotted on the product path. Harness (headless Chromium 1243, 1280×720): App.tsx's own shell
+(`styles.appRoot` + `chromeZoomFor(1)` > `styles.actionDock` sticky `zIndex: 50` > `styles.actionBar`, sibling
+`main` `styles.canvasPane` > real `StockRoundPanel`, eight floated corporations), scrolled so the roster
+grid's centre sits behind the dock, float event on the bottom-row B&O card.
+**Defect (reported, not fixed):** `ref={floatFocusedHere ? floatCardRef : undefined}` (StockRoundPanel.tsx
+~2177) attaches the ref only once `floatFocusedHere` is true, but in full motion `floatFocusedHere` requires
+`floatTarget !== null`, which `useFloatCardTarget` can only produce by measuring `floatCardRef.current` — a
+cycle that never starts. Measured over all 115 rAF frames of the 1800 ms sequence: card `transform` `none`
+throughout, no stamp, no flip wrapper, no muted livery, z-index `auto`, and 0 float cues fired (the A-3
+"no sound for a ceremony that never played" gate holds, so the float is silent too). Every full-motion float
+renders the plain card (`e5_fullmotion_midlift_nolift.png`). The jsdom suite reads this same outcome as the
+A-3 fallback, which is why it passes.
+**Stacking, as far as it can be shown:** (a) reduced motion (real product path, card's top 20 px tucked under
+the dock, at the stamp beat, inner `scale(1.12)` live, card z-index 5): 36/36 `elementFromPoint` samples in
+the dock/card overlap hit the dock; control point below the dock hits the card
+(`e5_reduced_stamp_under_dock.png`). (b) synthetic lift — the exact inline style the panel would apply
+(`useFloatCardTarget`'s formula: dx 403.3, dy −283.6, scale 1.5; `transition: transform 480ms ease-out`;
+`zIndex: 5`), set by the harness on the real card element because (A) cannot reach it: mid-lift (240 ms)
+36/36 and settled 36/36 overlap samples hit the dock, controls below the dock hit the card, which overlays its
+sibling cards (`e5_synthetic_midlift.png`, `e5_synthetic_lifted.png`). So the CSS reasoning holds — the
+lifted card settles behind the dock — but that is proven for the intended transform, not for the shipped code
+path, which does not lift. Re-run after the ref cycle is fixed. **Side observation:** in reduced motion the
+1.12 scale is applied to an inner wrapper inside `rosterCard`'s `overflow: hidden`, so the emphasis crops the
+card face at its edges (header text cut, visible in the screenshot) rather than growing the card. All numbers:
+`docs/phase3/evidence/w3h/e5_float_stacking.json`; harness `entries/e5.tsx`, `e5.mjs`.
+
+**RESOLVED by W3-H** — after the ref-cycle defect above was fixed (`4c89333`: the card's ref now follows the float
+sequence's named card, so `useFloatCardTarget` can measure it; pinned by `components/w3hFloatCeremonyMeasures.test.tsx`),
+the harness was re-run on the **shipped path** (full motion, same scroll: the roster grid's centre behind the dock).
+The ceremony now plays — card transform, stamp, flip, muted livery, z-index 5, one float cue over 116 frames — and the
+real lifted card settles behind the dock: 36/36 `elementFromPoint` samples in the dock/card overlap hit the dock
+mid-lift and 36/36 once settled at the centre; the control point below the dock hits the card
+(`e5_fullmotion_midlift.png`, `e5_fullmotion_lifted.png`; numbers under `fullMotion` in `e5_float_stacking.json`;
+driver `e5.mjs`). `e5_fullmotion_midlift_nolift.png` is kept as the pre-fix record of the defect. The reduced-motion
+crop noted above (the 1.12 emphasis inside `overflow: hidden`) is a separate observation, left for playtest.
+**Now live, so for E-1's playtest:** the full-motion float ceremony and its stamp cue run in the product for the
+first time. The harness deliberately scrolled the roster's centre under the dock; in that geometry the card
+settles behind the dock, i.e. partly out of sight — correct stacking, but whether a ceremony that can land
+under the dock reads well is a playtest question (the centring target is the roster grid's centre, VF-3).
+
+### E-6 · `RESOLVED` (W3-H, 2026-10-04) · Off-screen/inactive-tab cost, same shape as C-7
 The float timers and the geometry measurement run whether or not the "corps" tab is the active main tab or
 the card is scrolled into view — `useFloatCardTarget`'s early return only catches a genuinely unmounted
 `cardRef`/`floatGridRef`, not an inactive-but-mounted one. Harmless (nobody sees it, and the A-3 fallback
 still degrades cleanly if the rects come back zero-sized on a `display: none` ancestor), but, as C-7 already
 notes for VF-1's own proxy, the timers run for nothing. Low priority.
+
+**RESOLVED by W3-H** — C-7's fix, applied to the float event: `useVisibleLaunch` (`utils/surfaceVisibility.ts`)
+declines a float whose card is off screen, whose page is hidden, or whose pane is mounted but `display: none`
+(a zero-size box), before `useCorporationFloatFocus` sees it — so none of the ceremony's timers is armed, no
+geometry is measured, and the stamp cue never fires (the existing "NO SOUND FOR A CEREMONY THAT NEVER VISIBLY
+PLAYED" rule, applied one step earlier). Reduced motion is exempt and unchanged: a reduced float still plays
+(and sounds) off screen — **open for the owner** whether an off-screen reduced-motion float, or VF-1 takeover,
+should also stay silent; it was left as it was by brief. Pinned by `components/w3hOffscreenGating.test.tsx`
+("E-6: VF-3's float ceremony": on screen → timers armed; scrolled away / zero-size box / page hidden → none);
+each fails with the gate reverted. **Found while closing this, not fixed (outside W3-H's rows):**
+`floatCardRef` is attached only when `floatFocusedHere`, which needs `floatTarget !== null`, which needs
+`floatCardRef` — so the full-motion card can never measure itself and every full-motion float takes the A-3
+fallback, in a real browser as well as in jsdom (E-1 may be watching for a ceremony that cannot currently
+play). A local probe attaching the ref whenever the float sequence names the card made the stamp appear and
+the cue fire. **Since fixed in W3-H** (`4c89333`, under E-5, which could not be answered on the shipped path
+without it): the ref follows the float sequence's named card; see E-5 for the real-browser re-run. E-1's
+playtest can now watch the ceremony.
 
 ## Part F — Open review items (VF-2)
 
@@ -1588,20 +1781,28 @@ speed, and if so whether it reads as "settling into place" (intended) or as jitt
 pop (117%) reads as distinctly one bigger hit rather than a different kind of badge state; and whether 120ms
 still feels right for "the same moment" now that the reaction it groups is a pop rather than a tint.
 
-### F-5 · `OPEN` · The traveling signal and per-hex badge lookup run whenever any route overlay exists
+### F-5 · `RESOLVED` (W3-H, 2026-10-04) · The traveling signal and per-hex badge lookup run whenever any route overlay exists
 Same shape as VF-1's C-7 and VF-3's E-6: the rAF clock and the per-frame `pointOnRouteTrack` sampling run for
 as long as `routeOverlays.length > 0`, whether or not the board is actually the visible/active surface.
 Harmless — the work is cheap unit-hex-space math, gated to skip entirely under reduced motion — but, as noted
 in those two prior entries, it is not currently short-circuited for an off-screen or inactive board. Low
 priority.
 
+**RESOLVED by W3-H** — the same visibility rule (`utils/surfaceVisibility.ts`), shaped for a continuous clock:
+`useSurfaceVisible` tracks `visibilitychange` and, where available, an IntersectionObserver on the board's
+wrapper (with no IntersectionObserver the board counts as on screen). The rAF effect in `HexGridRenderer.tsx`
+now also returns early while the board is not visible and depends on that flag, so it stops requesting frames
+— and the per-frame `pointOnRouteTrack` sampling and badge lookup in `draw` stop with it — and re-arms when the
+board comes back. Each signal's phase is wall-clock (`routeSignalStartRef`), so it resumes where it would have
+been, with no catch-up; no cue rides this clock. Reduced motion is unchanged. Pinned by
+`components/w3hOffscreenGating.test.tsx` ("F-5: VF-2's traveling route signal clock": visible → frames;
+document hidden / board off screen → none; resumes on return); each fails with the gate reverted.
+
 ---
 
 ## Part G — Open review items (VF-4)
 
 ### G-1 · `OPEN` · Audio is unanswered, and the flip is silent until it is
-**Owner ruling OD-14(f) (transcribed 2026-10-04 from the owner's owner-decision reconciliation brief; supplied in an earlier owner conversation, never transcribed):** no phase-change sound effect in this phase.
-
 The brief allows a cue only if "an existing suitable mechanical cue already exists and can be reused
 cleanly", and rules out a generic cinematic boom or whoosh. The three clips in `public/audio` that could pass
 for a mechanical plate — `telegraph.mp3`, `watch-wind.mp3`, `steam_hiss.mp3` — are all owned by
@@ -1613,6 +1814,8 @@ own, fired on the fold's start rather than the midpoint (the sound of a plate re
 under the master SFX switch with no category of its own — the rule #1457 established for the presidency cue.
 **Owner decision needed:** whether a phase change deserves a sound at all. It happens five times a game and
 is already the loudest thing on the board in consequence terms.
+
+**RULED — OD-14(f), recorded by W3-H; header left `OPEN` (disposition changes are W3-F's, as on `26bca3b`)** (transcribed 2026-10-04 on `phase3/owner-decision-reconciliation` @ `26bca3b`): "No phase-change sound effect in this phase." The flip stays silent by ruling, not by omission; nothing was built. Revisit only on a new ruling.
 
 ### G-2 · `PLAYTEST` · The timings are first-guess numbers
 200 ms fold, 260 ms unfold, 6° overshoot, 60 ms settle — chosen against the brief's 450–600 ms band and
@@ -1652,13 +1855,13 @@ beat or like a stall; if it stalls, the modal can move to the `faceSwapped` mile
 uses) and still satisfy the ruling — a one-word change now that the holds are named rather than numbered.
 
 ### G-7 · `OPEN` · A phase change while the bar is unmounted
-**Owner ruling OD-14(g) (transcribed 2026-10-04 from the owner's owner-decision reconciliation brief; supplied in an earlier owner conversation, never transcribed):** do not replay stale flourish/celebration effects — the replay option is declined.
-
 The event is held for `PHASE_BADGE_TOTAL_MS` and then cleared, whoever is watching. A player on a tab where
 the action bar is not mounted misses the flip entirely and sees the new phase already settled when they
 return — which is correct (the badge is authoritative and the flourish is not), and the same shape as C-7 and
 E-6 for the cards. Recorded rather than fixed: the alternative is replaying a ceremony for an event that is
 no longer news.
+
+**RULED — OD-14(g), recorded by W3-H; header left `OPEN` (disposition changes are W3-F's, as on `26bca3b`)** (transcribed 2026-10-04 on `phase3/owner-decision-reconciliation` @ `26bca3b`): "Do not replay stale flourish/celebration effects." A phase change that happened while the bar was unmounted is not replayed; this entry's own reading ("acceptable") is the ruled behaviour. Nothing was built.
 
 ---
 
@@ -1733,13 +1936,15 @@ borrowing, which would break the association #727 exists to protect. **What to w
 contested mini-auction card. If it muddies, the fix is fewer stops for this surface — *taken from the same
 array*, never a new palette by eye.
 
-### H-6 · `OPEN` · The mini-auction card writes the palette out by hand
+### H-6 · `RESOLVED` (W3-H, 2026-10-04) · The mini-auction card writes the palette out by hand
 `WaterfallAuctionDashboard.tsx` spells the eight stops inline in its CSS rather than importing
 `PRIVATE_POWER_GLOW_STOPS`, which is the exact drift #727 created that constant to prevent ("two hard-coded
 palettes drifting apart is how the association quietly stops being one"). **Pre-existing, and deliberately
 not changed by this batch** — the ticket imports the shared array, so there are now two consumers of the
 constant and one hand-written copy. **Smallest fix:** interpolate the array into that card's template
 literal, exactly as `bankBreakFlourish.ts` does. Left for a batch that has reason to open that file.
+
+**RESOLVED by W3-H** — the card now interpolates `PRIVATE_POWER_GLOW_STOPS.join(", ")` into its template literal, exactly as `bankBreakFlourish.ts` does; no hand-written stop is left. Pinned behaviourally by `components/w3hMiniAuctionPalette.test.tsx` (the shared array is replaced with sentinel colours and the card's stylesheet must follow it); `utils/privatePowerGlow.test.ts`'s source pin, which asserted the hand-written copy, now asserts the interpolation.
 
 ### H-7 · `PLAYTEST` · Two tickets on screen at once
 The bar prints the ticket on both rails (the Operating Round panel's left rail and the action row's lead),
@@ -1849,7 +2054,7 @@ fill is far more opaque than those were, and it DARKENS rather than tints, but i
 against all eight. **What to watch:** NNH (`#ee7c22`) and any brown-adjacent livery, where an oxide wash may
 simply disappear. If it does, the fix is a darker oxide rather than a more saturated one.
 
-### I-8 · `OPEN` · Three of the five `TrainChips` call sites do not receive the event
+### I-8 · `RESOLVED` (W3-H, 2026-10-04) · Three of the five `TrainChips` call sites do not receive the event
 Wired: the Round Detail corporations table (every fleet at once — the surface a multi-corporation rust is
 watched on) and the action bar's acting-corporation strip (the buyer's own chips, and the bar renders on
 every tab since #1084). **Not wired:** the Stock Round card fronts and the Ledger's two tables. The Stock
@@ -1859,6 +2064,8 @@ sitting on the Ledger tab when a rust fires sees the new rosters appear without 
 above still animates the acting corporation's). Left unwired rather than threaded through a fourth panel for
 a tab nobody watches during a train purchase; it is A-3's fallback behaving correctly rather than a defect.
 
+**RESOLVED by W3-H** — the Ledger's Corporation Assets table now receives the rust event: `FinancialLedger` takes `rust` / `discard` props (the shell passes the same `rustEvent` / `discardEvent` the Round Detail table gets) and each row hands its `companyId` to `TrainChips`, which takes its own share. The Ledger's other `TrainChips` site is the depot tier list — a price list with no corporation, so a per-corporation event has nothing there to stage (the `Rusts` column already tells that story). The Stock Round card fronts stay unwired for the reason above (no rust is live while they are on screen). Pinned by `components/w3hLedgerFlourishEvents.test.tsx` (fails with the Ledger unwired).
+
 ### I-9 · `PLAYTEST` · Rust outranks both warning animations, and nothing was watched
 A chip being destroyed drops the `app-train-rust-critical` pulse and the `app-train-final-run` fade — two
 motions on one element read as a rendering fault, and the thing they were counting down to has arrived.
@@ -1866,14 +2073,14 @@ motions on one element read as a rendering fault, and the thing they were counti
 for a whole round suddenly stops, oxidises and fractures. The transition from a deep fade to full-opacity
 oxide may read as the chip *recovering* for an instant before it dies.
 
-### I-10 · `OPEN` · Rust's static badge icon is not implemented
-**Owner ruling OD-14(h) (transcribed 2026-10-04 from the owner's owner-decision reconciliation brief; supplied in an earlier owner conversation, never transcribed):** use the static rust icon treatment — ruled in (W3-H).
-
+### I-10 · `RESOLVED` (W3-H, 2026-10-04) · Rust's static badge icon is not implemented
 The brief asks that the flourish's vocabulary be structured so a later badge-identification pass can derive
 the static warning icon from it — a fractured train, a cracked wheel, a crack mark. `crackPath` is the piece
 that pass would reuse: it produces a resolution-free fracture from a seed, so a badge icon can be the same
 mark at a fixed seed. **Deliberately not implemented here** — the brief says not to unless the implementation
 required it, and it did not.
+
+**RESOLVED (verified by W3-H; OD-14(h) RULED "use static rust/discard icon treatment")** — already built by the warning-marks pass: `RustMark` in `WarningMarks.tsx` is `crackPath(41, 3)` in a square tile, exactly as this entry proposed (Part K, K-1 … K-6), and its identity with the generator is pinned in `warningMarks.test.tsx`. This entry's `OPEN` was stale; W3-H adds the discard half (J-6) and a badge-size guard (K-6) and changes nothing here.
 
 ---
 
@@ -1928,21 +2135,23 @@ the receiving pop is a bonus that fires for the minority of discards where the p
 departure has to carry the whole meaning on its own for the rest. **If that proves too weak at playtest**,
 the cheap fix is a Bank Pool count somewhere persistent rather than a longer animation.
 
-### J-5 · `OPEN` · Three of the five `TrainChips` call sites do not receive the event
+### J-5 · `RESOLVED` (W3-H, 2026-10-04) · Three of the five `TrainChips` call sites do not receive the event
 Exactly VF-7's I-8, and wired the same way: the Round Detail corporations table and the action bar's
 acting-corporation strip receive it; the Stock Round card fronts and the Ledger's two tables do not. **The
 Stock Round is genuinely not a gap** — a discard obligation exists only inside an Operating Round. **The
 Ledger is the same narrow gap rust has:** a player sitting on that tab sees the roster change without a cut.
 Left unwired rather than threaded through a fourth panel; A-3's fallback behaving correctly.
 
-### J-6 · `OPEN` · The discard's static badge icon is not implemented
-**Owner ruling OD-14(h) (transcribed 2026-10-04 from the owner's owner-decision reconciliation brief; supplied in an earlier owner conversation, never transcribed):** use the static discard icon treatment — ruled in (W3-H).
+**RESOLVED by W3-H** — wired with I-8, the same way: the Ledger's Corporation Assets rows receive the discard event and stage the cut on the discarding corporation only. Pinned by `components/w3hLedgerFlourishEvents.test.tsx`.
 
+### J-6 · `RESOLVED` (W3-H, 2026-10-04) · The discard's static badge icon is not implemented
 The brief asks that the vocabulary be structured so a later badge pass can derive a static "train limit
 exceeded" mark from it. `discardCut` is the piece that pass would reuse — it produces a position and a slant
 from a seed, so a badge can be the same blade at a fixed seed, and the contrast with VF-7's `crackPath`
 badge (I-10) is already built in: a straight line against a fracture. **Deliberately not implemented here**,
 on the brief's instruction not to unless the implementation required it, and it did not.
+
+**RESOLVED by W3-H** (OD-14(h) RULED "use static rust/discard icon treatment") — `DiscardMark` in `WarningMarks.tsx`: the rust mark's own tile and weights, parted in two by ONE straight blade taken from `discardCut(110)` (x 50%, slant +3%) — the clean cut against the rust mark's branching fracture. Shown before the title of the train-limit prompt (`TrainDiscardPrompt`), as the warning badges carry theirs; decorative (`aria-hidden`), the title carries the words. Pinned by `components/w3hStaticMarks.test.tsx` (straight, unbranched, edge to edge, at the generator's position; tile parted; distinct from the fracture; on the prompt — that case fails with the prompt unwired). **Watch (playtest):** whether the parted tile reads as "cut" at 12px and at uiScale 0.63.
 
 ### J-7 · `OWNER DECISION` · Two staging sources now share one chip row, and rust wins the tie
 `TrainChips` stages a pre-rust roster or a pre-discard one, and if both were ever live for one corporation
@@ -1991,12 +2200,25 @@ as a generic "item" box rather than as a train, in which case the mark says "som
 than "a train is". **What to watch:** whether anyone reads it as a train at all without being told; if
 nobody does, the tile is doing less work than it costs and K-2's first fix (drop it) gets easier.
 
-### K-4 · `OPEN` · The fallback capacity glyph has never been rendered in the product
+### K-4 · `RESOLVED` (W3-H evidence, 2026-10-04) · The fallback capacity glyph has never been rendered in the product
 `CapacityMark` falls back to a ceiling-and-down-arrow when `capacity` is null, per the brief's "do not
 fabricate numbers". It is unreachable from the Action Bar: `purchaseWarnings` constructs the train-limit
 warning only inside the guard that computes both figures. Asserted in the harness and drawn nowhere else.
 **If a future variant ever produces a limit change the depot cannot resolve**, this is the branch that
 runs, and it will be the first time anyone has seen it.
+
+**W3-H evidence** — rendered in headless Chromium 1243 (real `CapacityMark capacity={null}`, beside the real
+`4→3` mark and `RustMark`, inside the product's own `styles.phaseShiftBadge` + Warn/Critical capsules, pulse
+frozen) at uiScale 0.63 / 1.0 / 1.5, both through `chromeZoomFor` (the product's CSS zoom) and through plain
+label font-size scaling. The two mechanisms give identical mark boxes: the fallback and rust marks are
+7.97 / 12.64 / 18.97 CSS px square (1.15em of the 11px label, times the scale) and the `4→3` mark is
+15.6×8 / 24.7×13 / 37.1×19. The fallback draws exactly its two paths (ceiling bar + down arrow), no text and
+no figures. It reads as a ceiling-with-down-arrow at 1.0 and 1.5; at 0.63 on a 1× display it is ~8 device px
+and survives as a recognisable "↧", still clearly distinct from the boxed fracture beside it, with the
+ceiling bar at the edge of legibility. The branch remains unreachable from the bar (unchanged); this closes
+"never seen". Artifacts: `docs/phase3/evidence/w3h/k4_capacity_marks.png` (all sizes, DSF 2),
+`k4_scale063_dsf1.png` / `k4_scale063_dsf4.png` (0.63 close-ups), `k4_capacity_marks.json`; harness
+`frontend/scripts/w3hEvidence/` (`entries/k4.tsx`, `k4.mjs`).
 
 ### K-5 · `PLAYTEST` · `4→3` beside a label that does not carry the figures
 #889 deliberately took "Limit X → Y" off this badge because it was the busiest string in the row, and this
@@ -2006,13 +2228,15 @@ worth of numerals in one pill. **What to watch:** whether the eye reads `4→3` 
 rather than as a mark. It is set a hair smaller with extra letter-spacing to hold it apart; if that is not
 enough the next lever is a thin divider, NOT a colour (brief §2) and NOT a box (brief §7).
 
-### K-6 · `OPEN` · The rust mark and VF-7's chips can now disagree about a fracture, in one direction
+### K-6 · `RESOLVED` (W3-H, 2026-10-04) · The rust mark and VF-7's chips can now disagree about a fracture, in one direction
 The badge calls `crackPath(41, 3)` and the chips call it with the default 4. A change to the generator's
 SHAPE rules moves both, which is the point of reusing it — but a change that only makes sense at four
 steps (a fifth vertex, say, or a second branch) could quietly make the badge worse without failing
 anything. The harness asserts identity with `crackPath(41, 3)`, so the badge will keep matching the
 generator; what it cannot assert is that the result still looks like a break at 12px. **Whoever next edits
 `crackPath`: rasterise the badge as well as the chip.**
+
+**RESOLVED by W3-H** — the guard exists: `components/w3hStaticMarks.test.tsx` rasterises the badge's fracture at its real size (12.6px, K-2's figure for uiScale 1.0) and requires it to still read as a break — the fork at least 1.5px and at least 35° off the run, the run bent at least 1px off its chord, a turn of at least 20°, no segment under 1.5px, at least one pixel lit by the fork alone and at least two off the chord. Measured today: 2.0px / 54° / 1.34px / 29° / 3.3px / 3 / 11. A straight slash, a lost fork and a bunched zig each fail it (asserted). A `crackPath` change that only suits four steps now fails a test instead of quietly worsening the badge. At 8px (uiScale 0.63) the same mark measures fork 1.28px, bend 0.85px, one fork-only pixel — K-2's open playtest question, recorded there rather than gated here.
 
 ### K-7 · `PLAYTEST` · The chip in pieces, at 24px and at speed
 Added by the audio wiring pass, and it is the visual half of that batch. The failing chip now breaks into

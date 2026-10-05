@@ -777,6 +777,7 @@ gates.
 - **Constraint:** the ledger's standing rule — update `VISUAL_FLOURISH_BACKLOG.md` before each commit.
 - **Depends on:** W1-I, W1-B (shared files). **Gates:** OD-14 for ruled-in items; OD-12 only if A-19 needs RED R2.
 - **OD-14 (2026-10-04, §7.3):** ruled IN — U-7 cash / payout wash (AUD-12.05), U-8 seventh colour (AUD-12.06), the static rust / discard icons (VF/I-10, VF/J-6). Ruled OUT of W3-H's work — the G-1 phase-change sound (none in this phase) and the G-7 stale replay (declined).
+- **Status:** COMPLETE on its slice branch `phase3/w3-h` (from `phase3/wave3-i-w2i-w2j-w3c-w3g-v13cert-integration` @ `d29bb2f`); NOT integrated. All 18 implement rows IMPLEMENTED; the six OD-14 rows RULED ((b)/(c)/(h) built or verified and pinned, (f)/(g) no work). OD-12 followed: one RED R2 commit (`9f88178`, one argument at the haunting's duck). Found and fixed: the full-motion float ceremony never played (`4c89333`). Independent review APPROVE WITH FIXES, fixes in `31580c1`. See the matrix's "W3-H slice status".
 
 #### W3-I
 **Queued-submission visibility and form retention** · L3 · **3–5 h** · *new*

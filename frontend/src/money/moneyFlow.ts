@@ -107,7 +107,8 @@ export interface FlowInput {
   readonly now: number;
   /** W2-M (AUD-20.02): this seat's wallet proof can't be counted on for a deposit -- `aged`: the newest proof this
    *  page knows of (the link's own time, or a re-proof from this page) is older than the server accepts; `refused`:
-   *  the server refused a deposit for want of a fresh proof (its own word). Absent or null: nothing known against it. */
+   *  the server's own word -- it refused a deposit for want of a fresh proof, or the proof time it sends
+   *  (`link.proofVerifiedAt`, AUD-20.13) is past the limit. Absent or null: nothing known against it. */
   readonly proof?: "aged" | "refused" | null;
 }
 

@@ -115,15 +115,21 @@ export interface WalletChallenge {
   readonly text: string;
   readonly nonce: string;
   readonly expiresAt: number;
+  /** W2-M (AUD-20.14): the wallet this seat's standing link holds when it is ANOTHER wallet (linking would replace
+   *  it), null when nothing would be replaced, undefined from a server that doesn't say. A hint for asking first; the
+   *  link's own answer still decides. */
+  readonly replaces?: string | null;
 }
 
 /** SENSITIVE: needs a live "Confirm it's you" on this session. */
 export async function walletChallenge(gameId: string, wallet: string, port: SessionPort = sessionPort()): Promise<MoneyResult<WalletChallenge>> {
   const got = await post(port, "wallet-challenge", { gameId, wallet }, [200]);
   if (!got.ok) return got;
-  const { text, nonce, expiresAt } = got.value;
+  const { text, nonce, expiresAt, replaces } = got.value;
   if (!str(text, 2048) || !str(nonce, 64) || !num(expiresAt)) return badAnswer();
-  return { ok: true, value: { text, nonce, expiresAt } };
+  if (replaces === undefined) return { ok: true, value: { text, nonce, expiresAt } };
+  if (replaces !== null && !str(replaces, 96)) return badAnswer();
+  return { ok: true, value: { text, nonce, expiresAt, replaces } };
 }
 
 export interface WalletLinkAnswer {

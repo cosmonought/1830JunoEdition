@@ -71,7 +71,7 @@ export type OutcomeNeeds = "confirm" | "connect" | "replace" | "reprove";
 
 export type ActionOutcome =
   | { readonly ok: true; readonly notice?: string }
-  | { readonly ok: false; readonly reason: string; readonly needs?: OutcomeNeeds };
+  | { readonly ok: false; readonly reason: string; readonly needs?: OutcomeNeeds; readonly replace?: { readonly from: string; readonly to: string } };
 
 const done = (notice?: string): ActionOutcome => ({ ok: true, ...(notice !== undefined ? { notice } : {}) });
 const refuse = (reason: string, needs?: OutcomeNeeds): ActionOutcome => ({ ok: false, reason, ...(needs !== undefined ? { needs } : {}) });
@@ -183,6 +183,10 @@ export interface LinkOptions {
   readonly expectWallet?: string;
   /** This is the free re-proof of the seat's linked wallet (W2-M, AUD-20.02): say so when it lands. */
   readonly reprove?: boolean;
+  /** With `replace`: the linked wallet the player agreed to replace (W2-M, AUD-20.14). If the seat's standing link is
+   *  no longer that wallet -- by the server's challenge answer, or by the view from a server that doesn't say -- nothing
+   *  is signed and the player is asked again. */
+  readonly expectReplaces?: string;
 }
 
 /** Link the Keplr account to this seat: challenge -> this browser reads it -> Keplr signs it (ADR-036) -> link. */
@@ -203,6 +207,18 @@ export async function linkWallet(ctx: TableContext, options: LinkOptions = {}): 
   }
   const challenge = await walletChallenge(ctx.gameId, wallet, ctx.port);
   if (!challenge.ok) return fromApi(challenge, services);
+  /* W2-M (AUD-20.14): the server says, before Keplr signs, which wallet this link would replace. Unasked, the player
+     is asked first (nothing signed; this unspent challenge is simply superseded by the next one). Asked, the wallet
+     named in the question must still be the one standing. A server that doesn't say leaves the view's link as the
+     check and its own `replace-required` as the answer. */
+  const standing = challenge.value.replaces;
+  if (options.replace === true) {
+    if (options.expectReplaces !== undefined && (standing !== undefined ? standing : (you.link?.wallet ?? null)) !== options.expectReplaces) {
+      return refuse("This seat's linked wallet changed since you were asked, so nothing was signed. Look at it again before replacing it.");
+    }
+  } else if (standing !== undefined && standing !== null && standing !== wallet) {
+    return { ok: false, reason: `This seat is linked to ${standing}. Replace it with ${wallet}?`, needs: "replace", replace: { from: standing, to: wallet } };
+  }
   const site = ctx.site ?? (typeof window === "undefined" ? "" : window.location.origin);
   const checked = checkLinkChallenge(challenge.value.text, { appName: APP_NAME, site, pin, gameId: ctx.gameId, playerId: you.playerId, wallet, now: services.now() });
   if (!checked.ok) return refuse(checked.reason);

@@ -240,7 +240,22 @@ export function useMoneyTable(input: MoneyTableInput): MoneyTable {
   const link = you?.link ?? null;
   const linkTag = link === null ? null : `${link.wallet}#${link.epoch}`;
   const renewedAt = link === null || you === null ? undefined : session.proofRenewedAt[proofKey(input.gameId, you.playerId, link.wallet)];
-  const proof: "aged" | "refused" | null = link === null ? null : proofRefusedFor !== null && proofRefusedFor === linkTag ? "refused" : proofAgedOut(Math.max(link.linkedAt, renewedAt ?? Number.NEGATIVE_INFINITY), now) ? "aged" : null;
+  /* W2-M (AUD-20.13): the server's own record of when the proof was verified, when it sends it, is the authority -- a
+     proof it shows as past the limit is the server's word ("refused" wording: it needs a fresh proof); only without
+     it does the page infer from the link's own time ("aged": the deposit stays offered beside the re-proof). */
+  const verifiedAt = link !== null && typeof link.proofVerifiedAt === "number" && Number.isFinite(link.proofVerifiedAt) ? link.proofVerifiedAt : null;
+  const proof: "aged" | "refused" | null =
+    link === null
+      ? null
+      : proofRefusedFor !== null && proofRefusedFor === linkTag
+        ? "refused"
+        : verifiedAt !== null
+          ? proofAgedOut(Math.max(verifiedAt, renewedAt ?? Number.NEGATIVE_INFINITY), now)
+            ? "refused"
+            : null
+          : proofAgedOut(Math.max(link.linkedAt, renewedAt ?? Number.NEGATIVE_INFINITY), now)
+            ? "aged"
+            : null;
 
   const confirmedNow = isConfirmed(session, now);
   const flow = useMemo(
@@ -317,11 +332,10 @@ export function useMoneyTable(input: MoneyTableInput): MoneyTable {
         case "replace-confirmed": {
           const to = replaceTo.current;
           if (to === null) return { ok: false, reason: "The wallet to link isn't known, so nothing was signed. Start again." };
-          /* The question named the link it replaces: if the seat's link has moved since, ask again rather than replace
-             a wallet the player wasn't asked about. */
+          /* The question named the link it replaces: if the seat's link has moved since (the server's challenge answer
+             says, before Keplr signs), the player is asked again rather than a wallet they weren't asked about replaced. */
           const from = replaceFrom.current;
-          if (from !== null && ctx.view.you?.link?.wallet !== from) return { ok: false, reason: "This seat's linked wallet changed since you were asked, so nothing was signed. Look at it again before replacing it." };
-          return linkWallet(ctx, { replace: true, expectWallet: to });
+          return linkWallet(ctx, { replace: true, expectWallet: to, ...(from !== null ? { expectReplaces: from } : {}) });
         }
         case "open-review":
           setReviewing(true);
@@ -380,10 +394,16 @@ export function useMoneyTable(input: MoneyTableInput): MoneyTable {
               replaceFrom.current = null;
             }
           }
+        } else if (outcome.needs === "replace" && outcome.replace !== undefined) {
+          /* W2-M (AUD-20.14): the server's challenge answer named the standing wallet before Keplr signed: ask first,
+             naming both; nothing was signed, so the replacement is one signature. */
+          replaceTo.current = outcome.replace.to;
+          replaceFrom.current = outcome.replace.from;
+          setNeeds({ kind: "replace", from: outcome.replace.from, to: outcome.replace.to, again: false, said: null });
         } else if (outcome.needs === "replace") {
-          /* The server asked whether to replace (the view hadn't shown the standing link yet; its answer spent that link
-             request, so Keplr signs once more -- the case only a server change could save). The question names both
-             wallets as far as this page knows them: one surface, not an error beside it. */
+          /* The server asked only after Keplr signed (a server that doesn't name the standing wallet beforehand, or a
+             link made between the challenge and the signature): its answer spent that request, so Keplr signs once
+             more. The question carries the server's own sentence: one surface, not an error beside it. */
           replaceTo.current = moneySession().address;
           replaceFrom.current = null;
           setNeeds({ kind: "replace", from: null, to: replaceTo.current, again: true, said: outcome.reason });

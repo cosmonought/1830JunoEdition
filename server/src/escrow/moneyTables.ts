@@ -932,7 +932,8 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
         link:
           link === null
             ? null
-            : { wallet: link.wallet, epoch: link.epoch, ticket: link.ticket, linkedAt: link.issued_at, consentKeys: [...link.consent_keys] },
+            : /* W2-M (AUD-20.13): the stored proof's own time -- a same-wallet re-proof renews it and keeps `issued_at`. */
+              { wallet: link.wallet, epoch: link.epoch, ticket: link.ticket, linkedAt: link.issued_at, consentKeys: [...link.consent_keys], ...(link.proof !== null ? { proofVerifiedAt: link.proof.verified_at } : {}) },
         funding: claim.funding,
         chainSeatIndex: chainIndex,
         payoutWallet: frozenSeat?.wallet ?? claim.payoutWallet,
@@ -1213,6 +1214,17 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
     const wallet = canonicalJunoWallet(body.wallet);
     if (wallet === null) return refusal(400, "bad-wallet", "That isn't a Juno wallet address.");
     if (table.record.status !== "waiting" || dealtRecord(table.record)) return refusal(409, "wrong-state", "A wallet is linked before the game starts.");
+    /* W2-M (AUD-20.14): before the wallet signs, say which wallet this seat's standing link would be replaced (the
+       same test the link's `replace-required` makes), so the browser asks first and the wallet signs once. A hint only:
+       the challenge, its single use and the link's own decision are unchanged, and it names nothing the seat's own
+       view doesn't already carry. A ledger that can't be read just now leaves it out (the link still decides). */
+    let replaces: string | null | undefined;
+    try {
+      const standing = standingLinkOf((await deps.tickets.snapshot(table.record.game_id)).grants, table.playerId);
+      replaces = standing !== null && standing.wallet !== wallet ? standing.wallet : null;
+    } catch {
+      replaces = undefined;
+    }
     const minted = challenges.mint({
       context: { sessionId: caller.sessionId, familyId: caller.familyId, recoverySelector: caller.recoverySelector, principalId: caller.principalId },
       gameId: table.record.game_id,
@@ -1222,7 +1234,7 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
       chainId: deps.pin.chain_id,
       contract,
     });
-    return answer({ text: minted.text, nonce: minted.nonce, expiresAt: minted.expiresAt });
+    return answer({ text: minted.text, nonce: minted.nonce, expiresAt: minted.expiresAt, ...(replaces !== undefined ? { replaces } : {}) });
   }
 
   type LinkDecision = { readonly kind: "issue"; readonly relinkFrom: number | null } | { readonly kind: "unchanged"; readonly grant: Grant } | { readonly kind: "refused"; readonly status: number; readonly code: string; readonly reason: string };

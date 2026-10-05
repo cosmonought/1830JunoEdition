@@ -39,7 +39,31 @@ or attachment.
 
 OD-1, OD-2, OD-7 and OD-12 were ruled on 2026-10-03, during wave 1; OD-9(a) and OD-11 at the safe Wave-2 integration — verbatim in the
 plan's §7.3 and `owner_rulings` in the JSON. OD-4, OD-10(a) and OD-17 were ruled by the owner's W3-K rules-v13 brief (2026-10-03),
-restated in the same places. OD-6 and OD-8 were ruled 2026-10-04 (W2-I, W2-J); OD-3, OD-13, OD-14(d) and OD-14(i) were transcribed at the W3-G owner review (2026-10-04). Still open: OD-14(a)–(c), (e)–(h), OD-10(b).
+restated in the same places. OD-6 and OD-8 were ruled 2026-10-04 (W2-I, W2-J); OD-3, OD-13, OD-14(d) and OD-14(i) were transcribed at the W3-G owner review (2026-10-04).
+
+**Owner-decision reconciliation (2026-10-04, `phase3/owner-decision-reconciliation`).** Rulings the owner had given in earlier
+conversations but that were never written down are now transcribed from the owner's reconciliation brief, in its words:
+OD-5 (tutorial ORDERING only — tutorial work waits for the final tutorial/UI pass), OD-9(b) (the official Keplr asset only,
+never fabricated), OD-14(b), (c), (e)–(h), OD-15 (the owner's later cinematic-video clarification supersedes the older modal
+reading), OD-16 and OD-18. OD-14(a) was re-approved by the owner on 2026-10-04 (also transcribed on the unintegrated W1-I
+branch). *Cross-branch note, not on this line:* OD-19 is recorded on `phase3/w3-g-watch-defect-triage` (`3be965d`), not yet integrated.
+
+**Owner-decision rule.** Owner decisions require explicit owner approval. Assistant / Cowork recommendations, planning
+defaults, inferred choices and implementation decisions are NOT owner rulings. A ruling given in conversation is transcribed
+in the same pass; this list is the single maintained "still open" list.
+
+**Still open** (genuinely awaiting the owner):
+- **OD-0** — the Phase-3 base pin (historical evidence ambiguous; the implementation base above is still TBD).
+- **OD-5** — the three policy questions: persist one-shot notices per game or derive them from state; the focus target and
+  chaining / yield order for forced notices; the tutorial re-arm policy. (Only the tutorial ordering is ruled.)
+- **OD-10(b)** — phone-width game layout, zoom-aware breakpoints and keyboard map access: Phase-3 target, Phase-4
+  observation or Phase-5 work. (The historical OD-10 approval is (a); no equivalence is shown.)
+
+**Needs only a confirmation:** OD-18 — U-10's "pause cap" is not named by the ruling (clock, forfeit, trade decline and host
+succession are placed after Phase-4); the owner may confirm it falls under the same later placement.
+
+**Waiting on an input, not a decision:** OD-9(b) — the official Keplr logo file (ASSET PENDING); OD-16 — the owner-authored
+substantive Terms copy (a Phase-7 / mainnet gate; Phase 3 builds only the shell and links).
 
 ## Rules v13 (W3-K)
 

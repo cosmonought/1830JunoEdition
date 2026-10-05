@@ -668,6 +668,7 @@ gates.
 - **Constraints:** browser UX only. No contract, payload, codec, settlement, `FINANCIAL_PROTOCOL_VERSION` or server
   money-route change. If E-2 needs a server change, stop and record it for the owner.
 - **Focused tests:** `src/money/`, `src/components/money/` suites touched. **Gates:** OD-16 (Terms content).
+- **OD-16 RULED (transcribed 2026-10-04, §7.3):** W2-M builds the Terms route / page shell and the Terms / deposit link infrastructure; the substantive copy is owner-authored and never invented, and the final Terms are a Phase-7 / mainnet gate.
 
 ### Wave 3
 
@@ -681,6 +682,7 @@ gates.
 - **App.tsx regions:** R-TUT, R-NOTICES (RED R4's prune only under OD-12). **Pins likely to move:** the Batch 4A/4B modal
   suites, `nativeModalBoundary`.
 - **Depends on:** W2-G, W2-H. **Gates:** OD-5 (+ OD-12 if needed). **Phase-4:** AUD-13.08.
+- **OD-5 (2026-10-04):** only the tutorial ORDERING is ruled — tutorial work (AUD-01.06's re-arm effect) waits for the final tutorial/UI pass, after the shell/UI has stabilized. The notice-persistence, focus / yield-order and re-arm POLICY questions are still OPEN; nothing in W3-A is built from them until the owner approves them.
 
 #### W3-B
 **Latch residue** · L2 · **3–4.5 h**
@@ -711,6 +713,7 @@ gates.
   (OD-15(b)); replace the remaining `aria-modal` divs (except `HomeStationPrompt` / `AuctionPromptModal`, which W2-H
   settles); keyboard reach for the dock controls.
 - **Depends on:** W2-H, W3-A. **Gates:** OD-15.
+- **OD-15 RULED (transcribed 2026-10-04, §7.3):** the intro and end-game videos are full-viewport cinematic takeovers (not NativeModal / `<dialog>`, not modal-looking), sized by true viewport geometry with the counter-scale removed (`GameIntroOverlay.tsx`, AUD-13.05; `GameOutroOverlay.tsx` likewise); genuine modals stay on the native dialog / top layer, with no second manual modal / inert architecture (AUD-13.06). AUD-13.04 (tutorials as native dialogs) is tutorial work: OD-5's ruled ordering sequences it to the final tutorial/UI pass.
 
 #### W3-E
 **City bypass control (conditional)** · L4 · **5–8 h, only if OD-11 = build**
@@ -756,6 +759,7 @@ gates.
   badge icons, U-7 wash, U-8 palette).
 - **Constraint:** the ledger's standing rule — update `VISUAL_FLOURISH_BACKLOG.md` before each commit.
 - **Depends on:** W1-I, W1-B (shared files). **Gates:** OD-14 for ruled-in items; OD-12 only if A-19 needs RED R2.
+- **OD-14 (2026-10-04, §7.3):** ruled IN — U-7 cash / payout wash (AUD-12.05), U-8 seventh colour (AUD-12.06), the static rust / discard icons (VF/I-10, VF/J-6). Ruled OUT of W3-H's work — the G-1 phase-change sound (none in this phase) and the G-7 stale replay (declined).
 
 #### W3-I
 **Queued-submission visibility and form retention** · L3 · **3–5 h** · *new*
@@ -787,6 +791,12 @@ gates.
 Types: **PRODUCT** · **RULES** · **PRESENTATION** · **PLAYTEST-INFORMED** (can be re-tuned after Phase 4). None is
 answered here. Where a draft question was already decided, it is removed (§7.2).
 
+**Owner-decision rule (2026-10-04).** Owner decisions require explicit owner approval. Assistant / Cowork recommendations,
+planning defaults, inferred choices and implementation decisions are NOT owner rulings. A ruling is recorded only from the
+owner's own words (a brief, a decision, or an explicit approval); a ruling the owner gives in conversation is transcribed
+into `owner_rulings`, this table and §7.3 in the same pass, so a later lane never has to re-ask it. The genuinely open
+list is kept current in `docs/phase3/README.md` ("Still open").
+
 | ID | Type | The decision | What exists now | Gates | Needs Phase 4 first? |
 |---|---|---|---|---|---|
 | **OD-0** | PRODUCT (base) | **PHASE-3 BASE PIN.** At kickoff the integrator pins the FINAL canonical integrated post-Phase-2 head and confirms: no unique local frontend work exists outside it; the Phase-3 planning facts still apply; any drift is reconciled before P0. **No implementation starts before this pin.** | Planning snapshot only (`8e897f9`) | everything | No |
@@ -794,20 +804,20 @@ answered here. Where a draft question was already decided, it is removed (§7.2)
 | **OD-2** | RULES confirmation (+ PRESENTATION detail) | **RULED 2026-10-03 — see §7.3.** The audit fixes the target: one Pass / End Turn control. Open: **restate the recorded OD-A-2 and OD-A-4 rulings.** The 6.5-B report says they were "recorded, not implemented", but their text is in neither the repository nor the Project docs. OD-A-2: should a Stock Round Pass always end the turn (a v13 rules change, W3-K), or does the one control send the two `PassTurn`s under v12? OD-A-4: may a Brown IPO first purchase open the Pool continuation (SBS-4)? | Two Passes end a no-buy turn; stage buttons only switch tabs | W2-B; W3-K items SBS-2/SBS-4 | No |
 | **OD-3** | PRESENTATION (+ engine scope) | **RULED 2026-10-04 (transcribed at the W3-G owner review: generic expiry; no forensic engine reason) — see §7.3.** M&H queued request: toast + a persistent table marker + "requested" / "executed" lines; on cancellation, a generic "expired", or authorize engine work (v13, W3-K) to carry the reason | Narrated as executed; no reader of `pending_mh_exchange` | W2-E | No |
 | **OD-4** | PRODUCT | **RULED 2026-10-03 — see §7.3.** Emergency modal: Back/close while a decision remains? Non-presidents see a read-only liquidation, or nothing? | Cannot close; every seat sees "Declare bankruptcy" | W2-G | No |
-| **OD-5** | PRESENTATION · PLAYTEST-INFORMED | Notices: persist one-shot notices per game, or derive them from state for late joiners; the focus target and chaining order for forced notices; the tutorial re-arm policy (once per profile? per new game?) | PhaseThree / PrivateRevenue / Herald lost on reload; FleetLoss replays history in a fresh tab; tutorials re-arm on every zero-state mount | W3-A | No; Phase 4 may re-tune |
+| **OD-5** | PRESENTATION · PLAYTEST-INFORMED | **Tutorial ORDERING RULED (transcribed 2026-10-04: tutorial work deferred to the final tutorial/UI pass) — see §7.3; the three policy questions below stay OPEN.** Notices: persist one-shot notices per game, or derive them from state for late joiners; the focus target and chaining order for forced notices; the tutorial re-arm policy (once per profile? per new game?) | PhaseThree / PrivateRevenue / Herald lost on reload; FleetLoss replays history in a fresh tab; tutorials re-arm on every zero-state mount | W3-A | No; Phase 4 may re-tune |
 | **OD-6** | PRODUCT | **RULED 2026-10-04 (Option A: game_id stays undisplayed; build id + rules version on the Rules Reference build line) — see §7.3.** Show the game id (LIVE-2 §7.2 says never)? Where do the build id and rules version appear? | Room code only on hosted tables; stale build note; version only in error text | W2-I (that part) | No |
 | **OD-7** | RULES (confirmation) | **RULED 2026-10-03 — see §7.3.** RR-4: when the treasury can pay a forced purchase, must it be the cheapest train? "Yes" is a rules defect (v13, W3-K); "No" is a copy fix (W2-J). **The 6.5-B report says an RR-4 ruling was recorded; restate it for Part D** | Engine allows any legal purchase; the Reference said "cheapest" at 4 sites (corrected, `ca73834`) | W2-J / W3-K — ruled: W1-L copy, done | No |
 | **OD-8** | PRESENTATION | **RULED 2026-10-04 (Option A: the float and its capital at the purchase, the home line at the placement) — see §7.3.** U-37 float narration: (a) "floated" at the float plus "placed its home" later, or (b) one line at placement | One line at placement | W2-J | No |
-| **OD-9** | PRESENTATION / PRODUCT | **(a) RULED 2026-10-03 — see §7.3; (b) the Keplr logo stays ASSET PENDING.** (a) U-44 time convention: local with zone (needs a server copy edit) or UTC everywhere. (b) U-15 Keplr logo asset and brand approval | Local "HH:MM" unlabelled vs the server's "UTC"; no logo asset | W2-K | No |
-| **OD-10** | RULES / PRODUCT | **RULED 2026-10-03 — see §7.3.** (a) Is a v13 rules batch allowed inside Phase 3 (W3-K), or are all rules items owner-placed after Phase 4? (b) Are phone-width game layout, zoom-aware breakpoints and keyboard map access Phase-3 targets, Phase-4 observations only, or Phase-5 work? | v12; no game-shell breakpoints; the map is mouse-only | W3-K; AUD-16.05, AUD-16.09 | (a) No. (b) Partly |
+| **OD-9** | PRESENTATION / PRODUCT | **(a) RULED 2026-10-03 — see §7.3; (b) policy RULED (transcribed 2026-10-04: the official Keplr asset only, never fabricated) — ASSET PENDING, not a decision awaiting the owner.** (a) U-44 time convention: local with zone (needs a server copy edit) or UTC everywhere. (b) U-15 Keplr logo asset and brand approval | Local "HH:MM" unlabelled vs the server's "UTC"; no logo asset | W2-K | No |
+| **OD-10** | RULES / PRODUCT | **(a) RULED 2026-10-03 — see §7.3; (b) OPEN (not equivalent to the historical OD-10 approval; checked 2026-10-04).** (a) Is a v13 rules batch allowed inside Phase 3 (W3-K), or are all rules items owner-placed after Phase 4? (b) Are phone-width game layout, zoom-aware breakpoints and keyboard map access Phase-3 targets, Phase-4 observations only, or Phase-5 work? | v12; no game-shell breakpoints; the map is mouse-only | W3-K; AUD-16.05, AUD-16.09 | (a) No. (b) Partly |
 | **OD-11** | PRODUCT · PLAYTEST-INFORMED | **RULED 2026-10-03 (build: manual route only) — see §7.3.** K-06 city bypass: build in Phase 3 (which hexes, which gesture, how it meets the shortfall refusal) or place it later | No voluntary control; bypass is sent automatically where forced | W3-E | Partly |
 | **OD-12** | PRODUCT (engineering scope) | **RULED 2026-10-03 — see §7.3.** **RED-region permission.** May named Phase-3 fixes edit the RED regions (submit half, apply half, OR verdict, link drain), each as one separately reviewed commit naming its exact lines? Candidates: K-18 (R2), the banner/refusal model and refusal rollbacks (R1, R5), the `press:true` latch (R1), K-24's call site (R2), A-19 if the audio-side fix is not enough (R2), the FleetLoss prune if the store fix is not enough (R4), the queued-state read if it cannot be done outside the drain (R5). A refusal places each named item later (E) — it does not silently drop it | The draft deferred all of these to Phase 4 without a ruling | W2-J, W3-B, W3-C, W3-I, W1-N, W3-A, W3-H | No |
 | **OD-13** | PRESENTATION (derived statistics) | **RULED 2026-10-04 (transcribed at the W3-G owner review: W2-L's corrections approved as implemented) — see §7.3.** Ratify or amend the candidate resolutions for U-41 and U-43 (1)–(4). Each changes standard-game post-game statistics | Recorded in Part C as candidates "NOT ratified" | W2-L | No |
-| **OD-14** | PRESENTATION | **(d) and (i) RULED 2026-10-04 (transcribed at the W3-G owner review: keep "traded"; a bounded money-panel consistency pass) — see §7.3; (a)–(c), (e)–(h) open.** Owner calls the audit names: (a) U-16 — move the step panels back into the bar, or keep; (b) U-7 — extend the card wash to the cash slide-out and payout modal; (c) U-8 — seven-seat palette; (d) GR-3 — keep "traded" for a first-Diesel trade-in or restore "rusted"; (e) the waiting room's extra description line; (f) VF G-1 — a phase-flip cue (which asset); (g) VF G-7 — close as designed or replay; (h) VF I-10 / J-6 — build the static badge icons now; (i) the money panel's styling (a Part C U-44 note, beyond the audit) | Each recorded as open or "owner to say" | W1-I(-b), W3-H, W1-L, W2-K, W2-L | (a)(f) partly |
-| **OD-15** | PRESENTATION (modal infrastructure) | (a) The intro overlay's scale contract; (b) is the portal / inert layer still needed (and if so, inert behind every modal)? | `zoom: 1 / uiScale` on an `aria-modal` div; `ModalPortal` disowns inert | W3-D | No |
-| **OD-16** | PRODUCT (owner-authored) | The Terms page content (S10-12), required before the first real deposit | None | W2-M (hosting) | No |
+| **OD-14** | PRESENTATION | **(a)–(i) RULED — see §7.3.** (d) and (i) transcribed 2026-10-04 at the W3-G owner review; (a) re-approved by the owner 2026-10-04 (keep the panels outside the bar; remove the probe); (b), (c), (e)–(h) transcribed 2026-10-04 from the owner's reconciliation brief (wash: yes; seventh colour: yes; keep the persistence line; no phase-change sound; no stale replay; static rust / discard icons). Owner calls the audit names: (a) U-16 — move the step panels back into the bar, or keep; (b) U-7 — extend the card wash to the cash slide-out and payout modal; (c) U-8 — seven-seat palette; (d) GR-3 — keep "traded" for a first-Diesel trade-in or restore "rusted"; (e) the waiting room's extra description line; (f) VF G-1 — a phase-flip cue (which asset); (g) VF G-7 — close as designed or replay; (h) VF I-10 / J-6 — build the static badge icons now; (i) the money panel's styling (a Part C U-44 note, beyond the audit) | Each recorded as open or "owner to say" | W1-I(-b), W3-H, W1-L, W2-K, W2-L | (a)(f) partly |
+| **OD-15** | PRESENTATION (modal infrastructure) | **RULED (transcribed 2026-10-04; the owner's later cinematic-video clarification supersedes the older modal reading) — see §7.3.** (a) The intro overlay's scale contract; (b) is the portal / inert layer still needed (and if so, inert behind every modal)? | `zoom: 1 / uiScale` on an `aria-modal` div; `ModalPortal` disowns inert | W3-D | No |
+| **OD-16** | PRODUCT (owner-authored) | **RULED (transcribed 2026-10-04: Phase 3 builds the Terms route/page shell and the Terms/deposit link infrastructure; the substantive copy is owner-authored, never invented, and a Phase-7/mainnet gate) — see §7.3.** The Terms page content (S10-12), required before the first real deposit | None | W2-M (hosting) | No |
 | **OD-17** | RULES | **RULED 2026-10-03 — see §7.3.** Tile-upgrade legality cross-references: VF D-18 (New York #54→#883 offered, #62→#883 not) and VF D-22 (#59 → brown OO facings that break fixed OO; 256 accepted transitions) | The placement filter accepts them | W3-K | No |
-| **OD-18** | PRODUCT | Confirm or reject the later placement of U-10 (clock / live-vs-async UX: the offer answerer on the clock, auto-decline, pause cap) and of the recorded limits (no host succession, no clock or forfeit for an absent seat). Confirmed → E with the ruling cited; rejected → scoped as Phase-3 slices | U-10 `DEFERRED` in Part C; the limits recorded in the 6.5 preflight | AUD-11.04, AUD-19.04 | No |
+| **OD-18** | PRODUCT | **RULED (transcribed 2026-10-04: no move clock, automatic forfeit, automatic trade decline or host succession at this stage; reconsider after Phase-4 human playtesting; U-10's "pause cap" not named) — see §7.3.** Confirm or reject the later placement of U-10 (clock / live-vs-async UX: the offer answerer on the clock, auto-decline, pause cap) and of the recorded limits (no host succession, no clock or forfeit for an absent seat). Confirmed → E with the ruling cited; rejected → scoped as Phase-3 slices | U-10 `DEFERRED` in Part C; the limits recorded in the 6.5 preflight | AUD-11.04, AUD-19.04 | No |
 
 ### 7.1 Not owner decisions (implementation defaults; the owner may object at a gate)
 
@@ -872,7 +882,8 @@ Recorded from the owner's Wave-1 integration brief, in its words; only instructi
 - server refusal copy: relative duration is acceptable because the server has no player time zone;
 - machine evidence remains UTC.
 - Official Keplr logo remains ASSET PENDING; do not fabricate one.
-- *Effect on this plan:* OD-9(a) implemented by W2-K (`fb4eee5`); AUD-20.01 C → B, IMPLEMENTED. OD-9(b) open: AUD-18.05 ASSET PENDING.
+- (b) Use the official Keplr branding/logo asset. Do not fabricate/redraw/fake the Keplr logo. *(Transcribed 2026-10-04 from the owner's owner-decision reconciliation brief: supplied in a prior owner conversation, never transcribed.)*
+- *Effect on this plan:* OD-9(a) implemented by W2-K (`fb4eee5`); AUD-20.01 C → B, IMPLEMENTED. OD-9(b): the policy is ruled (the official asset only); AUD-18.05 stays OPEN as ASSET PENDING until the official file is supplied. It is not an owner-policy decision awaiting the owner.
 
 **OD-11 — CITY BYPASS (W3-E).**
 - W3-E: manual route only.
@@ -906,11 +917,26 @@ Recorded from the owner's Wave-1 integration brief, in its words; only instructi
 - Derived-statistics corrections are approved as implemented by W2-L: train discard; Salvager; refused runs; RunManualRoute; Cowboy fixes.
 - *Effect on this plan:* OD-13: RULED — U-41 and U-43 (1)–(4) ratified as implemented (`e16aa5a`). AUD-12.02 and AUD-12.03 stay IMPLEMENTED.
 
-**OD-14 — PRESENTATION CALLS, (d) AND (i).** (Transcribed 2026-10-04 at the W3-G owner review, AUD-25.15; (d) applied by W2-L, (i) by W2-K.)
+**OD-14 — PRESENTATION CALLS, (a) THROUGH (i).** ((d) and (i) transcribed 2026-10-04 at the W3-G owner review, AUD-25.15; (d) applied by W2-L, (i) by W2-K. (a) explicitly re-approved by the owner on 2026-10-04. (b), (c), (e)–(h) transcribed 2026-10-04 from the owner's owner-decision reconciliation brief: supplied in a prior owner conversation, never transcribed; original date not recorded.)
+- (a) Keep the step panels OUTSIDE the action bar.
+- (a) Remove the temporary sticky-fit probe.
+- (b) Use the cash/payout player-color wash.
+- (c) Give the seventh LPF/player a distinct color.
 - (d) For the first-Diesel trade-in presentation, keep the label: "traded". Earlier 4-trains rusted by the phase event remain rusted.
+- (e) Keep/tighten the established waiting-room persistence presentation rather than replacing the model.
+- (f) No phase-change sound effect in this phase.
+- (g) Do not replay stale flourish/celebration effects.
+- (h) Use static rust/discard icon treatment.
 - (i) Phase 3 gets a bounded money-panel consistency pass. The goal is to make the money panel visually belong to the rest of the game and stop there.
 - (i) W2-K / W2-M may extend the established styling while touching money UI, but this is NOT permission for a money-panel redesign or broader frontend refactor.
-- *Effect on this plan:* OD-14(d) and OD-14(i): RULED. AUD-12.07 RULED ("traded" kept; no change). (i) bounds W2-K's panel pass and any W2-M money-UI styling. OD-14(a)–(c) and (e)–(h) remain open.
+- *Effect on this plan:* OD-14 (a)–(i): RULED.
+  - (a): AUD-01.02 RULED (the panels are not moved into the bar; the conditional W1-I-b sub-scope has no work). The probe removal (AUD-01.01) is implemented on the unintegrated W1-I slice branch `phase3/w1-i-completion` (`1b76512`; its tracking `63fccca` records (a) in its own words, with a transcription note on where the panel wrapper renders); AUD-01.01 stays OPEN on this line until W1-I is integrated.
+  - (b): AUD-12.05 (U-7) ruled in — W3-H. (c): AUD-12.06 (U-8) ruled in — W3-H.
+  - (d): AUD-12.07 RULED ("traded" kept; no change).
+  - (e): AUD-18.07 RULED. The audit's cited line (`components/SandboxWaitingRoom.tsx`:590 at `7b1a956`) is the seat-persistence sentence ("Your seat is kept for your profile …"), so the question and the ruling name the same presentation: it stays (a tightening is allowed); no replacement model.
+  - (f): VF/G-1 RULED — no phase-change sound in Phase 3. (g): VF/G-7 RULED — the replay option is declined.
+  - (h): VF/I-10 and VF/J-6 ruled in — W3-H builds the static rust / discard icons.
+  - (i): bounds W2-K's panel pass and any W2-M money-UI styling.
 
 *Also from that brief (constraints on integrated slices, not new rulings):* W2-H keeps the Routes/Dividends informational
 visibility for non-active players (home/auction actors get controls, others a status) — this is OD-1's viewer scope for those two
@@ -947,14 +973,42 @@ transcribed above, from the W3-G owner-review brief (2026-10-04; AUD-25.15). W2-
 - (b) is not addressed by this ruling.
 - Owner ruling 2 (2026-10-04): the Brown Bank Pool continuation is one contiguous multi-certificate purchase by the ACTIVE Stock Round player. Any accepted state-changing turn action by that player which is not another qualifying Brown Bank Pool purchase closes it (a sale, an accepted private trade, an M&H exchange, Pass Turn, any other stock-turn action). Another player's off-turn consent or answer, and derived / system bookkeeping, do not. A private-trade proposal, or its withdrawal, does not close it either: a proposal transacts nothing. It is the accepted trade that closes the continuation -- the counterparty's acceptance completes the active player's own trade, so it counts as that player's turn action, not as an off-turn answer (clarification 2026-10-04, matching the reviewed W3-K implementation, `rulesV13StockRound.test.ts`). Decided from actor / turn semantics, not log adjacency; a refused or no-op message closes nothing.
 - Owner ruling 3 (2026-10-04): KEEP the existing Stock Round semantics for the M&H exchange: it is not a stock purchase or sale for turn_action_taken, the true-pass / all-pass streak, or Priority Deal / last-trader purposes. It can close an already-open Brown purchase (ruling 2) without becoming stock trading.
-- *Effect on this plan:* W3-K implemented on `phase3/w3-k-rules-v13`; integrated on `phase3/wave2a-v13-integration` (merge `ed5e69a`). AUD-04.04 and AUD-08.01 leave W3-K (owner placement open; no version bump needed). P3-N023 and P3-N024 C/G → A, IMPLEMENTED. OD-10(b) stays open. The 2026-10-04 rulings 2 and 3 are implemented on the same branch. **v13 settlement certification: PASS / CERTIFIED** by its own pass on `phase3/v13-settlement-certification` (2026-10-04; evidence `e36f3a1`, admission in its own commit; integrated on `phase3/wave2-bcg-v13cert-integration`, merge `69c7496`): rules engine 13, supported live gameplay [13], settlement-certified [10, 11, 12, 13] — gameplay-engine support and settlement certification stay separate axes.
+- *Effect on this plan:* W3-K implemented on `phase3/w3-k-rules-v13`; integrated on `phase3/wave2a-v13-integration` (merge `ed5e69a`). AUD-04.04 and AUD-08.01 leave W3-K (owner placement open; no version bump needed). P3-N023 and P3-N024 C/G → A, IMPLEMENTED. OD-10(b) stays open. The 2026-10-04 rulings 2 and 3 are implemented on the same branch. *Reconciliation (2026-10-04):* the owner's historical approval ("one consolidated v13 rules batch is allowed") is (a), recorded above; that proposal had no (b), and the current (b) asks a layout / input-scope question, not a rules-version one, so no equivalence is shown and OD-10(b) stays OPEN. **v13 settlement certification: PASS / CERTIFIED** by its own pass on `phase3/v13-settlement-certification` (2026-10-04; evidence `e36f3a1`, admission in its own commit; integrated on `phase3/wave2-bcg-v13cert-integration`, merge `69c7496`): rules engine 13, supported live gameplay [13], settlement-certified [10, 11, 12, 13] — gameplay-engine support and settlement certification stay separate axes.
 
 **OD-17 — TILE-UPGRADE CROSS-REFERENCES.**
 - D-18 and D-22 are excluded from the v13 batch: V13_SCOPE_VERIFICATION found D-18 INVALID (the printed rule) and D-22 ALREADY CORRECT (Stage 9.3 rule 5b, rules v7).
 - No engine change.
 - *Effect on this plan:* VF/D-18 and VF/D-22 stay C (the ledger still lists them OPEN) with status RULED — no change; the ledger and comment cleanup is a docs task (closure contract item 12).
 
-Still open from wave 1: **OD-14(a)** (W1-I). (OD-14(d) and (i) are RULED above, 2026-10-04.) Part D of `RULES_HARDENING_BACKLOG.md` should record OD-2 and OD-7 when the backlog is next updated (closure contract item 3).
+*OD-5, OD-15, OD-16 and OD-18 below (and OD-9(b)'s asset policy and OD-14(b), (c), (e)–(h) above) are transcribed 2026-10-04 from the owner's owner-decision reconciliation brief, in its words. Each was supplied by the owner in a prior conversation and never transcribed: the 2026-10-04 read-only history pass found none of them in any branch, reflog, tracking commit or Project report. Original ruling dates were not recorded.*
+
+**OD-5 — NOTICES AND TUTORIALS: TUTORIAL ORDERING ONLY.**
+- Tutorial work is deferred until the FINAL tutorial/UI pass, after the shell/UI has stabilized.
+- *Effect on this plan:* only the ordering is ruled. The tutorial rows (AUD-01.06, the re-arm effect; AUD-13.04, tutorials as native dialogs) are sequenced to the final tutorial/UI pass. **OD-5's three policy questions stay OPEN** — persist one-shot notices per game or derive them from state; the focus target and chaining / yield order for forced notices; the tutorial re-arm policy — and this ruling is not read as answering any of them. AUD-01.03, AUD-11.02, AUD-13.02, AUD-13.07, P3-N019 and the policy half of AUD-01.06 stay gated on OD-5.
+
+**OD-15 — MODAL INFRASTRUCTURE AND THE CINEMATIC VIDEOS.** (The owner's historical approval covered the modal / accessibility direction; the owner's LATER explicit clarification supersedes any interpretation that would turn the cinematic videos into modals.)
+- Intro video = full-viewport cinematic takeover.
+- End-game video = full-viewport cinematic takeover.
+- Neither is NativeModal / `<dialog>`.
+- Neither should look like a modal.
+- Both fill the viewport independently of gameplay UI scale.
+- Remove inverse/counter-scale hacks in favor of true viewport geometry.
+- For genuine modal UI: continue using the established native dialog/top-layer approach rather than inventing a second manual modal/inert architecture.
+- *Effect on this plan:* (a) AUD-13.05 RULED — `components/GameIntroOverlay.tsx` becomes true viewport geometry (its `zoom: 1 / uiScale` goes), not a NativeModal; the end-game video (`components/GameOutroOverlay.tsx`, the same counter-zoom; no row of its own) likewise. W3-D's "replace the remaining `aria-modal` divs" does not convert either video. (b) AUD-13.06 RULED — genuine modals stay on the native dialog / top layer; no inert registry or second manual modal architecture. Whether `ModalPortal` is retired is not stated by the ruling and is not inferred.
+
+**OD-16 — TERMS PAGE (S10-12).**
+- Phase 3 builds the Terms route/page shell.
+- Phase 3 builds the relevant Terms/deposit link infrastructure.
+- Substantive Terms copy is OWNER-AUTHORED and must not be invented.
+- Final substantive Terms remain a Phase-7/mainnet gate.
+- *Effect on this plan:* AUD-20.08 RULED — W2-M builds the shell and the link infrastructure with no invented copy. The unintegrated W2-M branch (`phase3/w2-m-wallet-dispute-ux` @ `19c021c`) predates this transcription and records AUD-20.08 as owner-gated with nothing hosted.
+
+**OD-18 — LIVE / ASYNC LIMITS (U-10) AND RECORDED LIMITS.**
+- Do NOT add at this stage: move clock; automatic forfeit; automatic trade decline; host succession.
+- Reconsider these only after Phase-4 human playtesting.
+- *Effect on this plan:* AUD-11.04 (U-10) and AUD-19.04 RULED — placed after Phase-4 human playtesting, not Phase-3 work. U-10 as worded here also names a "pause cap"; the ruling does not name it and it is not inferred; the owner may confirm whether it falls under this later placement (README, "Still open"). The C → E disposition move is left to W3-F's closure reconciliation.
+
+Still open: see `docs/phase3/README.md` ("Still open"), the single maintained list. Part D of `RULES_HARDENING_BACKLOG.md` should record OD-2 and OD-7 when the backlog is next updated (closure contract item 3).
 
 ---
 

@@ -1600,6 +1600,8 @@ priority.
 ## Part G — Open review items (VF-4)
 
 ### G-1 · `OPEN` · Audio is unanswered, and the flip is silent until it is
+**Owner ruling OD-14(f) (transcribed 2026-10-04 from the owner's owner-decision reconciliation brief; supplied in an earlier owner conversation, never transcribed):** no phase-change sound effect in this phase.
+
 The brief allows a cue only if "an existing suitable mechanical cue already exists and can be reused
 cleanly", and rules out a generic cinematic boom or whoosh. The three clips in `public/audio` that could pass
 for a mechanical plate — `telegraph.mp3`, `watch-wind.mp3`, `steam_hiss.mp3` — are all owned by
@@ -1650,6 +1652,8 @@ beat or like a stall; if it stalls, the modal can move to the `faceSwapped` mile
 uses) and still satisfy the ruling — a one-word change now that the holds are named rather than numbered.
 
 ### G-7 · `OPEN` · A phase change while the bar is unmounted
+**Owner ruling OD-14(g) (transcribed 2026-10-04 from the owner's owner-decision reconciliation brief; supplied in an earlier owner conversation, never transcribed):** do not replay stale flourish/celebration effects — the replay option is declined.
+
 The event is held for `PHASE_BADGE_TOTAL_MS` and then cleared, whoever is watching. A player on a tab where
 the action bar is not mounted misses the flip entirely and sees the new phase already settled when they
 return — which is correct (the badge is authoritative and the flourish is not), and the same shape as C-7 and
@@ -1863,6 +1867,8 @@ for a whole round suddenly stops, oxidises and fractures. The transition from a 
 oxide may read as the chip *recovering* for an instant before it dies.
 
 ### I-10 · `OPEN` · Rust's static badge icon is not implemented
+**Owner ruling OD-14(h) (transcribed 2026-10-04 from the owner's owner-decision reconciliation brief; supplied in an earlier owner conversation, never transcribed):** use the static rust icon treatment — ruled in (W3-H).
+
 The brief asks that the flourish's vocabulary be structured so a later badge-identification pass can derive
 the static warning icon from it — a fractured train, a cracked wheel, a crack mark. `crackPath` is the piece
 that pass would reuse: it produces a resolution-free fracture from a seed, so a badge icon can be the same
@@ -1930,6 +1936,8 @@ Ledger is the same narrow gap rust has:** a player sitting on that tab sees the 
 Left unwired rather than threaded through a fourth panel; A-3's fallback behaving correctly.
 
 ### J-6 · `OPEN` · The discard's static badge icon is not implemented
+**Owner ruling OD-14(h) (transcribed 2026-10-04 from the owner's owner-decision reconciliation brief; supplied in an earlier owner conversation, never transcribed):** use the static discard icon treatment — ruled in (W3-H).
+
 The brief asks that the vocabulary be structured so a later badge pass can derive a static "train limit
 exceeded" mark from it. `discardCut` is the piece that pass would reuse — it produces a position and a slant
 from a seed, so a badge can be the same blade at a fixed seed, and the contrast with VF-7's `crackPath`

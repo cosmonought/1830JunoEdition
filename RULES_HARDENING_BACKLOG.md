@@ -3874,6 +3874,7 @@ unpinned tool outlives this item. Still `DEFERRED`.
 forfeit, operator-resolved dispute) readable in the lobby before the deposit; a rules line on one person in two
 seats; the 2-player vote edge cases stated; who pays gas for what and the feegrant sizing re-derived (~5 player
 txs per game, not 400). `DEFERRED` (owner).
+**Owner ruling OD-16 (transcribed 2026-10-04 from the owner's owner-decision reconciliation brief; supplied in an earlier owner conversation, never transcribed):** Phase 3 builds the Terms route/page shell and the Terms/deposit link infrastructure (W2-M, AUD-20.08); the substantive Terms copy is owner-authored and must not be invented; the final substantive Terms remain a Phase-7/mainnet gate.
 **Routing (post-Stage-10, 2026-09-23):** → **Escrow / release readiness**, deadline **before the first real deposit**. Still `OWNER`, meaning
 owner-authored policy content — not optional work: the Terms page, the one-person-two-seats rule, the 2-player vote edge
 cases, the gas-payment policy and the feegrant sizing.
@@ -4242,13 +4243,16 @@ dispatch rule (#701) for every answer; a visible withdrawal for every proposer; 
 **U-7.** `TECH_DEBT.md` residue: TD-8 disabled family at 3.25:1 (deliberate); turn-order neutral ink 2.58:1
 (deliberate, #1092); Brick seat colour 12.9 dE from CPR (exempted by name in `seatColor.test.ts`); the
 player-card wash (#1347) not yet reaching the cash slide-out and the payout modal — owner to say. `DEFERRED`.
+**Owner ruling OD-14(b) (transcribed 2026-10-04 from the owner's owner-decision reconciliation brief; supplied in an earlier owner conversation, never transcribed):** use the cash/payout player-color wash — ruled in (Phase 3, W3-H; AUD-12.05).
 **U-8.** Seven-seat LPF wraps the six-colour palette (#1344 added Raspberry; contrast/livery separation of a
 widened palette is a `seatColor.test.ts` question). `DEFERRED`.
+**Owner ruling OD-14(c) (transcribed 2026-10-04 from the owner's owner-decision reconciliation brief; supplied in an earlier owner conversation, never transcribed):** give the seventh LPF player a distinct color — ruled in (Phase 3, W3-H; AUD-12.06).
 **U-9.** #1292 mirror instrumentation: item 25 (two tabs, different subpanel prices) not reproduced; a console
 `[mirror]` line names any corporation whose subpanel price disagrees with state — send it with the next report.
 `OPEN` (awaiting a report).
 **U-10.** Clock / Live-vs-Async UX (DECISIONS B1/B2): the offer answerer on the clock, auto-decline, pause cap —
 the UI half of S10-10's 2.5g. `DEFERRED`.
+**Owner ruling OD-18 (transcribed 2026-10-04 from the owner's owner-decision reconciliation brief; supplied in an earlier owner conversation, never transcribed):** do NOT add at this stage a move clock, automatic forfeit, automatic trade decline or host succession; reconsider only after Phase-4 human playtesting (AUD-11.04, AUD-19.04). The "pause cap" is not named by the ruling; the owner may confirm whether it falls under this later placement.
 **U-11.** Rules Reference (`RulesReference.tsx`, `rulesOverview.test.tsx`) is the owner's own in-progress work;
 the sub-phase label table there is hand-copied (S10-14). Not a Claude batch item; listed for the copy.
 **U-12.** (migrated, TRIAGE_2026-09-06 §2.1) A purchase made at Buy Trains was once stamped `[OR 1.1—Lay Track]`
@@ -4266,6 +4270,7 @@ out by running the reducer; the log exporter was built for it and has never been
 **U-15.** (migrated, HANDOFF §5c) Owner-deferred cosmetics: a Keplr logo SVG in the wallet connect surface (no
 asset in the tree as of 2026-09-15). The "Join Game modal listing active games" half is done (`JoinGameCard.tsx`).
 `DEFERRED` (owner).
+**Owner ruling OD-9(b) (transcribed 2026-10-04 from the owner's owner-decision reconciliation brief; supplied in an earlier owner conversation, never transcribed):** use the official Keplr branding/logo asset; do not fabricate/redraw/fake it. ASSET PENDING (W2-K's empty `KeplrMark` slot) — waiting on the official file, not on a decision.
 **U-16.** (sweep) `panels/ContextualActionBar.tsx` `useStickyFitProbe` (#813) is a self-described *temporary
 instrument* — a fit readout rendered outside the action bar to decide whether the step panels can move back
 into it. Decide, then remove it either way. `OPEN`.

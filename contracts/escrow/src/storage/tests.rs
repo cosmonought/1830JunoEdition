@@ -273,7 +273,12 @@ fn terms(rng: &mut Rng) -> GameTerms {
         liveness_window_secs: rng.u64(),
         resolver_timeout_secs: rng.u64(),
         treasury: rng.addr(),
-        policy: rng.pick(&[None, Some(GamePolicy::Timed), Some(GamePolicy::NoDeadline)]),
+        review_delay_secs: rng.u64(),
+        policy: rng.pick(&[
+            None,
+            Some(GamePolicy::TimedNoRemedies),
+            Some(GamePolicy::NoDeadline),
+        ]),
     }
 }
 
@@ -421,7 +426,12 @@ fn shaped_game(state: GameState, n: usize, addr_len: usize, variant: usize) -> G
             liveness_window_secs: 14 * 86_400,
             resolver_timeout_secs: 30 * 86_400,
             treasury: wallet(9),
-            policy: [None, Some(GamePolicy::Timed), Some(GamePolicy::NoDeadline)][variant % 3],
+            review_delay_secs: [0, 0, 7 * 86_400][variant % 3],
+            policy: [
+                None,
+                Some(GamePolicy::TimedNoRemedies),
+                Some(GamePolicy::NoDeadline),
+            ][variant % 3],
         },
         created_at: Timestamp::from_seconds(1_790_000_000),
         funding_deadline: Timestamp::from_seconds(1_790_086_400),
@@ -566,7 +576,11 @@ fn fixtures_cover_every_variant_and_every_option() {
     assert!(both(&|g| g.dispute.is_some()));
     assert!(both(&|g| g.outcome.is_some()));
     assert!(both(&|g| g.review_request.is_some()));
-    for policy in [None, Some(GamePolicy::Timed), Some(GamePolicy::NoDeadline)] {
+    for policy in [
+        None,
+        Some(GamePolicy::TimedNoRemedies),
+        Some(GamePolicy::NoDeadline),
+    ] {
         assert!(games.iter().any(|g| g.terms.policy == policy));
     }
     assert!(both(&|g| g
@@ -584,24 +598,33 @@ fn fixtures_cover_every_variant_and_every_option() {
 }
 
 /// Escrow 2.1.0 reads a game stored by 2.0.0 code: exactly the stored JSON
-/// without `created.terms.policy` and `progress.review_request` (the only two
-/// fields 2.1.0 added). It decodes with `policy == None`, which keeps the
+/// without `created.terms.policy`, `created.terms.review_delay_secs` and
+/// `progress.review_request` (the only fields 2.1.0 added). It decodes with `policy == None`, which keeps the
 /// 2.0.0 exits, and no review request; every other field is unchanged. A
 /// migrated 2.0.0 game can therefore never acquire 2.1.0 terms.
 #[test]
 fn a_game_stored_by_escrow_2_0_0_reads_with_no_policy() {
     for mut game in fixtures().into_iter().step_by(5) {
         game.terms.policy = None;
+        game.terms.review_delay_secs = 0;
         game.review_request = None;
         let mut json: serde_json::Value =
             serde_json::from_slice(&to_json_vec(&StoredGame::from(game.clone())).unwrap()).unwrap();
         let terms = json["created"]["terms"].as_object_mut().unwrap();
         assert!(terms.remove("policy").is_some());
+        assert_eq!(
+            terms.remove("review_delay_secs"),
+            Some(serde_json::json!(0))
+        );
         let progress = json["progress"].as_object_mut().unwrap();
         assert!(progress.remove("review_request").is_some());
         let legacy = serde_json::to_vec(&json).unwrap();
         let text = String::from_utf8(legacy.clone()).unwrap();
-        assert!(!text.contains("policy") && !text.contains("review_request"));
+        assert!(
+            !text.contains("policy")
+                && !text.contains("review_request")
+                && !text.contains("review_delay")
+        );
         let mut storage = MockStorage::new();
         storage.set(&GAMES.key(game.chain_game_id), &legacy);
         let loaded = load_game(&storage, game.chain_game_id).unwrap();
@@ -658,6 +681,7 @@ fn queries_return_the_public_game() {
             funding_period_async_secs: 604_800,
             liveness_window_secs: 1_209_600,
             resolver_timeout_secs: 2_592_000,
+            review_delay_secs: 604_800,
         },
         paused: false,
     };

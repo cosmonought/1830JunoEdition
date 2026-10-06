@@ -561,7 +561,7 @@ impl Fuzz {
                     let expected = if no_deadline {
                         GamePolicy::NoDeadline
                     } else {
-                        GamePolicy::Timed
+                        GamePolicy::TimedNoRemedies
                     };
                     assert_eq!(created, Some(expected), "CreateGame policy");
                     let policy = if legacy && !no_deadline {
@@ -1124,10 +1124,13 @@ impl Fuzz {
                 Some(d)
             }
             Act::RotateResolver => {
+                // Now and then a player's wallet, so a game may adopt a
+                // resolver that holds one of its seats (escrow 2.1.0 review).
                 let options = [
                     self.s.resolver.clone(),
                     self.s.addr("resolver-2"),
                     self.s.addr("resolver-3"),
+                    self.s.players[7].clone(),
                 ];
                 let next = self.rng.pick(&options);
                 let admin = self.s.admin.clone();
@@ -1633,8 +1636,17 @@ impl Fuzz {
                 assert_eq!(g.terms.policy, Some(GamePolicy::NoDeadline));
             }
             if let Some(b) = before.games.get(id) {
-                if b.review_request.is_some() {
-                    assert_eq!(b.review_request, g.review_request, "review request of {id}");
+                if b.review_request.is_some() && b.review_request != g.review_request {
+                    // Only an accepted Checkpoint message withdraws a request
+                    // (ForgeHugeSeq posts one under a leaked key: a signer can
+                    // withdraw requests, never move money).
+                    assert!(
+                        g.review_request.is_none()
+                            && matches!(d.act, Act::Checkpoint | Act::ForgeHugeSeq)
+                            && d.res.is_ok(),
+                        "review request of {id} changed by {:?}",
+                        d.act
+                    );
                 }
                 if b.state == GameState::InProgress
                     && g.state != GameState::InProgress
@@ -2114,14 +2126,28 @@ impl Fuzz {
         who: &Addr,
         res: &Result<AppResponse, ContractError>,
     ) {
+        let seated_resolver = g
+            .resolver
+            .as_ref()
+            .is_some_and(|r| g.seats.iter().any(|x| x.wallet == *r));
         let expected = if g.state != GameState::InProgress {
             Err("wrong state")
         } else if g.resolver.as_ref() != Some(who) {
             Err("unauthorized")
+        } else if seated_resolver {
+            Err("seated")
         } else if g.terms.policy != Some(GamePolicy::NoDeadline) {
             Err("not available")
         } else if g.review_request.is_none() {
             Err("not requested")
+        } else if self.s.now()
+            < g.review_request
+                .as_ref()
+                .unwrap()
+                .requested_at
+                .plus_seconds(g.terms.review_delay_secs)
+        {
+            Err("delay")
         } else {
             Ok(())
         };
@@ -2141,6 +2167,11 @@ impl Fuzz {
             }
             (Err(ContractError::ReviewNotAvailable {}), Err("not available")) => {}
             (Err(ContractError::ReviewNotRequested { .. }), Err("not requested")) => {}
+            (Err(ContractError::ResolverIsSeated {}), Err("seated")) => {}
+            (Err(ContractError::ReviewDelayNotElapsed { at }), Err("delay")) => {
+                let r = g.review_request.as_ref().unwrap();
+                assert_eq!(*at, r.requested_at.plus_seconds(g.terms.review_delay_secs));
+            }
             (got, want) => panic!("ReviewAnnul on {id}: got {got:?}, expected {want:?}"),
         }
     }
@@ -2172,7 +2203,12 @@ impl Fuzz {
     fn stall_v21_exit(&mut self, id: u64, must: bool) {
         self.begin();
         let g = self.game_of(id);
-        if g.terms.policy == Some(GamePolicy::NoDeadline) && self.rng.chance(60) {
+        let seated_resolver = g
+            .resolver
+            .as_ref()
+            .is_some_and(|r| g.seats.iter().any(|x| x.wallet == *r));
+        if g.terms.policy == Some(GamePolicy::NoDeadline) && !seated_resolver && self.rng.chance(60)
+        {
             if g.review_request.is_none() {
                 let before = self.begin();
                 let who = g.seats[self.rng.below(g.seats.len() as u64) as usize]
@@ -2184,6 +2220,8 @@ impl Fuzz {
                 let d = Self::done(Act::RequestReview, Some(id), who, res);
                 self.check(&d, &before);
             }
+            // The review delay runs from the request.
+            self.s.advance(g.terms.review_delay_secs);
             let before = self.begin();
             let g = self.game_of(id);
             let resolver = g.resolver.clone().unwrap();
@@ -3103,6 +3141,7 @@ fn inv12_pause_never_disables_a_refund_or_liveness_route() {
         &[],
     )
     .unwrap();
+    s.advance(7 * DAY);
     let resolver = s.resolver.clone();
     s.exec(
         &resolver,
@@ -3327,6 +3366,7 @@ fn inv13b_a_pause_traps_no_settled_result_and_v21_in_progress_needs_unanimity_or
         &[],
     )
     .unwrap();
+    s.advance(7 * DAY);
     let resolver = s.resolver.clone();
     s.exec(
         &resolver,

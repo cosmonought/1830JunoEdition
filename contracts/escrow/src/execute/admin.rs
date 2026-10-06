@@ -71,6 +71,7 @@ pub fn validate_params(params: &GameParams) -> Result<(), ContractError> {
         ),
         ("liveness_window_secs", params.liveness_window_secs),
         ("resolver_timeout_secs", params.resolver_timeout_secs),
+        ("review_delay_secs", params.review_delay_secs),
     ] {
         if value == 0 || value > MAX_DURATION_SECS {
             return Err(ContractError::InvalidParams {

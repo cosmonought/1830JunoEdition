@@ -16,6 +16,7 @@
             "join_ticket",
             "max_players",
             "mode",
+            "no_deadline",
             "rules_engine_version",
             "variants_digest"
           ],
@@ -45,8 +46,7 @@
               "$ref": "#/definitions/Mode"
             },
             "no_deadline": {
-              "description": "Escrow 2.1.0: `true` for an Async table with no action deadline (`GamePolicy::NoDeadline`); omitted or `false` for a table with one (`GamePolicy::Timed`). A Live game is always timed: `true` with `mode: live` is refused. Frozen into the game's terms.",
-              "default": false,
+              "description": "Escrow 2.1.0, required: `true` for an Async table with no action deadline (`GamePolicy::NoDeadline`), `false` for a table with one (`GamePolicy::TimedNoRemedies` in this build). A Live game is always timed: `true` with `mode: live` is refused. Frozen into the game's terms. (An escrow 2.0.0 CreateGame without the field does not decode: the deadline class is never chosen by default.)",
               "type": "boolean"
             },
             "rules_engine_version": {
@@ -476,7 +476,7 @@
       "additionalProperties": false
     },
     {
-      "description": "Escrow 2.1.0, a seated wallet of an IN_PROGRESS No-deadline game: asks the game's resolver for the exceptional review. Records the first request (seat and time); a later request changes nothing. Moves no funds; works while paused.",
+      "description": "Escrow 2.1.0, a seated wallet of an IN_PROGRESS No-deadline game: asks the game's resolver for the exceptional review. Records the first request (seat and time); a later request changes nothing; an accepted `Checkpoint` withdraws it. Moves no funds; works while paused.",
       "type": "object",
       "required": [
         "request_review"
@@ -500,7 +500,7 @@
       "additionalProperties": false
     },
     {
-      "description": "Escrow 2.1.0, the game's resolver (the address it adopted at `Start`) only, on an IN_PROGRESS No-deadline game whose review was requested: refunds every seat's net deposit (ANNULLED). It carries no payload and no amounts: the only outcome it can produce is the neutral refund. Works while paused.",
+      "description": "Escrow 2.1.0, the game's resolver (the address it adopted at `Start`, never one of the game's own seats) only, on an IN_PROGRESS No-deadline game whose review was requested at least `terms.review_delay_secs` ago (`GameDeadlines::review_annul_available_at`): refunds every seat's net deposit (ANNULLED). It carries no payload and no amounts: the only outcome it can produce is the neutral refund. Works while paused.",
       "type": "object",
       "required": [
         "review_annul"
@@ -772,6 +772,13 @@
         },
         "resolver_timeout_secs": {
           "description": "DISPUTED time after which a seated wallet may `LivenessSettle`.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "review_delay_secs": {
+          "description": "Escrow 2.1.0: the wait from a No-deadline game's first review request to the earliest `ReviewAnnul`, so the table can notice (and finish and `Settle`, or post a checkpoint, which withdraws the request) before a resolver acts. Snapshotted into each game at CreateGame. Validated like the other durations (1 s … 10 y); the value is a deployment choice. A configuration carried over from 2.0.0 reads 0 here, and a No-deadline game cannot be created until the admin sets it (`SetParams`).",
+          "default": 0,
           "type": "integer",
           "format": "uint64",
           "minimum": 0.0

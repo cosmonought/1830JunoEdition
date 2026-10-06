@@ -273,6 +273,7 @@ mod tests {
             funding_period_async_secs: 604_800,
             liveness_window_secs: 1_209_600,
             resolver_timeout_secs: 2_592_000,
+            review_delay_secs: 604_800,
         };
         let msg = InstantiateMsg {
             admin: "admin".to_string(),

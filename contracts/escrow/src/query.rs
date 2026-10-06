@@ -95,11 +95,18 @@ fn deadlines(game: &Game) -> GameDeadlines {
         }
         _ => None,
     };
+    let review_annul_available_at = match (game.state, &game.review_request) {
+        (GameState::InProgress, Some(request)) => {
+            add_secs(request.requested_at, game.terms.review_delay_secs).ok()
+        }
+        _ => None,
+    };
     GameDeadlines {
         funding_deadline: game.funding_deadline,
         liveness_available_at,
         challenge_window_end,
         resolver_timeout_at,
+        review_annul_available_at,
     }
 }
 
@@ -133,6 +140,7 @@ fn games(deps: Deps, start_after: Option<u64>, limit: Option<u32>) -> StdResult<
                 seats_filled: u8::try_from(g.seats.len()).unwrap_or(u8::MAX),
                 ante_gross: g.ante_gross,
                 pool: g.pool,
+                policy: g.terms.policy,
             })
         })
         .collect::<StdResult<Vec<_>>>()?;

@@ -220,6 +220,7 @@ fn params() -> GameParams {
         funding_period_async_secs: 7 * DAY,
         liveness_window_secs: 14 * DAY,
         resolver_timeout_secs: 30 * DAY,
+        review_delay_secs: 7 * DAY,
     }
 }
 

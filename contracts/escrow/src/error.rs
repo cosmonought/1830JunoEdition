@@ -199,6 +199,12 @@ pub enum ContractError {
     #[error("no seated wallet has requested the review of game {chain_game_id}")]
     ReviewNotRequested { chain_game_id: u64 },
 
+    #[error("the review delay has not elapsed; the review may be decided from {at}")]
+    ReviewDelayNotElapsed { at: Timestamp },
+
+    #[error("the game's resolver holds a seat in it and cannot review it")]
+    ResolverIsSeated {},
+
     // ---------------------------------------------------------------- admin
     #[error("invalid parameter: {reason}")]
     InvalidParams { reason: String },

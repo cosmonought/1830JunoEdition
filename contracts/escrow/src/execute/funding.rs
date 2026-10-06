@@ -39,9 +39,20 @@ pub fn create_game(
     // Escrow 2.1.0: every game this code creates carries an exit policy; a
     // Live table always has an action deadline.
     let policy = match (mode, no_deadline) {
-        (_, false) => GamePolicy::Timed,
+        (_, false) => GamePolicy::TimedNoRemedies,
         (Mode::Async, true) => GamePolicy::NoDeadline,
         (Mode::Live, true) => return Err(ContractError::NoDeadlineNeedsAsync {}),
+    };
+    // A No-deadline game needs a configured review delay (a configuration
+    // carried over from 2.0.0 has none until the admin sets one).
+    let review_delay_secs = match policy {
+        GamePolicy::NoDeadline if config.params.review_delay_secs == 0 => {
+            return Err(ContractError::InvalidParams {
+                reason: "review_delay_secs is not configured".to_string(),
+            })
+        }
+        GamePolicy::NoDeadline => config.params.review_delay_secs,
+        GamePolicy::TimedNoRemedies => 0,
     };
     fixed_bytes::<32>("variants_digest", &variants_digest)?;
     parse_compressed_pubkey("consent_pubkey", consent_pubkey.as_slice())?;
@@ -88,6 +99,7 @@ pub fn create_game(
         liveness_window_secs: params.liveness_window_secs,
         resolver_timeout_secs: params.resolver_timeout_secs,
         treasury: config.treasury.clone(),
+        review_delay_secs,
         policy: Some(policy),
     };
     let game = Game {

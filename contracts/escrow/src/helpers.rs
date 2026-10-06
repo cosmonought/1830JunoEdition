@@ -15,8 +15,9 @@
 //! marked compromised is never paid by an ordinary path. `Finalize` and
 //! `Consent` refuse it ([`require_trusted_settlement`]); the SETTLEABLE and
 //! DISPUTED liveness exits already pay only a trusted settlement and otherwise
-//! fall back to a trusted checkpoint or refund. A resolver `Uphold` remains the
-//! resolver's decision.
+//! fall back to a trusted checkpoint or refund (an escrow 2.1.0 game: always
+//! refund, never a checkpoint). A resolver `Uphold` remains the resolver's
+//! decision.
 //!
 //! Every payout goes through [`pay_out`] and every refund through [`refund_all`].
 //! Both zero the pool and move the game to a terminal state in the same

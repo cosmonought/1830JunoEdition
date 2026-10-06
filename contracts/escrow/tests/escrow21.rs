@@ -57,8 +57,8 @@ fn create_records_the_policy_and_a_live_table_is_always_timed() {
     let mut s = Suite::new();
     let creator = s.players[0].clone();
     for (mode, no_deadline, expected) in [
-        (Mode::Live, false, GamePolicy::Timed),
-        (Mode::Async, false, GamePolicy::Timed),
+        (Mode::Live, false, GamePolicy::TimedNoRemedies),
+        (Mode::Async, false, GamePolicy::TimedNoRemedies),
         (Mode::Async, true, GamePolicy::NoDeadline),
     ] {
         let res = s
@@ -92,10 +92,11 @@ fn create_records_the_policy_and_a_live_table_is_always_timed() {
     s.assert_custody();
 }
 
-/// The CreateGame JSON an escrow 2.0.0 client sends (no `no_deadline`) still
-/// decodes, and creates a Timed game: the flag can only narrow, never widen.
+/// The deadline class is never chosen by default: the CreateGame JSON an
+/// escrow 2.0.0 client sends (no `no_deadline`) does not decode, so nothing is
+/// created and no fund moves.
 #[test]
-fn the_escrow_2_0_create_json_still_decodes_as_a_timed_game() {
+fn the_escrow_2_0_create_json_without_a_deadline_class_is_refused() {
     let mut s = Suite::new();
     let creator = s.players[0].clone();
     let contract = s.contract.clone();
@@ -107,10 +108,17 @@ fn the_escrow_2_0_create_json_still_decodes_as_a_timed_game() {
         "consent_pubkey": Key::seat(0).pubkey.to_hex(),
         "join_ticket": ticket("creator").to_hex(),
     }});
-    s.app
-        .execute_contract(creator, contract, &json, &coins(ANTE, DENOM))
-        .unwrap();
-    assert_eq!(s.game(1).game.terms.policy, Some(GamePolicy::Timed));
+    let balance = s.balance(&creator);
+    let err = s
+        .app
+        .execute_contract(creator.clone(), contract, &json, &coins(ANTE, DENOM))
+        .unwrap_err();
+    assert!(
+        format!("{err:?}").contains("missing field `no_deadline`"),
+        "{err:?}"
+    );
+    assert_eq!(s.balance(&creator), balance);
+    assert_eq!(s.config().next_chain_game_id, 1);
 }
 
 /// Nothing after CreateGame changes a game's policy: no admin message, no
@@ -147,11 +155,17 @@ fn the_policy_is_frozen_at_create() {
     s.post_checkpoint(timed, 10, &[1, 1, 1]);
     s.post_checkpoint(nd, 10, &[1, 1, 1]);
     request(&mut s, nd, 2).unwrap();
-    assert_eq!(s.game(timed).game.terms.policy, Some(GamePolicy::Timed));
+    assert_eq!(
+        s.game(timed).game.terms.policy,
+        Some(GamePolicy::TimedNoRemedies)
+    );
     assert_eq!(s.game(nd).game.terms.policy, Some(GamePolicy::NoDeadline));
     // A game created after SetParams gets the new params, still a 2.1.0 policy.
     let later = s.started(2);
-    assert_eq!(s.game(later).game.terms.policy, Some(GamePolicy::Timed));
+    assert_eq!(
+        s.game(later).game.terms.policy,
+        Some(GamePolicy::TimedNoRemedies)
+    );
     assert_eq!(s.game(later).game.terms.liveness_window_secs, 1);
 }
 
@@ -224,6 +238,22 @@ fn in_progress_liveness_is_refused_at_any_time_paused_or_not_with_or_without_a_c
         );
         assert_eq!(s.state(id), GameState::InProgress);
         assert_eq!(s.game(id).deadlines.liveness_available_at, None);
+        // The carried checkpoints were genuinely valid: the same payload is
+        // accepted by an ordinary Checkpoint (nothing above stored it).
+        let signer = s.signer.clone();
+        let (_, cp) = s.signed_checkpoint(id, 1, &signer, 50, &[1, 9, 1]);
+        let who = s.outsider.clone();
+        s.exec(
+            &who,
+            &ExecuteMsg::Checkpoint {
+                chain_game_id: id,
+                payload: cp.payload,
+                signature: cp.signature,
+            },
+            &[],
+        )
+        .unwrap();
+        assert_eq!(s.trusted_seq(id), 100);
         s.assert_custody();
     }
 }
@@ -498,6 +528,7 @@ fn only_the_games_own_resolver_may_review_and_the_snapshot_cannot_be_retargeted(
             role: "resolver".to_string()
         }
     );
+    s.advance(7 * DAY);
     review(&mut s, id, &old_resolver).unwrap();
     review(&mut s, later, &new_resolver).unwrap();
     assert_eq!(s.game(id).game.resolver, Some(old_resolver));
@@ -551,6 +582,7 @@ fn a_review_needs_a_seated_request_first() {
         .unwrap_err(),
         ContractError::NonPayable {}
     );
+    s.advance(7 * DAY);
     review(&mut s, id, &resolver).unwrap();
 }
 
@@ -650,12 +682,14 @@ fn the_reviewer_cannot_award_a_payout() {
         serde_json::json!({ "review_annul": { "chain_game_id": id, "weights": [0, 0, 1] } }),
         serde_json::json!({ "review_annul": { "chain_game_id": id, "outcome": { "uphold": {} } } }),
     ] {
-        assert!(s
+        let err = s
             .app
             .execute_contract(resolver.clone(), contract.clone(), &json, &[])
-            .is_err());
+            .unwrap_err();
+        assert!(format!("{err:?}").contains("unknown field"), "{err:?}");
         assert_eq!(s.state(id), GameState::InProgress);
     }
+    s.advance(7 * DAY);
     review(&mut s, id, &resolver).unwrap();
     assert_eq!(
         s.game(id).game.outcome.unwrap().amounts,
@@ -709,6 +743,203 @@ fn unanimous_annulment_is_still_n_of_n() {
     }
 }
 
+/// The review delay (R-2): from the first request, `ReviewAnnul` is refused
+/// until `requested_at + terms.review_delay_secs`, and the deadline is shown.
+/// A later request does not move it.
+#[test]
+fn review_annul_waits_for_the_review_delay() {
+    let mut s = Suite::new();
+    let id = no_deadline_game(&mut s, 3);
+    assert_eq!(s.game(id).game.terms.review_delay_secs, 7 * DAY);
+    assert_eq!(s.game(id).deadlines.review_annul_available_at, None);
+    request(&mut s, id, 1).unwrap();
+    let at = s.now().plus_seconds(7 * DAY);
+    assert_eq!(s.game(id).deadlines.review_annul_available_at, Some(at));
+    s.advance(DAY);
+    request(&mut s, id, 2).unwrap();
+    assert_eq!(s.game(id).deadlines.review_annul_available_at, Some(at));
+    let resolver = s.resolver.clone();
+    s.advance(6 * DAY - 1);
+    let game = s.game(id).game;
+    assert_eq!(
+        review(&mut s, id, &resolver).unwrap_err(),
+        ContractError::ReviewDelayNotElapsed { at }
+    );
+    assert_eq!(s.game(id).game, game);
+    s.advance(1);
+    review(&mut s, id, &resolver).unwrap();
+    assert_eq!(s.game(id).game.outcome.unwrap().route, Route::ReviewAnnul);
+}
+
+/// A new round boundary withdraws a pending request (R-3): the table kept
+/// playing. A new request starts a new delay. A request never survives into a
+/// finished game's review either (IN_PROGRESS only).
+#[test]
+fn a_checkpoint_withdraws_a_pending_review_request() {
+    let mut s = Suite::new();
+    let id = no_deadline_game(&mut s, 3);
+    request(&mut s, id, 0).unwrap();
+    s.advance(30 * DAY);
+    let p = s.checkpoint_payload(id, 40, &[1, 1, 1]);
+    let msg = s.checkpoint_msg(id, &p);
+    let who = s.outsider.clone();
+    let res = s.exec(&who, &msg, &[]).unwrap();
+    assert_eq!(attr(&res, "review_request_cleared"), "true");
+    assert_eq!(s.game(id).game.review_request, None);
+    assert_eq!(s.game(id).deadlines.review_annul_available_at, None);
+    let resolver = s.resolver.clone();
+    assert_eq!(
+        review(&mut s, id, &resolver).unwrap_err(),
+        ContractError::ReviewNotRequested { chain_game_id: id }
+    );
+    // A checkpoint with no pending request says nothing about one.
+    let p = s.checkpoint_payload(id, 41, &[1, 1, 1]);
+    let msg = s.checkpoint_msg(id, &p);
+    let res = s.exec(&who, &msg, &[]).unwrap();
+    assert!(res
+        .events
+        .iter()
+        .flat_map(|e| e.attributes.iter())
+        .all(|a| a.key != "review_request_cleared"));
+    // A fresh request, a fresh delay.
+    request(&mut s, id, 2).unwrap();
+    let at = s.now().plus_seconds(7 * DAY);
+    assert_eq!(
+        review(&mut s, id, &resolver).unwrap_err(),
+        ContractError::ReviewDelayNotElapsed { at }
+    );
+    s.advance(7 * DAY);
+    review(&mut s, id, &resolver).unwrap();
+}
+
+/// A resolver that holds a seat in the game cannot review it (R-4): it could
+/// otherwise request and approve its own neutral exit alone.
+#[test]
+fn a_seated_resolver_cannot_review_its_own_game() {
+    let mut s = Suite::new();
+    let admin = s.admin.clone();
+    let seat1 = s.players[1].clone();
+    s.exec(
+        &admin,
+        &ExecuteMsg::SetResolver {
+            resolver: seat1.to_string(),
+        },
+        &[],
+    )
+    .unwrap();
+    let id = no_deadline_game(&mut s, 3);
+    assert_eq!(s.game(id).game.resolver, Some(seat1.clone()));
+    request(&mut s, id, 1).unwrap();
+    s.advance(30 * DAY);
+    assert_eq!(
+        review(&mut s, id, &seat1).unwrap_err(),
+        ContractError::ResolverIsSeated {}
+    );
+    assert_eq!(s.state(id), GameState::InProgress);
+}
+
+/// A configuration carried over from 2.0.0 has no review delay: no
+/// No-deadline game can be created until the admin sets one (a Timed game
+/// still can); `SetParams` refuses a zero delay.
+#[test]
+fn a_no_deadline_game_needs_a_configured_review_delay() {
+    let mut s = Suite::new();
+    // The stored 2.0.0 `Config` has no `params.review_delay_secs`.
+    let mut config = serde_json::to_value(s.config().config).unwrap();
+    config["params"]
+        .as_object_mut()
+        .unwrap()
+        .remove("review_delay_secs")
+        .unwrap();
+    s.set_raw(b"config", &serde_json::to_vec(&config).unwrap());
+    assert_eq!(s.config().config.params.review_delay_secs, 0);
+    let creator = s.players[0].clone();
+    assert_eq!(
+        s.exec(
+            &creator,
+            &Suite::create_msg_with(2, Mode::Async, 0, true),
+            &coins(ANTE, DENOM)
+        )
+        .unwrap_err(),
+        ContractError::InvalidParams {
+            reason: "review_delay_secs is not configured".to_string()
+        }
+    );
+    let timed = s.create(0, 2, Mode::Async, ANTE);
+    assert_eq!(s.game(timed).game.terms.review_delay_secs, 0);
+    let admin = s.admin.clone();
+    let mut params = default_params();
+    params.review_delay_secs = 0;
+    assert!(matches!(
+        s.exec(&admin, &ExecuteMsg::SetParams { params }, &[])
+            .unwrap_err(),
+        ContractError::InvalidParams { .. }
+    ));
+    s.exec(
+        &admin,
+        &ExecuteMsg::SetParams {
+            params: default_params(),
+        },
+        &[],
+    )
+    .unwrap();
+    let res = s
+        .exec(
+            &creator,
+            &Suite::create_msg_with(2, Mode::Async, 0, true),
+            &coins(ANTE, DENOM),
+        )
+        .unwrap();
+    let id: u64 = attr(&res, "chain_game_id").parse().unwrap();
+    assert_eq!(s.game(id).game.terms.review_delay_secs, 7 * DAY);
+    s.assert_custody();
+}
+
+/// KNOWN GAP of this build, pinned so it cannot be forgotten (review R-1): a
+/// `TimedNoRemedies` game has no exit but completion and unanimity. One absent
+/// seat holds it indefinitely: no liveness exit, no review, no cancel, and
+/// N - 1 annul signatures fail. The timed remedies (pending the owner's
+/// trust-bridge decision) are what must close this before any Timed money
+/// table runs on 2.1.0.
+#[test]
+fn known_gap_a_timed_game_in_this_build_has_no_non_unanimous_exit() {
+    let mut s = Suite::new();
+    let id = s.started(3);
+    assert_eq!(
+        s.game(id).game.terms.policy,
+        Some(GamePolicy::TimedNoRemedies)
+    );
+    s.advance(YEARS_10);
+    assert_eq!(
+        s.liveness(id, 0, None).unwrap_err(),
+        ContractError::LivenessExitRemoved {}
+    );
+    assert_eq!(
+        request(&mut s, id, 0).unwrap_err(),
+        ContractError::ReviewNotAvailable {}
+    );
+    let who = s.outsider.clone();
+    assert!(matches!(
+        s.exec(&who, &ExecuteMsg::Cancel { chain_game_id: id }, &[])
+            .unwrap_err(),
+        ContractError::WrongState { .. }
+    ));
+    let consents = s.annul_sigs(id, &[0, 1], 0);
+    assert!(matches!(
+        s.exec(
+            &who,
+            &ExecuteMsg::AnnulByConsent {
+                chain_game_id: id,
+                consents
+            },
+            &[]
+        )
+        .unwrap_err(),
+        ContractError::MissingConsent { seat_index: 2 }
+    ));
+    assert_eq!(s.state(id), GameState::InProgress);
+}
+
 // ========================================================== migration (2.0.0)
 
 /// A 2.0.0 instance migrated to this code (a future instance with a wasm
@@ -740,7 +971,10 @@ fn a_migrated_2_0_0_game_keeps_its_2_0_0_exit_and_new_games_get_2_1() {
     assert_eq!(attr(&res, "to_version"), "2.1.0");
     assert_eq!(s.game(old).game.terms.policy, None);
     let new = s.started(3);
-    assert_eq!(s.game(new).game.terms.policy, Some(GamePolicy::Timed));
+    assert_eq!(
+        s.game(new).game.terms.policy,
+        Some(GamePolicy::TimedNoRemedies)
+    );
     s.advance(14 * DAY);
     // The new game has no IN_PROGRESS exit ...
     assert_eq!(

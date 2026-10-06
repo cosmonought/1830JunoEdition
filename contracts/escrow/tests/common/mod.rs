@@ -81,6 +81,7 @@ pub fn default_params() -> GameParams {
         funding_period_async_secs: 7 * DAY,
         liveness_window_secs: 14 * DAY,
         resolver_timeout_secs: 30 * DAY,
+        review_delay_secs: 7 * DAY,
     }
 }
 
@@ -909,23 +910,28 @@ impl Suite {
     }
 
     /// Rewrites game `id` into exactly the shape escrow 2.0.0 code stored: the
-    /// same JSON without the two fields 2.1.0 added (`created.terms.policy`,
-    /// `progress.review_request`). This is the state a 2.0.0 game has after a
-    /// code migration to 2.1.0, so the game must keep every 2.0.0 path.
+    /// same JSON without the fields 2.1.0 added (`created.terms.policy`,
+    /// `created.terms.review_delay_secs`, `progress.review_request`). This is
+    /// the state a 2.0.0 game has after a code migration to 2.1.0, so the game
+    /// must keep every 2.0.0 path.
     pub fn make_legacy(&mut self, id: u64) {
         let mut json = self.raw_game(id);
-        json["created"]["terms"]
-            .as_object_mut()
-            .unwrap()
+        let terms = json["created"]["terms"].as_object_mut().unwrap();
+        terms
             .remove("policy")
             .expect("a 2.1.0 game stores its policy");
+        terms
+            .remove("review_delay_secs")
+            .expect("a 2.1.0 game stores its review delay");
         json["progress"]
             .as_object_mut()
             .unwrap()
             .remove("review_request")
             .expect("a 2.1.0 game stores its review request");
         self.set_raw_game(id, &json);
-        assert_eq!(self.game(id).game.terms.policy, None);
+        let g = self.game(id).game;
+        assert_eq!(g.terms.policy, None);
+        assert_eq!(g.terms.review_delay_secs, 0);
     }
 
     /// Σ over every game of (pool + bond held while DISPUTED).

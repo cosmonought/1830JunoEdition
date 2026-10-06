@@ -5,7 +5,9 @@
 > review, but the timed default / foreclosure remedies are **not** in it: how an
 > off-chain overdue fact becomes trustworthy to the contract is an open owner
 > decision (Project report `claude/PHASE3_ESCROW21_TIMEOUT_REMEDIES_BLOCKED_2026-10-06.md`).
-> A Timed 2.1.0 game therefore has no non-unanimous exit at all in this build.
+> A timed game created by this build (`GamePolicy::TimedNoRemedies`) therefore
+> has no non-unanimous exit at all: one absent seat holds it indefinitely
+> (pinned by `escrow21::known_gap_a_timed_game_in_this_build_has_no_non_unanimous_exit`).
 > The server still certifies only `2.0.0` (`JUNO_ESCROW_CONTRACT_VERSIONS`), so it
 > refuses a 2.1.0 instance. The canonical money artifact remains escrow 2.0.0
 > (`5ecc3022…09e8`).
@@ -33,31 +35,49 @@ not an action clock and nothing in 2.1.0 treats it as one.
   and changed by nothing afterwards (no message, `SetParams` or migration):
   * `None`: the game was stored by 2.0.0 code (a migrated 2.0.0 game). It keeps
     every 2.0.0 path, including the IN_PROGRESS standings `LivenessSettle`.
-  * `Timed`: every Live table, and an Async table with a fixed pace.
+  * `TimedNoRemedies`: every Live table, and an Async table with a fixed pace,
+    under this build's rules (completion or unanimity only). The variant names
+    its meaning on purpose: the pass that adds the timed remedies must add a
+    new variant for the games it creates, so a migration can never hand
+    remedies to a game funded without them.
   * `NoDeadline`: an Async table with no action deadline.
-* **`CreateGame.no_deadline`** (optional, default `false`): `true` creates a
-  `NoDeadline` game; with `mode: live` it is refused (`NoDeadlineNeedsAsync`)
-  before any fund moves. Escrow 2.0.0 JSON (no field) creates a `Timed` game.
+* **`CreateGame.no_deadline`** (required): `true` creates a `NoDeadline` game;
+  with `mode: live` it is refused (`NoDeadlineNeedsAsync`) before any fund
+  moves. The field has no default, so escrow 2.0.0 JSON (without it) does not
+  decode: the deadline class is never chosen by default.
 * **No IN_PROGRESS inactivity exit.** A 2.1.0 game refuses `LivenessSettle`
   while IN_PROGRESS (`LivenessExitRemoved`), whatever the time, the pause, the
   caller or a carried checkpoint; nothing is stored. `GameDeadlines.liveness_available_at`
   is `None` for it while IN_PROGRESS.
-* **No standings payout, ever.** The SETTLEABLE (`window_end + liveness_window`)
+* **No checkpoint promotion.** The SETTLEABLE (`window_end + liveness_window`)
   and DISPUTED (resolver timeout) exits still pay a trusted stored result,
-  paused or not. Where 2.0.0 would promote the best trusted checkpoint (the
-  stored settlement's signer key was retired as compromised), a 2.1.0 game
-  refunds every net deposit instead (`SettleableTimeoutRefund` /
-  `ResolverTimeoutRefund`, CANCELLED, bond back).
-* **The exceptional review (No-deadline only).** `RequestReview` (a seated
-  wallet, IN_PROGRESS; the first request is recorded in `Game.review_request`,
-  later ones change nothing) and `ReviewAnnul` (only the resolver the game
-  adopted at `Start`, after a request; refunds every seat's own net deposit,
-  route `ReviewAnnul`, ANNULLED). It carries no payload or amounts, so the
-  neutral refund is its only outcome. A finished game (SETTLEABLE onward) is
-  never reviewable. Both work while paused. Denying a review is not acting.
+  paused or not. Where 2.0.0 would promote the best trusted checkpoint into the
+  settlement (the stored settlement's signer key was retired as compromised), a
+  2.1.0 game refunds every net deposit instead (`SettleableTimeoutRefund` /
+  `ResolverTimeoutRefund`, CANCELLED, bond back). (A terminal `Settle` payload
+  or a resolver `Replace` still carries whatever vector its signer or the
+  resolver chose, as in 2.0.0; the settlement signer remains trusted for
+  terminal weights, behind the challenge window.)
+* **The exceptional review (No-deadline only).**
+  * `RequestReview`: a seated wallet, IN_PROGRESS. The first request is recorded
+    in `Game.review_request`; later ones change nothing. An accepted
+    `Checkpoint` (a new round boundary: the table kept playing) withdraws it.
+  * `ReviewAnnul`: only the resolver the game adopted at `Start`, never one of
+    the game's own seats (`ResolverIsSeated`), after a request and once
+    `terms.review_delay_secs` has passed since it (`ReviewDelayNotElapsed`;
+    `GameDeadlines.review_annul_available_at`). Refunds every seat's own net
+    deposit, route `ReviewAnnul`, ANNULLED. It carries no payload or amounts,
+    so the neutral refund is its only outcome.
+  * A finished game (SETTLEABLE onward) is never reviewable. Both work while
+    paused. Denying a review is not acting.
+  * `GameParams.review_delay_secs` (1 s … 10 y like every duration; the value is
+    a deployment decision) is snapshotted at CreateGame. A configuration
+    carried over from 2.0.0 reads 0, and no No-deadline game can be created
+    until the admin sets it.
 * **Unchanged:** `AnnulByConsent` (N-of-N), the settlement codec and every
-  digest, `Checkpoint`, `Settle`, `Consent`, `Finalize`, `Challenge`, `Resolve`,
-  the resolver snapshot (OD-ESC2-5), every admin message.
+  digest, `Settle`, `Consent`, `Finalize`, `Challenge`, `Resolve`, the resolver
+  snapshot (OD-ESC2-5), every admin message. `Checkpoint` only gains the
+  request withdrawal.
 * **Foreclosure arithmetic only:** `payout::foreclosure_split(net_deposits, d)`
   pays seat `d` zero and every other seat its own net deposit plus
   `⌊net_d / (N − 1)⌋`; the remainder (≤ N − 2 base units) is dust to the
@@ -68,10 +88,14 @@ not an action clock and nothing in 2.1.0 treats it as one.
   admin pause blocks `Settle`, and with the standings exit gone an IN_PROGRESS
   2.1.0 game then leaves only by unanimous `AnnulByConsent` or (No-deadline)
   `ReviewAnnul`.
-* **Migration.** 2.0.0 → 2.1.0 needs no state migration (`Config` unchanged;
-  the two new game fields read as absent). The JX-1 2.0.0 instance has no wasm
-  admin and can never be migrated: 2.1.0 is a new instance, after draining the
-  2.0.0 money games.
+* **Migration.** 2.0.0 → 2.1.0 needs no state migration: the new fields
+  (`terms.policy`, `terms.review_delay_secs`, `review_request`,
+  `params.review_delay_secs`) read as absent / 0. The JX-1 2.0.0 instance has
+  no wasm admin and can never be migrated: 2.1.0 is a new instance, after
+  draining the 2.0.0 money games.
+* **Not bound by the server yet.** Neither `Join` nor the join admission binds
+  the policy (the host's wallet picks `no_deadline`); the server lane must check
+  `terms.policy` (and the table's pace) before admitting anyone to a 2.1.0 game.
 
 ## Build and test
 
@@ -111,8 +135,8 @@ profile, and the library denies `clippy::arithmetic_side_effects` outside tests.
 | `golden` | SET-0A P1–P13, Q16 and the 13 case previews, off chain and on chain |
 | `set0c_vectors` | SET-0C: the TypeScript builder's vectors (`frontend/src/utils/__fixtures__/settlement/settlementPayloadVectorsV1.json`) re-derived by the crate — domains, roster hashes, payload bytes, SETTLE/CONSENT digests, shape per message, payouts and dust, JSON form — plus the 71 TypeScript mutation outcomes and single-byte decoder classification |
 | `funding`, `start`, `consent_key`, `checkpoint`, `settlement`, `challenge`, `resolver`, `liveness`, `annul`, `admin`, `terminal` | each message's rules, refusals and boundaries (`liveness`: the 2.0.0 IN_PROGRESS exit, on games stored in the 2.0.0 shape) |
-| `matrix` | every execute message × every state × paused/unpaused × six caller roles, against an oracle written from §9.1 as amended by the closed decisions and the 2.1.0 policy (Timed, No-deadline and 2.0.0-shaped fixtures; RequestReview / ReviewAnnul rows) |
-| `invariants` | the nineteen escrow invariants (18–19: the 2.1.0 policy and review): targeted tests plus a seeded random-sequence checker with an independent payout/refund model over a mix of Timed, No-deadline and 2.0.0-shaped games, which also runs the emergency rotation and finally drains every live game under a permanent pause |
+| `matrix` | every execute message × every state × paused/unpaused × six caller roles, against an oracle written from §9.1 as amended by the closed decisions and the 2.1.0 policy (TimedNoRemedies, No-deadline and 2.0.0-shaped fixtures; RequestReview / ReviewAnnul rows) |
+| `invariants` | the nineteen escrow invariants (18–19: the 2.1.0 policy and review): targeted tests plus a seeded random-sequence checker with an independent payout/refund model over a mix of TimedNoRemedies, No-deadline and 2.0.0-shaped games, which also runs the emergency rotation and finally drains every live game under a permanent pause |
 | `escrow21` | escrow 2.1.0: the policy at CreateGame and its freeze; the IN_PROGRESS exit refused at any time, paused or not, with or without a carried checkpoint; No-deadline never inactivity-settled; trusted results still paid; compromised settlements refunded, never a checkpoint; the review (only the game's resolver, only after a seated request, only No-deadline, only IN_PROGRESS, only the neutral refund, no payout fields); N-of-N annulment unchanged; a migrated 2.0.0 game keeps its 2.0.0 exit; the foreclosure formula against an independent model |
 | `closed_decisions` | regressions for OD-ESC2-1…5 and consent-key uniqueness (see below) |
 | `compromised_settlement` | ESCROW-2.2: a stored settlement under a compromised signer key is never paid by Finalize or Consent; recovery by LivenessSettle |
@@ -229,8 +253,9 @@ path pays that settlement. It stays on record as evidence only.
   before the compromise stay as history; nothing can complete them.
 * Recovery is unchanged from ESCROW-2.1. From `window_end + liveness_window`,
   `LivenessSettle` (paused or not) promotes the best trusted checkpoint into a
-  fresh SETTLEABLE window, or refunds every net deposit when there is none.
-  `Challenge` (inside the window) and `AnnulByConsent` remain available.
+  fresh SETTLEABLE window, or refunds every net deposit when there is none
+  (escrow 2.1.0 games always refund). `Challenge` (inside the window) and
+  `AnnulByConsent` remain available.
 * The DISPUTED resolver-timeout exit already paid only a trusted settlement.
 * A key retired **without** compromise stays trusted: its settlements finalize
   and complete by consent as before.
@@ -255,6 +280,17 @@ Rust and Cargo 1.81.
   cannot parse an edition-2024 manifest, so `Cargo.lock` pins `base64ct 1.7.3`
   and `zeroize 1.8.2` (via `cosmwasm-crypto`, host-only). A `cargo update` that
   raises either breaks the optimizer build.
+
+**Escrow 2.1.0 (source branch, NOT a canonical artifact).** Without Docker,
+an approximation of the optimizer route (`cargo +1.81.0 build --release --lib
+--target wasm32-unknown-unknown` with `-C link-arg=-s`, then binaryen
+`wasm-opt -Os --signext-lowering`, version 116) gives max 70 locals and
+559,755 B for 2.1.0; the same route gives 68 locals for the 2.0.0 source,
+matching the canonical record, and `cosmwasm-check` 2.2.9 passes both. The
+official optimizer build, all four checkers and `gasbench` must be redone at
+the 2.1.0 artifact gate. `gasbench`'s two IN_PROGRESS `LivenessSettle` rows
+are 2.0.0 paths that a 2.1.0 artifact refuses, and the review messages are
+not yet benchmarked; both need rework there.
 
 **Acceptance.** Run `scripts/wasm-gate.sh`. It fails when any function
 declares more than 90 locals, and it runs every `cosmwasm-check` listed in
@@ -284,7 +320,8 @@ VM gas plus modelled KV/event gas for every path.
 * Paths that compute the trusted sequence grow by ≈3.5k SDK gas per stored
   checkpoint. A `LivenessSettle` that carries a checkpoint scans twice, ≈7k per
   checkpoint.
-* The largest modelled execution is that carried-checkpoint liveness exit at the
+* The largest modelled execution (escrow 2.0.0; on 2.1.0 only a game stored by
+  2.0.0 code still has this path) is that carried-checkpoint liveness exit at the
   64-checkpoint cap: ≈0.67M SDK gas before ante costs.
 * Chain figures come only from simulating on the target chain.
 
@@ -300,7 +337,14 @@ VM gas plus modelled KV/event gas for every path.
   replace the contract code and is the ultimate trust root.
 * A compromised stored settlement waits for its SETTLEABLE liveness exit
   (`window_end + liveness_window`) unless a seat challenges it or every seat
-  signs an annul. Recovery is delayed, never blocked.
+  signs an annul. Recovery is delayed, never blocked. (A 2.1.0 game recovers
+  by refund, never by a checkpoint.)
+* Escrow 2.1.0 review: a compromised or colluding resolver can neutrally annul
+  a No-deadline game a seat asked to review, once the review delay has passed;
+  it cannot pay itself or anyone else, touch a Timed or 2.0.0 game, or replace
+  a finished result. A settlement signer (honest or leaked) withdraws a pending
+  request with any accepted checkpoint, so a malicious server can delay a review
+  indefinitely (the requester asks again); it moves no money that way.
 * Emergency rotation: submit `RetireSignerKey{compromised: true}` and the fresh
   checkpoints in one transaction. Otherwise a leaked key can still post between
   `Pause` and the retirement (Checkpoint works while paused), and ANNUL

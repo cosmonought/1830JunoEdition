@@ -63,6 +63,15 @@ pub struct GameParams {
     pub liveness_window_secs: u64,
     /// DISPUTED time after which a seated wallet may `LivenessSettle`.
     pub resolver_timeout_secs: u64,
+    /// Escrow 2.1.0: the wait from a No-deadline game's first review request
+    /// to the earliest `ReviewAnnul`, so the table can notice (and finish and
+    /// `Settle`, or post a checkpoint, which withdraws the request) before a
+    /// resolver acts. Snapshotted into each game at CreateGame. Validated like
+    /// the other durations (1 s … 10 y); the value is a deployment choice. A
+    /// configuration carried over from 2.0.0 reads 0 here, and a No-deadline
+    /// game cannot be created until the admin sets it (`SetParams`).
+    #[serde(default)]
+    pub review_delay_secs: u64,
 }
 
 /// Live or async; its byte (0 or 1) is part of the settlement domain.
@@ -130,18 +139,26 @@ impl GameState {
 ///
 /// * neither has an IN_PROGRESS inactivity exit: no time spent without chain
 ///   activity ever moves money (`LivenessExitRemoved`);
-/// * neither ever pays from a round-boundary checkpoint's standings: where
-///   2.0.0 would promote a checkpoint (a SETTLEABLE or DISPUTED settlement whose
-///   signer key was retired as compromised), the game refunds every net deposit.
+/// * neither ever promotes a stored checkpoint into its settlement: where
+///   2.0.0 would (a SETTLEABLE or DISPUTED settlement whose signer key was
+///   retired as compromised), the game refunds every net deposit. (A terminal
+///   `Settle` payload, or a resolver `Replace`, still carries whatever vector
+///   its signer or the resolver chose, as in 2.0.0.)
+///
+/// The variants are versioned by meaning: a later escrow version that adds the
+/// timed remedies must add a NEW variant for the games it creates, so a code
+/// migration can never hand remedies to a game funded as
+/// `TimedNoRemedies`.
 #[cw_serde]
 #[derive(Copy, Eq)]
 pub enum GamePolicy {
     /// A table with an action deadline (every Live table; an Async table with a
-    /// fixed pace). Ends by completion or unanimous annulment. The timed
-    /// default / foreclosure remedies are NOT in this build: their trust bridge
-    /// (how the contract learns an off-chain overdue fact) awaits an owner
-    /// decision.
-    Timed,
+    /// fixed pace) under THIS build's rules: it ends only by completion or
+    /// unanimous annulment. The timed default / foreclosure remedies are not in
+    /// this build (their trust bridge, how the contract learns an off-chain
+    /// overdue fact, awaits an owner decision), so one absent seat can hold
+    /// such a game indefinitely. Not for money tables until the remedies exist.
+    TimedNoRemedies,
     /// An Async table with no action deadline. Inactivity never moves money; it
     /// ends by completion, unanimous annulment, or the exceptional review: the
     /// game's resolver may refund every net deposit after a seated wallet asked
@@ -152,7 +169,7 @@ pub enum GamePolicy {
 impl GamePolicy {
     pub fn as_str(self) -> &'static str {
         match self {
-            GamePolicy::Timed => "timed",
+            GamePolicy::TimedNoRemedies => "timed_no_remedies",
             GamePolicy::NoDeadline => "no_deadline",
         }
     }
@@ -173,6 +190,10 @@ pub struct GameTerms {
     pub resolver_timeout_secs: u64,
     /// Where this game's subsidies and dust go.
     pub treasury: Addr,
+    /// Escrow 2.1.0, No-deadline games: `GameParams::review_delay_secs` at
+    /// CreateGame. 0 on 2.0.0 and Timed games (no review applies to them).
+    #[serde(default)]
+    pub review_delay_secs: u64,
     /// `None` = created by escrow 2.0.0 code (2.0.0 semantics, see
     /// [`GamePolicy`]); every 2.1.0 game has `Some`. The per-game gate that
     /// keeps a code migration from changing the terms a game was funded under.
@@ -181,7 +202,8 @@ pub struct GameTerms {
 }
 
 /// A seated wallet's request for the exceptional review of a No-deadline game
-/// (`RequestReview`). Only the first request is recorded.
+/// (`RequestReview`). Only the first request is recorded; an accepted
+/// `Checkpoint` (proof the table kept playing) withdraws it.
 #[cw_serde]
 pub struct ReviewRequest {
     /// `chain_seat_index` of the requesting wallet.
@@ -292,7 +314,9 @@ pub enum Route {
     ResolverAnnul,
     /// DISPUTED + resolver timeout, stored settlement paid (uphold-like).
     ResolverTimeoutPayout,
-    /// DISPUTED + resolver timeout, no usable settlement or checkpoint: refund.
+    /// DISPUTED + resolver timeout, the stored settlement's key compromised and
+    /// no usable checkpoint (or, for a 2.1.0 game, whatever checkpoints
+    /// exist): refund.
     ResolverTimeoutRefund,
     AnnulByConsent,
     CreatorCancel,

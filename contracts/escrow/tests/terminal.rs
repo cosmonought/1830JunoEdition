@@ -111,6 +111,7 @@ fn terminal_games(s: &mut Suite) -> Vec<(Route, u64)> {
         &[],
     )
     .unwrap();
+    s.advance(7 * DAY);
     let resolver = s.resolver.clone();
     s.exec(
         &resolver,

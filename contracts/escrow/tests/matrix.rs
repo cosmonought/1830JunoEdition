@@ -598,7 +598,7 @@ fn run_cell(msg: Msg, state: GameState, role: Role, paused: bool) -> bool {
     } else if msg.no_deadline() {
         assert_eq!(policy, Some(GamePolicy::NoDeadline));
     } else {
-        assert_eq!(policy, Some(GamePolicy::Timed));
+        assert_eq!(policy, Some(GamePolicy::TimedNoRemedies));
     }
     match msg {
         Msg::CancelAfterDeadline | Msg::Finalize => s.advance(DAY),

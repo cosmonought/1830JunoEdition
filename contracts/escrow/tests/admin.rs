@@ -143,6 +143,7 @@ fn set_params_applies_to_games_created_afterwards_only() {
         funding_period_async_secs: 9 * DAY,
         liveness_window_secs: 20 * DAY,
         resolver_timeout_secs: 40 * DAY,
+        review_delay_secs: 3 * DAY,
     };
     admin_exec(
         &mut s,
@@ -210,7 +211,7 @@ fn set_params_is_validated() {
             ..base.clone()
         },
     ];
-    for i in 0..6 {
+    for i in 0..7 {
         for value in [0, MAX_DURATION_SECS + 1] {
             let mut p = base.clone();
             match i {
@@ -219,12 +220,13 @@ fn set_params_is_validated() {
                 2 => p.funding_period_live_secs = value,
                 3 => p.funding_period_async_secs = value,
                 4 => p.liveness_window_secs = value,
-                _ => p.resolver_timeout_secs = value,
+                5 => p.resolver_timeout_secs = value,
+                _ => p.review_delay_secs = value,
             }
             bad.push(p);
         }
     }
-    assert_eq!(bad.len(), 14);
+    assert_eq!(bad.len(), 16);
     for params in bad {
         assert!(matches!(
             admin_exec(&mut s, &ExecuteMsg::SetParams { params }).unwrap_err(),
@@ -244,6 +246,7 @@ fn set_params_is_validated() {
         funding_period_async_secs: MAX_DURATION_SECS,
         liveness_window_secs: MAX_DURATION_SECS,
         resolver_timeout_secs: 1,
+        review_delay_secs: MAX_DURATION_SECS,
     };
     admin_exec(
         &mut s,

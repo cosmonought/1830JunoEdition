@@ -129,7 +129,9 @@ pub(crate) fn store_checkpoint(
 /// Anyone may post a validly signed Checkpoint while IN_PROGRESS. It works while
 /// paused (OD-ESC2-1/2: it moves no funds, and the emergency key rotation
 /// re-posts a fresh checkpoint before unpausing). It supersedes older
-/// checkpoints of its key and refreshes `last_activity`.
+/// checkpoints of its key and refreshes `last_activity` (which only an escrow
+/// 2.0.0 game's IN_PROGRESS liveness exit reads), and withdraws a pending
+/// escrow 2.1.0 review request.
 pub fn checkpoint(
     deps: DepsMut,
     env: Env,
@@ -151,8 +153,17 @@ pub fn checkpoint(
     let now = env.block.time;
     store_checkpoint(deps.storage, &mut game, &payload, &digest, now)?;
     game.last_activity = Some(now);
+    // Escrow 2.1.0: a new round boundary proves the table kept playing, so a
+    // pending review request (No-deadline games only) is withdrawn.
+    let review_request_cleared = game.review_request.take().is_some();
     save_game(deps.storage, &game)?;
-    Ok(Response::new()
+    let response = Response::new();
+    let response = if review_request_cleared {
+        response.add_attribute("review_request_cleared", "true")
+    } else {
+        response
+    };
+    Ok(response
         .add_attribute("action", "checkpoint")
         .add_attribute("chain_game_id", chain_game_id.to_string())
         .add_attribute("seq", payload.seq.to_string())
@@ -299,8 +310,8 @@ pub fn consent(
 /// Anyone, SETTLEABLE, once block time reaches the window end, not paused. A
 /// stored settlement whose signer key has since been marked compromised has
 /// lost its payout authority and is refused (ESCROW-2.2); the SETTLEABLE
-/// `LivenessSettle` exit then recovers the game (trusted checkpoint or
-/// refund).
+/// `LivenessSettle` exit then recovers the game (a 2.0.0 game: trusted
+/// checkpoint or refund; a 2.1.0 game: refund).
 pub fn finalize(
     deps: DepsMut,
     env: Env,

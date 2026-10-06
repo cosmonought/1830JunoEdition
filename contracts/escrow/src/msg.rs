@@ -9,7 +9,9 @@
 use cosmwasm_schema::{cw_serde, QueryResponses};
 use cosmwasm_std::{HexBinary, Timestamp, Uint128, Uint64};
 
-use crate::state::{CheckpointRecord, Config, Game, GameParams, GameState, Mode, Seat, SignerKey};
+use crate::state::{
+    CheckpointRecord, Config, Game, GameParams, GamePolicy, GameState, Mode, Seat, SignerKey,
+};
 
 #[cw_serde]
 pub struct InstantiateMsg {
@@ -113,11 +115,12 @@ pub enum ExecuteMsg {
         consent_pubkey: HexBinary,
         /// 32 bytes, stored verbatim.
         join_ticket: HexBinary,
-        /// Escrow 2.1.0: `true` for an Async table with no action deadline
-        /// (`GamePolicy::NoDeadline`); omitted or `false` for a table with one
-        /// (`GamePolicy::Timed`). A Live game is always timed: `true` with
-        /// `mode: live` is refused. Frozen into the game's terms.
-        #[serde(default)]
+        /// Escrow 2.1.0, required: `true` for an Async table with no action
+        /// deadline (`GamePolicy::NoDeadline`), `false` for a table with one
+        /// (`GamePolicy::TimedNoRemedies` in this build). A Live game is always
+        /// timed: `true` with `mode: live` is refused. Frozen into the game's
+        /// terms. (An escrow 2.0.0 CreateGame without the field does not
+        /// decode: the deadline class is never chosen by default.)
         no_deadline: bool,
     },
     /// Takes the next seat with exactly the creator's gross ante. The consent
@@ -212,16 +215,17 @@ pub enum ExecuteMsg {
     },
     /// Escrow 2.1.0, a seated wallet of an IN_PROGRESS No-deadline game: asks
     /// the game's resolver for the exceptional review. Records the first
-    /// request (seat and time); a later request changes nothing. Moves no
-    /// funds; works while paused.
+    /// request (seat and time); a later request changes nothing; an accepted
+    /// `Checkpoint` withdraws it. Moves no funds; works while paused.
     RequestReview {
         chain_game_id: u64,
     },
-    /// Escrow 2.1.0, the game's resolver (the address it adopted at `Start`)
-    /// only, on an IN_PROGRESS No-deadline game whose review was requested:
-    /// refunds every seat's net deposit (ANNULLED). It carries no payload and
-    /// no amounts: the only outcome it can produce is the neutral refund.
-    /// Works while paused.
+    /// Escrow 2.1.0, the game's resolver (the address it adopted at `Start`,
+    /// never one of the game's own seats) only, on an IN_PROGRESS No-deadline
+    /// game whose review was requested at least `terms.review_delay_secs` ago
+    /// (`GameDeadlines::review_annul_available_at`): refunds every seat's net
+    /// deposit (ANNULLED). It carries no payload and no amounts: the only
+    /// outcome it can produce is the neutral refund. Works while paused.
     ReviewAnnul {
         chain_game_id: u64,
     },
@@ -325,6 +329,10 @@ pub struct GameDeadlines {
     pub challenge_window_end: Option<Timestamp>,
     /// DISPUTED: `LivenessSettle` from this time.
     pub resolver_timeout_at: Option<Timestamp>,
+    /// Escrow 2.1.0, IN_PROGRESS No-deadline game with a review request: the
+    /// resolver may `ReviewAnnul` from this time (request + review delay).
+    #[serde(default)]
+    pub review_annul_available_at: Option<Timestamp>,
 }
 
 #[cw_serde]
@@ -354,6 +362,8 @@ pub struct GameSummary {
     pub seats_filled: u8,
     pub ante_gross: Uint128,
     pub pool: Uint128,
+    /// Escrow 2.1.0: the game's exit policy (`None` = stored by 2.0.0 code).
+    pub policy: Option<GamePolicy>,
 }
 
 #[cw_serde]

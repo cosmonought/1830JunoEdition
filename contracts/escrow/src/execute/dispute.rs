@@ -11,7 +11,7 @@ use crate::execute::play::{accept_signed_payload, store_checkpoint};
 use crate::helpers::{
     add_secs, best_checkpoint, check_payload_for_game, game_domain, key_is_trusted, load_game,
     nonpayable, pay_out, payload_record, refund_all, require_seated, require_state, save_game,
-    send, trusted_checkpoint_seq, trusted_seq, verify_seat_signatures,
+    seat_index_of, send, trusted_checkpoint_seq, trusted_seq, verify_seat_signatures,
 };
 use crate::msg::{ResolveOutcome, SeatSignature, SignedCheckpoint};
 use crate::payload::{fixed_bytes, Payload, PayloadUse};
@@ -501,8 +501,9 @@ fn require_no_deadline(game: &Game) -> Result<(), ContractError> {
 
 /// Escrow 2.1.0: a seated wallet of an IN_PROGRESS No-deadline game asks the
 /// game's resolver for the exceptional review. Records the first request only;
-/// a later request (by any seat) is accepted and changes nothing. Moves no
-/// funds and works while paused. The evidence itself (death, explicit
+/// a later request (by any seat) is accepted and changes nothing. An accepted
+/// `Checkpoint` withdraws the request (the table kept playing), after which a
+/// new request starts a new delay. Moves no funds and works while paused. The evidence itself (death, explicit
 /// permanent abandonment, lost access) is off chain; the request only proves
 /// that a seated player asked, so the resolver cannot annul a game nobody
 /// asked about.
@@ -535,13 +536,17 @@ pub fn request_review(
 
 /// Escrow 2.1.0: the game's resolver (the address it adopted at `Start`,
 /// whatever `SetResolver` did since, OD-ESC2-5) approves the review of an
-/// IN_PROGRESS No-deadline game that a seated wallet asked for. The only
-/// outcome is the neutral refund: every seat's own net deposit back to its own
-/// deposit wallet, nothing to the resolver, the treasury or a "winner" (the
-/// message carries no payload and no amounts). Works while paused. A finished
-/// game (SETTLEABLE and later) is never reviewable: its result stands or is
-/// disputed through `Challenge` / `Resolve`. Denying a review is simply not
-/// sending this message: the funds stay escrowed.
+/// IN_PROGRESS No-deadline game that a seated wallet asked for, once the
+/// game's review delay has passed since that request. The only outcome is the
+/// neutral refund: every seat's own net deposit back to its own deposit
+/// wallet, nothing to the resolver, the treasury or a "winner" (the message
+/// carries no payload and no amounts). Works while paused. Refused when the
+/// resolver holds a seat in the game (it could otherwise request and approve
+/// its own exit). A finished game (SETTLEABLE and later) is never reviewable:
+/// its result stands or is disputed through `Challenge` / `Resolve`. Denying a
+/// review is simply not sending this message: the funds stay escrowed.
+///
+/// Check order: state → role → resolver not seated → policy → request → delay.
 pub fn review_annul(
     deps: DepsMut,
     env: Env,
@@ -562,9 +567,18 @@ pub fn review_annul(
             role: "resolver".to_string(),
         });
     }
+    if seat_index_of(&game, resolver).is_some() {
+        return Err(ContractError::ResolverIsSeated {});
+    }
     require_no_deadline(&game)?;
-    if game.review_request.is_none() {
-        return Err(ContractError::ReviewNotRequested { chain_game_id });
+    let requested_at = game
+        .review_request
+        .as_ref()
+        .map(|r| r.requested_at)
+        .ok_or(ContractError::ReviewNotRequested { chain_game_id })?;
+    let available = add_secs(requested_at, game.terms.review_delay_secs)?;
+    if env.block.time < available {
+        return Err(ContractError::ReviewDelayNotElapsed { at: available });
     }
     let msgs = refund_all(
         &mut game,

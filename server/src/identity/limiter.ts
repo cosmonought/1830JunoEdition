@@ -29,6 +29,8 @@ export class IdentityLimiter {
   readonly passwordFailuresPerAccountAddress: KeyedBuckets;
   readonly passwordReauthFailures: KeyedBuckets;
   readonly passwordReauthFailuresPerAccount: KeyedBuckets;
+  /** P3-ACCT POLICY: "Change password" attempts per account. */
+  readonly passwordChanges: KeyedBuckets;
   readonly cooldowns: MalformedCooldowns;
   readonly denied: DeniedCounters = {};
 
@@ -53,6 +55,7 @@ export class IdentityLimiter {
     this.passwordFailuresPerAccountAddress = new KeyedBuckets(limits.passwordFailuresPerAccountAddress, now, keys);
     this.passwordReauthFailures = new KeyedBuckets(limits.passwordReauthFailuresPerFamily, now, keys);
     this.passwordReauthFailuresPerAccount = new KeyedBuckets(limits.passwordReauthFailuresPerAccount, now, keys);
+    this.passwordChanges = new KeyedBuckets(limits.passwordChangesPerAccount, now, keys);
     this.cooldowns = new MalformedCooldowns(
       limits.malformedClosesForCooldown,
       limits.malformedCloseWindowMs,
@@ -85,6 +88,7 @@ export class IdentityLimiter {
     this.passwordFailuresPerAccountAddress.prune();
     this.passwordReauthFailures.prune();
     this.passwordReauthFailuresPerAccount.prune();
+    this.passwordChanges.prune();
     this.cooldowns.prune();
   }
 
@@ -109,6 +113,7 @@ export class IdentityLimiter {
       this.passwordFailuresPerAccountAddress.size +
       this.passwordReauthFailures.size +
       this.passwordReauthFailuresPerAccount.size +
+      this.passwordChanges.size +
       this.cooldowns.size
     );
   }

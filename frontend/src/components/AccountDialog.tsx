@@ -91,6 +91,9 @@ export function AccountDialog({ mode, reason, port = sessionPort(), onModeChange
   const [revealKey, setRevealKey] = useState<string | null>(null);
   /* "Forgot password?": the new password (the key is `secret`). Cleared the moment it is sent. */
   const [newPassword, setNewPassword] = useState("");
+  /* Review M1 (frontend): a Create account on its way cannot be closed -- its answer carries the one appearance of the
+     recovery key, which a closed dialog could no longer show (bounded by the port's sign-in timeout). */
+  const [creating, setCreating] = useState(false);
   const first = useRef<HTMLInputElement | null>(null);
   const continueRef = useRef<HTMLButtonElement | null>(null);
   /* Closed while a sign-in was on its way: its answer still moves this page's sockets to the new session, but resumes
@@ -174,6 +177,11 @@ export function AccountDialog({ mode, reason, port = sessionPort(), onModeChange
     setBusy(true);
     try {
       if (other === "forgot") {
+        /* Review NIT 8: a too-short password is said before anything is cleared (nothing has to be pasted again). */
+        if (Array.from(newPassword).length < PASSWORD_MIN_LENGTH) {
+          setError(profileErrorSentence({ ok: false, error: "bad-password", problem: "too-short" }));
+          return;
+        }
         const key = secret;
         const chosen = newPassword;
         setSecret("");
@@ -201,7 +209,8 @@ export function AccountDialog({ mode, reason, port = sessionPort(), onModeChange
         finish(await logIn({ username, password: typed }, port), "login");
         return;
       }
-      const created = await createAccount({ username, password: typed, name }, port);
+      setCreating(true);
+      const created = await createAccount({ username, password: typed, name }, port).finally(() => setCreating(false));
       if (created.ok && created.recoveryKey !== "") {
         /* Signed in now: this page's sockets move to the new session at once; the action that asked resumes only after
            the player has acknowledged the key (`finish`, from the reveal's Continue). */
@@ -232,7 +241,7 @@ export function AccountDialog({ mode, reason, port = sessionPort(), onModeChange
   const pendingName = pending?.kind === "already" ? pending.name : pending?.kind === "unconfirmed" ? (port.account?.name ?? null) : null;
 
   return (
-    <NativeModal name={title} dismissible={!revealing} onDismiss={revealing ? () => undefined : onClose} onScrimClick={busy || revealing ? undefined : onClose} restoreOpener scrimStyle={dialogStyles.scrim} testId="account-dialog">
+    <NativeModal name={title} dismissible={!revealing && !creating} onDismiss={revealing || creating ? () => undefined : onClose} onScrimClick={busy || revealing ? undefined : onClose} restoreOpener scrimStyle={dialogStyles.scrim} testId="account-dialog">
       <div style={dialogStyles.card} onClick={(event) => event.stopPropagation()}>
         {revealKey !== null ? (
           <RecoveryKeyReveal
@@ -253,7 +262,7 @@ export function AccountDialog({ mode, reason, port = sessionPort(), onModeChange
             {/* Review M3: always closable (Escape too) -- closing drops the action that asked; a sign-in still on its way
                 finishes on its own, bounded by the port's timeout. P3-ACCT POLICY: except the recovery-key reveal,
                 which is left only by acknowledging it (the account already exists and is signed in). */}
-            <button type="button" style={dialogStyles.close} onClick={onClose} aria-label="Close">
+            <button type="button" style={disabledLook(dialogStyles.close, creating)} disabled={creating} onClick={onClose} aria-label="Close">
               ×
             </button>
           </div>

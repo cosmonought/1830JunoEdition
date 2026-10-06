@@ -1616,8 +1616,8 @@ export class IdentityService {
       P3-ACCT: USERNAME + PASSWORD ACCOUNTS
      ==================================================================
      CREATE ACCOUNT binds THIS browser's principal (exactly as `createProfile` does: a browser that played before
-     profiles keeps its tables) to a new schema-2 profile carrying the username and the scrypt hash and NO recovery key
-     (a sealed credential epoch, `accountCredentials.ts`), and -- unlike the LIVE-2E create (§13 L1) -- signs the browser
+     profiles keeps its tables) to a new schema-2 profile carrying the username, the scrypt hash and (P3-ACCT POLICY) ONE
+     recovery key -- account recovery only, answered once -- and -- unlike the LIVE-2E create (§13 L1) -- signs the browser
      in on a FRESH session in a new family, revoking the temporary one `replaced` in the same commit: whatever cookie the
      browser held before (a fixated one included) opens nothing of the account.
      LOG IN works exactly like a recovery: the username and password authenticate the PROFILE, and this browser gets a
@@ -1627,7 +1627,8 @@ export class IdentityService {
      IS a recent authentication), so a first wallet link right after signing in asks for nothing more.
      ESTABLISH CREDENTIALS is the LEGACY migration: a signed-in recovery-key profile sets its username and password,
      under a recent "Confirm it's you" with its recovery key (a stolen cookie alone must never be able to attach a
-     durable credential to someone else's profile). Its recovery key keeps working (legacy compatibility, reported).
+     durable credential to someone else's profile). P3-ACCT POLICY: its recovery key is kept, as the account's recovery key
+     -- from then on it resets the password; it no longer signs in or confirms.
      The KDF always runs OUTSIDE the identity queue (bounded by `KdfGate`); everything it was checked against is checked
      again inside the queue before anything is written. */
 
@@ -1844,16 +1845,24 @@ export class IdentityService {
          cookie opens nothing.
        RESET (signed out, "Forgot password?"): EVERY session of the account ends, and this browser gets a fresh session
          in a NEW family (exactly like a sign-in: its temporary session is `replaced`).
-     WHAT A CREDENTIAL CHANGE DOES NOT TOUCH: the profile and its principal (every seat), its username, its trust history
-     -- and its VERIFIED WALLET. Reviewed (the brief): the persisted wallet authorizes a link only for this account's own
-     sessions AND only with that wallet's own fresh ADR-036 signature (`escrow/moneyTables.ts` `linkAuthority`); every
-     session that predates the change other than the changer's is ended by it, so nothing an old credential set up can
-     be exercised afterwards without the new one. No invariant requires clearing it, so it is kept. (A key ROTATION and
-     "Sign out other devices" keep their 343fac2 behaviour -- they clear it.)
-     THE RECOVERY KEY IS KEPT BY A RESET (not rotated automatically): a reset made with a STOLEN key would otherwise hand
-     the thief the only key there is; kept, the owner's saved key resets the account back, and "Make a new recovery key"
-     (which needs a "Confirm it's you") then retires the stolen one. Both journaled first (`password-replaced`), so an
-     identity restore never brings an old password back (`securityReplay.ts`). */
+     WHAT A CREDENTIAL CHANGE DOES NOT TOUCH: the profile and its principal (every seat), its username, its trust history.
+     THE VERIFIED WALLET (reviewed, as the brief asks):
+       CHANGE keeps it (the owner's ruling: an ordinary password change is not proof the wallet is wrong). The persisted
+         wallet authorizes a link only for this account's own sessions AND only with that wallet's own fresh ADR-036
+         signature (`escrow/moneyTables.ts` `linkAuthority`), and every session that predates the change other than the
+         changer's is ended by it. Residual (security review M2, recorded for the owner): a wallet a thief's session
+         persisted stays the account's until the owner forgets it -- the menu shows it right after the change with
+         "Not yours? Forget this wallet".
+       RESET clears it (security review M2: "Forgot password?" is the account-recovery path, the one taken after a
+         credential may have been in someone else's hands; money review M1's rule -- a wallet made the account's own
+         under a credential that may be compromised never authorizes a link without a fresh confirmation again -- applies
+         exactly as it does to a key rotation and to "Sign out other devices"). Under the `profile-wallet` CAS.
+     THE RECOVERY KEY IS KEPT BY A RESET (not rotated automatically): rotating it would make the reset's caller -- maybe a
+       thief with a stolen key -- the holder of the only key, at once and without another step. Kept, the owner's saved
+       key can reset the account back. This is a race, not a guarantee (security review NIT 7): a thief who reset with a
+       stolen key knows the password they chose, so a "Confirm it's you" and "Make a new recovery key" retire the
+       owner's key too; the owner's remedy then is the operator. Both journaled first (`password-replaced`), so an
+       identity restore never brings an old password back (`securityReplay.ts`). */
 
   /** "Change password" (signed in): the CURRENT password or the recovery key, in the request, and the new password. */
   async changePassword(read: SessionCookieRead, input: { current: CurrentCredential; newPassword: unknown }, now: number, options: { client?: string } = {}): Promise<ChangePasswordOutcome> {
@@ -2036,13 +2045,16 @@ export class IdentityService {
       const replacedFamilies = this.revokedFamilies([current.family_id], "replaced", now);
       const newFamilies = founded === null ? [] : [founded];
       const dropLinks = this.linkHashesOf(profile.profile_id);
-      const updated: Profile = { ...profile, password_hash: hashed.value, password_set_at: now };
+      /* Security review M2: a reset forgets the persisted wallet (see the block above), under its compare-and-swap. */
+      const wallet = walletOf(profile);
+      const updated: Profile = { ...withoutWallet(profile), password_hash: hashed.value, password_set_at: now };
       try {
         await this.commit(
           {
             expect: [
               { kind: "profile-password", profile_id: updated.profile_id, password_hash: held.hash },
               { kind: "profile-selector", profile_id: updated.profile_id, recovery_selector: parsed.selector },
+              { kind: "profile-wallet", profile_id: updated.profile_id, wallet_address: wallet?.address ?? null },
               { kind: "session-absent", session_id: fresh.session_id },
               ...newFamilies.map((family) => ({ kind: "family-absent" as const, family_id: family.family_id })),
               ...ended.map((session) => ({ kind: "session-open" as const, session_id: session.session_id })),

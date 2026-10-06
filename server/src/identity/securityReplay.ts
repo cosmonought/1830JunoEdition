@@ -202,6 +202,25 @@ type Replacement = Extract<SecurityEvent, { kind: "password-replaced" }>;
 const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
 const byText = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
+/** P3-ACCT POLICY: whether `to` is `from` or a password some chain of journaled replacements leads to from it. */
+function passwordChainReaches(events: readonly SecurityEvent[], from: string, to: string): boolean {
+  const next = new Map<string, string[]>();
+  for (const event of events) if (event.kind === "password-replaced") next.set(event.from_hash, [...(next.get(event.from_hash) ?? []), event.to_hash]);
+  const seen = new Set<string>([from]);
+  const queue = [from];
+  while (queue.length > 0) {
+    const hash = queue.shift() as string;
+    if (hash === to) return true;
+    for (const following of next.get(hash) ?? []) {
+      if (!seen.has(following)) {
+        seen.add(following);
+        queue.push(following);
+      }
+    }
+  }
+  return false;
+}
+
 /** The replay plan (see the header). Throws `SecurityReplayError` when the journal, or the journal against the table,
  *  cannot be read without guessing. */
 export function planSecurityReplay(input: ReplayInput): ReplayPlan {
@@ -421,7 +440,10 @@ export function planSecurityReplay(input: ReplayInput): ReplayPlan {
       const held = loginOf(profile);
       if (held !== null) {
         const first = confirmedEstablishments[0];
-        if (first !== undefined && (first.login_key !== held.key || first.password_hash !== held.hash)) throw new SecurityReplayError(`credentials ${first.event_id} are not the ones the profile holds`);
+        /* P3-ACCT POLICY (security review M1): the table may hold a LATER password than the establishment's -- one a
+           `password-replaced` chain reaches from it (a migrated profile that has since changed or reset its password).
+           The username never moves, so it is compared strictly; the password only has to lie on that chain. */
+        if (first !== undefined && (first.login_key !== held.key || !passwordChainReaches(events, first.password_hash, held.hash))) throw new SecurityReplayError(`credentials ${first.event_id} are not the ones the profile holds`);
       } else {
         const pick = confirmedEstablishments[0] ?? establishments[establishments.length - 1];
         if (loginWinner(pick.login_key) === profileId) {

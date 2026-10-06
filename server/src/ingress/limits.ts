@@ -137,6 +137,10 @@ export interface IdentityLimits {
    *  out of "Confirm it's you" by a thief still signs in afresh (a sign-in confirms for its first minutes) and signs the
    *  other devices out. */
   passwordReauthFailuresPerAccount: BucketSpec;
+  /** P3-ACCT POLICY (security review L5): "Change password" attempts per ACCOUNT, right or wrong: burst 5, then 5 an
+   *  hour. Each attempt costs two password-KDF runs on the gate's signed-in slot and a durable security change, and a
+   *  successful one mints a fresh session (whose own budgets start full) -- so it is bounded by the account instead. */
+  passwordChangesPerAccount: BucketSpec;
   /** LIVE-2E: sockets per SESSION -- one browser or device, all of its tabs (they share the cookie). */
   maxSocketsPerSession: number;
   /** Sockets per principal, across every session (device) that authenticates it. */
@@ -216,6 +220,7 @@ export const DEFAULT_INGRESS_LIMITS: IngressLimits = Object.freeze({
     passwordFailuresPerAccountAddress: { capacity: 10, refillPerSecond: 20 / 3600 },
     passwordReauthFailuresPerFamily: { capacity: 10, refillPerSecond: 20 / 3600 },
     passwordReauthFailuresPerAccount: { capacity: 20, refillPerSecond: 20 / 3600 },
+    passwordChangesPerAccount: { capacity: 5, refillPerSecond: 5 / 3600 },
     /* LIVE-2E: THE CAPS FROM THE CLIENT'S ACTUAL TOPOLOGY. One tab holds at most THREE sockets: the lobby channel
        (the public list and the create/join ops; it closes 1.5 s after nothing listens), one room channel per open
        table (its view, chat and presence share it) and the game-log link -- two while seated at a table, one in the

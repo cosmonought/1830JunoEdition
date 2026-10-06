@@ -461,8 +461,8 @@ async function serveProfile(
   }
 
   if (pathname === PROFILE_PATH) {
-    /* P3-ACCT (review L2): new accounts have a username and password and NO recovery key; this server makes no new
-       recovery-key profile (existing ones still recover, confirm and rotate with theirs). */
+    /* P3-ACCT (review L2): new accounts are username + password (P3-ACCT POLICY: with ONE account-recovery key, made by
+       the account create); this server makes no new LIVE-2E recovery-key-only profile (existing ones keep theirs). */
     if (!api.identity.legacyProfileCreation) {
       json(response, 410, { error: "use-account" });
       return;
@@ -670,13 +670,22 @@ async function serveProfile(
     const context = api.identity.securityContextOf(read, now);
     const familyKey = context?.familyId ?? sessionId;
     const accountKey = context?.principalId ?? null;
+    /* Security review L5: every attempt is charged to the ACCOUNT (a success mints a fresh session, so a per-session
+       budget would start over each time); given back below only when nothing was checked or written. */
+    const changeKey = accountKey ?? sessionId;
+    const changeWait = api.limiter.passwordChanges.take(changeKey);
+    if (changeWait > 0) return tooMany(response, api, "password-change-account", changeWait);
     if (byPassword) {
       const reauthWait = api.limiter.passwordReauthFailures.take(familyKey);
-      if (reauthWait > 0) return tooMany(response, api, "password-reauth", reauthWait);
+      if (reauthWait > 0) {
+        api.limiter.passwordChanges.give(changeKey);
+        return tooMany(response, api, "password-reauth", reauthWait);
+      }
       if (accountKey !== null) {
         const accountWait = api.limiter.passwordReauthFailuresPerAccount.take(accountKey);
         if (accountWait > 0) {
           api.limiter.passwordReauthFailures.give(familyKey);
+          api.limiter.passwordChanges.give(changeKey);
           return tooMany(response, api, "password-reauth-account", accountWait);
         }
       }
@@ -687,6 +696,7 @@ async function serveProfile(
       api.limiter.passwordReauthFailures.give(familyKey);
       if (accountKey !== null) api.limiter.passwordReauthFailuresPerAccount.give(accountKey);
     }
+    if (changed.kind !== "ok" && changed.kind !== "invalid") api.limiter.passwordChanges.give(changeKey);
     switch (changed.kind) {
       case "ok":
         json(response, 200, { ok: true, signedOut: changed.signedOut }, { "Set-Cookie": changed.setCookie });

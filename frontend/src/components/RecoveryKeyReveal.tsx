@@ -11,7 +11,7 @@
 // use it, and will not continue until the player ticks that they have saved it. The key lives in the caller's state
 // only while this screen is up; nothing here logs it, stores it or puts it in a URL.
 
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 
 import { APP_NAME } from "../config";
 import { disabledLook, profileStyles as styles } from "./profileStyles";
@@ -30,7 +30,7 @@ function keyFileText(recoveryKey: string, purpose: RecoveryKeyPurpose): string {
     ...(purpose === "account"
       ? [
           "If you forget your password, this key lets you choose a new one (Log in → “Forgot password?”).",
-          "Anyone with it can reset your password. Keep it private. There is no email reset: without your password and this key the account cannot be recovered.",
+          "Anyone with it can take over your account (it sets a new password and signs you out everywhere). Keep it private. There is no email reset: without your password and this key the account cannot be recovered.",
         ]
       : ["This key is the only way back into your profile if you lose this browser and have no other signed-in device.", "Anyone with it can sign in as you. Keep it private."]),
     "",
@@ -80,6 +80,12 @@ export function RecoveryKeyReveal({
 }): JSX.Element {
   const [saved, setSaved] = useState(false);
   const [said, setSaid] = useState<string | null>(null);
+  /* Review L6 (frontend): focus moves to the reveal's heading when it appears (the control that was pressed is gone),
+     so a screen reader announces the key's screen. */
+  const headingRef = useRef<HTMLHeadingElement | null>(null);
+  useEffect(() => {
+    headingRef.current?.focus();
+  }, []);
 
   const copy = async () => {
     try {
@@ -102,7 +108,7 @@ export function RecoveryKeyReveal({
 
   return (
     <div role={embedded ? "group" : "dialog"} aria-labelledby="recovery-key-title" data-testid="recovery-key-reveal">
-      <h2 id="recovery-key-title" style={styles.heading}>
+      <h2 id="recovery-key-title" ref={headingRef} tabIndex={-1} style={styles.heading}>
         {heading}
       </h2>
       {notice ? <p style={styles.notice}>{notice}</p> : null}
@@ -135,9 +141,9 @@ export function RecoveryKeyReveal({
       </div>
       {purpose === "account" ? (
         <p style={styles.text}>
-          Anyone with this key can reset your password. Keep it private: store it in a password manager or a file only
-          you can open, and never share it. There is no email reset — if you lose both your password and this key, the
-          account cannot be recovered.
+          Anyone with this key can take over your account: it sets a new password and signs you out everywhere. Keep it
+          private: store it in a password manager or a file only you can open, and never share it. There is no email
+          reset — if you lose both your password and this key, the account cannot be recovered.
         </p>
       ) : (
         <p style={styles.text}>

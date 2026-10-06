@@ -19,8 +19,10 @@
 //                                   `cancelled`, or the chain's terminal state ANNULLED / CANCELLED -- an annul can close
 //                                   the escrow while play goes on to the end). P3-ACCT POLICY: with a money layer, a table
 //                                   whose financial record cannot be read just now is NOT counted (fail closed: a fact
-//                                   that cannot be checked never adds standing). Counted over the profile's newest
-//                                   `MAX_MONEY_TABLES_READ` real-money tables (the bound on one answer's reads).
+//                                   that cannot be checked never adds standing, and such an answer is not reused); a
+//                                   table HELD for an operator's attention is not counted either. Counted over the newest
+//                                   `MAX_MONEY_TABLES_READ` real-money tables of the profile (the bound on one answer's
+//                                   reads).
 //   unresolvedDisputes              of this profile's real-money tables, those whose money is in DISPUTE now (the
 //                                   financial record's phase `disputed`: the resolver has not ruled). A dispute is a
 //                                   table's -- the record does not say which seat raised it, and none is blamed here.
@@ -102,6 +104,8 @@ export const coarseAgeDays = (createdAt: number, now: number): number => Math.ma
 const isDisputeRoute = (route: string | undefined): boolean => typeof route === "string" && route.startsWith("resolver_");
 /** P3-ACCT POLICY: a table whose escrow was cancelled or annulled is no completed real-money game. */
 const cancelledOrAnnulled = (fin: FinancialGameRecord): boolean => fin.phase === "cancelled" || fin.chain_outcome?.state === "ANNULLED" || fin.chain_outcome?.state === "CANCELLED";
+/** Review NIT 10: a table held for an operator's attention is not (yet) a completed real-money game. */
+const notCounted = (fin: FinancialGameRecord): boolean => cancelledOrAnnulled(fin) || fin.phase === "held";
 const isInactivityRoute = (route: string | undefined): boolean => typeof route === "string" && (route.startsWith("liveness_") || route.startsWith("settleable_timeout_"));
 
 export function createTrustFacts(deps: TrustFactsDeps) {
@@ -110,7 +114,7 @@ export function createTrustFacts(deps: TrustFactsDeps) {
 
   /** The real-money tables of this principal that COUNT as completed (see the header), newest first, with the
    *  dispute / inactivity facts read on the way. */
-  async function moneyFacts(principalId: string): Promise<{ readonly counted: readonly GameRecord[]; readonly unresolvedDisputes: number; readonly disputedGames: number; readonly inactivityExits: number }> {
+  async function moneyFacts(principalId: string): Promise<{ readonly counted: readonly GameRecord[]; readonly unresolvedDisputes: number; readonly disputedGames: number; readonly inactivityExits: number; readonly incomplete: boolean }> {
     const money = deps
       .tablesOf(principalId)
       .filter((record) => record.money !== null)
@@ -120,6 +124,8 @@ export function createTrustFacts(deps: TrustFactsDeps) {
     let unresolvedDisputes = 0;
     let disputedGames = 0;
     let inactivityExits = 0;
+    /* Review L5: a record that could not be read is not a fact -- the answer counts nothing for it, and is not reused. */
+    let incomplete = false;
     for (const record of money) {
       let fin: FinancialGameRecord | null = null;
       if (deps.financial !== undefined) {
@@ -128,6 +134,7 @@ export function createTrustFacts(deps: TrustFactsDeps) {
         } catch {
           fin = null; // a record that cannot be read just now counts as nothing (never as a dispute, never as a game)
         }
+        if (fin === null) incomplete = true;
         if (fin !== null) {
           if (fin.phase === "disputed") unresolvedDisputes += 1;
           if (isDisputeRoute(fin.chain_outcome?.route)) disputedGames += 1;
@@ -135,22 +142,15 @@ export function createTrustFacts(deps: TrustFactsDeps) {
         }
       }
       if (record.completed_at === null || record.cancelled_at !== null) continue;
-      if (deps.financial !== undefined && (fin === null || cancelledOrAnnulled(fin))) continue;
+      if (deps.financial !== undefined && (fin === null || notCounted(fin))) continue;
       counted.push(record);
     }
-    return { counted, unresolvedDisputes, disputedGames, inactivityExits };
+    return { counted, unresolvedDisputes, disputedGames, inactivityExits, incomplete };
   }
 
-  /** The other principals this one completed a COUNTED real-money game with -- each once. */
-  async function opponentsOf(principalId: string): Promise<Set<string>> {
-    const out = new Set<string>();
-    for (const record of (await moneyFacts(principalId)).counted) for (const seat of record.seats) if (seat.principal_id !== principalId) out.add(seat.principal_id);
-    return out;
-  }
-
-  async function compute(principalId: string): Promise<TrustFacts | null> {
+  async function compute(principalId: string): Promise<{ readonly facts: TrustFacts | null; readonly reusable: boolean }> {
     const profile = deps.profileFacts(principalId);
-    if (profile === null) return null;
+    if (profile === null) return { facts: null, reusable: true };
     const now = deps.now();
     const facts = await moneyFacts(principalId);
     /* Every opponent of a counted game completed that SAME game, so by the owner's definition it is established by it
@@ -160,7 +160,7 @@ export function createTrustFacts(deps: TrustFactsDeps) {
     for (const record of facts.counted) for (const seat of record.seats) if (seat.principal_id !== principalId) opponents.add(seat.principal_id);
     let establishedOpponents = 0;
     for (const other of opponents) if (deps.profileFacts(other) !== null) establishedOpponents += 1;
-    return {
+    const result: TrustFacts = {
       memberSince: monthOf(profile.createdAt),
       accountAgeDays: coarseAgeDays(profile.createdAt, now),
       completedMoneyGames: facts.counted.length,
@@ -171,6 +171,7 @@ export function createTrustFacts(deps: TrustFactsDeps) {
       walletVerifiedSince: profile.walletVerifiedAt === null ? null : monthOf(profile.walletVerifiedAt),
       establishedOpponents,
     };
+    return { facts: result, reusable: !facts.incomplete };
   }
 
   /** One profile's facts (reused for `reuseMs`); null for a principal with no profile. */
@@ -178,13 +179,17 @@ export function createTrustFacts(deps: TrustFactsDeps) {
     const at = deps.now();
     const cached = cache.get(principalId);
     if (useCache && cached !== undefined && at - cached.at < reuseMs) return cached.facts;
-    const facts = await compute(principalId);
-    cache.set(principalId, { at, facts });
-    while (cache.size > MAX_CACHED) cache.delete(cache.keys().next().value as string);
-    return facts;
+    const computed = await compute(principalId);
+    if (computed.reusable) {
+      cache.set(principalId, { at, facts: computed.facts });
+      while (cache.size > MAX_CACHED) cache.delete(cache.keys().next().value as string);
+    } else {
+      cache.delete(principalId);
+    }
+    return computed.facts;
   }
 
-  return { factsOf, opponentsOf, forget: (principalId: string) => cache.delete(principalId) };
+  return { factsOf, forget: (principalId: string) => cache.delete(principalId) };
 }
 
 export type TrustFactsService = ReturnType<typeof createTrustFacts>;

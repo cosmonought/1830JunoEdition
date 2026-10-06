@@ -48,7 +48,7 @@ const KEY = "rk_0123456789abcdefghjkmnpqr0.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 const NEW_KEY = "rk_abcdefghjkmnpqrstvwxyz0120.BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
 const ACCOUNT_ME = { ok: true, account: { name: "Ann", otherSessions: 2, username: "Ann", recoveryKey: true, wallet: null, memberSince: Date.UTC(2026, 9, 5) } };
 
-type Answer = { status: number; body?: unknown; then?: () => void };
+type Answer = { status: number; body?: unknown; then?: () => void; wait?: Promise<void> };
 
 function fakeServer(initial: { name: string; otherSessions: number } | null) {
   let profile = initial;
@@ -63,6 +63,7 @@ function fakeServer(initial: { name: string; otherSessions: number } | null) {
       if (path === "/gs/api/session") return { status: 200, json: async () => ({ ok: true, expiresAt: 1, profile }) };
       const next = queued.get(path)?.shift();
       if (!next) throw new Error(`nothing queued for ${path}`);
+      if (next.wait) await next.wait;
       next.then?.();
       return { status: next.status, json: async () => next.body ?? {} };
     },
@@ -188,6 +189,25 @@ describe("account policy: creating an account shows its recovery key ONCE, then 
     expect(byTestId("account-dialog")).toBeNull();
     expect(all().innerHTML).not.toContain(KEY);
     expect(storageText()).not.toContain(KEY.split(".")[1]);
+  });
+
+  it("review M1: while Create account is on its way the dialog cannot be closed (its answer is the key's one appearance)", async () => {
+    const server = fakeServer(null);
+    await homepage(server.port);
+    await click(byTestId("account-create"));
+    await click(byTestId("account-tab-create"));
+    type(byTestId<HTMLInputElement>("account-username"), "Ann");
+    type(byTestId<HTMLInputElement>("account-password"), "a long enough secret");
+    type(byTestId<HTMLInputElement>("account-name"), "Ann");
+    let answer: () => void = () => undefined;
+    const wait = new Promise<void>((resolve) => (answer = resolve));
+    server.queue("/gs/api/account/create", { status: 201, body: { ok: true, profile: { name: "Ann", otherSessions: 0 }, username: "Ann", recoveryKey: KEY }, then: () => server.signIn("Ann"), wait });
+    await submit(byTestId("account-form"));
+    expect(byTestId("account-dialog")?.getAttribute("closedby")).toBe("none");
+    expect((all().querySelector('[aria-label="Close"]') as HTMLButtonElement | null)?.disabled).toBe(true);
+    answer();
+    await settle();
+    expect(byTestId("recovery-key-value")?.textContent).toBe(KEY);
   });
 
   it("from the homepage's own Create account (nothing to resume): Continue to the site", async () => {
@@ -344,6 +364,26 @@ describe("account policy: the profile menu of a password account", () => {
     expect(server.port.state).toBe("ready");
     expect(server.port.account?.otherSessions).toBe(0);
     expect(all().innerHTML).not.toContain("the new passphrase!");
+  });
+
+  it("security review M2 (residual): after a change, the kept verified wallet is shown with 'Forget this wallet'", async () => {
+    const withWallet = { ok: true, account: { ...ACCOUNT_ME.account, wallet: { address: "juno1qyqszqgpqyqszqgpqyqszqgpqyqszqgpypz92q", verifiedAt: Date.UTC(2026, 9, 1) } } };
+    const server = fakeServer({ name: "Ann", otherSessions: 0 });
+    await server.port.ensure();
+    server.queue("/gs/api/account/me", { status: 200, body: withWallet });
+    installSessionPort(server.port);
+    act(() => root.render(<ProfileMenu port={server.port} />));
+    await settle();
+    await click(byTestId("profile-chip"));
+    await click(byTestId("profile-menu-password"));
+    type(byTestId<HTMLInputElement>("profile-current-secret"), "the old passphrase");
+    type(byTestId<HTMLInputElement>("profile-changed-password"), "the new passphrase!");
+    server.queue("/gs/api/account/password", { status: 200, body: { ok: true, signedOut: 0 } });
+    server.queue("/gs/api/account/me", { status: 200, body: withWallet });
+    await submit(byTestId("profile-password-form"));
+    expect(byTestId("profile-password-wallet")?.textContent).toContain("Not yours?");
+    await click(byTestId("profile-password-forget-wallet"));
+    expect(byTestId("profile-forget-wallet-summary")).toBeTruthy();
   });
 
   it("Change password with the recovery key instead (a forgotten current password)", async () => {

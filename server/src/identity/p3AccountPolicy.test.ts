@@ -322,6 +322,29 @@ describe("account policy C: change password", () => {
     }
   });
 
+  test("security review L5: password changes are budgeted per ACCOUNT (a success's fresh session does not start a fresh budget)", async () => {
+    const service = IdentityService.fromSnapshot(createMemoryIdentityStore(), { principals: [], sessions: [] }, { policy: { passwordKdf: TEST_PASSWORD_KDF } });
+    const clock = { now: Date.now() };
+    const started = await startServer({
+      identity: { mode: "production", allowedOrigins: [PROD_ORIGIN], trustedProxyHops: 0, now: () => clock.now, service },
+      limits: { identity: { passwordChangesPerAccount: { capacity: 2, refillPerSecond: 0.000001 } } },
+    });
+    try {
+      let cookie = (await account(started.port, "Ann")).cookie;
+      const passwords = [PASSWORD, "second passphrase", "third passphrase!"];
+      for (let n = 0; n < 2; n += 1) {
+        const changed = await changePassword(started.port, cookie, { currentPassword: passwords[n], newPassword: passwords[n + 1] });
+        assert.equal(changed.status, 200, changed.text);
+        cookie = cookieFromAnswer(changed) as string;
+      }
+      const third = await changePassword(started.port, cookie, { currentPassword: passwords[2], newPassword: "fourth passphrase" });
+      assert.equal(third.status, 429, "the account's budget is spent, whatever session asks");
+      assert.equal((await login(started.port, await bootstrapCookie(started.port), "ann", passwords[2])).status, 200, "nothing changed");
+    } finally {
+      await stopServer(started.server);
+    }
+  });
+
   test("a profile with no password (made before accounts) is told to set one instead", async () => {
     const { server, port } = await prodServer();
     try {
@@ -360,6 +383,21 @@ describe("account policy D: forgot password (the recovery key, no email, no user
       assert.equal((await login(port, await bootstrapCookie(port), "ann", PASSWORD)).status, 403, "the old password stops working");
       assert.equal((await login(port, await bootstrapCookie(port), "ann", NEW_PASSWORD)).status, 200);
       assert.equal((service.peekProfileOf(principal) as Profile).recovery_selector, ann.recoveryKey.split(".")[0], "the key is kept (not rotated)");
+    } finally {
+      await stopServer(server);
+    }
+  });
+
+  test("security review M2: a reset (the account-recovery path) forgets the verified wallet -- an ordinary change keeps it (C)", async () => {
+    const { server, port, clock, service } = await prodServer();
+    try {
+      const ann = await account(port, "Ann");
+      const principal = principalOf(service, ann.cookie, clock.now) as string;
+      const mine = service.securityContextOf(readSessionCookie(ann.cookie), clock.now);
+      assert.ok(mine !== null);
+      assert.equal(await service.associateWallet({ ...mine, seen: null }, FIXTURE_WALLET, clock.now), "associated");
+      assert.equal((await reset(port, await bootstrapCookie(port), { recoveryKey: ann.recoveryKey, newPassword: NEW_PASSWORD })).status, 200);
+      assert.equal(service.profileWallet(principal), null, "forgotten: the next money action proves a wallet again");
     } finally {
       await stopServer(server);
     }
@@ -595,6 +633,27 @@ describe("account policy F: the credential fences", () => {
     assert.equal(await verifyPassword(third, loginOf(restored2.profiles[0])?.hash ?? null, TEST_PASSWORD_KDF), true);
   });
 
+  test("security review M1: a migrated legacy profile that later changed its password restores (the table's password lies on the chain from the establishment)", async () => {
+    const now = Date.now();
+    const store = createMemoryIdentityStore();
+    const journal = createMemorySecurityJournal();
+    const service = IdentityService.fromSnapshot(store, { principals: [], sessions: [] }, { policy: { passwordKdf: TEST_PASSWORD_KDF }, security: { journal } });
+    const guest = await guestOf(service, now);
+    const made = await service.createProfile(guest, "Old Timer", now);
+    assert.equal(made.kind, "ok");
+    const key = (made as { recoveryKey: string }).recoveryKey;
+    assert.equal((await service.reauthenticate(guest, key, now)).kind, "ok");
+    assert.equal((await service.establishCredentials(guest, { username: "OldTimer", password: PASSWORD }, now)).kind, "ok");
+    const changed = await service.changePassword(guest, { current: { password: PASSWORD }, newPassword: NEW_PASSWORD }, now + 1);
+    assert.equal(changed.kind, "ok");
+    await service.settled();
+    const events = journal.snapshot().map((body) => parseSecurityEventBody(body) as SecurityEvent);
+    const plan = planSecurityReplay({ snapshot: store.snapshot(), events, restoreId: "rs-m1", at: now + 10 });
+    let restored = store.snapshot();
+    for (const entry of plan.principals) if (entry.change !== null) restored = applyChange(restored, entry.change);
+    assert.equal(await verifyPassword(NEW_PASSWORD, loginOf(restored.profiles[0])?.hash ?? null, TEST_PASSWORD_KDF), true);
+  });
+
   test("the replay is strict: a cycle of replacements, or a table password the journal never names, is refused (fail closed)", async () => {
     const now = Date.now();
     const store = createMemoryIdentityStore();
@@ -715,6 +774,7 @@ describe("account policy H: trust -- 'established' is one completed real-money g
       { record: record([me, "pr_f"]), fin: "throws" as const }, // cannot be read now: never counted
       { record: record([me, "pr_g"]), fin: fin("closed", "SETTLED") }, // pr_g has no active profile
       { record: record([me, "pr_h"], { completed: false }), fin: fin("in-progress") }, // not completed yet
+      { record: record([me, "pr_i"]), fin: fin("held") }, // held for an operator: not counted (review NIT 10)
     ];
     const facts = world(tables, [me, "pr_a", "pr_b", "pr_c", "pr_d", "pr_e", "pr_f", "pr_h"]);
     const mine = await facts.factsOf(me);
@@ -729,6 +789,22 @@ describe("account policy H: trust -- 'established' is one completed real-money g
     }
     assert.equal(isEstablished((await facts.factsOf("pr_a")) as { completedMoneyGames: number }), true);
     assert.equal((await facts.factsOf("pr_a"))?.establishedOpponents, 2, "pr_a: me (twice, counted once) and pr_b");
+  });
+
+  test("review L5: an answer computed while a record could not be read is never reused", async () => {
+    const me = "pr_me";
+    let readable = false;
+    const one = record([me, "pr_y"]);
+    const facts = createTrustFacts({
+      profileFacts: () => ({ createdAt: NOW, walletVerifiedAt: null }),
+      tablesOf: () => [one],
+      financial: async () => (readable ? fin("closed", "SETTLED") : null),
+      now: () => NOW,
+      reuseMs: 60_000,
+    });
+    assert.equal((await facts.factsOf(me))?.completedMoneyGames, 0);
+    readable = true;
+    assert.equal((await facts.factsOf(me))?.completedMoneyGames, 1, "read again, not the cached zero");
   });
 
   test("a game completing makes its opponent established -- and only then do they count", async () => {

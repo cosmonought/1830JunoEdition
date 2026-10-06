@@ -268,6 +268,11 @@ function MenuPanel({ port, name, otherSessions, onClose }: { port: SessionPort; 
   /* P3-ACCT POLICY: change the password -- the credential travels in the request; this browser gets a fresh session
      (the port re-bootstraps before the call resolves) and its sockets move to it. */
   const savePassword = async () => {
+    /* Review NIT 8: a too-short password is said before anything is cleared. */
+    if (Array.from(newPassword).length < PASSWORD_MIN_LENGTH) {
+      setError(profileErrorSentence({ ok: false, error: "bad-password", problem: "too-short" }));
+      return;
+    }
     const current = currentSecret;
     const chosen = newPassword;
     setCurrentSecret("");
@@ -336,7 +341,17 @@ function MenuPanel({ port, name, otherSessions, onClose }: { port: SessionPort; 
   }
 
   const back = (
-    <button type="button" style={disabledLook(styles.secondary, busy)} disabled={busy} onClick={() => go({ kind: "menu" })}>
+    <button
+      type="button"
+      style={disabledLook(styles.secondary, busy)}
+      disabled={busy}
+      onClick={() => {
+        /* Review NIT 11: typed secrets do not outlive the view. */
+        setCurrentSecret("");
+        setNewPassword("");
+        go({ kind: "menu" });
+      }}
+    >
       Back
     </button>
   );
@@ -407,7 +422,7 @@ function MenuPanel({ port, name, otherSessions, onClose }: { port: SessionPort; 
                 {legacy
                   ? "Your recovery key signs this profile in on another device."
                   : details.recoveryKey
-                    ? "Your recovery key lets you choose a new password if you forget yours. You never need it to log in or play."
+                    ? "Your recovery key lets you choose a new password if you forget yours. You never need it to log in or play. Lost it, or never saved it? Make a new one."
                     : "This account has no recovery key yet. Make one so a forgotten password can be reset."}
               </p>
             </>
@@ -443,7 +458,7 @@ function MenuPanel({ port, name, otherSessions, onClose }: { port: SessionPort; 
       {view.kind === "rotate-confirm" ? (
         <>
           <p style={styles.text}>
-            Make a new recovery key? Your current recovery key stops working immediately, and the new one is shown once.{legacy ? "" : " You'll confirm with your password first."}
+            Make a new recovery key? Your current recovery key stops working immediately, and the new one is shown once. Your verified payout wallet is forgotten too, and a wallet linked at a real-money table that hasn't started has to be linked again (one Keplr signature).{legacy ? "" : " You'll confirm with your password first."}
           </p>
           <div style={styles.row}>
             <button type="button" style={disabledLook(styles.primary, busy)} disabled={busy} onClick={() => void rotate()} data-testid="profile-rotate-confirm">
@@ -578,6 +593,16 @@ function MenuPanel({ port, name, otherSessions, onClose }: { port: SessionPort; 
           <p style={styles.text} role="status" data-testid="profile-password-done">
             Password changed. {view.signedOut === 0 ? "No other devices were signed in." : `Signed out ${devices(view.signedOut)}.`} This device stays signed in.
           </p>
+          {details !== null && details.wallet !== null ? (
+            /* Security review M2 (residual): the verified wallet is kept by a password change -- shown here, so a wallet the
+               player doesn't recognise is forgotten at once. */
+            <p style={styles.label} data-testid="profile-password-wallet">
+              Your verified payout wallet is still {shortAddress(details.wallet.address)}. Not yours?{" "}
+              <button type="button" style={disabledLook(menuStyles.link, busy)} disabled={busy} onClick={() => go({ kind: "forget-wallet-confirm" })} data-testid="profile-password-forget-wallet">
+                Forget this wallet
+              </button>
+            </p>
+          ) : null}
           <div style={styles.row}>{back}</div>
         </>
       ) : null}

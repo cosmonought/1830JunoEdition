@@ -14,12 +14,19 @@
 //   - it FAILS CLOSED: a read that fails, damage, a session without its family or principal, a family of another
 //     principal, a profiled principal without its profile -- `unavailable`, never `ok`;
 //   - it never writes (the store's commit count is unchanged; the port has no write) and never reads more than one record
-//     for a cookie whose secret does not match.
+//     for a cookie whose secret does not match;
+//   - PHASE 3 FINAL: a LEGACY account (a schema-1 recovery-key profile, or a schema-2 P3-ACCT one -- made before
+//     Authorization Wallets) is RETIRED, as the writer retires it: its session is refused `ended` at the upgrade and a
+//     socket of its principal is `revoked` at the next frame; an Authorization Wallet account (schema 3) is `ok`.
 
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 
+import { createHash } from "crypto";
+
+import { hashPassword, loginKeyOf } from "./accountCredentials";
 import { readSessionCookie, type SessionCookieRead } from "./cookies";
+import { familyIdOf, mintPrincipalId, mintProfileId, mintRecoveryKey, mintSecret, mintSessionId, secretHash } from "./ids";
 import { IdentityService } from "./sessions";
 import { createMemoryIdentityStore, type Principal, type Profile, type Session, type SessionFamily } from "./store";
 import { createSessionVerifier, IdentityRecordUnreadableError, snapshotRecordReader, type IdentityRecordReader } from "./verifier";
@@ -71,6 +78,39 @@ function writerAnswer(writer: IdentityService, read: SessionCookieRead, now: num
   const auth = writer.authenticate(read, now);
   if (auth.kind !== "ok") return { kind: auth.kind, why: auth.why };
   return { kind: auth.kind, principalId: auth.principalId, sessionId: auth.sessionId, profiled: writer.isProfiled(auth.principalId), expiresAt: auth.sessionExpiresAt };
+}
+
+/** PHASE 3 FINAL: a LEGACY account as an earlier build left it in the table -- a profiled principal, its open session and
+ *  family, and its profile at `schema` 1 (a recovery-key profile) or 2 (P3-ACCT: a username and password, no Authorization
+ *  Wallet). This build makes none; it must not serve one either. Committed straight to the store (the records are what a
+ *  verifier reads). */
+async function legacyAccount(store: ReturnType<typeof createMemoryIdentityStore>, schema: 1 | 2, name: string, now: number): Promise<{ read: SessionCookieRead; session: Session }> {
+  const [principalId, profileId, sessionId, secret, key] = [mintPrincipalId(), mintProfileId(), mintSessionId(), mintSecret(), mintRecoveryKey()];
+  const familyId = familyIdOf(sessionId);
+  const principal: Principal = { principal_id: principalId, kind: "profile", status: "active", created_at: now, activated_at: now, last_seen_at: now, account_link: profileId };
+  const base: Profile = { profile_id: profileId, principal_id: principalId, display_name: name, created_at: now, status: "active", recovery_selector: key.selector, recovery_hash: createHash("sha256").update(key.key).digest("hex"), recovery_rotated_at: now, schema: 1 };
+  const username = name.toLowerCase();
+  const profile: Profile =
+    schema === 1
+      ? base
+      : { ...base, schema: 2, login_key: loginKeyOf(username), login_name: username, password_hash: await hashPassword(`${name} legacy password`, TEST_PASSWORD_KDF), password_set_at: now, wallet_address: null, wallet_verified_at: null };
+  const session: Session = { session_id: sessionId, principal_id: principalId, secret_hash: secretHash(secret), created_at: now, last_seen_at: now, expires_at: now + 30 * DAY, revoked_at: null, revoke_reason: null, rotated_to: null, family_id: familyId };
+  const family: SessionFamily = { family_id: familyId, principal_id: principalId, created_at: now, origin: "bootstrap", revoked_at: null, revoke_reason: null };
+  await store.commit({
+    expect: [
+      { kind: "principal-absent", principal_id: principalId },
+      { kind: "profile-absent", profile_id: profileId },
+      { kind: "selector-unused", recovery_selector: key.selector },
+      { kind: "session-absent", session_id: sessionId },
+      { kind: "family-absent", family_id: familyId },
+      ...(schema === 2 ? [{ kind: "login-unused" as const, login_key: loginKeyOf(username) }] : []),
+    ],
+    principals: [principal],
+    profiles: [profile],
+    sessions: [session],
+    families: [family],
+  });
+  return { read: { kind: "session", sessionId, secret }, session };
 }
 
 describe("L6-1 identity verifier: the writer's answers, from the durable records, without writing", () => {
@@ -231,5 +271,32 @@ describe("L6-1 identity verifier: the writer's answers, from the durable records
     assert.deepEqual([...reads].sort(), ["family", "principal", "profile", "session"]);
     assert.deepEqual(Object.keys(verifier).sort(), ["authenticate", "recheck"], "the verifier's whole surface: two questions, no write");
     assert.equal(store.stats.commits, commits);
+  });
+
+  test("PHASE 3 FINAL: a LEGACY account (schema 1 or 2) is retired -- refused `ended` at the upgrade and `revoked` at a frame, as the writer refuses it; an Authorization Wallet account is still `ok` and profiled", async () => {
+    const { store, writer, verifier } = await world();
+    const ann = await profiled(writer, T0, "Ann");
+    const recoveryKeyProfile = await legacyAccount(store, 1, "Leo", T0 + 1);
+    const usernameProfile = await legacyAccount(store, 2, "Lia", T0 + 2);
+    const at = T0 + 3;
+    /* The writer, over the very same records (loaded as a restart loads them), retires both legacy accounts. */
+    const snapshot = store.snapshot();
+    const writerOver = IdentityService.fromSnapshot(createMemoryIdentityStore(snapshot), snapshot, { policy: { passwordKdf: TEST_PASSWORD_KDF } });
+    for (const [label, legacy] of [["a schema-1 (recovery-key) profile", recoveryKeyProfile], ["a schema-2 (username, no Authorization Wallet) profile", usernameProfile]] as const) {
+      assert.deepEqual(writerOver.authenticate(legacy.read, at), { kind: "refused", why: "ended" }, `${label}: the writer refuses its session`);
+      assert.equal(writerOver.isProfiled(legacy.session.principal_id), false, `${label}: the writer does not serve it`);
+      assert.deepEqual(writerOver.classify(legacy.read, false, at), { kind: "ended", reason: "retired" }, `${label}: its bootstrap says retired`);
+      assert.deepEqual(await verifier.authenticate(legacy.read, at), { kind: "refused", why: "ended" }, `${label}: the verifier refuses it at the upgrade`);
+      /* A socket context of that principal (opened before this build, say): the next frame closes it. */
+      const ctx = { principalId: legacy.session.principal_id, sessionId: legacy.session.session_id, sessionExpiresAt: legacy.session.expires_at };
+      assert.deepEqual(await verifier.recheck(ctx, at), { kind: "revoked" }, `${label}: the verifier revokes its socket at a frame`);
+    }
+    /* The Authorization Wallet account beside them is untouched. */
+    const opened = await verifier.authenticate(ann.read, at);
+    assert.equal(opened.kind, "ok", JSON.stringify(opened));
+    if (opened.kind !== "ok") return;
+    assert.equal(opened.profiled, true);
+    assert.deepEqual(await verifier.recheck({ principalId: opened.principalId, sessionId: opened.sessionId, sessionExpiresAt: opened.sessionExpiresAt }, at), { kind: "ok", profiled: true });
+    assert.equal(writerOver.authenticate(ann.read, at).kind, "ok");
   });
 });

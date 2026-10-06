@@ -690,6 +690,41 @@ describe("L6-4 R3: strict -- a journal that cannot be read without guessing stop
     assert.throws(() => replay(s, s.T, [...s.events, confirm(umaSecond, "f"), walletFork, confirm(walletFork, "e")]), /two confirmed wallet replacements start from one designation/);
   });
 
+  test("PHASE 3 FINAL: a key rotation naming an Authorization Wallet account (schema 3, no recovery key) is refused by the PLAN -- before any store write", async () => {
+    const s = await scenario();
+    const pat = s.accounts.pat;
+    const profile = s.T.profiles.find((entry) => entry.principal_id === pat.principalId) as Profile;
+    assert.equal(profile.schema, 3, "Pat's account is an Authorization Wallet account");
+    /* A forged (or damaged) rotation of Pat's internal credential epoch: no build ever journals one for such an account. */
+    const forged: Extract<SecurityEvent, { kind: "recovery-key-rotated" }> = {
+      format: "gs-security-event",
+      version: 1,
+      event_id: "fe" + "0".repeat(30),
+      at: AT - MIN,
+      principal_id: pat.principalId,
+      kind: "recovery-key-rotated",
+      profile_id: profile.profile_id,
+      from_selector: profile.recovery_selector,
+      to_selector: quarantineKeyOf("forged", profile.profile_id).selector,
+      recovery_hash: "a".repeat(64),
+      rotated_at: AT - MIN,
+    };
+    const confirmation: SecurityEvent = { format: "gs-security-event", version: 1, event_id: "ff" + "0".repeat(30), at: forged.at, principal_id: pat.principalId, kind: "confirmed", confirms: forged.event_id, confirmed_kind: "recovery-key-rotated" };
+    /* The table the restore would write: it must see no write at all. */
+    const target = createMemoryIdentityStore(s.T);
+    for (const [label, events] of [["unconfirmed", [...s.events, forged]], ["confirmed", [...s.events, forged, confirmation]]] as const) {
+      assert.throws(
+        () => replay(s, target.snapshot(), events),
+        (error: unknown) => error instanceof SecurityReplayError && /names an Authorization Wallet account, which has no recovery key/.test((error as Error).message),
+        `${label}: refused up front, as a SecurityReplayError`,
+      );
+    }
+    assert.equal(target.stats.commits, 0, "nothing was written");
+    assert.deepEqual(target.snapshot(), s.T, "the table is exactly as restored");
+    /* The same journal without the forged rotation still plans (the refusal is that event's, not the scenario's). */
+    assert.ok(replay(s).principals.length > 0);
+  });
+
   test("the canonical journal refuses a malformed stored event and names no content", () => {
     assert.throws(() => canonicalJournal([{ nope: true } as unknown as SecurityEvent]), (error: unknown) => error instanceof SecurityReplayError && /#0 is not a well-formed/.test((error as Error).message));
   });

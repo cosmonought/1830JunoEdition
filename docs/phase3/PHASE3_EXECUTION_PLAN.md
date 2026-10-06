@@ -832,9 +832,16 @@ gates.
   Every row IMPLEMENTED; the "established opponents" count (no definition exists) and the substantive Terms copy (OD-16, Phase-7) are
   NOT closed. Pins 13 / [13] / [10, 11, 12, 13]; no escrow message, codec, contract, settlement or financial-protocol change. Record:
   `PHASE3_AUDIT_RECONCILIATION.md` "W3-L slice status"; `w3l_profile_account_wallet` in the JSON.
-- **Owner decisions open (not invented):** password minimum length (provisional 8); username syntax beyond the mechanism's bounds;
-  the "established" definition; password change / reset (no email; security review M4 / N-2); lockout thresholds; KDF parameters
-  against the production host; the visitor scope (public chat, watcher slots, 6 visitor sockets per browser).
+- **Owner decisions at `343fac2`:** password minimum length; username syntax; the "established" definition; password change / reset;
+  the visitor scope -- **all RULED 2026-10-05** (below). Still open: lockout thresholds and KDF parameters against the production host
+  (a pre-real-money deployment task).
+- **Account-policy follow-up (owner rulings 2026-10-05; row P3-N031):** COMPLETE on `phase3/preplaytest-profile-account-policy`
+  (from `343fac2`; `c7841ee`, `cc241e7`, `3de06c2`; NOT integrated): password >= 12, no composition rules; username policy unchanged;
+  ONE recovery key per new account as an ACCOUNT-RECOVERY credential (shown once after creation; never asked for in routine play);
+  Change password (current password or key; other devices signed out; this device kept); "Forgot password?" by the key (no email,
+  no username); key rotation under an explicit "Confirm it's you"; "established" = one completed real-money game. Email recovery is
+  intentionally OUT OF SCOPE for this release (not required for Phase 4). Record: `PHASE3_AUDIT_RECONCILIATION.md` "W3-L
+  account-policy follow-up status"; `w3l_account_policy_followup` in the JSON.
 
 ---
 

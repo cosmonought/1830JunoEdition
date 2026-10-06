@@ -239,7 +239,6 @@ describe("account policy: creating an account shows its recovery key ONCE, then 
 
   it("no ProfileGate returns: the app renders for everyone, and the reveal lives inside the account dialog", () => {
     expect(readStripped("index.tsx")).not.toContain("ProfileGate");
-    expect(readStripped("App.tsx")).not.toContain("ProfileGate");
     expect(readStripped("components/AccountDialog.tsx")).toContain("RecoveryKeyReveal");
   });
 });

@@ -67,6 +67,8 @@ import { GAME_ID_PATTERN, seatOf, type GameRecord } from "./rooms/gameRecord";
 /* LIVE-3C: restore, reconciliation, durable holds, the terminal seal, the operator's view. */
 import { isMaintenanceHold, type CommittedView } from "./rooms/committedView";
 import { createMemoryHoldStore, HoldUnreadableError, makeHold, type HoldStore } from "./rooms/holdStore";
+import type { RoomHostClockConfig } from "./rooms/roomHost";
+import type { ClockController } from "./rooms/clock/clockController";
 import { handleReadiness, type ReadinessAnswer } from "./ingress/readiness";
 import { handleEdgeDiagnostic } from "./ingress/edgeDiagnostic";
 import { admissibleAfterSeal, GAME_OVER_SENTENCE, NO_MONEY_SETTLEMENT, RECONCILING_SENTENCE, UNAVAILABLE_PLAYER_SENTENCE, type SettlementLifecycle } from "./rooms/lifecycle";
@@ -225,6 +227,10 @@ export interface GameServerIdentity {
 export interface GameServerOptions {
   port: number;
   build: string;
+  /** Phase 3 final clocks: the table clock (`rooms/clock/`). Absent: no table is timed (hosts built without one -- the
+   *  older suites and tools). `start.ts` and the AWS runtime always configure it. With a clock, the session stamps every
+   *  entry from the clock's time (`clock.now`), and a move's entries carry the exact moment the clock judged it at. */
+  clock?: RoomHostClockConfig;
   /** LIVE-2B: authentication at the upgrade (the successor of `resolveIdentity`). */
   identity: GameServerIdentity;
   /** LIVE-2C: the server-owned GameRecords and the join-code index. In memory when absent; `start.ts` passes the
@@ -403,6 +409,8 @@ const submissionIdOf = (frame: unknown): string | undefined => {
 export function createGameServer(options: GameServerOptions): {
   http: HttpServer;
   close: () => Promise<void>;
+  /** Phase 3 final clocks: the table clock (`null` when the server was built without one). */
+  clock: ClockController | null;
   /** LIVE-3A: the executor's counters (expiries, store failures, resyncs...), for tests and the smoke run. */
   counters: Readonly<ActorCounters & { submitAhead: number; submitResync: number; internal: number }>;
   /** LIVE-2A: what the ingress limits refused, stripped and closed -- for tests and the smoke run. */
@@ -562,6 +570,19 @@ export function createGameServer(options: GameServerOptions): {
      the capability is immutable for the process, so the status snapshot repeats the same object. */
   const compatibility = compatibilityDescriptor(continuation.capability, { build_id: options.build });
 
+  /* Phase 3 final clocks: one time base for the clock and every entry's stamp; a move is stamped with the exact time the
+     clock judged it at (set only around a synchronous `RoomSession.submit`). */
+  const clockTime = options.clock?.now ?? (() => Date.now());
+  let stampNow: number | null = null;
+  const stampAt = <T>(at: number, fn: () => T): T => {
+    const prior = stampNow;
+    stampNow = at;
+    try {
+      return fn();
+    } finally {
+      stampNow = prior;
+    }
+  };
   /** A room's session at the seed, nothing applied: what a game is loaded into. LIVE-4 (L4-2): with this pool's
    *  continuation answers for that game -- its verdict (asked at every rebuild), its dealing identity and its serving
    *  decision. (ESCROW-3A's `continuesDealtBuild`, asked only across builds, is gone.) */
@@ -582,7 +603,8 @@ export function createGameServer(options: GameServerOptions): {
       mintId: () => `s${processTag}-${(minted += 1)}`,
       /* LIVE-4 L4-5 (D-43): the turn's revenue draw -- `crypto.randomInt`, never `randomTurnSeed`'s `Math.random`. */
       mintSeed: mintHostedRevenueSeed,
-      now: () => Date.now(),
+      /* Phase 3 final clocks: an entry's server stamp is the clock's decision time (`stampAt`), else the clock's now. */
+      now: () => stampNow ?? clockTime(),
       explainDivergence: options.explainDivergence === true,
       replayPolicy: options.legacyLogs === "development-corpus" ? DEVELOPMENT_CORPUS_POLICY : SERVER_REPLAY_POLICY,
     });
@@ -938,6 +960,19 @@ export function createGameServer(options: GameServerOptions): {
       }
     }
 
+    /* ==================================================================
+        PHASE 3 FINAL CLOCKS: THE TABLE CLOCK JUDGES THE MOVE FIRST, IN THIS TASK
+       ==================================================================
+       Every transition due by now happens first, each at its own moment (an overdue at 20:00, a finality at 30:00, a
+       train offer's unanswered expiry -- which the server closes in the log and then refuses this submit, so it is
+       judged on the new board). Then a pause, a system pause, an interruption, an ended game, a fenced undo or the
+       two-decline limit refuses it, appending nothing. The move's entries are stamped with the time it was judged at. */
+    const clockGate = host.clock === null ? null : await host.clock.gateSubmit(game, tx, { actor: bound.actor, msg: frame.msg });
+    if (clockGate !== null && !clockGate.ok) {
+      answer({ kind: "refused", code: clockGate.code, reason: clockGate.reason, build: options.build });
+      return;
+    }
+
     const session = tx.session;
     const before = session.entries.length;
 
@@ -956,7 +991,7 @@ export function createGameServer(options: GameServerOptions): {
        reference to the line printed here instead of the exception's own text. */
     let result: ServerMessage;
     try {
-      result = session.submit({
+      const submitMove = (): ServerMessage => session.submit({
         actor,
         build: frame.build,
         /* LIVE-4 (L4-3): the socket's announced client protocol, as the upgrade read it: 0 (the legacy wire) keeps the
@@ -972,6 +1007,7 @@ export function createGameServer(options: GameServerOptions): {
         seated: true,
         undoPolicy,
       });
+      result = clockGate !== null ? stampAt(clockGate.now, submitMove) : submitMove();
     } catch (error) {
       tx.rollback();
       counters.internal += 1;
@@ -1031,6 +1067,10 @@ export function createGameServer(options: GameServerOptions): {
     const settled = await tx.commitBatch(batch, (settled) => submitDelivery(settled, batch, result, inReplyTo));
     /* ESCROW-3B: the committed board, for a money game's checkpoint seam. */
     if (settled.kind === "committed") host.afterGameplay(game, endedAfter, closedAfter, boardAfter);
+    /* Phase 3 final clocks: the committed batch folded into the table clock (and written) before this task ends. */
+    if (settled.kind === "committed" && clockGate !== null && host.clock !== null) {
+      await host.clock.afterCommit(game, { gate: clockGate, actor, batch: settled.entries, board: boardAfter });
+    }
     if (settled.kind !== "committed" || result.kind !== "applied") return;
     /* LIVE-2A: a revert that landed spends its budget. */
     revertBudget?.record();
@@ -1413,6 +1453,9 @@ export function createGameServer(options: GameServerOptions): {
     ...(options.escrow !== undefined ? { escrow: options.escrow } : {}),
     ...(options.money !== undefined ? { money: options.money } : {}),
     boardFacts,
+    /* Phase 3 final clocks */
+    ...(options.clock !== undefined ? { clock: { ...options.clock, now: clockTime } } : {}),
+    stampAt,
     /* LIVE-4 (L4-3): the room channel's client check. A game this pool does not continue is shown as such by its view
        (`holdKind: "incompatible"`, with its reason), so only a `reload` refuses a room socket. */
     clientMayRead: (socket, gameId, view) => {
@@ -2134,6 +2177,8 @@ export function createGameServer(options: GameServerOptions): {
     clientAnswers,
     records: recordStore,
     rooms: host,
+    /** Phase 3 final clocks: the table clock (null when not configured). */
+    clock: host.clock,
     residentGames: () => games.size,
     /** LIVE-5 L5-3 (tests): evict the actors idle as of `at` -- the registry's own sweep, run now. */
     evictIdleGames: (at: number) => games.evictIdle(at),
@@ -2177,6 +2222,7 @@ export function createGameServer(options: GameServerOptions): {
       new Promise<void>((resolve) => {
         clearInterval(keepalive);
         clearInterval(identitySweep);
+        host.clock?.close();
         games.close();
         for (const socket of contexts.keys()) socket.close(1001, "server stopping");
         try {

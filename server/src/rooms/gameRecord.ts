@@ -25,6 +25,7 @@ import { base32Lower } from "../identity/ids";
 import type { GameVariants } from "../../../frontend/src/gameEngine/gameVariants";
 import type { UndoPolicy } from "../../../frontend/src/gameEngine/logRevert";
 import type { MyTableMoneySummary, RoomMoneyView, RoomStakeSummary } from "../../../frontend/src/utils/moneyProtocol";
+import type { RoomClockView } from "../../../frontend/src/utils/clockProtocol";
 
 /* ---------------------------------------------------------------------------
     IDENTIFIERS (LIVE-2 §3.2)
@@ -475,7 +476,7 @@ export function roomViewFor(
   record: GameRecord,
   facts: LogFacts,
   principalId: string,
-  context: { now: number; held: boolean; holdKind?: HoldKind; holdReason?: string | null; online: (playerId: string) => boolean; canStart: boolean; money?: RoomMoneyView | null },
+  context: { now: number; held: boolean; holdKind?: HoldKind; holdReason?: string | null; online: (playerId: string) => boolean; canStart: boolean; money?: RoomMoneyView | null; clock?: RoomClockView | null },
 ): RoomView {
   const lifecycle = effectiveStatus(record, facts, context.now);
   const seat = seatOf(record, principalId);
@@ -509,6 +510,8 @@ export function roomViewFor(
     undoPolicy: { host_undo: record.policy.host_undo },
     you: { role, playerId: seat?.player_id ?? null, kicked: isKicked(record, principalId), canStart: host && context.canStart },
     ...(record.money !== null && context.money != null ? { money: context.money } : {}),
+    /* Phase 3 final clocks: the table clock, the same for every viewer (additive, optional). */
+    ...(context.clock != null ? { clock: context.clock } : {}),
   };
 }
 

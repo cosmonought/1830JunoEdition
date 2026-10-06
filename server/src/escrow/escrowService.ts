@@ -87,7 +87,8 @@ import type { PrefixReplay, TerminalSettlementEvidence } from "./settlementEvide
 import type { WalletTicketLedger } from "./walletTickets";
 import { SignerError } from "./juno/signer";
 import { verifyDigest } from "./juno/secp256k1";
-import { junoGameView, parseConfigResponse, parseGameResponse, parseSignerKeysResponse, QUERY, RELAYER_EXECUTE, type JunoGameResponse } from "./juno/junoContract";
+import { junoGameView, parseConfigResponse, parseGameResponse, parseRemedyKeysResponse, parseSignerKeysResponse, QUERY, RELAYER_EXECUTE, type JunoGameResponse } from "./juno/junoContract";
+import { prepareRemedyIntent, type PrepareRemedyOutcome } from "./juno/remedyIntents";
 import type { JoinAdmissionSigner } from "./juno/joinAdmission";
 import type { JunoRest } from "./juno/junoRest";
 import type { Admission, IntentServing, Relayer } from "./juno/relayer";
@@ -163,6 +164,35 @@ export interface EscrowServiceDeps {
    *  expires within the hour and is attested again only under the system-pause rules). ABSENT (this build: the lane is
    *  not built): no remedy intent is ever relayed -- fail closed. */
   readonly remedyGate?: (gameId: string, intent: ChainIntentRecord) => Promise<{ readonly kind: "ok" } | { readonly kind: "wait"; readonly why: string }>;
+  /** Phase 3 final clocks: the table's deadline class (the clock record's policy, fixed for a money table at its
+   *  creation) -- what an ASYNC chain game must have been funded under to be bound (a pace's allowance, or No-deadline).
+   *  Absent, or `null` for a table: an async chain game is never bound (3fecd54's refusal). */
+  readonly tableDeadline?: (gameId: string) => Promise<{ readonly deadline: "live" | "async-pace" | "no-deadline"; readonly paceSecs: number | null } | null>;
+}
+
+/** Phase 3 final clocks (FP4): what the remedy pipeline needs of a bound money game, read by QUORUM. */
+export interface RemedyChainContext {
+  readonly instance: string;
+  readonly chainGameId: string;
+  readonly domain: string;
+  readonly state: string;
+  readonly policy: string | null;
+  readonly paused: boolean;
+  readonly startedAtSecs: bigint;
+  readonly allowanceSecs: number;
+  readonly trustedSeq: bigint;
+  /** Every chain seat's CURRENT consent key (seat order). */
+  readonly consentPubkeys: readonly string[];
+  /** player id -> chain seat index (the frozen roster). */
+  readonly seatOf: Readonly<Record<string, number>>;
+  /** The REMEDY key registry entry at `remedyKeyId`, as the chain holds it (`null`: not registered). */
+  readonly remedyKey: { readonly pubkey: string; readonly active: boolean } | null;
+  /** The chain's latest block time (seconds), by quorum. */
+  readonly blockTimeSecs: number;
+  /** The pending exceptional review request, if any. */
+  readonly review: { readonly seatIndex: number; readonly requestedAtSecs: string } | null;
+  /** A remedy the chain already accepted, if any. */
+  readonly remedy: { readonly kind: string; readonly remedyDigest: string } | null;
 }
 
 export type ServiceRefusal = { readonly ok: false; readonly code: string; readonly detail: string };
@@ -342,6 +372,19 @@ export interface EscrowService {
   idle(): Promise<void>;
   isRosterFrozen(gameId: string): boolean;
   readonly stats: { checkpoints: number; settles: number; finalizes: number; holds: number; skipped: number; failures: number };
+  /** Phase 3 final clocks (FP4): a bound money game's chain facts for a remedy, read by QUORUM (the game, the REMEDY key
+   *  registry entry `remedyKeyId`, the chain's latest block time). A refusal when the game is not bound, held, not this
+   *  pool's, or the chain cannot be read by quorum now (nothing is attested on a single node's word). */
+  remedyContext(gameId: string, remedyKeyId: number | null): Promise<RemedyChainContext | ServiceRefusal>;
+  /** Phase 3 final clocks (FP4): writes one `submit-remedy` intent behind the per-game fence (`prepareRemedyIntent`),
+   *  serialized per game, with the chain's QUORUM block time for the fence. */
+  prepareRemedy(gameId: string, candidate: ChainIntentRecord, chainTimeSecs: number): Promise<PrepareRemedyOutcome>;
+  /** Phase 3 final clocks (FP4, the clock lane's obligation): a cure ended an overdue instance -- post a FENCING checkpoint
+   *  at the current committed log position (past the stall), so no attestation of the cured instance can land. Queued;
+   *  a position the appraiser refuses is skipped (audited) like any checkpoint. */
+  fenceCheckpoint(gameId: string): void;
+  /** Phase 3 final clocks: whether a unanimous ANNUL intent of this game is still open (it supersedes a pending remedy). */
+  annulOpen(gameId: string): Promise<boolean>;
 }
 
 export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
@@ -1211,14 +1254,32 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
        the 20-minute action clock. A game stored by escrow 2.0.0 code (no policy: an older game of a migrated
        deployment) is financial protocol 3's; an async game's deadline class (its pace, or none) is the table's choice,
        which no table records yet (the server clock lane), so it is not bound under terms nobody at the table chose. */
+    /* Phase 3 final clocks: an async chain game is bound only when its funded deadline is EXACTLY the table's recorded
+       choice (fixed at the money table's creation): the same pace (`timed_remedy_v1` with that allowance), or No-deadline
+       (`no_deadline`). Never one the table did not choose. */
+    const table = deps.tableDeadline === undefined ? null : await deps.tableDeadline(gameId).catch(() => null);
     const policyProblem =
       (g.policy ?? null) === null
         ? "the chain game was stored by escrow 2.0.0 code (no exit policy): financial protocol 3's, not this build's"
-        : g.mode !== 0
-          ? "an async money table's deadline class (its pace, or no deadline) is not recorded by any table yet"
-          : g.policy !== "timed_remedy_v1"
+        : g.mode === 0
+          ? g.policy !== "timed_remedy_v1"
             ? `the chain game's exit policy is ${String(g.policy)}, not the Live action clock`
-            : null;
+            : (g.allowance_secs ?? 1200) !== 1200
+              ? `the chain game's action allowance is ${String(g.allowance_secs)} s, not the Live 1200 s`
+              : table !== null && table.deadline !== "live"
+                ? "the table's deadline is not the Live action clock"
+                : null
+          : table === null
+            ? "an async money table's deadline class (its pace, or no deadline) is not recorded for this table"
+            : table.deadline === "no-deadline"
+              ? g.policy === "no_deadline"
+                ? null
+                : `the chain game's exit policy is ${String(g.policy)}; the table has no action deadline`
+              : table.deadline === "async-pace"
+                ? g.policy === "timed_remedy_v1" && g.allowance_secs === table.paceSecs
+                  ? null
+                  : `the chain game's pace (${String(g.policy)}, ${String(g.allowance_secs)} s) is not the table's ${String(table.paceSecs)} s`
+                : "the table's deadline is Live; the chain game is async";
     if (policyProblem !== null) return { ok: false, code: expect !== null ? "not-the-hosts-escrow" : "terms-mismatch", detail: policyProblem };
     /* A seat held by a trusted resolver's wallet (a host's own CreateGame included): the contract would refuse to start
        the game (its resolver would judge its own stake), so it is never bound -- the seats withdraw or the host cancels. */
@@ -1581,7 +1642,101 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
   }
   const restoreRefusal = (gameId: string): ServiceRefusal | null => (restoreGate(gameId) === null ? null : { ok: false, code: "restore-unverified", detail: RESTORE_READ_ONLY_SENTENCE });
 
+  /* ------------------------------------------------------------------ */
+  /* Phase 3 final clocks (FP4): the remedy pipeline's chain seams        */
+  /* ------------------------------------------------------------------ */
+
+  async function remedyContext(gameId: string, remedyKeyId: number | null): Promise<RemedyChainContext | ServiceRefusal> {
+    if (!ready()) return refuseRemedy("not-verified", "financial mode is not verified against the chain");
+    const found = await servingOf(gameId);
+    const record = found.record;
+    const bound = boundOf(record);
+    if (record === null || bound === null) return refuseRemedy("not-bound", "the table's escrow has no frozen roster");
+    const refused = refusalOf(found);
+    if (refused !== null) return refuseRemedy(refused.code, refused.detail);
+    if (record.phase === "held") return refuseRemedy("held", record.hold?.detail ?? "the money game is held");
+    const rest = backend.rest;
+    if (rest.latestBlockQuorum === undefined) return refuseRemedy("no-quorum", "this chain client cannot read block time by quorum; no remedy is attested");
+    const quorumSmart = (query: string): Promise<unknown> => (rest.smartQuorum !== undefined ? rest.smartQuorum(backend.pin.contract_address, query) : rest.smart(backend.pin.contract_address, query));
+    let response: JunoGameResponse;
+    let blockTimeSecs: number;
+    try {
+      const [game, block] = await Promise.all([readGameQuorum(bound.binding.chain_game_id), rest.latestBlockQuorum()]);
+      response = game;
+      blockTimeSecs = Math.floor(Date.parse(block.time) / 1000);
+    } catch (error) {
+      return refuseRemedy("chain-unavailable", `the chain could not be read by quorum (${error instanceof Error ? error.message.slice(0, 200) : String(error)})`);
+    }
+    if (!Number.isSafeInteger(blockTimeSecs) || blockTimeSecs <= 0) return refuseRemedy("chain-unavailable", "the chain's block time is unreadable");
+    let remedyKey: RemedyChainContext["remedyKey"] = null;
+    if (remedyKeyId !== null) {
+      let after: number | null = null;
+      try {
+        for (let page = 0; page < 8 && remedyKey === null; page += 1) {
+          const keys = parseRemedyKeysResponse(await quorumSmart(QUERY.remedyKeys(after, 30)));
+          const hit = keys.find((key) => key.key_id === remedyKeyId);
+          if (hit !== undefined) remedyKey = { pubkey: hit.pubkey, active: !hit.retired && !hit.compromised };
+          if (keys.length < 30) break;
+          after = keys[keys.length - 1].key_id;
+        }
+      } catch (error) {
+        return refuseRemedy("chain-unavailable", `the REMEDY key registry could not be read by quorum (${error instanceof Error ? error.message.slice(0, 200) : String(error)})`);
+      }
+    }
+    const g = response.game;
+    if (g.domain === null) return refuseRemedy("wrong-state", "the escrow has no domain (not started)");
+    if (g.started_at_secs === null || g.started_at_secs === undefined) return refuseRemedy("wrong-state", "the escrow has no start time (not started)");
+    if (g.domain !== bound.roster.expected_domain) return refuseRemedy("binding-mismatch", "the chain game's domain is not the frozen roster's");
+    const seatOf: Record<string, number> = {};
+    for (const entry of bound.roster.roster) seatOf[entry.player_id] = entry.chain_seat_index;
+    return {
+      instance: escrowInstanceKey(bound.binding),
+      chainGameId: bound.binding.chain_game_id,
+      domain: g.domain,
+      state: g.state,
+      policy: g.policy ?? null,
+      paused: response.paused,
+      startedAtSecs: BigInt(g.started_at_secs),
+      allowanceSecs: g.allowance_secs ?? 0,
+      trustedSeq: BigInt(response.trusted_seq),
+      consentPubkeys: g.seats.map((seat) => seat.consent_pubkey),
+      seatOf,
+      remedyKey,
+      blockTimeSecs,
+      review: g.review_request === null || g.review_request === undefined ? null : { seatIndex: g.review_request.seat_index, requestedAtSecs: g.review_request.requested_at_secs },
+      remedy: g.remedy === null || g.remedy === undefined ? null : { kind: g.remedy.kind, remedyDigest: g.remedy.remedy_digest },
+    };
+  }
+
+  const refuseRemedy = (code: string, detail: string): ServiceRefusal => ({ ok: false, code, detail });
+
   return {
+
+    remedyContext,
+
+    prepareRemedy(gameId, candidate, chainTimeSecs) {
+      return exclusive(`remedy|${gameId}`, () => prepareRemedyIntent(deps.intents, candidate, { poke: (game, intent) => deps.relayer()?.poke(game, intent), now: deps.now(), chainTime: chainTimeSecs }));
+    },
+
+    fenceCheckpoint(gameId) {
+      void enqueue(gameId, "a fencing checkpoint (a cured overdue)", async () => {
+        const entries = await deps.readLog(gameId);
+        const L = entries.length;
+        if (L === 0) return;
+        const replayed = deps.replay(entries);
+        if (!replayed.ok) {
+          deps.warn(`  escrow: ${gameId}: the fencing checkpoint's board does not replay (${replayed.reason.slice(0, 200)}); not posted`);
+          return;
+        }
+        audit("checkpoint.fence", { game_id: gameId, log_len: L });
+        await checkpointAt({ game_id: gameId, log_len: L, round_key: roundKeyOf(replayed.board), canonical_text: canonicalStateText(replayed.board), entries, issued_at: issuedAtOf(entries, L) });
+      });
+    },
+
+    async annulOpen(gameId) {
+      const intents = await deps.intents.listGame(gameId);
+      return intents.some((intent) => intent.op.kind === "annul" && (intent.status === "pending" || intent.status === "in-flight" || (intent.status === "held" && intent.attempts.some(isLiveAttempt))));
+    },
     stats,
     rosterSource,
     restoreGate,

@@ -158,6 +158,9 @@ export interface AccountView {
   readonly pub_key: string | null;
 }
 
+/** Phase 3 final clocks: how far apart (seconds) two endpoints' latest block times may be and still make a quorum. */
+export const BLOCK_QUORUM_SPREAD_SECS = 120;
+
 export interface BlockView {
   readonly chain_id: string;
   readonly height: string;
@@ -189,6 +192,12 @@ export interface JunoRest {
   /** ESCROW-4: the same smart query from every configured endpoint, agreeing (two or more when two or more are
    *  configured), or `unavailable`. Optional for test doubles (callers fall back to `smart`). */
   smartQuorum?(contract: string, queryJson: string): Promise<unknown>;
+  /** Phase 3 final clocks (FP4): the chain's latest block as a QUORUM read -- one endpoint configured: its answer; two or
+   *  more: at least two must answer on the configured chain, within `BLOCK_QUORUM_SPREAD_SECS` of each other, and the
+   *  answer is the EARLIEST of their block times (a remedy's `attested_at` is then at or before every answering node's
+   *  head, and FP4's fence waits on the most conservative clock). Optional for test doubles (absent: a remedy is never
+   *  attested -- fail closed). */
+  latestBlockQuorum?(): Promise<BlockView>;
   /** Every configured endpoint's own chain id (each asked separately; null when it did not answer). An endpoint that
    *  answers for another network is never used for anything (reads, simulation or broadcast). */
   endpointChains(): Promise<ReadonlyArray<{ readonly endpoint: string; readonly chain_id: string | null; readonly error: string | null }>>;
@@ -380,6 +389,34 @@ export function createJunoRest(policy: JunoEndpointPolicy, http: HttpTransport =
         if (header.chain_id !== policy.expectedChainId) throw new JunoRpcError("wrong-chain", `the node is on ${header.chain_id}, not ${policy.expectedChainId}`, shown(base));
         return { chain_id: header.chain_id, height: header.height, time: header.time };
       });
+    },
+    async latestBlockQuorum() {
+      const blockAt = async (base: string): Promise<BlockView> => {
+        await verifiedChain(base);
+        const { json } = await call(base, "GET", "/cosmos/base/tendermint/v1beta1/blocks/latest");
+        const block = isObject(json) ? (isObject(json.sdk_block) ? json.sdk_block : json.block) : undefined;
+        const header = isObject(block) ? block.header : undefined;
+        if (!isObject(header) || typeof header.chain_id !== "string" || typeof header.height !== "string" || !DEC.test(header.height) || typeof header.time !== "string") return malformed("latest block", base);
+        if (header.chain_id !== policy.expectedChainId) throw new JunoRpcError("wrong-chain", `the node is on ${header.chain_id}, not ${policy.expectedChainId}`, shown(base));
+        if (!Number.isFinite(Date.parse(header.time))) return malformed("latest block", base);
+        return { chain_id: header.chain_id, height: header.height, time: header.time };
+      };
+      if (endpoints.length === 1) return blockAt(endpoints[0]);
+      const answers: BlockView[] = [];
+      await Promise.all(
+        endpoints.map(async (base) => {
+          try {
+            answers.push(await blockAt(base));
+          } catch {
+            /* an endpoint that does not answer does not vote */
+          }
+        }),
+      );
+      if (answers.length < 2) throw new JunoRpcError("unavailable", `quorum block read: ${answers.length} of ${endpoints.length} endpoints answered (2 needed)`);
+      const seconds = answers.map((answer) => Math.floor(Date.parse(answer.time) / 1000));
+      const earliest = Math.min(...seconds);
+      if (Math.max(...seconds) - earliest > BLOCK_QUORUM_SPREAD_SECS) throw new JunoRpcError("unavailable", "quorum block read: the endpoints' heads are too far apart (a lagging node); read again later");
+      return answers[seconds.indexOf(earliest)];
     },
     async syncing() {
       return read("syncing", async (base) => {

@@ -24,6 +24,7 @@ import type { GameVariants } from "../gameEngine/gameVariants";
 import type { UndoPolicy } from "../gameEngine/logRevert";
 import { GAME_ID_PATTERN } from "../gameEngine/messageSchema";
 import type { MyTableMoneySummary, RoomMoneyView, RoomStakeSummary } from "./moneyProtocol";
+import type { ClockDeadlineClass, RoomClockView } from "./clockProtocol";
 import type { PresenceState } from "./presence";
 
 export type RoomRole = "host" | "player" | "member" | "viewer";
@@ -82,6 +83,10 @@ export interface RoomView {
   /** ESCROW-4 (additive, optional): a real-money table's projection for this viewer (`moneyProtocol.ts`). Absent for a
    *  no-money table (and from any server that has no money layer). */
   money?: RoomMoneyView;
+  /** Phase 3 final clocks (additive, optional): the table clock (`clockProtocol.ts`) -- the deadline, who owes the next
+   *  required decision and their countdown, a train offer's response time, an overdue, votes, pauses, a system pause.
+   *  Absent before the table has a clock and from an older server. The browser presents it; the server decides. */
+  clock?: RoomClockView;
 }
 
 /** A public list entry: names yes, ids no (beyond gameId and code). */
@@ -208,6 +213,14 @@ export type RoomOpBody =
   | { type: "transfer-host"; toPlayerId: string }
   | { type: "start-game" }
   | { type: "cancel-room" }
+  /** Phase 3 final clocks (`clockProtocol.ts` CLOCK_OPS): the table clock's ops. */
+  | { type: "clock-policy"; deadline: ClockDeadlineClass; paceSecs?: number | null }
+  | { type: "clock-pause"; action: "request" | "yes" | "no"; kind: "pause" | "resume"; id?: number }
+  | { type: "clock-sysresume" }
+  | { type: "clock-propose"; kind: "foreclose" | "annul"; approveUntil?: number; signature?: string }
+  | { type: "clock-vote"; proposalId: number; yes: boolean; approveUntil?: number; signature?: string }
+  | { type: "clock-annul"; yes: boolean }
+  | { type: "clock-ack" }
   /** LIVE-2F/3D (C9-01): a read -- the caller's own tables, answered `{tables: MyTableSummary[]}`. */
   | { type: "my-tables" };
 

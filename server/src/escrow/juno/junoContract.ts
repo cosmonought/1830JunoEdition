@@ -186,6 +186,12 @@ export interface JunoGame {
   readonly policy?: string | null;
   /** FP4: the accepted remedy, if any: which, against which seat, and the REMEDY digest the chain recorded. */
   readonly remedy?: { readonly kind: string; readonly defaulting_seat: number; readonly remedy_digest: string; readonly final_at: string } | null;
+  /** Phase 3 final clocks (escrow 2.1.0): the Start's block time (whole seconds, decimal), the funded action allowance
+   *  (seconds; 0 for No-deadline and 2.0.0 games) and the pending exceptional review request. Optional: absent from an
+   *  answer that does not carry them. */
+  readonly started_at_secs?: string | null;
+  readonly allowance_secs?: number;
+  readonly review_request?: { readonly seat_index: number; readonly requested_at_secs: string; readonly trusted_seq: string } | null;
 }
 
 export interface JunoGameResponse {
@@ -284,6 +290,15 @@ export function parseGameResponse(data: unknown): JunoGameResponse {
             defaulting_seat: int(g.remedy.defaulting_seat, "remedy.defaulting_seat", 6),
             remedy_digest: hexOf(g.remedy.remedy_digest, HEX32, "remedy.remedy_digest"),
             final_at: dec(g.remedy.final_at, "remedy.final_at"),
+          }
+        : null,
+      started_at_secs: orNull(g.started_at, (v) => secondsOf(v, "game.started_at")),
+      allowance_secs: terms.allowance_secs === undefined || terms.allowance_secs === null ? 0 : int(terms.allowance_secs, "terms.allowance_secs", Number.MAX_SAFE_INTEGER),
+      review_request: isObject(g.review_request)
+        ? {
+            seat_index: int(g.review_request.seat_index, "review_request.seat_index", 6),
+            requested_at_secs: secondsOf(g.review_request.requested_at, "review_request.requested_at"),
+            trusted_seq: dec(g.review_request.trusted_seq, "review_request.trusted_seq"),
           }
         : null,
     },

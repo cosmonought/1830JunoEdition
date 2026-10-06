@@ -108,6 +108,10 @@ export interface JunoBackendConfig {
   readonly settlementKey: { readonly signerKeyId: number; readonly publicKeyHex: string; readonly signer: SignerRef };
   /** ESCROW-JOIN: the key the contract's `Config.admission_pubkey` must be; signs Join admissions only. */
   readonly admissionKey: { readonly publicKeyHex: string; readonly signer: SignerRef; readonly ttlSecs: number };
+  /** Phase 3 final clocks (FP4, owner decision R1): the DEDICATED REMEDY key -- the contract's REMEDY registry key
+   *  `remedyKeyId` -- which signs remedy attestations only. `null` (absent from the file): this server signs NO remedy
+   *  (fail closed), and a deployment with ANY active remedy key is refused (one this server would not control). */
+  readonly remedyKey: { readonly remedyKeyId: number; readonly publicKeyHex: string; readonly signer: SignerRef } | null;
   readonly trust: EscrowTrustPolicy;
   readonly gas: GasPolicy;
   readonly timeoutBlocks: number;
@@ -141,7 +145,7 @@ export function parseJunoBackendConfig(raw: unknown, context: { readonly serverM
   if (!isObject(raw)) throw new JunoConfigError(["the file is not a JSON object"]);
   need(JUNO_BACKEND_CONFIG_FORMATS.includes(raw.format as string), `format must be ${JUNO_BACKEND_CONFIG_FORMAT} or ${JUNO_BACKEND_CONFIG_FORMAT_V3}`);
   const v3 = raw.format === JUNO_BACKEND_CONFIG_FORMAT_V3;
-  const allowed = ["format", "chain_id", "network_class", "rest_endpoints", "allow_insecure_local_http", "contract_address", "code_checksum", "wasm_admin", "denom", "asset_symbol", "relayer", "settlement_key", "admission_key", "trust", "gas", "timeout_blocks", v3 ? "journal" : "journal_dir", "dev_signer", "request_timeout_ms"];
+  const allowed = ["format", "chain_id", "network_class", "rest_endpoints", "allow_insecure_local_http", "contract_address", "code_checksum", "wasm_admin", "denom", "asset_symbol", "relayer", "settlement_key", "admission_key", "remedy_key", "trust", "gas", "timeout_blocks", v3 ? "journal" : "journal_dir", "dev_signer", "request_timeout_ms"];
   for (const key of Object.keys(raw)) need(allowed.includes(key), `unknown field ${key} (a misspelt setting is never ignored${key === "journal_dir" || key === "journal" ? `; ${JUNO_BACKEND_CONFIG_FORMAT} names journal_dir, ${JUNO_BACKEND_CONFIG_FORMAT_V3} names journal` : ""})`);
 
   const chainId = typeof raw.chain_id === "string" && /^[a-z0-9][a-z0-9-]{1,48}$/.test(raw.chain_id) ? raw.chain_id : "";
@@ -236,6 +240,24 @@ export function parseJunoBackendConfig(raw: unknown, context: { readonly serverM
   const admissionKey = { publicKeyHex: admissionPublicKeyHex, signer: admissionRaw === null ? ({ kind: "kms", key_ref: "" } as SignerRef) : signerRef(admissionRaw.signer, "admission_key"), ttlSecs };
   need(JSON.stringify(admissionKey.signer) !== JSON.stringify(relayer.signer), "the admission key and the relayer key must be different keys");
   need(JSON.stringify(admissionKey.signer) !== JSON.stringify(settlementKey.signer), "the admission key and the settlement key must be different keys");
+  /* Phase 3 final clocks (FP4, R1): the dedicated REMEDY key -- OPTIONAL (absent: no remedy is ever signed here) and its
+     own key: never the relayer's, the settlement key or the admission key (the contract refuses the same on chain). */
+  let remedyKey: JunoBackendConfig["remedyKey"] = null;
+  if (raw.remedy_key !== undefined) {
+    const remedyRaw = isObject(raw.remedy_key) ? raw.remedy_key : {};
+    need(isObject(raw.remedy_key), "remedy_key must be an object");
+    for (const key of Object.keys(remedyRaw)) need(["remedy_key_id", "public_key_hex", "signer"].includes(key), `unknown field remedy_key.${key}`);
+    const remedyKeyId = typeof remedyRaw.remedy_key_id === "number" && Number.isInteger(remedyRaw.remedy_key_id) && remedyRaw.remedy_key_id >= 1 && remedyRaw.remedy_key_id <= 64 ? remedyRaw.remedy_key_id : 0;
+    need(remedyKeyId !== 0, "remedy_key.remedy_key_id must be 1..64");
+    const remedyPublicKeyHex = typeof remedyRaw.public_key_hex === "string" && /^0[23][0-9a-f]{64}$/.test(remedyRaw.public_key_hex) ? remedyRaw.public_key_hex : "";
+    need(remedyPublicKeyHex !== "", "remedy_key.public_key_hex must be a 33-byte compressed key (lowercase hex)");
+    need(remedyPublicKeyHex === "" || (remedyPublicKeyHex !== publicKeyHex && remedyPublicKeyHex !== admissionPublicKeyHex), "the remedy key must differ from the settlement key and the admission key");
+    const remedySigner = signerRef(remedyRaw.signer, "remedy_key");
+    need(JSON.stringify(remedySigner) !== JSON.stringify(relayer.signer), "the remedy key and the relayer key must be different keys");
+    need(JSON.stringify(remedySigner) !== JSON.stringify(settlementKey.signer), "the remedy key and the settlement key must be different keys (the settlement signer never substitutes for it)");
+    need(JSON.stringify(remedySigner) !== JSON.stringify(admissionKey.signer), "the remedy key and the admission key must be different keys");
+    remedyKey = { remedyKeyId, publicKeyHex: remedyPublicKeyHex, signer: remedySigner };
+  }
 
   const trustRaw = isObject(raw.trust) ? raw.trust : {};
   const list = (value: unknown, where: string) => (Array.isArray(value) && value.length > 0 ? value.map((entry, i) => address(entry, `${where}[${i}]`)) : (problems.push(`${where} must list at least one address`), []));
@@ -330,6 +352,7 @@ export function parseJunoBackendConfig(raw: unknown, context: { readonly serverM
     relayer,
     settlementKey,
     admissionKey,
+    remedyKey,
     trust,
     gas,
     timeoutBlocks,
@@ -364,7 +387,7 @@ export function settlementKeyConfigOf(config: JunoBackendConfig, kmsKeyRef: stri
 }
 
 /** The keys agree with the configuration (the static half that needs the opened signers). */
-export function checkSignerIdentities(config: JunoBackendConfig, relayerPublicKey: Buffer, settlementPublicKey: Buffer, settlementKey: SettlementKeyConfig, admissionPublicKey: Buffer): void {
+export function checkSignerIdentities(config: JunoBackendConfig, relayerPublicKey: Buffer, settlementPublicKey: Buffer, settlementKey: SettlementKeyConfig, admissionPublicKey: Buffer, remedyPublicKey: Buffer | null = null): void {
   const problems: string[] = [];
   const controlled = addressOfPublicKey(relayerPublicKey, "juno");
   if (controlled !== config.relayer.address) problems.push(`the relayer key controls ${controlled}, not the configured relayer ${config.relayer.address}`);
@@ -372,6 +395,12 @@ export function checkSignerIdentities(config: JunoBackendConfig, relayerPublicKe
   if (relayerPublicKey.equals(settlementPublicKey)) problems.push("the relayer and settlement keys are the same key");
   if (admissionPublicKey.toString("hex") !== config.admissionKey.publicKeyHex) problems.push("the admission key is not the configured admission public key");
   if (admissionPublicKey.equals(relayerPublicKey) || admissionPublicKey.equals(settlementPublicKey)) problems.push("the admission key is the same key as the relayer or settlement key");
+  /* Phase 3 final clocks (FP4): the remedy key, when configured, is its own key. */
+  if ((config.remedyKey === null) !== (remedyPublicKey === null)) problems.push(config.remedyKey === null ? "a remedy key was opened but none is configured" : "the configured remedy key was not opened");
+  if (config.remedyKey !== null && remedyPublicKey !== null) {
+    if (remedyPublicKey.toString("hex") !== config.remedyKey.publicKeyHex) problems.push("the remedy key is not the configured remedy public key");
+    if (remedyPublicKey.equals(relayerPublicKey) || remedyPublicKey.equals(settlementPublicKey) || remedyPublicKey.equals(admissionPublicKey)) problems.push("the remedy key is the same key as the relayer, settlement or admission key");
+  }
   try {
     checkSettlementKeyConfig([settlementKey], [JUNO_CAPABILITIES_V1]);
   } catch (error) {
@@ -419,9 +448,10 @@ export async function verifyJunoDeployment(config: JunoBackendConfig, rest: Juno
     const foreign = keys.filter((key) => !key.retired && !key.compromised && key.key_id !== config.settlementKey.signerKeyId);
     if (foreign.length > 0) problems.push(`the registry has active keys this server does not hold: ${foreign.map((key) => key.key_id).join(", ")} (an unmonitored signer is a hold, never signed around)`);
     /* FP4 (escrow 2.1.0): a REMEDY key is a financial authority of its own (with the seats' N-1 approvals it forecloses;
-       alone it annuls, or stores a challengeable third-strike foreclosure). This build holds NO remedy key yet (the KMS
-       remedy signer is the server clock lane's), so an ACTIVE remedy key on the deployment is one this server does not
-       control: the deployment is refused, exactly as an unmonitored settlement signer is. */
+       alone it annuls, or stores a challengeable third-strike foreclosure). Phase 3 final clocks: the configured remedy
+       key (if any) must be registered, active, at its id with its public key; ANY OTHER active remedy key is one this
+       server does not control, and the deployment is refused, exactly as an unmonitored settlement signer is. With no
+       remedy key configured, every active remedy key is foreign (fail closed). */
     const remedyKeys = [];
     let remedyAfter: number | null = null;
     for (let page = 0; page < 8; page += 1) {
@@ -430,8 +460,14 @@ export async function verifyJunoDeployment(config: JunoBackendConfig, rest: Juno
       if (batch.length < 30) break;
       remedyAfter = batch[batch.length - 1].key_id;
     }
-    const activeRemedy = remedyKeys.filter((key) => !key.retired && !key.compromised);
-    if (activeRemedy.length > 0) problems.push(`the REMEDY registry has active keys this server does not hold: ${activeRemedy.map((key) => key.key_id).join(", ")} (a remedy key can end a game; this build holds none yet)`);
+    const ownRemedy = config.remedyKey;
+    if (ownRemedy !== null) {
+      const held = remedyKeys.find((key) => key.key_id === ownRemedy.remedyKeyId);
+      if (held === undefined || held.pubkey !== ownRemedy.publicKeyHex) problems.push(`the REMEDY registry does not hold remedy key ${ownRemedy.remedyKeyId} with the configured public key`);
+      else if (held.retired || held.compromised) problems.push(`remedy key ${ownRemedy.remedyKeyId} is ${held.compromised ? "compromised" : "retired"} on chain`);
+    }
+    const activeRemedy = remedyKeys.filter((key) => !key.retired && !key.compromised && key.key_id !== ownRemedy?.remedyKeyId);
+    if (activeRemedy.length > 0) problems.push(`the REMEDY registry has active keys this server does not hold: ${activeRemedy.map((key) => key.key_id).join(", ")} (a remedy key can end a game${ownRemedy === null ? "; this server is configured with none" : ""})`);
     return problems.length > 0 ? { kind: "mismatch", problems } : { kind: "verified", height: block.height };
   } catch (error) {
     if (error instanceof JunoRpcError && error.kind === "wrong-chain") return { kind: "mismatch", problems: [error.message] };

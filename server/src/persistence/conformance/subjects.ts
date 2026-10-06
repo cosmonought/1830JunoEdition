@@ -21,6 +21,8 @@ import * as path from "path";
 
 import { createFileLogStore, nodeStoreFs } from "../../fileLogStore";
 import { createFileHoldStore, createMemoryHoldStore, holdDirectory } from "../../rooms/holdStore";
+import { clockDirectory, createFileClockStore, createMemoryClockStore } from "../../rooms/clock/clockStore";
+import { CLOCK_FORMAT } from "../../rooms/clock/clockRecord";
 import { createFileRecordStore, createMemoryRecordStore } from "../../rooms/recordStore";
 import { createFileFinancialGameStore, createMemoryFinancialGameStore, financialDirectory } from "../../escrow/financialGameStore";
 import { FINANCIAL_FORMAT } from "../../escrow/moneyLifecycle";
@@ -39,6 +41,7 @@ import { gameRecord, grant } from "./fixtures";
 import type { CaseContext } from "./harness";
 import type { LogSubject } from "./logStore.conformance";
 import type { HoldSubject, Planted, RecordSubject } from "./roomStores.conformance";
+import type { ClockSubject } from "./clockStore.conformance";
 import type { FinancialSubject, IntentSubject, TicketSubject } from "./escrowStores.conformance";
 import type { IdentitySubject, JournalPlant, JournalSubject } from "./identityJournal.conformance";
 import type { GrantSubject, SecuritySubject } from "./identitySecurity.conformance";
@@ -561,4 +564,45 @@ export const fileJournalSubject: JournalSubject = {
     ctx.faults.add({ op: "write", where: (at) => at === signingJournalFile(ctx), action: { kind: "stall", gate: stall }, label: "the append stalls at its byte write" });
     return stall;
   },
+};
+
+/* ================================================================== */
+/*  Phase 3 final clocks: the table clock (ported from lane A)         */
+/* ================================================================== */
+
+const memoryClocksOf = perCase(createMemoryClockStore);
+const clockFile = (ctx: CaseContext, gameId: string) => path.join(clockDirectory(ctx.dir), `${gameId}.json`);
+
+export const memoryClockSubject: ClockSubject = {
+  name: "memory (createMemoryClockStore)",
+  backend: "memory",
+  capabilities: ["plant", "validates-shape"],
+  differences: { "CLK-07-newer": "the memory store keeps no document bytes, so it cannot hold a newer build's clock" },
+  async open(ctx) {
+    return memoryClocksOf(ctx);
+  },
+  async stored(ctx, gameId) {
+    const held = memoryClocksOf(ctx).clocks.get(gameId);
+    return held === undefined ? null : JSON.stringify(held);
+  },
+  async plant(ctx, gameId) {
+    memoryClocksOf(ctx).clocks.set(gameId, "unreadable");
+  },
+};
+
+export const fileClockSubject: ClockSubject = {
+  name: "file (createFileClockStore)",
+  backend: "file",
+  capabilities: ["durable", "fence", "plant", "fs-faults", "stall-write", "validates-shape", "inject-lost-answer", "inject-transient-failure"],
+  async open(ctx, options) {
+    return createFileClockStore(ctx.dir, { ...quiet, fs: faultFs(ctx), ...writer(options) });
+  },
+  async plant(ctx, gameId, what) {
+    fs.mkdirSync(clockDirectory(ctx.dir), { recursive: true });
+    fs.writeFileSync(clockFile(ctx, gameId), what === "newer" ? `${JSON.stringify({ format: CLOCK_FORMAT, version: 99, game_id: gameId })}\n` : `{"format":"${CLOCK_FORMAT}",`);
+  },
+  async stored(ctx, gameId) {
+    return read(clockFile(ctx, gameId));
+  },
+  ...replaceHooks(scriptOf, clockFile),
 };

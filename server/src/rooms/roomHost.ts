@@ -67,6 +67,11 @@ import {
   type MyTableSummary,
 } from "./gameRecord";
 import { createMemoryHoldStore, type HoldStore } from "./holdStore";
+import { createClockController, rescindExpiredOffer, type ClockAnswer, type ClockController, type ClockOpInput, type ClockTimers, type CloseOffer } from "./clock/clockController";
+import type { ClockStore } from "./clock/clockStore";
+import type { ClockConductHook } from "./clock/clockEvidence";
+import type { RemedyPort } from "../escrow/remedyPipeline";
+import { CLOCK_REFUSAL } from "../../../frontend/src/utils/clockProtocol";
 import type { MoneyContinuationFacts } from "../escrow/moneyContinuation";
 import type { ContinuationWiring } from "../continuationWiring";
 import { disabledMoneyView, disabledStake, type MoneyRoomPort, type MoneyTables } from "../escrow/moneyTables";
@@ -192,6 +197,29 @@ export interface RoomHostDeps {
    *  route, when there is one to answer (true: answered -- the route frame, or the read authorization's refusal).
    *  False, or absent: the answer is exactly as before (`unavailableFor`). */
   answerRouted?: (socket: WebSocket, gameId: string, routed: GameRoutedError) => Promise<boolean>;
+  /** Phase 3 final clocks: the table clock (`clock/clockController.ts`). Absent: no table is timed (the pre-lane
+   *  behaviour, kept for hosts built without one -- tests and tools). `start.ts` and the AWS runtime always give one. */
+  clock?: RoomHostClockConfig;
+  /** Phase 3 final clocks: run `fn` with every entry the session mints stamped `at` (the clock's decision time). */
+  stampAt?: <T>(at: number, fn: () => T) => T;
+}
+
+/** Phase 3 final clocks: what the room host needs to run the table clock. */
+export interface RoomHostClockConfig {
+  readonly store: ClockStore;
+  /** This process's continuity token (file mode: the lock's instance id; AWS: generation / pool / epoch / task). */
+  readonly authority: string;
+  /** The clock's time (`deps.now` when absent) and timers (real when absent) -- tests control both. */
+  readonly now?: () => number;
+  readonly timers?: ClockTimers;
+  /** The money remedy pipeline, bound late (the Juno backend is built before the server). */
+  readonly remedy?: () => RemedyPort | null;
+  /** The escrow's terminal route when a money table's financial record is closed (`null`: not terminal). */
+  readonly moneyTerminal?: (gameId: string) => Promise<string | null>;
+  /** A bound money game's chain Start (seconds), for the first obligation's clamp. */
+  readonly moneyStartedAtSecs?: (gameId: string) => Promise<number | null>;
+  /** The player-reporting lane's hook (safe conduct evidence). */
+  readonly conduct?: ClockConductHook;
 }
 
 /** The board's own end and close, read off a session. */
@@ -311,6 +339,8 @@ export function createRoomHost(deps: RoomHostDeps) {
   const joinFailIp = new IpBuckets(rooms.joinFailuresPerIp, now, factor, keys);
   const joinFailGlobal = new KeyedBuckets(rooms.joinFailuresGlobal, now, 1);
   const membership = new KeyedBuckets(rooms.membershipOpsPerPrincipal, now, keys);
+  /* Phase 3 final clocks: each clock op is a durable write in the game's task -- budgeted like a membership op. */
+  const clockOps = new KeyedBuckets(rooms.membershipOpsPerPrincipal, now, keys);
   const submitsSeat = new KeyedBuckets(rooms.submitsPerSeat, now, keys);
   const submitsGame = new KeyedBuckets(rooms.submitsPerGame, now, keys);
   const chatSeat = new KeyedBuckets(rooms.chatPerSeat, now, keys);
@@ -341,6 +371,56 @@ export function createRoomHost(deps: RoomHostDeps) {
   };
   const holds = deps.holds ?? createMemoryHoldStore();
   const ops = deps.ops ?? NO_OPS;
+  /* Phase 3 final clocks: the table clock, run INSIDE each game's serialization (see `clock/clockController.ts`). */
+  const clockPins = new Map<string, GameActor>();
+  const clock: ClockController | null =
+    deps.clock === undefined
+      ? null
+      : createClockController({
+          store: deps.clock.store,
+          authority: deps.clock.authority,
+          now: deps.clock.now ?? (() => now()),
+          ...(deps.clock.timers !== undefined ? { timers: deps.clock.timers } : {}),
+          ops,
+          warn: (line) => deps.warn(line),
+          runOn: async (gameId, label, task) => {
+            let game: GameActor | null;
+            try {
+              game = await actorFor(gameId);
+            } catch {
+              return false;
+            }
+            if (game === null) return false;
+            const actor = game;
+            const outcome = await actor.run("room-op", (tx) => task(actor, tx), { quiet: label !== "clock" });
+            if (outcome.kind === "failed") throw outcome.error;
+            return outcome.kind === "ran";
+          },
+          onChange: (gameId) => broadcastView(gameId),
+          serving: (gameId) => {
+            const game = peekLoaded(gameId);
+            return game !== undefined && !game.fenced;
+          },
+          pin: (gameId, on) => {
+            if (on) {
+              const game = peekLoaded(gameId);
+              if (game === undefined || clockPins.get(gameId) === game) return;
+              clockPins.get(gameId)?.unpin();
+              game.pin();
+              clockPins.set(gameId, game);
+            } else {
+              clockPins.get(gameId)?.unpin();
+              clockPins.delete(gameId);
+            }
+          },
+          closeOffer: (game, tx, input) => closeExpiredOffer(game, tx, input),
+          ...(deps.clock.remedy !== undefined ? { remedy: deps.clock.remedy } : {}),
+          ...(deps.clock.moneyTerminal !== undefined ? { moneyTerminal: deps.clock.moneyTerminal } : {}),
+          ...(deps.clock.moneyStartedAtSecs !== undefined ? { moneyStartedAtSecs: deps.clock.moneyStartedAtSecs } : {}),
+          ...(deps.clock.conduct !== undefined ? { conduct: deps.clock.conduct } : {}),
+          nameOf: (gameId, seat) => peekLoaded(gameId)?.view.record?.seats.find((entry) => entry.player_id === seat)?.nickname ?? "A player",
+        });
+  clock?.startSweep();
   const settlement = deps.settlement ?? NO_MONEY_SETTLEMENT;
   /** LIVE-4 (L4-2): what the view says about the game -- the session's verdict decided it; no build is compared. */
   const kindOf = (view: CommittedView): HoldKind => holdKindOf(view);
@@ -535,6 +615,9 @@ export function createRoomHost(deps: RoomHostDeps) {
       return;
     }
     if (view.hold !== null) return; // a store fault: neither reconciled nor held -- the next load decides
+    /* Phase 3 final clocks: the clock is read and its continuity judged at the load, before anyone moves -- a table that
+       was served by another process is SYSTEM-PAUSED now (and shown so), never silently resumed. */
+    clock?.loaded(game.gameId);
     if (!factsFromView(view, record).dealt) {
       settle(game.gameId, null); // no history: the load's own reconciliation (an empty log) was the whole of it
       return;
@@ -677,6 +760,8 @@ export function createRoomHost(deps: RoomHostDeps) {
         /* ESCROW-4: a real-money table starts from the chain's funding (the money view says when; never `ready`). */
         canStart: record.money === null ? !facts.dealt && waitingBlock(record) === null && view.hold === null : !facts.dealt && view.hold === null && money?.start.canStart === true,
         money,
+        /* Phase 3 final clocks: the table clock, the same for every viewer (absent while held or not yet read). */
+        clock: clock === null || view.hold !== null || view.incompatible !== null ? null : clock.viewOf(record.game_id),
       }),
     };
   }
@@ -1235,6 +1320,13 @@ export function createRoomHost(deps: RoomHostDeps) {
     }
     if (game === null) return ack(socket, requestId, { ok: false, code: "not-found", reason: "There is no such game." });
     if (type === "start-game") return ack(socket, requestId, await startGame(game, ctx.principalId));
+    if (CLOCK_OP_TYPES.has(type)) {
+      if (clockOps.take(ctx.principalId) > 0) {
+        deny("clock-ops");
+        return ack(socket, requestId, { ok: false, code: "rate-limited", reason: "Too many changes too quickly. Wait a moment." });
+      }
+      return ack(socket, requestId, await clockRoomOp(game, ctx.principalId, op));
+    }
     const opName = OP_NAMES[type] ?? null;
     let claimingSeat = false;
     if (type === "take-seat") {
@@ -1296,6 +1388,110 @@ export function createRoomHost(deps: RoomHostDeps) {
     }
   }
 
+  /* ---- Phase 3 final clocks: the server's own move, and the clock's room ops ---- */
+
+  /** A Live train offer's 10-minute response time ran out unanswered: the SERVER closes it, in the game's own task, as
+   *  the proposer's rescission (the one legal message that withdraws a standing offer; the engine has no expiry), its
+   *  entries stamped at the exact moment the response time ended. The clock folds it as an expiry: the proposer resumes
+   *  exactly the time it had, the direction counts one decline, and no undo may reach back across it. */
+  const closeExpiredOffer: CloseOffer = async (game, tx, input) => {
+    const record = tx.view.record;
+    if (record === null) return { ok: false, why: "the table has no record" };
+    const rescinded = rescindExpiredOffer(tx.session, { proposer: input.proposer, at: input.at, build: deps.build, host: record.host_player_id, hostUndo: record.policy.host_undo }, deps.stampAt);
+    if (!rescinded.ok) {
+      tx.rollback();
+      return rescinded;
+    }
+    const settled = await tx.commitBatch(rescinded.batch, (s) =>
+      s.kind === "committed" ? { fanout: { kind: "applied", entries: s.entries, digest: s.view.digest, ...(s.view.fields ? { fields: { ...s.view.fields } } : {}), build: deps.build } } : {},
+    );
+    if (settled.kind !== "committed") return { ok: false, why: "the expiry could not be committed" };
+    ops.audit("clock.trade-expired", { game_id: game.gameId, proposer: input.proposer, at: input.at, index: rescinded.batch[0]?.index ?? null });
+    afterGameplay(game, rescinded.after.over, rescinded.after.closed, rescinded.board);
+    return { ok: true, first: rescinded.batch[0].index, last: rescinded.batch[rescinded.batch.length - 1].index, before: rescinded.before, after: rescinded.after };
+  };
+
+  const CLOCK_OP_TYPES: ReadonlySet<string> = new Set(["clock-policy", "clock-pause", "clock-sysresume", "clock-propose", "clock-vote", "clock-annul", "clock-ack"]);
+
+  /** A table-clock op: the caller's own seat (the host's for the deadline), checked; a money YES's approval verified
+   *  OUTSIDE the game's task (a quorum chain read) against the overdue standing now, then applied INSIDE it (which
+   *  re-checks that overdue is still the one standing). */
+  async function clockRoomOp(game: GameActor, principalId: string, op: Record<string, unknown>): Promise<ClockAnswer> {
+    if (clock === null) return { ok: false, code: CLOCK_REFUSAL.unavailable, reason: "This server keeps no table clock." };
+    if (awaitingReconciliation(game)) return { ok: false, code: "unavailable", reason: UNAVAILABLE_PLAYER_SENTENCE };
+    const view = game.view;
+    const record = view.record;
+    if (record === null) return { ok: false, code: "not-found", reason: "There is no such game." };
+    if (view.hold !== null || view.incompatible !== null) return { ok: false, code: "wrong-state", reason: "This table is held; its clock cannot change now." };
+    const seat = seatOf(record, principalId)?.player_id ?? null;
+    const type = String(op.type);
+    if (seat === null) return { ok: false, code: "forbidden", reason: "Only a seated player can do that." };
+    let input: ClockOpInput;
+    switch (type) {
+      case "clock-policy":
+        if (seat !== record.host_player_id) return { ok: false, code: "forbidden", reason: "Only the host chooses the table's deadline." };
+        if ((record.variants as { mode?: string }).mode !== "async" && op.deadline !== "live") return { ok: false, code: "bad-frame", reason: "A Live table always plays the Live action clock." };
+        if ((record.variants as { mode?: string }).mode === "async" && op.deadline === "live") return { ok: false, code: "bad-frame", reason: "An Async table chooses a pace or no deadline." };
+        input = { type: "clock-policy", seat, deadline: op.deadline as "live" | "async-pace" | "no-deadline", paceSecs: typeof op.paceSecs === "number" ? op.paceSecs : null };
+        break;
+      case "clock-ack":
+        input = { type: "clock-ack", seat };
+        break;
+      case "clock-pause":
+        input = { type: "clock-pause", seat, action: op.action as "request" | "yes" | "no", kind: op.kind as "pause" | "resume", id: typeof op.id === "number" ? op.id : null };
+        break;
+      case "clock-sysresume":
+        input = { type: "clock-sysresume", seat };
+        break;
+      case "clock-annul":
+        input = { type: "clock-annul", seat, yes: op.yes === true };
+        break;
+      case "clock-propose":
+      case "clock-vote": {
+        const yes = type === "clock-propose" ? true : op.yes === true;
+        let approval: { approve_until: number; signature: string } | null = null;
+        let verifiedFor: { epoch: number; logLen: number } | null = null;
+        if (yes && record.money !== null) {
+          if (typeof op.approveUntil !== "number" || typeof op.signature !== "string") return { ok: false, code: "bad-frame", reason: "On a money table, a YES needs your signed approval." };
+          const standing = clock.recordOf(game.gameId);
+          const od = standing?.overdue ?? null;
+          if (standing === null || od === null) return { ok: false, code: "wrong-state", reason: "Nobody is overdue." };
+          const kind = type === "clock-propose" ? (op.kind as "foreclose" | "annul") : (od.proposal?.kind ?? "foreclose");
+          const remedyKind = standing.policy.class === "live" ? 2 : kind === "foreclose" ? 5 : 4;
+          const port = deps.clock?.remedy?.() ?? null;
+          if (port === null) return { ok: false, code: CLOCK_REFUSAL.unavailable, reason: "This server cannot check a money approval right now." };
+          const why = await port.verifyApproval(game.gameId, {
+            remedy: remedyKind,
+            defaultingSeat: od.seat,
+            approvingSeat: seat,
+            strike: od.strike,
+            epoch: od.epoch,
+            logLen: od.log_len,
+            logHash: od.log_hash,
+            overdueMs: od.at,
+            approveUntil: op.approveUntil,
+            signature: op.signature,
+            finalNotBeforeMs: od.at + clock.cureMs,
+            nowMs: now(),
+          });
+          if (why !== null) return { ok: false, code: "bad-approval", reason: why };
+          approval = { approve_until: op.approveUntil, signature: op.signature };
+          verifiedFor = { epoch: od.epoch, logLen: od.log_len };
+        }
+        input =
+          type === "clock-propose"
+            ? { type: "clock-propose", seat, kind: op.kind as "foreclose" | "annul", approval, verifiedFor }
+            : { type: "clock-vote", seat, proposalId: typeof op.proposalId === "number" ? op.proposalId : 0, yes, approval, verifiedFor };
+        break;
+      }
+      default:
+        return { ok: false, code: "bad-frame", reason: "That is not a clock operation." };
+    }
+    const outcome = await game.run("room-op", (tx) => clock.op(game, tx, input));
+    if (outcome.kind === "ran") return outcome.value;
+    return { ok: false, code: "unavailable", reason: UNAVAILABLE_PLAYER_SENTENCE };
+  }
+
   /* ---- start (§8) ---- */
 
   /** The deal, inside a task that holds the game (the host's Start, or ESCROW-4's deal after the chain's Start): the
@@ -1333,6 +1529,12 @@ export function createRoomHost(deps: RoomHostDeps) {
     if (settled.kind !== "committed") return { ok: false, code: "unavailable", reason: UNAVAILABLE };
     /* ESCROW-3B: the deal is the first checkpoint position of a money game. */
     callEscrow(record.game_id, settled.view.entries, dealtBoard);
+    /* Phase 3 final clocks: play begins -- the table's deadline is fixed and the first obligation's clock starts. */
+    if (clock !== null) {
+      const dealtAt = typeof batch[0]?.at === "number" ? (batch[0].at as number) : now();
+      const actor = deps.games.peek(record.game_id);
+      if (actor !== undefined) await clock.afterCommit(actor, { gate: { ok: true, now: dealtAt, before: null, cls: "deal", revertTarget: null }, actor: record.host_player_id, batch, board: dealtBoard });
+    }
     return { ok: true, data: { started: true } };
   }
 
@@ -2026,7 +2228,7 @@ export function createRoomHost(deps: RoomHostDeps) {
     publishStatus();
     for (const gameId of [...chats.keys()]) if (!viewSubs.has(gameId)) chats.delete(gameId);
     for (const gameId of [...presence.keys()]) if (!viewSubs.has(gameId)) presence.delete(gameId);
-    for (const buckets of [createsPrincipal, createsGlobal, joinFailPrincipal, joinFailGlobal, membership, submitsSeat, submitsGame, chatSeat, rotations]) buckets.prune();
+    for (const buckets of [createsPrincipal, createsGlobal, joinFailPrincipal, joinFailGlobal, membership, clockOps, submitsSeat, submitsGame, chatSeat, rotations]) buckets.prune();
     createsIp.prune();
     joinFailIp.prune();
     const cutoff = now();
@@ -2165,6 +2367,8 @@ export function createRoomHost(deps: RoomHostDeps) {
     boardOf,
     /* ESCROW-4: the port the money layer is built on. */
     moneyPort,
+    /* Phase 3 final clocks: the table clock (null when this host keeps none). */
+    clock,
     /* ESCROW-3A (brief §6): the money games the index knows (never a replay; the coordinator loads them). */
     financialGameIds: (): string[] => [...recordIndex.values()].filter((record) => settlement.retentionOf(record).kind === "financial").map((record) => record.game_id),
     financialRecords: (): GameRecord[] => [...recordIndex.values()].filter((record) => settlement.retentionOf(record).kind === "financial"),

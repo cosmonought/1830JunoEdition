@@ -75,6 +75,7 @@ const VIEW_KEYS: Record<keyof ClientRoomView, true> = {
   undoPolicy: true,
   you: true,
   money: true,
+  clock: true,
 };
 const SUMMARY_KEYS: Record<keyof ClientRoomSummary, true> = {
   gameId: true,
@@ -94,7 +95,8 @@ const YOU_KEYS: Record<keyof ClientRoomView["you"], true> = { role: true, player
 /* ESCROW-4 (additive and optional, the LIVE-4 amendment): carried only by a real-money table, so a no-money table's view
    and list entry are exactly what they were before (`escrow4Money.test.ts` pins the money table's own). LIVE-4 (L4-3):
    `holdReason` likewise -- carried only by a view whose `holdKind` is `incompatible` (`live4ClientCompatibility`). */
-const OPTIONAL_VIEW_KEYS: ReadonlySet<string> = new Set(["money", "holdReason"]);
+/* Phase 3 final clocks (additive and optional): `clock` is carried only by a table whose clock the server keeps. */
+const OPTIONAL_VIEW_KEYS: ReadonlySet<string> = new Set(["money", "holdReason", "clock"]);
 const OPTIONAL_SUMMARY_KEYS: ReadonlySet<string> = new Set(["stake"]);
 
 /* ==================================================================

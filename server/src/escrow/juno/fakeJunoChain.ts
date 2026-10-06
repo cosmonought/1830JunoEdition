@@ -1122,6 +1122,13 @@ export class FakeJunoChain implements JunoRest {
     return { chain_id: chainId, height: String(this.height), time: new Date(this.time * 1000).toISOString() };
   }
 
+  /** Phase 3 final clocks: one node, so the quorum block read is its answer (a disagreeing second node is modelled by
+   *  `quorumDisagrees`). */
+  async latestBlockQuorum(): Promise<BlockView> {
+    if (this.quorumDisagrees) throw new JunoRpcError("unavailable", "quorum block read: the endpoints disagree");
+    return this.latestBlock();
+  }
+
   async syncing(): Promise<boolean> {
     this.check();
     return this.syncingNow;

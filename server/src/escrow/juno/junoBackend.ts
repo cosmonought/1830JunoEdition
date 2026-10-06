@@ -26,6 +26,8 @@ import type { InspectableSigningJournal } from "../signingJournal";
 import type { WalletTicketLedger } from "../walletTickets";
 import type { WalletControlProofs } from "../escrowPorts";
 import { junoJoinAdmissionSigner } from "./joinAdmission";
+import { junoRemedySigner, type RemedySigner } from "./remedySigner";
+import type { ChainIntentRecord } from "../chainIntents";
 import type { MoneyServing } from "../moneyServing";
 import type { GameIdentityFacts } from "../../../../frontend/src/gameEngine/compat/continuationIdentity";
 import type { FormatFact } from "../../../../frontend/src/gameEngine/compat/continuationVerdict";
@@ -40,6 +42,11 @@ export interface JunoBackend {
   readonly service: EscrowService;
   readonly relayer: Relayer;
   readonly rest: JunoRest;
+  /** Phase 3 final clocks (FP4): the DEDICATED REMEDY signer, or `null` when no remedy key is configured (no remedy is
+   *  ever signed: fail closed). Never the settlement signer. */
+  readonly remedySigner: RemedySigner | null;
+  /** The owner-side (game-fenced) chain intent store the service writes through (the remedy pipeline prepares there). */
+  readonly intents: ChainIntentStore;
   state(): JunoBackendState;
   lastVerdict(): DeploymentVerdict | null;
   /** Verify the deployment (retrying while the chain is unreachable); on success, resume every money game's work. */
@@ -91,6 +98,12 @@ export interface JunoBackendDeps {
   /** LIVE-6 L6-7: the money games the escrow load and its chain sweep visit -- the OPEN ones (AWS: the FINKEYS / FINIDX#
    *  index). Absent (PROCESS mode): every financial record, as before. */
   readonly openMoneyGames?: () => Promise<string[]>;
+  /** Phase 3 final clocks (FP4): the clock lane's word before a remedy intent is relayed (`EscrowServiceDeps.remedyGate`).
+   *  Absent: no remedy intent is ever relayed (fail closed). */
+  readonly remedyGate?: (gameId: string, intent: ChainIntentRecord) => Promise<{ readonly kind: "ok" } | { readonly kind: "wait"; readonly why: string }>;
+  /** Phase 3 final clocks: the table's deadline class, for binding an async chain game to its table (absent: an async
+   *  money table is never bound -- 3fecd54's refusal). */
+  readonly tableDeadline?: (gameId: string) => Promise<{ readonly deadline: "live" | "async-pace" | "no-deadline"; readonly paceSecs: number | null } | null>;
 }
 
 async function openSigner(ref: SignerRef, deps: JunoBackendDeps): Promise<DigestSigner> {
@@ -110,8 +123,11 @@ export async function openJunoBackend(deps: JunoBackendDeps): Promise<JunoBacken
   const relayerSigner = await openSigner(config.relayer.signer, deps);
   const settlementDigestSigner = await openSigner(config.settlementKey.signer, deps);
   const admissionDigestSigner = await openSigner(config.admissionKey.signer, deps);
+  /* Phase 3 final clocks (FP4, R1): the dedicated REMEDY key, opened only when configured (else none: fail closed). */
+  const remedyDigestSigner = config.remedyKey === null ? null : await openSigner(config.remedyKey.signer, deps);
   const keyConfig = settlementKeyConfigOf(config, settlementDigestSigner.label);
-  checkSignerIdentities(config, relayerSigner.publicKey, settlementDigestSigner.publicKey, keyConfig, admissionDigestSigner.publicKey);
+  checkSignerIdentities(config, relayerSigner.publicKey, settlementDigestSigner.publicKey, keyConfig, admissionDigestSigner.publicKey, remedyDigestSigner?.publicKey ?? null);
+  const remedySigner = config.remedyKey === null || remedyDigestSigner === null ? null : junoRemedySigner(config.remedyKey.remedyKeyId, config.remedyKey.publicKeyHex, remedyDigestSigner);
 
   let state: JunoBackendState = "unverified";
   /** Verified, and the service's load is running (its jobs may run; the relayer waits for `active`). */
@@ -149,6 +165,8 @@ export async function openJunoBackend(deps: JunoBackendDeps): Promise<JunoBacken
     ...(deps.serving !== undefined ? { serving: deps.serving } : {}),
     ...(deps.restoreSafeMode === true ? { restoreSafeMode: true } : {}),
     ...(deps.openMoneyGames !== undefined ? { openGames: deps.openMoneyGames } : {}),
+    ...(deps.remedyGate !== undefined ? { remedyGate: deps.remedyGate } : {}),
+    ...(deps.tableDeadline !== undefined ? { tableDeadline: deps.tableDeadline } : {}),
   });
   relayer = createJunoRelayer({
     rest,
@@ -220,6 +238,8 @@ export async function openJunoBackend(deps: JunoBackendDeps): Promise<JunoBacken
     service,
     relayer,
     rest,
+    remedySigner,
+    intents: deps.intents,
     state: () => state,
     lastVerdict: () => verdict,
     async start() {

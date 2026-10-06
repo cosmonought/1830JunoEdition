@@ -1269,8 +1269,6 @@ export function createRoomHost(deps: RoomHostDeps) {
     }
     if (game === null) return ack(socket, requestId, { ok: false, code: "not-found", reason: "There is no such game." });
     if (type === "start-game") return ack(socket, requestId, await startGame(game, ctx.principalId));
-    /* PHASE 3 FINAL: no new seat at a table without an ante. */
-    if (type === "take-seat" && freeTableRefused(game.view.record) && seatOf(game.view.record as GameRecord, ctx.principalId) === null) return ack(socket, requestId, ANTE_REQUIRED);
     const opName = OP_NAMES[type] ?? null;
     let claimingSeat = false;
     if (type === "take-seat") {
@@ -1279,6 +1277,9 @@ export function createRoomHost(deps: RoomHostDeps) {
       const verdict = authorizeNow(game, ctx.principalId, "take-seat");
       if (!verdict.ok) return ack(socket, requestId, verdict);
       const record = game.view.record as GameRecord;
+      /* PHASE 3 FINAL: no new seat at a table without an ante -- decided AFTER the authorization (security review,
+         INFO 5): an outsider of a private table is answered exactly as before (as if it did not exist). */
+      if (freeTableRefused(record) && seatOf(record, ctx.principalId) === null) return ack(socket, requestId, ANTE_REQUIRED);
       if (seatOf(record, ctx.principalId) === null) {
         if (capsOf(ctx.principalId).seated >= rooms.maxSeatedGames) {
           return ack(socket, requestId, { ok: false, code: "limit-reached", reason: `You already sit at ${rooms.maxSeatedGames} open tables.` });
@@ -1437,6 +1438,13 @@ export function createRoomHost(deps: RoomHostDeps) {
       if (record === null) return { ok: false, code: "not-found", reason: "There is no such game." };
       if (isMaintenanceHold(tx.view.hold)) return { ok: false, code: "held", reason: HELD_PLAYER_SENTENCE };
       if (tx.view.hold !== null || awaitingReconciliation(actor)) return { ok: false, code: "unavailable", reason: UNAVAILABLE };
+      /* LIVE-6 L6-2 (security review, LOW 1): no money write of a RESTORED table runs before its history is verified --
+         the same gate as its seat ops (`runOp`). The money routes ask it first (`moneyTables.ts` restoreHeld); this is
+         the actor's own backstop for every money task. */
+      if (record.record_schema === 2) {
+        const restoring = deps.escrow?.restoreGate?.(record.game_id) ?? null;
+        if (restoring !== null) return { ok: false, code: "held", reason: restoring };
+      }
       return { ok: true, value: await task(record) };
     });
     if (outcome.kind === "ran") return outcome.value;

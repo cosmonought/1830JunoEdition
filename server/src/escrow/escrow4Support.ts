@@ -250,7 +250,8 @@ export async function moneyServer(options: MoneyServerOptions = {}): Promise<Mon
     moneyFacts,
     rosterSource: { plan: (record, ctx) => (record.money === null ? noMoney.plan(record, ctx) : service.rosterSource.plan(record, ctx)) },
     money: () => refs.money,
-    escrow: { onGameplayCommitted: (input) => service.onGameplayCommitted(input), isRosterFrozen: (gameId) => service.isRosterFrozen(gameId) },
+    /* As `awsRuntime.ts`: the room host asks the escrow service's L6-2 restore gate (always open here: no safe mode). */
+    escrow: { onGameplayCommitted: (input) => service.onGameplayCommitted(input), isRosterFrozen: (gameId) => service.isRosterFrozen(gameId), restoreGate: (gameId) => service.restoreGate(gameId) },
   });
   refs.server = started.server;
   /* As `start.ts` (LIVE-4 integration): when the chain facts every verdict reads change, every resident game's

@@ -124,6 +124,9 @@ export interface MoneyServerOptions {
   readonly store?: LogStore;
   /** JX-4B: the contract's resolver (a bech32 address when a test parses a production configuration naming it). */
   readonly resolver?: string;
+  /** PHASE 3 FINAL (§13): the room host's free-table switch -- `false` is every production entry point's (no-ante tables
+   *  are refused); absent: the internal default (free tables allowed, for the historical fixtures). */
+  readonly freeTables?: boolean;
 }
 
 export async function moneyServer(options: MoneyServerOptions = {}): Promise<MoneyServer> {
@@ -243,6 +246,7 @@ export async function moneyServer(options: MoneyServerOptions = {}): Promise<Mon
     capability: options.capability ?? service.serving.capability,
     runtime: service.serving.runtime(),
     ...(options.store !== undefined ? { store: options.store } : {}),
+    ...(options.freeTables !== undefined ? { freeTables: options.freeTables } : {}),
     moneyFacts,
     rosterSource: { plan: (record, ctx) => (record.money === null ? noMoney.plan(record, ctx) : service.rosterSource.plan(record, ctx)) },
     money: () => refs.money,

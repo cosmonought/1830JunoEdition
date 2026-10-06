@@ -49,7 +49,7 @@ describe("ESCROW-4: the funding progression, reload by reload", () => {
     const approving = seatFlow(input({ ui: "approving", view: moneyView({ escrow: bound, you: linked([], { actions: ["deposit"] }) }) }));
     expect([approving.step, approving.headline]).toEqual(["approve", "Approve in Keplr…"]);
     const wrongAccount = seatFlow(input({ ui: "review", wallet: { kind: "connected", address: "juno1another" }, view: moneyView({ escrow: bound, you: linked([], { actions: ["deposit"] }) }) }));
-    expect(wrongAccount.blocker).toMatch(/Switch accounts in Keplr/);
+    expect(wrongAccount.blocker).toMatch(/^Switch Keplr to .+ to sign this action\./);
   });
 
   it("signed locally, then broadcast (or unknown): 'Sent' -- and NEVER funded from local persistence", () => {

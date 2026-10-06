@@ -82,7 +82,7 @@ describe("W2-M AUD-20.02: a proof that can't be counted on reads 're-prove', nev
     const unconfirmed = seatFlow(flowInput({ view: joinerView(), proof: "aged", confirmed: false }));
     expect([unconfirmed.step, unconfirmed.primary?.kind]).toEqual(["link", "ante"]);
     const wrong = seatFlow(flowInput({ view: joinerView(), proof: "aged", wallet: { kind: "connected", address: OTHER_WALLET } }));
-    expect(wrong.blocker).toMatch(/Switch accounts in Keplr/);
+    expect(wrong.blocker).toMatch(/^Switch Keplr to .+ to sign this action\./);
     const phone = seatFlow(flowInput({ view: joinerView(), proof: "aged", wallet: { kind: "unavailable" } }));
     expect(phone.blocker).toMatch(/Keplr isn't available/);
   });

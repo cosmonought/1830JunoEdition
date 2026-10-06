@@ -229,7 +229,7 @@ describe("P3-ACCT anteNow: only the steps still needed, in order, with the owner
     const port = scriptedPort();
     const view = moneyView({ you: linked([], { actions: ["open-escrow", "link-wallet"] }) });
     const outcome = await anteNow({ gameId: "g_table", view, variants: resolveVariants({} as never), isHost: true, port, services, site: SITE }, hooksFor(() => null, [], view));
-    expect(outcome).toEqual({ ok: false, reason: expect.stringMatching(/this seat is linked to juno12gdm.*Change wallet/), needs: "connect" });
+    expect(outcome).toEqual({ ok: false, reason: expect.stringMatching(/^Switch Keplr to juno12gdm.* to sign this action.*Change wallet/), needs: "connect" });
     expect(prompts(services.wallet)).toEqual([]);
     expect(port.requests).toEqual([]);
   });

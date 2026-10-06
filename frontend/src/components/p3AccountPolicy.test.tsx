@@ -330,7 +330,7 @@ describe("account policy (PHASE 3 FINAL): Forgot password? -- the username and t
     expect(byTestId("account-forgot-username")).toBeTruthy();
     expect(byTestId("account-forgot-explain")?.textContent).toContain("a wallet you only used for games can't recover it");
     expect(byTestId("account-forgot-nowallet")?.textContent).toBe(
-      "There is no email reset and no recovery key: without your password and your Authorization Wallet, the account can't be recovered.",
+      "Only your Authorization Wallet can reset your password — there is no email reset. Without your password and your Authorization Wallet, the account can't be recovered.",
     );
     type(byTestId<HTMLInputElement>("account-forgot-username"), "Ann");
     await click(byTestId("account-forgot-connect"));

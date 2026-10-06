@@ -288,7 +288,7 @@ export interface SendTarget {
 export async function signKeepSend(services: MoneyServices, pin: PinnedEscrowDeployment, target: SendTarget, message: WalletMessage, port?: SessionPort): Promise<ActionOutcome> {
   const account = await currentAccount(services, pin);
   if (!account.ok) return account.outcome;
-  if (account.address !== target.wallet) return refuse(`Keplr is on ${account.address}, but this needs ${target.wallet}. Switch accounts in Keplr, then try again.`);
+  if (account.address !== target.wallet) return refuse(`Switch Keplr to ${target.wallet} to sign this action. (Keplr is on ${account.address}.)`);
   const deployment = await services.wallet.verifyDeployment(pin);
   if (!deployment.ok) return refuse(deployment.reason);
   /* Single flight: a transaction of this wallet on this table that may still land blocks another of the same kind
@@ -427,7 +427,7 @@ export async function approveDeposit(ctx: TableContext): Promise<ActionOutcome> 
   }
   const account = await currentAccount(services, pin);
   if (!account.ok) return account.outcome;
-  if (account.address !== you.link.wallet) return refuse(`Keplr is on ${account.address}, but this seat is linked to ${you.link.wallet}. Switch accounts in Keplr to continue.`, "connect");
+  if (account.address !== you.link.wallet) return refuse(`Switch Keplr to ${you.link.wallet} to sign this action. (Keplr is on ${account.address}; this seat is linked to ${you.link.wallet}.)`, "connect");
   const deployment = await services.wallet.verifyDeployment(pin);
   if (!deployment.ok) return refuse(deployment.reason);
   const key = await registeredLocalKey(ctx, services, pin, you.link.wallet);
@@ -562,7 +562,7 @@ export async function anteNow(ctx: TableContext, hooks: AnteHooks): Promise<Acti
   let accepted: AcceptedLink = { ticket: null, consentKey: null };
   if (link !== null && link.wallet !== wallet) {
     /* Never a silent replacement: the seat's wallet changes only through the W2-M question ("Change wallet"). */
-    return refuse(`Keplr is on ${wallet}, but this seat is linked to ${link.wallet}. Switch accounts in Keplr to ante from the linked wallet, or use Change wallet.`, "connect");
+    return refuse(`Switch Keplr to ${link.wallet} to sign this action — it is this seat's linked wallet (Keplr is on ${wallet}). To ante from another wallet, use Change wallet first.`, "connect");
   }
   /* Money review L2: a seat linked from ANOTHER device has no signing key on this one; registering one outside a link
      is a sensitive step (the password). A same-wallet re-proof registers this browser's key with the link instead --
@@ -675,7 +675,7 @@ export async function moveSigningKeyHere(ctx: TableContext): Promise<ActionOutco
   /* Keplr on the seat's wallet first: a device that can't send the SetConsentKey makes and registers no key (M3). */
   const account = await currentAccount(services, pin);
   if (!account.ok) return account.outcome;
-  if (account.address !== wallet) return refuse(`Keplr is on ${account.address}, but your seat's wallet is ${wallet}. Switch accounts in Keplr, then try again.`, "connect");
+  if (account.address !== wallet) return refuse(`Switch Keplr to ${wallet} to sign this action. (Keplr is on ${account.address}; that is your seat's wallet.)`, "connect");
   const made = await services.keys.create({ chainId: pin.chainId, contract: pin.contract, gameId: ctx.gameId, playerId: you.playerId, wallet });
   bumpLocal();
   if (!made.ok) return refuse(made.reason);

@@ -220,7 +220,7 @@ const isDepositKind = (kind: string): boolean => kind === "create" || kind === "
 function walletBlocker(wallet: WalletState, need: string | null): string | null {
   if (wallet.kind === "no-pin") return wallet.reason;
   if (wallet.kind === "unavailable") return "Keplr isn't available in this browser. You can keep playing here; deposits need Keplr (the desktop extension or the Keplr app's browser) on a device where you're signed in to this profile.";
-  if (wallet.kind === "connected" && need !== null && wallet.address !== need) return `Keplr is on ${shortWallet(wallet.address)}, but this seat uses ${shortWallet(need)}. Switch accounts in Keplr to continue.`;
+  if (wallet.kind === "connected" && need !== null && wallet.address !== need) return `Switch Keplr to ${shortWallet(need)} to sign this action. (Keplr is on ${shortWallet(wallet.address)}; this seat's wallet is ${shortWallet(need)} — your account and seat don't change.)`;
   return null;
 }
 

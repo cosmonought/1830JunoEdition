@@ -195,7 +195,7 @@ describe("ESCROW-4: the host's CreateGame, and the exits", () => {
     expect(services.pending.all()).toEqual([]); // a withdrawal's record is done once included (not a deposit)
     /* Cancel comes from the escrow's creator AS JUNO SAYS IT (read here), whatever this seat's link says. */
     services.wallet.game = chainFacts({ creator: "juno1creatorwallet" });
-    expect(await escrowExit(ctx({ view, port, services }), "cancel-escrow")).toEqual({ ok: false, reason: expect.stringMatching(/needs juno1creatorwallet/) });
+    expect(await escrowExit(ctx({ view, port, services }), "cancel-escrow")).toEqual({ ok: false, reason: expect.stringMatching(/^Switch Keplr to juno1creatorwallet to sign this action\./) });
     services.wallet.game = chainFacts({ creator: TEST_WALLET });
     expect((await escrowExit(ctx({ view, port, services }), "cancel-escrow")).ok).toBe(true);
     expect(services.wallet.signed.map((message) => message.msgJson)).toEqual(['{"withdraw":{"chain_game_id":7}}', '{"cancel":{"chain_game_id":7}}']);
@@ -322,7 +322,7 @@ describe("ESCROW-4 review fixes: a deposit Juno included is kept until the table
     expect((await moveSigningKeyHere(ctx({ view, port, services }))).ok).toBe(false);
     services.wallet.present = true;
     services.wallet.address = "juno1another";
-    expect(await moveSigningKeyHere(ctx({ view, port, services }))).toEqual({ ok: false, reason: expect.stringMatching(/Switch accounts in Keplr/), needs: "connect" });
+    expect(await moveSigningKeyHere(ctx({ view, port, services }))).toEqual({ ok: false, reason: expect.stringMatching(/^Switch Keplr to .+ to sign this action\./), needs: "connect" });
     expect(await services.keys.count()).toBe(0);
     expect(port.requests).toEqual([]);
   });

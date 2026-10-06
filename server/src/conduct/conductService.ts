@@ -359,7 +359,11 @@ export function createConductService(deps: ConductServiceDeps): ConductService {
         deps.warn(`  conduct: could not read the cases of a report -- ${error instanceof Error ? error.message.slice(0, 200) : String(error)}`);
         return { ok: false, code: "unavailable", reason: REPORT_SENTENCES.unavailable };
       }
-      if (sequence.kind === "unreadable") return { ok: false, code: "unavailable", reason: REPORT_SENTENCES.unconfirmed };
+      if (sequence.kind === "unreadable") {
+        /* Honest to the reporter, and visible to the operator: a case of this sequence cannot be read. */
+        deps.ops?.audit("conduct.report-unconfirmed", { game_id: record.game_id, category });
+        return { ok: false, code: "unavailable", reason: REPORT_SENTENCES.unconfirmed };
+      }
       const now = deps.now();
       const cases = sequence.cases;
       /* THE REPORTER LEARNS NOTHING ABOUT THE REVIEW. Every answer below depends only on this reporter's own reports and

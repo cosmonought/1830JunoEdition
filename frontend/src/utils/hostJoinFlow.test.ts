@@ -252,8 +252,10 @@ describe("the server enforces the terms (design note #1415; LIVE-2D: the GameRec
     const create = sliceBetween(SERVICE, "export function createRecord(", "\n}\n");
     expect(create).toContain("input.exactPlayers < MIN_PLAYERS || input.exactPlayers > seatCap");
     expect(create).toContain("kicked_principals: []");
-    /* The host's seat is minted by the server, never taken from the frame. */
-    expect(HOST).toContain("hostPlayerId: mintPlayerId()");
+    /* The host's seat is minted by the server, never taken from the frame. (Phase 3 final clocks: minted once, before
+       the record, so a No-deadline money table's host acknowledgement can name the seat; the record takes that id.) */
+    expect(HOST).toContain("const hostPlayerId = mintPlayerId();");
+    expect(HOST).toContain("          hostPlayerId,\n          money: moneyTerms,");
   });
 
   it("refuses a NEW joiner past the cap, after the start, or after a kick -- and tells them", () => {

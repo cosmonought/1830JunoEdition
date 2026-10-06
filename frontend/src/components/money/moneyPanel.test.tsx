@@ -105,7 +105,7 @@ describe("ESCROW-4: the money panel", () => {
     act(() => updateMoneySession({ wallet: "disconnected", address: null, confirmedUntil: null }));
     const port = scriptedPort();
     port.answer("money/wallet-challenge", 403, { error: "reauth-required", reason: "Confirm it's you first." });
-    port.answer("account/me", 200, { ok: true, account: { name: "Brad", otherSessions: 0, username: "Brad.Player", recoveryKey: false, wallet: null, memberSince: T0 } });
+    /* PHASE 3 FINAL: "Confirm it's you" is the password alone -- it no longer reads the account to choose a method. */
     port.answer("profile/reauth", 200, { ok: true, expiresAt: T0 + 5 * 60 * 1000 });
     const view = moneyView({ escrow: { chainGameId: "7", state: "FUNDING", fundingDeadline: T0 + 3_600_000 } });
     await render(<MoneyPanel room={room(view)} onStart={() => undefined} services={services} port={port} />);
@@ -121,15 +121,18 @@ describe("ESCROW-4: the money panel", () => {
     expect(byTestId("money-reauth-origin")?.textContent).toMatch(/This is Project 18XX at http:\/\/localhost\. Only enter your password on this site\./);
     expect(container.textContent).toContain("To use this wallet here, enter your password.");
     const key = byTestId("money-reauth-key") as HTMLInputElement;
+    expect(key.type).toBe("password");
+    expect(byTestId("money-reauth-form")?.querySelectorAll("input")).toHaveLength(1);
+    expect(byTestId("money-reauth-form")?.textContent).not.toMatch(/recovery key/i);
     act(() => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(key, "correct horse battery");
       key.dispatchEvent(new Event("input", { bubbles: true }));
     });
     await click(byTestId("money-reauth-confirm"));
     /* The password went once, in the POST body; the Ante then carried on by itself: a fresh challenge. */
-    expect(port.requests.map((request) => request.path)).toEqual(["money/wallet-challenge", "account/me", "profile/reauth", "money/wallet-challenge"]);
-    expect(port.requests[2].body).toEqual({ password: "correct horse battery" });
-    expect(port.requests[3].body).toEqual({ gameId: "g_table", wallet: TEST_WALLET });
+    expect(port.requests.map((request) => request.path)).toEqual(["money/wallet-challenge", "profile/reauth", "money/wallet-challenge"]);
+    expect(port.requests[1].body).toEqual({ password: "correct horse battery" });
+    expect(port.requests[2].body).toEqual({ gameId: "g_table", wallet: TEST_WALLET });
     expect(byTestId("money-reauth-form")).toBeNull();
     /* Nothing scripted for that challenge: the panel says the server didn't answer; Keplr was never asked to sign. */
     expect(byTestId("money-error")?.textContent).toMatch(/didn't answer/);

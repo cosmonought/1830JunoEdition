@@ -384,10 +384,18 @@ describe("the room is the page, and the text carries its own ground", () => {
     expect(LOBBY).not.toContain("localPlayerId");
   });
 
-  it("shrinks the connect button to the row it lives in", () => {
-    // `primaryButton` is the lobby's loudest control and was sized as a call to action; this is furniture.
-    expect(LOBBY).toContain('label="Connect"');
-    expect(LOBBY).toContain("styles.connectButton");
+  it("PHASE 3 FINAL (§12): the account corner has no wallet chip -- no Connect, no address, no balance, no Disconnect", () => {
+    /* Design note #1133 shrank the corner's Connect to furniture; PHASE 3 FINAL removed it with the address, balance and
+       Disconnect beside it: a connected Keplr address beside the account chip answered "who am I", which only the
+       account answers (owner ruling). Keplr is reached where it signs -- a seat's money panel, the account's
+       Authorization Wallet steps. */
+    expect(LOBBY).not.toContain("<ConnectWalletButton");
+    expect(LOBBY).not.toContain('label="Connect"');
+    expect(LOBBY).not.toContain("useWallet(");
+    expect(LOBBY).not.toContain("wallet.disconnect");
+    expect(LOBBY).not.toContain("truncateAddress(");
+    expect(LOBBY).not.toMatch(/style=\{styles\.(?:connectButton|addressBadge|balanceBadge)\}/);
+    expect(LOBBY).toContain("<ProfileMenu />");
   });
 
   it("splits the utility row: the world on the left, the account on the right", () => {

@@ -10,13 +10,15 @@
 //   a visitor gets the homepage at once -- no gate, no bootstrap in the way -- with Log in, Create account and Rules;
 //   Host and Join ask for an account first (saying why), and NOTHING runs underneath;
 //   logging in RESUMES the action (the host's setup card opens by itself), on a fresh session, the password sent once
-//   in a POST body and kept nowhere; a new account is signed in at once and (P3-ACCT POLICY) shown its recovery key
-//   once before the action resumes (`p3AccountPolicy.test.tsx` pins the reveal);
-//   a wrong password -- or an unknown username -- is one sentence that names neither;
+//   in a POST body and kept nowhere; a new account (PHASE 3 FINAL: with its Authorization Wallet's CREATE signature)
+//   is signed in at once and the action resumes -- no recovery key exists to show (`p3AccountPolicy.test.tsx`);
+//   a wrong password -- or an unknown username -- is one sentence that names neither; an account made before
+//   Authorization Wallets is retired (`legacy-account`), said plainly;
 //   signed in, Host opens straight away (no password, no key);
 //   the Terms page is reachable by anyone, says the owner's copy is pending, and carries no invented legal prose;
 //   every money/deposit surface links it (AUD-20.08); the trust facts are facts under their three headings, never a
-//   score, and carry no id, username or wallet.
+//   score, and carry no id, username or wallet (PHASE 3 FINAL: identity assurance is since when the account's
+//   Authorization Wallet was designated -- never its address).
 
 import React from "react";
 import { act } from "react";
@@ -33,7 +35,10 @@ import { accountSignedIn, requireAccount, resetAccountPromptForTests } from "../
 import { roomLinkRenewals } from "../utils/roomLink";
 import { openInfoPage, resetInfoPagesForTests } from "../utils/infoPages";
 import { readStripped } from "../utils/sourceScan";
-import { scriptedPort } from "../money/moneyTestSupport";
+import { scriptedPort, T0, TEST_WALLET, testServices } from "../money/moneyTestSupport";
+import { installMoneyServicesForTests } from "../money/moneySession";
+import { profileAuthorizationText } from "../utils/profileAuthorizationV1";
+import { APP_NAME } from "../config";
 
 /* This build has a game server (the doors render); its URL is not needed -- the room links are not exercised. */
 jest.mock("../config/backend", () => ({ isBackendConfigured: () => true, backendConfigError: () => null }));
@@ -90,6 +95,7 @@ afterEach(() => {
   act(() => root.unmount());
   container.remove();
   installSessionPort(null);
+  installMoneyServicesForTests(null);
 });
 
 const settle = async () => {
@@ -279,8 +285,22 @@ describe("P3-ACCT: a visitor gets the homepage, and an account only where one is
     expect(dialogGoneWhenResumed).toBe(true);
   });
 
-  it("Create account (P3-ACCT POLICY): signed in at once, the recovery key shown ONCE, and the action resumes after the acknowledgement", async () => {
-    const KEY = "rk_0123456789abcdefghjkmnpqr0.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+  it("Create account (PHASE 3 FINAL): the Authorization Wallet signs the CREATE text, the browser is signed in at once, and the action resumes -- no recovery key between", async () => {
+    const OPERATION = "0123456789abcdef0123456789abcdef";
+    const services = testServices();
+    installMoneyServicesForTests(services);
+    const text = profileAuthorizationText({
+      appName: APP_NAME,
+      purpose: "CREATE",
+      site: window.location.origin,
+      account: "Ann",
+      authorizationWallet: TEST_WALLET,
+      replaces: null,
+      signer: TEST_WALLET,
+      operation: OPERATION,
+      nonce: "fedcba9876543210fedcba9876543210",
+      expiresAt: T0 + 300_000,
+    });
     const server = fakeServer(null);
     await homepage(server.port);
     await click(buttonNamed("Host game"));
@@ -288,15 +308,19 @@ describe("P3-ACCT: a visitor gets the homepage, and an account only where one is
     type(byTestId("account-username") as HTMLInputElement, "Ann");
     type(byTestId("account-password") as HTMLInputElement, "a long enough secret");
     type(byTestId("account-name") as HTMLInputElement, "Ann");
-    server.queue("/gs/api/account/create", { status: 201, body: { ok: true, profile: { name: "Ann", otherSessions: 0 }, username: "Ann", recoveryKey: KEY }, then: () => server.signIn("Ann") });
+    await click(byTestId("account-wallet-connect"));
+    server.queue("/gs/api/account/authorization", { status: 200, body: { ok: true, operation: OPERATION, texts: [{ purpose: "CREATE", signer: TEST_WALLET, text }], expiresAt: T0 + 300_000 } });
+    server.queue("/gs/api/account/create", { status: 201, body: { ok: true, profile: { name: "Ann", otherSessions: 0 }, username: "Ann" }, then: () => server.signIn("Ann") });
     await submit(byTestId("account-form"));
-    expect(server.calls.filter((call) => call.path === "/gs/api/account/create").map((call) => JSON.parse(call.body))).toEqual([{ username: "Ann", password: "a long enough secret", name: "Ann" }]);
-    expect(byTestId("recovery-key-value")?.textContent).toBe(KEY);
-    expect(byTestId("host-body")).toBeNull();
-    await click(byTestId("recovery-key-saved"));
-    await click(byTestId("recovery-key-continue"));
+    await settle();
+    expect(server.calls.filter((call) => call.path === "/gs/api/account/create").map((call) => JSON.parse(call.body))).toEqual([
+      { username: "Ann", password: "a long enough secret", name: "Ann", operation: OPERATION, pubKey: "Ai1R5vzeZFvF73ROli+IbV7OuNG7bM6HeI0rthBGJzvf", signature: "c2ln" },
+    ]);
+    expect(services.wallet.calls.filter((call) => call.startsWith("signLink"))).toEqual([`signLink:${TEST_WALLET}:1830JUNO/PROFILE-AUTHORIZATION/v1`]);
+    expect(byTestId("recovery-key-value")).toBeNull();
+    expect(byTestId("account-dialog")).toBeNull();
     expect(byTestId("host-body")).toBeTruthy();
-    expect(all().innerHTML).not.toContain(KEY);
+    expect(all().innerHTML).not.toContain("a long enough secret");
   });
 
   it("a wrong password and an unknown username are ONE sentence that names neither; a short password is refused before anything is sent", async () => {
@@ -320,16 +344,23 @@ describe("P3-ACCT: a visitor gets the homepage, and an account only where one is
     expect(server.calls.some((call) => call.path === "/gs/api/account/create")).toBe(false);
   });
 
-  it("a profile made before accounts still gets in (its recovery key, under 'Other ways') -- never orphaned", async () => {
+  /* PHASE 3 FINAL: "a profile made before accounts still gets in (its recovery key, under 'Other ways')" is removed --
+     owner ruling: legacy profiles are disposable test profiles, retired with no migration. What a legacy account's
+     owner meets instead: */
+  it("an account made before Authorization Wallets is retired: its right password is one plain sentence, and nothing signs in", async () => {
     const server = fakeServer(null);
     await homepage(server.port);
     await click(byTestId("account-login"));
-    await click(byTestId("account-other-recovery"));
-    type(byTestId("account-secret") as HTMLInputElement, "rk_0123456789abcdefghjkmnpqr0.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
-    server.queue("/gs/api/profile/recover", { status: 200, body: { ok: true, profile: { name: "Old" } }, then: () => server.signIn("Old") });
+    expect(byTestId("account-other-recovery")).toBeNull();
+    expect(byTestId("account-secret")).toBeNull();
+    type(byTestId("account-username") as HTMLInputElement, "Old.Timer");
+    type(byTestId("account-password") as HTMLInputElement, "the right old password");
+    server.queue("/gs/api/account/login", { status: 409, body: { error: "legacy-account" } });
     await submit(byTestId("account-form"));
-    expect(server.port.state).toBe("ready");
-    expect(byTestId("account-dialog")).toBeNull();
+    expect(byTestId("account-error")?.textContent).toBe("That account was made before Authorization Wallets and is retired. Create a new account to keep playing.");
+    expect(server.port.state).not.toBe("ready");
+    expect(byTestId("account-dialog")).toBeTruthy();
+    expect((byTestId("account-password") as HTMLInputElement).value).toBe("");
   });
 
   it("signed in already: Host opens straight away -- no dialog, no password, no key", async () => {
@@ -390,8 +421,10 @@ describe("P3-ACCT: trust facts -- facts under three headings, never a score, nev
     port.answer("trust/table", 200, {
       ok: true,
       seats: [
-        { playerId: "p-me", facts: { memberSince: "2026-09", accountAgeDays: 28, completedMoneyGames: 3, unresolvedDisputes: 0, disputedGames: 1, inactivityExits: 0, walletVerified: true, walletVerifiedSince: "2026-09", establishedOpponents: 2 } },
-        { playerId: "p-other", facts: { memberSince: "2026-09-01", accountAgeDays: 1, completedMoneyGames: 0, unresolvedDisputes: 0, disputedGames: 0, inactivityExits: 0, walletVerified: false, walletVerifiedSince: null, establishedOpponents: null } },
+        { playerId: "p-me", facts: { memberSince: "2026-09", accountAgeDays: 28, completedMoneyGames: 3, unresolvedDisputes: 0, disputedGames: 1, inactivityExits: 0, authorizationWalletSince: "2026-09", establishedOpponents: 2 } },
+        { playerId: "p-other", facts: { memberSince: "2026-09-01", accountAgeDays: 1, completedMoneyGames: 0, unresolvedDisputes: 0, disputedGames: 0, inactivityExits: 0, authorizationWalletSince: null, establishedOpponents: null } },
+        /* An exact day for the Authorization Wallet's month is malformed too (review L4): dropped, never guessed. */
+        { playerId: "p-third", facts: { memberSince: "2026-09", accountAgeDays: 2, completedMoneyGames: 0, unresolvedDisputes: 0, disputedGames: 0, inactivityExits: 0, authorizationWalletSince: "2026-09-03", establishedOpponents: null } },
       ],
     });
     act(() =>
@@ -402,6 +435,7 @@ describe("P3-ACCT: trust facts -- facts under three headings, never a score, nev
           players={[
             { id: "p-me", nickname: "Brad" },
             { id: "p-other", nickname: "Ana" },
+            { id: "p-third", nickname: "Cy" },
           ]}
         />,
       ),
@@ -414,9 +448,12 @@ describe("P3-ACCT: trust facts -- facts under three headings, never a score, nev
     expect(mine?.textContent).toContain("Member since 2026-09 (about 4 weeks)");
     expect(mine?.textContent).toContain("3 completed real-money games");
     expect(mine?.textContent).toContain("Disputes: 0 unresolved now · 1 closed by the resolver");
-    expect(mine?.textContent).toContain("Wallet verified since 2026-09");
+    /* PHASE 3 FINAL: identity assurance is since when the account's Authorization Wallet was designated -- no address. */
+    expect(byTestId("trust-facts-p-me-authorization")?.textContent).toBe("Account secured by an Authorization Wallet since 2026-09");
+    expect(mine?.textContent).not.toMatch(/Wallet verified|verified wallet/i);
     expect(byTestId("trust-facts-p-me-relationships")?.textContent).toBe("2 established opponents (completed real-money games together)");
     expect(byTestId("trust-facts-p-other")).toBeNull(); // malformed (an exact day, review L4): dropped, never guessed
+    expect(byTestId("trust-facts-p-third")).toBeNull();
     expect(box?.textContent).not.toMatch(/score|rating:|trust level|\d+\s*\/\s*\d+/i);
     expect(ID_PATTERN.test(box?.innerHTML ?? "")).toBe(false);
     expect(box?.innerHTML).not.toMatch(/juno1/);

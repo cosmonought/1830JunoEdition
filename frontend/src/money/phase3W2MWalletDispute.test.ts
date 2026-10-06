@@ -199,7 +199,8 @@ describe("W2-M AUD-20.03: Change wallet asks first, then Keplr signs once", () =
 /* ================================================================== */
 
 describe("W2-M AUD-20.04: an ended Confirm-it's-you and an ended link request say what happened", () => {
-  const reauth = { error: "reauth-required", reason: "Confirm it's you first (your recovery key), then link the wallet." };
+  /* The server's own words (`server/src/escrow/moneyTables.ts`); PHASE 3 FINAL: no recovery key is named anywhere. */
+  const reauth = { error: "reauth-required", reason: "Confirm it's you first." };
 
   it("the sentences: ended early (believed live), expired at a time (believed until then), none when never confirmed", () => {
     expect(reconfirmSentence(T0 + 120_000, T0)).toMatch(/ended early on the server.*Confirm it's you again.*nothing was changed/);
@@ -215,7 +216,7 @@ describe("W2-M AUD-20.04: an ended Confirm-it's-you and an ended link request sa
   it.each([
     ["believed live (the server ended it early)", T0 + 120_000, /ended early on the server/],
     ["believed until a past time (it lapsed)", T0 - 120_000, /expired at /],
-    ["never confirmed on this page", null, /^Confirm it's you first \(your recovery key\)/],
+    ["never confirmed on this page", null, /^Confirm it's you first\.$/],
   ] as const)("reauth-required, %s", async (_case, believed, said) => {
     const services = testServices();
     installMoneyServicesForTests(services);

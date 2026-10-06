@@ -13,6 +13,7 @@ import { withClientAnnouncement } from "./clientAnnouncement";
 import { connectServerLink, type SocketLike } from "./serverLink";
 import { resetRoomLinks, setRoomSocketFactory, watchRoom, type SocketLike as RoomSocketLike } from "./roomLink";
 import { httpSessionPort, installSessionPort, readySessionPort, sessionEndedSentence, sessionEndpointFor, sessionPort } from "./sessionBootstrap";
+import { readStripped } from "./sourceScan";
 
 /** LIVE-2E: a bootstrap answer for a PROFILED browser -- the only kind a socket opens for. */
 const PROFILED = { ok: true, expiresAt: 1, profile: { name: "Brad", otherSessions: 0 } };
@@ -262,6 +263,18 @@ describe("public first (P3-ACCT; LIVE-2E's mandatory profiles superseded)", () =
     expect(await second).toBe("ready");
     expect(session.account).toEqual({ name: "Brad", otherSessions: 0 });
     expect(notified).toBe(2);
+    /* PHASE 3 FINAL: the account's username rides along (told only to its own session) -- an open table compares it to
+       notice another tab changed this browser's account; anything but a short string is left out, never guessed. */
+    const named = session.ensure(true);
+    await http.answer(200, { ok: true, expiresAt: 1, profile: { name: "Brad", otherSessions: 0, username: "Brad.Player" } });
+    expect(await named).toBe("ready");
+    expect(session.account).toEqual({ name: "Brad", otherSessions: 0, username: "Brad.Player" });
+    for (const username of [7, null, "u".repeat(257)]) {
+      const odd = session.ensure(true);
+      await http.answer(200, { ok: true, expiresAt: 1, profile: { name: "Brad", otherSessions: 0, username } });
+      expect(await odd).toBe("ready");
+      expect(session.account).toEqual({ name: "Brad", otherSessions: 0 });
+    }
     /* A malformed profile is no profile: the gate, never a guessed one. */
     const third = session.ensure(true);
     await http.answer(200, { ok: true, profile: { name: 7 } });
@@ -310,8 +323,20 @@ describe("public first (P3-ACCT; LIVE-2E's mandatory profiles superseded)", () =
   it("names the LIVE-2E reasons a session ends", () => {
     expect(sessionEndedSentence("replaced")).toBe("This browser signed in to an account, which replaced its earlier session.");
     expect(sessionEndedSentence("signed-out-remotely")).toBe("It was signed out from another of your devices.");
-    for (const reason of ["expired", "logout", "evicted", "operator", "principal-disabled", "rotated", "unreadable", "replaced", "signed-out-remotely", null]) {
-      expect(sessionEndedSentence(reason)).not.toMatch(/guest/i);
+    /* PHASE 3 FINAL: an account made before Authorization Wallets is retired -- its sessions end `retired`. */
+    expect(sessionEndedSentence("retired")).toBe("It belonged to an account made before Authorization Wallets. That account is retired: create a new account to keep playing.");
+    for (const reason of ["expired", "logout", "evicted", "operator", "principal-disabled", "rotated", "unreadable", "replaced", "signed-out-remotely", "retired", null]) {
+      expect(sessionEndedSentence(reason)).not.toMatch(/guest|recovery key/i);
+    }
+  });
+
+  it("PHASE 3 FINAL: the closed list of account routes names the Authorization-Wallet account's routes, and none of the retired ones", () => {
+    const code = readStripped("utils/sessionBootstrap.ts");
+    for (const path of ["account/authorization", "account/recover", "account/authorization-wallet/challenge", "account/authorization-wallet/replace", "account/create", "account/login", "account/password", "account/me", "profile/reauth", "profile/sign-out-others"]) {
+      expect([path, code.includes(`| "${path}"`)]).toEqual([path, true]);
+    }
+    for (const path of ["profile", "profile/recover", "profile/link", "profile/link-code", "profile/recovery-key", "profile/key-received", "account/credentials", "account/forget-wallet", "account/reset"]) {
+      expect([path, code.includes(`"${path}"`)]).toEqual([path, false]);
     }
   });
 });

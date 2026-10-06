@@ -17,8 +17,8 @@
 //   - `prepareRemedyIntent` writes it once, behind the per-game fence (`remedyFence`, chainIntents.ts): never two open
 //                          remedy intents for a game, nothing after one landed, idempotent across a restart (the same
 //                          slot holding the same work answers `exists`); an earlier intent refused for good (held, no
-//                          live attempt) is superseded first; a DIFFERENT decision waits until every earlier
-//                          attestation of another decision can no longer land (its usable life, plus a clock margin).
+//                          live attempt) is superseded first; a DIFFERENT decision waits until the chain's observed
+//                          block time has passed every earlier attestation of another decision (its usable life).
 //
 // Restart safety, replay and durable status are the relayer's generic intent machinery (a signed-or-broadcast attempt
 // is resolved by its transaction hash before anything else is signed; `effectOf` reads `game.remedy` -- the chain's
@@ -189,14 +189,15 @@ export type PrepareRemedyOutcome =
  *  intent files another build wrote (`newer` / `older-unread`) or that are damaged is never added to here. An earlier
  *  remedy intent refused for good (held, no live attempt) is superseded before the candidate is written. A created
  *  (or already present, still open) intent is handed to the relayer (`poke`), as every intent writer does. Callers
- *  serialize per game. */
-export async function prepareRemedyIntent(store: ChainIntentStore, candidate: ChainIntentRecord, options: { readonly poke?: (gameId: string, intentId: string) => void; readonly now?: number } = {}): Promise<PrepareRemedyOutcome> {
-  const outcome = await prepare(store, candidate, options.now ?? candidate.created_at);
+ *  serialize per game, and pass the latest block time they read from the chain (`chainTime`, seconds): without it a
+ *  different decision never follows an earlier one that ended without effect. */
+export async function prepareRemedyIntent(store: ChainIntentStore, candidate: ChainIntentRecord, options: { readonly poke?: (gameId: string, intentId: string) => void; readonly now?: number; readonly chainTime?: number } = {}): Promise<PrepareRemedyOutcome> {
+  const outcome = await prepare(store, candidate, options.now ?? candidate.created_at, options.chainTime ?? null);
   if ((outcome.kind === "created" || outcome.kind === "exists") && outcome.record.status !== "confirmed" && outcome.record.status !== "superseded") options.poke?.(candidate.game_id, candidate.intent_id);
   return outcome;
 }
 
-async function prepare(store: ChainIntentStore, candidate: ChainIntentRecord, now: number): Promise<PrepareRemedyOutcome> {
+async function prepare(store: ChainIntentStore, candidate: ChainIntentRecord, now: number, chainTime: number | null): Promise<PrepareRemedyOutcome> {
   if (candidate.op.kind !== "remedy") return { kind: "hold", why: "not a remedy intent" };
   if (store.formatOf !== undefined) {
     const format = await store.formatOf(candidate.game_id);
@@ -209,7 +210,7 @@ async function prepare(store: ChainIntentStore, candidate: ChainIntentRecord, no
     if (error instanceof ChainIntentUnreadableError) return { kind: "hold", why: `the game's intent files are ${error.format}: this build does not add to them` };
     throw error;
   }
-  const fence = remedyFence(existing, candidate, now);
+  const fence = remedyFence(existing, candidate, chainTime);
   if (fence.kind === "hold") return fence;
   if (fence.kind === "same") return { kind: "exists", record: existing.find((x) => x.intent_id === candidate.intent_id) as ChainIntentRecord };
   for (const earlier of fence.retire) {

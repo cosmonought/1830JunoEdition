@@ -3723,6 +3723,27 @@ until LIVE-5's KMS). Financial protocol 3; money GameRecords `record_schema 2`; 
 only: the waiting room's money panel replaces Ready at a money table; the result's placeholder payout column and the activity-log
 line "The payout distribution has been dispatched for on-chain settlement" are gone (the #899 console stub stays, pinned by
 `shellMessageArms`). UI residuals filed as U-44 and U-45. Record: `claude/ESCROW4_KEPLR_WALLET_CONSENT_2026-09-28.md`.
+**PHASE-3 ESCROW 2.1 (2026-10-05 / 06): per-game exit policy and the timed remedies (contract and protocol support only).**
+No rules change and no replay change: rules 13, live `[13]`, settlement-certified `[10, 11, 12, 13]`, the settlement codec
+(18JUNO/v1) and the hosted protocol are unchanged; every escrow 2.0.0 fixture and vector is unchanged and the JX-1 2.0.0
+deployment is untouched. Branch `phase3/preplaytest-escrow21-timeout-remedies` (source / tests / docs; nothing deployed). Owner
+decisions implemented: the dedicated REMEDY signer (R1: `18JUNO/REMEDY/v1` attestations, `18JUNO/REMEDY-APPROVE/v1` seat
+approvals bound to one overdue instance and each seat's signed `approve_until`); FINANCIAL_PROTOCOL_VERSION 4 (the durable
+`submit-remedy` chain intent, intent schema 2); the old Forfeit / Clemency payload semantics NOT repurposed; the Live 20/30 model
+(first / second overdue: neutral TimeoutAnnul at 30:00, or foreclosure with every N−1 approval); the third strike's challengeable
+foreclosure (Uphold or neutral Annul, never Replace, never a gameplay reopen); Timed Async (12 h / 24 h / 2 d / 3 d / 7 d)
+remedies final the moment N−1 consensus completes, no extra timer; No-deadline has no ordinary timeout; the universal unanimous
+neutral annulment (IN_PROGRESS, SETTLEABLE, DISPUTED with the bond returned); the 7-day exceptional neutral review for every
+IN_PROGRESS 2.1.0 game; system-outage / voluntary pause is the server lane's (the contract cannot detect an outage; a stale
+attestation cannot execute; foreclosure never enters while the escrow is admin-paused); foreclosure dust to the game's
+snapshotted treasury; escrow 2.1.0 supersedes the old standings liveness for its own games. **Superseded for 2.1.0 games only
+(2.0.0 keeps them):** D-12's "no unilateral exit after the deal, 14-day liveness", OD-ESC-C's 14-day IN_PROGRESS liveness window
+(it still bounds the SETTLEABLE exit) and ESCROW-3B's "a stalled game pays by its last appraisal"; OD-ESC-4 ("never
+force-refund") is narrowed only by the 2.1.0 remedies. **NOT complete (the server clock / system-pause lane):** the Live and Async
+action clocks, the strike count, the N−1 vote, voluntary / system pause and unanimous resume, the outage continuity, the KMS
+REMEDY signer, the remedy gate, the fencing checkpoint on cure and the client approval horizon; until it exists no remedy is
+attested or relayed. The canonical 2.1.0 artifact (official optimizer, four checkers, gas) is an owner-machine gate. Record:
+`claude/PHASE3_ESCROW21_TIMED_REMEDY_PASS_2026-10-06.md`.
 
 **S10-7. Engine tests and packaging.** 304 engine-adjacent suites still live in `frontend/src/utils/` (Jest
 `roots` + per-suite classification, Batch 1 §6d); a repo-root `shared/` package needs CRA's `ModuleScopePlugin`,
@@ -4846,7 +4867,7 @@ closure (`claude/INTEGRATED_CLOSURE_ESCROW4_65B_APP0A_2026-09-28.md`). All UI-on
 
 **D-11. Auto-Pass presidency guard is a toggle, on by default; off, a tied presidency rides.** #1335 (T05 20 ruling). `OWNER DECISION` (UX rule).
 
-**D-12. Settlement / money decisions (DECISIONS_2026-09-06, resolved same day):** operator-trusted settlement; session keys sign every move; no unilateral exit after the deal, 14-day liveness; consent fast path; bonded challenge; every game has an on-chain ante (no free-game path); forfeit pays zero. Outside rules hardening; listed so D-1 has its source and so nobody re-opens A7. Specified in `MIGRATION_PLAN.md` #1254.
+**D-12. Settlement / money decisions (DECISIONS_2026-09-06, resolved same day):** operator-trusted settlement; session keys sign every move; no unilateral exit after the deal, 14-day liveness; consent fast path; bonded challenge; every game has an on-chain ante (no free-game path); forfeit pays zero. Outside rules hardening; listed so D-1 has its source and so nobody re-opens A7. Specified in `MIGRATION_PLAN.md` #1254. *(Escrow 2.1.0, owner decisions of 2026-10-05 / 06: for games funded on escrow 2.1.0, "no unilateral exit after the deal, 14-day liveness" is superseded by the timed remedies, the universal unanimous neutral annulment and the 7-day exceptional review -- see Part B "PHASE-3 ESCROW 2.1". Escrow 2.0.0 games keep D-12 as written.)*
 
 **D-13. Auto-skip granularity: the log stays granular (one derived entry per skipped sub-phase) and the transport emits at settle points; the client suppresses intermediate frames.** Decided 7 September (UI_ACTION_PLAN "Not in this plan": "granular log, settle-point emission… re-observe, do not patch"; TRIAGE_2026-09-05 item 6; PLAYTEST_TRANSPORT check 1). The wire format is therefore frozen on per-step derived entries. `OWNER DECISION` (log format). If flicker is re-observed it is a shell frame-suppression bug, not a log change.
 

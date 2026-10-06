@@ -1,16 +1,16 @@
-# eighteen-cosmos-escrow 2.1.0 (ESCROW-2, corrected by ESCROW-2.1 and ESCROW-2.2; storage reshaped by ESCROW-2.3; `Join` admission-gated by ESCROW-JOIN; per-game exit policy by the Phase-3 escrow 2.1.0 pass)
+# eighteen-cosmos-escrow 2.1.0 (ESCROW-2, corrected by ESCROW-2.1 and ESCROW-2.2; storage reshaped by ESCROW-2.3; `Join` admission-gated by ESCROW-JOIN; per-game exit policy and timed remedies by the Phase-3 escrow 2.1.0 passes)
 
-> **Escrow 2.1.0 is source-level work in progress, not a deployable money
-> contract.** It removes the IN_PROGRESS standings exit and adds the No-deadline
-> review, but the timed default / foreclosure remedies are **not** in it: how an
-> off-chain overdue fact becomes trustworthy to the contract is an open owner
-> decision (Project report `claude/PHASE3_ESCROW21_TIMEOUT_REMEDIES_BLOCKED_2026-10-06.md`).
-> A timed game created by this build (`GamePolicy::TimedNoRemedies`) therefore
-> has no non-unanimous exit at all: one absent seat holds it indefinitely
-> (pinned by `escrow21::known_gap_a_timed_game_in_this_build_has_no_non_unanimous_exit`).
-> The server still certifies only `2.0.0` (`JUNO_ESCROW_CONTRACT_VERSIONS`), so it
-> refuses a 2.1.0 instance. The canonical money artifact remains escrow 2.0.0
-> (`5ecc3022…09e8`).
+> **Escrow 2.1.0 is source-level work, not a canonical money artifact.** It
+> carries the per-game exit policy, the dedicated REMEDY key and the timed
+> remedies of the owner decisions of 2026-10-06 (R1, FP4; Project report
+> `claude/PHASE3_ESCROW21_TIMED_REMEDY_PASS_2026-10-06.md`). What it does
+> NOT contain is the server's action clock: which seat is overdue, the 20/30
+> race, voluntary and system pauses, the N−1 vote and outage continuity are
+> the **server clock / system-pause lane, not complete**; until it exists no
+> remedy is ever attested or relayed (the server's remedy gate is absent and
+> fails closed). The canonical money artifact remains escrow **2.0.0**
+> (`5ecc3022…09e8`, the JX-1 deployment, untouched); a 2.1.0 artifact needs the
+> official optimizer gate on the owner's machine before it can hold money.
 
 A CosmWasm 1.5 settlement escrow for Juno money rooms. It is a vault, a deposit
 holder, a roster record, a secp256k1 signature verifier, a settlement/challenge
@@ -24,84 +24,206 @@ Design sources: `ESCROW_LIVE_RECONCILIATION_2026-09-25` (as amended, A1–A3),
 `SET0A_NET_WORTH_VALUATION_AUDIT_2026-09-25` rev 2 §21, and the ESCROW-2.1 owner
 decisions OD-ESC2-1…5 (all closed; see below).
 
-## Escrow 2.1.0: the per-game exit policy
+## Escrow 2.1.0: the per-game exit policy and the timed remedies
 
 Owner policy of 2026-10-05 (Live per-action clock, unanimous Live pause, timed
-and No-deadline Async, foreclosure formula). The chain never sees gameplay
-actions: `last_activity` moves only on `Start` and posted checkpoints, so it is
-not an action clock and nothing in 2.1.0 treats it as one.
+and No-deadline Async, foreclosure formula) and owner decisions R1 / FP4 of
+2026-10-06 (the dedicated REMEDY key and its attestation, financial protocol
+4). The chain never sees gameplay actions: `last_activity` moves only on
+`Start` and posted checkpoints, so it is not an action clock and nothing in
+2.1.0 treats it as one. Every off-chain timing fact enters the contract only as
+a signed attestation.
 
-* **`GameTerms.policy`** (`state::GamePolicy`), written once by `CreateGame`
-  and changed by nothing afterwards (no message, `SetParams` or migration):
-  * `None`: the game was stored by 2.0.0 code (a migrated 2.0.0 game). It keeps
-    every 2.0.0 path, including the IN_PROGRESS standings `LivenessSettle`.
-  * `TimedNoRemedies`: every Live table, and an Async table with a fixed pace,
-    under this build's rules (completion or unanimity only). The variant names
-    its meaning on purpose: the pass that adds the timed remedies must add a
-    new variant for the games it creates, so a migration can never hand
-    remedies to a game funded without them.
-  * `NoDeadline`: an Async table with no action deadline.
-* **`CreateGame.no_deadline`** (required): `true` creates a `NoDeadline` game;
-  with `mode: live` it is refused (`NoDeadlineNeedsAsync`) before any fund
-  moves. The field has no default, so escrow 2.0.0 JSON (without it) does not
-  decode: the deadline class is never chosen by default.
-* **No IN_PROGRESS inactivity exit.** A 2.1.0 game refuses `LivenessSettle`
-  while IN_PROGRESS (`LivenessExitRemoved`), whatever the time, the pause, the
-  caller or a carried checkpoint; nothing is stored. `GameDeadlines.liveness_available_at`
-  is `None` for it while IN_PROGRESS.
-* **No checkpoint promotion.** The SETTLEABLE (`window_end + liveness_window`)
-  and DISPUTED (resolver timeout) exits still pay a trusted stored result,
-  paused or not. Where 2.0.0 would promote the best trusted checkpoint into the
-  settlement (the stored settlement's signer key was retired as compromised), a
-  2.1.0 game refunds every net deposit instead (`SettleableTimeoutRefund` /
-  `ResolverTimeoutRefund`, CANCELLED, bond back). (A terminal `Settle` payload
-  or a resolver `Replace` still carries whatever vector its signer or the
-  resolver chose, as in 2.0.0; the settlement signer remains trusted for
-  terminal weights, behind the challenge window.)
-* **The exceptional review (No-deadline only).**
-  * `RequestReview`: a seated wallet, IN_PROGRESS. The first request is recorded
-    in `Game.review_request` (seat, time, the trusted sequence then); later
-    ones change nothing. An accepted `Checkpoint` beyond that trusted sequence
-    (a new round boundary: the table kept playing) withdraws it; re-posting a
-    boundary already reached (the emergency rotation) does not. Refused while
-    the game's resolver holds a seat (`ResolverIsSeated`: no review could
-    follow).
-  * `ReviewAnnul`: only the resolver the game adopted at `Start`, never one of
-    the game's own seats (`ResolverIsSeated`), after a request and once
-    `terms.review_delay_secs` has passed since it (`ReviewDelayNotElapsed`;
-    `GameDeadlines.review_annul_available_at`). It names the request it
-    decides (`requested_at`), so a decision taken for a since-withdrawn request
-    cannot execute against a later one (`ReviewRequestMismatch`). Refunds every
-    seat's own net deposit, route `ReviewAnnul`, ANNULLED. It carries no
-    payload or amounts, so the neutral refund is its only outcome.
-  * A finished game (SETTLEABLE onward) is never reviewable. Both work while
-    paused. Denying a review is not acting.
-  * `GameParams.review_delay_secs` (1 s … 10 y like every duration; the value is
-    a deployment decision) is snapshotted at CreateGame. A configuration
-    carried over from 2.0.0 reads 0, and no No-deadline game can be created
-    until the admin sets it.
-* **Unchanged:** `AnnulByConsent` (N-of-N), the settlement codec and every
-  digest, `Settle`, `Consent`, `Finalize`, `Challenge`, `Resolve`, the resolver
-  snapshot (OD-ESC2-5), every admin message. `Checkpoint` only gains the
-  request withdrawal.
-* **Foreclosure arithmetic only:** `payout::foreclosure_split(net_deposits, d)`
-  pays seat `d` zero and every other seat its own net deposit plus
-  `⌊net_d / (N − 1)⌋`; the remainder (≤ N − 2 base units) is dust to the
-  game's treasury. No execute path calls it: which seat defaulted, and whether
-  a foreclosure is authorised, needs the trust bridge.
-* **OD-ESC2-1 narrowed.** A pause still never traps a settled result
-  (SETTLEABLE / DISPUTED exits) or FUNDING / FUNDED funds. But an indefinite
-  admin pause blocks `Settle`, and with the standings exit gone an IN_PROGRESS
-  2.1.0 game then leaves only by unanimous `AnnulByConsent` or (No-deadline)
-  `ReviewAnnul`.
-* **Migration.** 2.0.0 → 2.1.0 needs no state migration: the new fields
-  (`terms.policy`, `terms.review_delay_secs`, `review_request`,
-  `params.review_delay_secs`) read as absent / 0. The JX-1 2.0.0 instance has
-  no wasm admin and can never be migrated: 2.1.0 is a new instance, after
-  draining the 2.0.0 money games.
-* **Not bound by the server yet.** Neither `Join` nor the join admission binds
-  the policy (the host's wallet picks `no_deadline`); the server lane must check
-  `terms.policy` (and the table's pace) before admitting anyone to a 2.1.0 game.
+### The policy (`GameTerms.policy`, written once by `CreateGame`)
+
+* **`CreateGame.deadline`** (required, `msg::DeadlineChoice`; no default, so
+  escrow 2.0.0 JSON does not decode):
+  * `live_action_clock {}` (Live only) → `GamePolicy::TimedRemedyV1`,
+    `allowance_secs` 1200 (20:00), `cure_window_secs` 600 (to 30:00);
+  * `async_pace { allowance_secs }` (Async only; one of 43200, 86400, 172800,
+    259200, 604800 = 12 h / 24 h / 2 d / 3 d / 7 d, else `BadAsyncPace`) →
+    `TimedRemedyV1`, `cure_window_secs` 0;
+  * `no_deadline {}` (Async only) → `GamePolicy::NoDeadline`;
+  * the wrong class for the mode is `DeadlineNotForMode`, before any fund moves.
+* `policy: None` means the game was stored by 2.0.0 code (a migrated 2.0.0
+  game): it keeps every 2.0.0 path, including the IN_PROGRESS standings
+  `LivenessSettle`, and has no remedy, no review and no DISPUTED annulment.
+* Nothing changes a game's policy, pace or `review_delay_secs` (7 days,
+  `REVIEW_DELAY_SECS`) after `CreateGame`: no admin message, `SetParams`,
+  pause, key rotation or migration.
+* **2.1.0 supersedes the old standings liveness for its own games.** A 2.1.0
+  game refuses `LivenessSettle` while IN_PROGRESS (`LivenessExitRemoved`) at any
+  time, paused or not, with or without a carried checkpoint. Where 2.0.0 would
+  promote the best trusted checkpoint at a SETTLEABLE / DISPUTED timeout (the
+  stored settlement's key compromised), a 2.1.0 game refunds every net deposit
+  (`SettleableTimeoutRefund` / `ResolverTimeoutRefund`, bond back). A trusted
+  stored result is still paid by those exits, paused or not.
+
+### The REMEDY key (owner decision R1)
+
+* A key class of its own (`Config.remedy_keys`, ids 1…, `REMEDY_KEYS` /
+  `REMEDY_PUBKEY_INDEX`), registered at instantiate (`InstantiateMsg.remedy_keys`,
+  bounded) or by `AddRemedyKey`, retired by `RetireRemedyKey { key_id,
+  compromised }` (escalation only). A remedy key is never a settlement signer
+  key or an admission key, nor the reverse (every registry checks the others);
+  queries `RemedyKey`, `RemedyKeys`. A migrated 2.0.0 deployment starts with an
+  empty registry.
+* `compromised` also removes the payout authority of a third-strike
+  foreclosure the key attested that is stored and not yet paid (`Finalize` and
+  `Consent` refuse it; its SETTLEABLE exit refunds).
+* **REMEDY attestation** (`remedy::RemedyAttestation`, 166 bytes, every integer
+  fixed-width big-endian):
+
+  ```text
+  encode = u8(version=1) ‖ domain(32) ‖ u64(chain_game_id) ‖ u8(remedy) ‖ u8(defaulting_seat)
+           ‖ u8(strike) ‖ u64(overdue_epoch) ‖ u64(log_len) ‖ log_hash(32) ‖ u64(allowance_secs)
+           ‖ u64(overdue_at) ‖ u64(final_at) ‖ u64(attested_at) ‖ u64(expires_at)
+           ‖ evidence_hash(32) ‖ u16(remedy_key_id)
+  remedy  = SHA-256("18JUNO/REMEDY/v1" ‖ encode)                   signed by an active REMEDY key
+  approve = SHA-256("18JUNO/REMEDY-APPROVE/v1" ‖ domain(32) ‖ u64(chain_game_id) ‖ u8(remedy)
+           ‖ u8(defaulting_seat) ‖ u8(strike) ‖ u64(overdue_epoch) ‖ u64(log_len) ‖ log_hash(32)
+           ‖ u64(overdue_at) ‖ u64(approve_until) ‖ u8(approving_seat))
+                                                                    signed by a seat's CURRENT consent key
+  ```
+
+  The settlement domain binds chain, contract, game, roster, rules version,
+  variants, ante and mode; the attestation binds the exact log position
+  (`seq = 2·log_len + 1` must exceed the game's trusted sequence, so a
+  checkpoint past the stall voids it), the remedy, the defaulting seat, the
+  strike and overdue epoch, the funded allowance, the overdue / final /
+  attestation / expiry times and the hash of the server's clock evidence
+  (never interpreted). An approval binds one overdue instance and the approving
+  seat's own horizon `approve_until`: from that block second on it is refused
+  (`ApprovalExpired`) whatever the remedy key attests, and it cannot be
+  extended (the horizon is signed). Every tag differs from every other, so no
+  signature made for one purpose verifies for another. Cross-language vectors:
+  `testdata/remedy_vectors_v1.json` (independent Python generator
+  `gen_remedy_vectors.py`; 41 vectors, 40 executed on chain by
+  `tests/remedy_vectors.rs`; TypeScript `frontend/src/utils/escrowRemedyVectors.test.ts`).
+* **Bearer life:** `final_at ≤ attested_at ≤ block time < expires_at ≤
+  attested_at + 3600` (`MAX_REMEDY_TTL_SECS`). A final remedy that did not land
+  is attested again (a fresh `attested_at`), never extended. No seat is overdue
+  before one allowance has run since `Start` (`overdue_at ≥ started_at +
+  allowance_secs`).
+* The old settlement-payload reasons Forfeit / Clemency are **not** repurposed:
+  no remedy is a `SettlementPayloadV1`, and the settlement codec (18JUNO/v1) and
+  every 2.0.0 digest are unchanged.
+
+### `SubmitRemedy { chain_game_id, attestation, signature, approvals }` (anyone relays)
+
+Check order: no funds → game → IN_PROGRESS → `TimedRemedyV1` → remedy kind →
+pause (foreclosing kinds) → shape against the game and its terms → finality,
+attestation time and expiry against block time → sequence → remedy key →
+signature → approvals (each: seat range, not the defaulter, no duplicate,
+`approve_until`, signature; then all N−1). A refusal changes nothing.
+
+| remedy | mode | strike | final_at | approvals | outcome |
+|---|---|---|---|---|---|
+| 1 `LiveTimeoutAnnul` | live | 1, 2 | ≥ overdue_at + 600 | none | refund every net deposit, ANNULLED (`RemedyTimeoutAnnul`) |
+| 2 `LiveForeclose` | live | 1, 2 | ≥ overdue_at + 600 | all N−1 | foreclosure, SETTLED (`RemedyForeclosure`) |
+| 3 `LiveStrike3Foreclose` | live | 3 | = overdue_at (20:00) | none | foreclosure stored as a challengeable settlement, SETTLEABLE |
+| 4 `AsyncAnnul` | async | 0 | ≥ overdue_at | all N−1 | refund every net deposit, ANNULLED (`RemedyAnnul`) |
+| 5 `AsyncForeclose` | async | 0 | ≥ overdue_at | all N−1 | foreclosure, SETTLED (`RemedyForeclosure`) |
+
+* **Live first / second overdue.** The seat's 20:00 allowance runs out; it may
+  cure until 30:00. Uncured at 30:00 (later only by exactly the time a
+  voluntary or system pause froze the cure window — the clock evidence accounts
+  for it; never sooner): the neutral TimeoutAnnul (remedy key alone), or the
+  foreclosure if every other seat approved it (N−1).
+* **Live third overdue.** At the 20:00 expiry (no cure window) the foreclosure
+  is stored as a settlement (`SettlementSource::RemedyStrike3`: kind Terminal,
+  weight 0 for the defaulter and 1 for every other seat) and the game is
+  SETTLEABLE for the game's challenge window. The defaulter (any seat) may
+  `Challenge` with the bond; the game's resolver may only `Uphold` (the
+  foreclosure is paid) or `Annul` (neutral refund) — `Replace` is refused
+  (`RemedySettlementNotReplaceable`) and gameplay never reopens. Unchallenged,
+  `Finalize` or unanimous `Consent` pays it; the SETTLEABLE / DISPUTED timeouts
+  pay it unless its remedy key was marked compromised (then they refund).
+* **Timed Async.** Overdue at the pace; the remedy (neutral annulment or
+  foreclosure) needs every non-defaulting seat's approval and is final the
+  moment that consensus completes — no extra timer, no grace period. A cure
+  before the consensus completes ends the instance (the approvals bind it).
+* **No-deadline.** No overdue, no ordinary timeout: `SubmitRemedy` is refused
+  (`RemedyNotAvailable`); it ends by completion, unanimous annulment or the
+  exceptional review.
+* **Foreclosure arithmetic** (`payout::foreclosure_split`): seat D gets 0; every
+  other seat its own net deposit plus `⌊net_D / (N − 1)⌋`; the remainder
+  (≤ N − 2 base units) is dust to the game's **snapshotted treasury** (no
+  seat-based remainder preference). Fees (taken on every deposit) and gas are
+  never refunded or re-created; no remedy carries an address or an amount.
+* Every remedy needs IN_PROGRESS and ends it, so at most one takes effect per
+  game; `Game.remedy` (`RemedyRecord`) records the one that did (kind, seat,
+  strike, epoch, position, times incl. `attested_at`, key id, REMEDY digest,
+  approvals bitmap).
+
+### Universal unanimous neutral annulment and the exceptional review
+
+* **`AnnulByConsent`** (N-of-N over `annul = SHA-256("18JUNO/ANNUL/v1" ‖ domain
+  ‖ u64(trusted_seq))`) works in every non-terminal escrow-held state of a
+  2.1.0 game: IN_PROGRESS, SETTLEABLE and **DISPUTED** (the challenger's bond
+  goes back to the challenger), paused or not; it supersedes any pending
+  remedy. FUNDING / FUNDED funds leave by `Withdraw` / `Cancel` (also paused).
+  A 2.0.0-stored game keeps its 2.0.0 states (IN_PROGRESS, SETTLEABLE).
+* **The 7-day exceptional review** (every IN_PROGRESS 2.1.0 game: Timed and
+  No-deadline): `RequestReview` by a seated wallet records the first request
+  (seat, time, the trusted sequence then); an accepted checkpoint past that
+  sequence withdraws it. `ReviewAnnul { chain_game_id, requested_at }` by the
+  game's resolver only, from `requested_at + 7 days`, refunds every net deposit
+  (route `ReviewAnnul`): neutral only — no payload, no amounts, no address. The
+  evidence bar (death, permanent abandonment, lost access; for timed games also
+  a catastrophic remedy-system failure) is governance policy, off chain.
+* **A resolver never holds a seat in a game it would judge.** `Start` refuses a
+  2.1.0 game whose seats include the current resolver (`ResolverIsSeated`; the
+  game stays FUNDED, where every deposit can still leave, also while paused,
+  until a seat leaves or the admin names another resolver); `Resolve`,
+  `RequestReview` and `ReviewAnnul` keep their own refusals as a second line.
+
+### Pause, outages and system pauses
+
+* **The contract cannot detect an AWS outage** and does not try. A system pause
+  and a voluntary pause are the server lane's: the server freezes the clock,
+  attests nothing for the frozen time, and a remedy is final later by exactly
+  the frozen time. A stale (pre-outage) attestation cannot execute: it expires
+  one hour after its attestation time, a checkpoint past the stall voids it,
+  and its evidence hash is bound.
+* **Routes while the escrow is admin-paused** (`Config.paused`):
+
+  | state | works while paused | waits for Unpause |
+  |---|---|---|
+  | FUNDING / FUNDED | `Withdraw`, `Cancel`, `SetConsentKey` | `CreateGame`, `Join`, `Start` |
+  | IN_PROGRESS (2.1.0) | `Checkpoint`, neutral `SubmitRemedy` (1, 4), `AnnulByConsent`, `RequestReview`, `ReviewAnnul`, `SetConsentKey` | `Settle`, foreclosing `SubmitRemedy` (2, 3, 5) |
+  | SETTLEABLE | `Challenge`, `AnnulByConsent`, the `window_end + liveness_window` exit | `Finalize`, `Consent` |
+  | DISPUTED | `Resolve`, `AnnulByConsent` (bond back), the resolver-timeout exit | — |
+
+  So an admin pause never traps funds (a neutral exit always exists), never
+  manufactures a foreclosure (no foreclosing remedy enters while paused) and
+  never revives the standings exit. A foreclosure that became final during a
+  pause is attested again after it, within its approvals' horizons; past them
+  the seats approve again or the server falls back to the neutral remedy.
+* **OD-ESC2-1 narrowed, OD-ESC-4 narrowed.** An indefinite admin pause blocks
+  `Settle` and every foreclosure; IN_PROGRESS 2.1.0 games then leave only
+  neutrally (remedy 1 / 4, unanimity, review). OD-ESC-4 ("never force-refund")
+  is narrowed only by the 2.1.0 remedies: the remedy key may end a Live game
+  neutrally (remedy 1) on an attested 30:00 expiry; there is still no
+  arbitrary admin or operator withdrawal power.
+
+### Superseded for 2.1.0 games (2.0.0 unchanged)
+
+* D-12's "no unilateral exit after the deal, 14-day liveness" and OD-ESC-C's
+  14-day IN_PROGRESS liveness window: replaced by the timed remedies, the
+  universal annulment and the review (the window still bounds the SETTLEABLE
+  exit).
+* ESCROW-3B's "a stalled game pays by its last appraisal" (the IN_PROGRESS
+  standings exit): removed; a stall is cured, remedied, annulled or reviewed.
+* A 2.0.0 game, a 2.0.0 deployment (JX-1) and every 2.0.0 fixture and vector
+  are unchanged.
+
+### Migration
+
+2.0.0 → 2.1.0 needs no state migration: the new fields read as absent / 0 and
+the remedy registry starts empty. The JX-1 2.0.0 instance has no wasm admin and
+can never be migrated: 2.1.0 is a new instance, after draining the 2.0.0 money
+games.
 
 ## Build and test
 
@@ -122,14 +244,15 @@ profile, and the library denies `clippy::arithmetic_side_effects` outside tests.
 | File | Role |
 |---|---|
 | `src/payload.rs` | the fixed-width `136 + 16·n` byte payload, strict decode, shape rules (kind/reason, `seq = 2·log_len + kind`, A1 appraisal rule) |
-| `src/crypto.rs` | `18JUNO/{DOMAIN,ROSTER,SETTLE,CONSENT,ANNUL,JOIN}/v1` digests, low-s check, compressed keys |
+| `src/crypto.rs` | `18JUNO/{DOMAIN,ROSTER,SETTLE,CONSENT,ANNUL,JOIN,REMEDY,REMEDY-APPROVE}/v1` digests, low-s check, compressed keys |
+| `src/remedy.rs` | the 166-byte REMEDY attestation: strict encode / decode and the JSON wire conversion (escrow 2.1.0) |
 | `src/payout.rs` | `floor(pool·wᵢ/Σw)` in `Uint256`, checked downcast, dust; subsidy and bond arithmetic |
 | `src/helpers.rs` | guards (state → role → pause → rest), payload-vs-game checks, the trusted sequence floor, consent-key uniqueness and verification, `pay_out`, `refund_all` |
-| `src/execute/*.rs` | funding (create/join/withdraw/cancel/consent key), play (start/checkpoint/settle/consent/finalize), dispute (challenge/resolve/annul/liveness), admin |
+| `src/execute/*.rs` | funding (create/join/withdraw/cancel/consent key), play (start/checkpoint/settle/consent/finalize), dispute (challenge/resolve/annul/liveness/review), remedy (`SubmitRemedy`), admin (incl. the remedy-key registry) |
 | `src/storage.rs` | the storage-only `StoredGame` shape under `games`: private map, lossless `Game` conversions, and the only read/write/range paths (ESCROW-2.3) |
 | `src/query.rs` | config, games (with `trusted_seq` and every open deadline), seats, checkpoints (with the liveness candidate), signer keys, settlement preview |
 | `schema/` | generated JSON schema of every message and response (the ESCROW-3 client ABI) |
-| `testdata/` | independent Python vector generators and their frozen output (`payload_vectors_v1.json`; `join_admission_vectors_v1.json`, ESCROW-JOIN), and the SET-0A rev 2 payout goldens |
+| `testdata/` | independent Python vector generators and their frozen output (`payload_vectors_v1.json`; `join_admission_vectors_v1.json`, ESCROW-JOIN; `remedy_vectors_v1.json`, escrow 2.1.0), and the SET-0A rev 2 payout goldens |
 | `scripts/` | `wasm-gate.sh` (optimizer build, ≤ 90 locals per function, every `cosmwasm-check`) and `wasm_locals.py` (the per-function local count) |
 | `gasbench/` | stand-alone gas harness that runs the optimized wasm in cosmwasm-vm 3.0.5 (own workspace and lockfile; see its README) |
 
@@ -141,9 +264,11 @@ profile, and the library denies `clippy::arithmetic_side_effects` outside tests.
 | `golden` | SET-0A P1–P13, Q16 and the 13 case previews, off chain and on chain |
 | `set0c_vectors` | SET-0C: the TypeScript builder's vectors (`frontend/src/utils/__fixtures__/settlement/settlementPayloadVectorsV1.json`) re-derived by the crate — domains, roster hashes, payload bytes, SETTLE/CONSENT digests, shape per message, payouts and dust, JSON form — plus the 71 TypeScript mutation outcomes and single-byte decoder classification |
 | `funding`, `start`, `consent_key`, `checkpoint`, `settlement`, `challenge`, `resolver`, `liveness`, `annul`, `admin`, `terminal` | each message's rules, refusals and boundaries (`liveness`: the 2.0.0 IN_PROGRESS exit, on games stored in the 2.0.0 shape) |
-| `matrix` | every execute message × every state × paused/unpaused × six caller roles, against an oracle written from §9.1 as amended by the closed decisions and the 2.1.0 policy (TimedNoRemedies, No-deadline and 2.0.0-shaped fixtures; RequestReview / ReviewAnnul rows) |
-| `invariants` | the nineteen escrow invariants (18–19: the 2.1.0 policy and review): targeted tests plus a seeded random-sequence checker with an independent payout/refund model over a mix of TimedNoRemedies, No-deadline and 2.0.0-shaped games, which also runs the emergency rotation and finally drains every live game under a permanent pause |
-| `escrow21` | escrow 2.1.0: the policy at CreateGame and its freeze; the IN_PROGRESS exit refused at any time, paused or not, with or without a carried checkpoint; No-deadline never inactivity-settled; trusted results still paid; compromised settlements refunded, never a checkpoint; the review (only the game's resolver, only after a seated request, only No-deadline, only IN_PROGRESS, only the neutral refund, no payout fields); N-of-N annulment unchanged; a migrated 2.0.0 game keeps its 2.0.0 exit; the foreclosure formula against an independent model |
+| `matrix` | every execute message × every state × paused/unpaused × six caller roles, against an oracle written from §9.1 as amended by the closed decisions and the 2.1.0 policy (TimedRemedyV1, No-deadline and 2.0.0-shaped fixtures; RequestReview / ReviewAnnul / SubmitRemedy rows) |
+| `invariants` | the twenty escrow invariants (18–19: the 2.1.0 policy and review; 20: the timed remedies): targeted tests plus a seeded random-sequence checker with an independent payout/refund model and an independent `SubmitRemedy` model (every refusal predicted in the contract's check order, 19 mutation classes) over a mix of Live, Timed Async, No-deadline and 2.0.0-shaped games, which also runs the emergency rotation, remedy-key rotation and compromise, and finally drains every live game under a permanent pause; a remedy-focused run covers every remedy kind, every refusal label and every way a third strike closes |
+| `escrow21` | escrow 2.1.0: the deadline class at CreateGame and its freeze; the IN_PROGRESS exit refused at any time, paused or not, with or without a carried checkpoint; No-deadline never inactivity-settled; trusted results still paid; compromised settlements refunded, never a checkpoint; the 7-day review (only the game's resolver, only after a seated request, only IN_PROGRESS, only the neutral refund, no payout fields, bound to its request); no game starts with a seated resolver; a migrated 2.0.0 game keeps its 2.0.0 exit; the foreclosure formula against an independent model |
+| `remedy` | escrow 2.1.0 timed remedies: key-class separation and registry; every attested field bound; cross-game / cross-instance refusal; at most once; expiry, TTL and the attestation time; pre-outage attestations; staleness by checkpoint; retired and compromised keys; the Live 20/30 shape (a paused cure window final later, never earlier); N−1 approvals (defaulter, duplicate, rotated key, out of range, other instance, other horizon, expired horizon); the third strike (window, challenge, Uphold / Annul only, timeouts, compromise); Async immediate on N−1; No-deadline and 2.0.0 refused; pause blocks foreclosure only; no address or amount; treasury dust; the universal annulment in every non-terminal state |
+| `remedy_vectors` | the Python generator's REMEDY encodings, digests, approvals and verdicts reproduced byte for byte, then every replayable vector executed on chain with the recorded verdict |
 | `closed_decisions` | regressions for OD-ESC2-1…5 and consent-key uniqueness (see below) |
 | `compromised_settlement` | ESCROW-2.2: a stored settlement under a compromised signer key is never paid by Finalize or Consent; recovery by LivenessSettle |
 | `join_admission` | ESCROW-JOIN: a Join without the admission for its own sender is refused and moves nothing (random wallet, copied ticket, copied admission, other game, changed ticket or expiry, malformed/high-s/foreign signatures, expiry boundary, rotation, key separation); every other Join rule unchanged |
@@ -289,14 +414,18 @@ Rust and Cargo 1.81.
 
 **Escrow 2.1.0 (source branch, NOT a canonical artifact).** Without Docker,
 an approximation of the optimizer route (`cargo +1.81.0 build --release --lib
---target wasm32-unknown-unknown` with `-C link-arg=-s`, then binaryen
-`wasm-opt -Os --signext-lowering`, version 116) gives max 70 locals and
-561,836 B for 2.1.0; the same route gives 68 locals for the 2.0.0 source,
-matching the canonical record, and `cosmwasm-check` 2.2.9 passes both. The
-official optimizer build, all four checkers and `gasbench` must be redone at
-the 2.1.0 artifact gate. `gasbench`'s two IN_PROGRESS `LivenessSettle` rows
-are 2.0.0 paths that a 2.1.0 artifact refuses, and the review messages are
-not yet benchmarked; both need rework there.
+--target wasm32-unknown-unknown --locked` with `-C link-arg=-s`, then binaryen
+`wasm-opt -Os --signext-lowering`, version 116) gives, for the timed-remedy
+source, max **80** locals (limit 90) and 634,892 B (SHA-256 of that
+approximation `5990f2a1…6b0`, not a canonical checksum); the same route gives
+68 locals for the 2.0.0 source, matching the canonical record, and
+`cosmwasm-check` 2.2.9 passes. `gasbench` now benchmarks `SubmitRemedy` (all
+five kinds, with 6 approvals where needed, and scaling to 64 checkpoints),
+`RequestReview`, `ReviewAnnul` and the DISPUTED `AnnulByConsent`; the largest
+remedy is ≈0.53M modelled SDK gas at 64 checkpoints. **Owner-machine
+certification still required:** the official `cosmwasm/optimizer:0.16.1` build
+(two byte-identical builds; the canonical 2.1.0 checksum), all four
+`cosmwasm-check` versions, and `gasbench` against that artifact.
 
 **Acceptance.** Run `scripts/wasm-gate.sh`. It fails when any function
 declares more than 90 locals, and it runs every `cosmwasm-check` listed in
@@ -346,9 +475,10 @@ VM gas plus modelled KV/event gas for every path.
   signs an annul. Recovery is delayed, never blocked. (A 2.1.0 game recovers
   by refund, never by a checkpoint.)
 * Escrow 2.1.0 review: a compromised or colluding resolver can neutrally annul
-  a No-deadline game a seat asked to review, once the review delay has passed;
-  it cannot pay itself or anyone else, touch a Timed or 2.0.0 game, or replace
-  a finished result. A settlement signer (honest or leaked) withdraws a pending
+  an IN_PROGRESS 2.1.0 game a seat asked to review, once the 7-day delay has
+  passed; it cannot pay itself or anyone else, touch a 2.0.0 game, or replace
+  a finished result. In a third-strike dispute it can uphold or annul, never
+  replace. A settlement signer (honest or leaked) withdraws a pending
   request with any accepted checkpoint beyond the boundary trusted at the
   request, so a malicious server can delay a review indefinitely (the requester
   asks again); it moves no money that way.
@@ -369,3 +499,26 @@ VM gas plus modelled KV/event gas for every path.
   carries a newer checkpoint; post newer checkpoints before the window closes.
 * Resolver tooling: the `Replace` floor is `Checkpoints.liveness_candidate_seq`
   (the best trusted checkpoint), not `GameResponse.trusted_seq`.
+* **Escrow 2.1.0 remedy trust (residuals).**
+  * The admin registers remedy keys with immediate effect (`AddRemedyKey`), so
+    an admin compromise can escalate to a remedy-key compromise; separating
+    that governance from the admin is part of the same mainnet security gate.
+  * A compromised REMEDY key alone can: end a Live game neutrally (remedy 1,
+    a refund); store a challengeable third-strike foreclosure (remedy 3: the
+    defaulter challenges, the resolver annuls; `RetireRemedyKey{compromised}`
+    removes its payout authority before payment). With N−1 approvals it can
+    use them only for the exact overdue instance they name and only until
+    their `approve_until`.
+  * Before a checkpoint past the stall reaches the chain, the contract cannot
+    tell a cured overdue from an uncured one: the remedy key is trusted for
+    that, and the **server lane must post a fencing checkpoint on cure** (an
+    obligation of the clock lane). The approval horizon bounds the approvals'
+    part of that window; the client lane must pick it (Live: about the overdue
+    moment + the 10-minute cure window + a relay / pause allowance; Async: the
+    proposal's life). The contract does not cap it.
+  * An admin `SetResolver` to a seated wallet delays the `Start` of FUNDED
+    2.1.0 games (deposits stay withdrawable and cancellable): denial of service
+    only.
+  * `SetConsentKey` is not allowed in DISPUTED, so a seat that lost its consent
+    key cannot join a DISPUTED unanimous annulment; the dispute still ends by
+    the resolver or its timeout.

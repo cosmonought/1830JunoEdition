@@ -31,6 +31,19 @@ dependency tree.
 Real chain numbers come only from simulating on the target chain. These figures
 are for comparing paths, tracking growth, and finding worst cases.
 
+**Escrow 2.1.0 rows.** The bench instantiates with a remedy key and creates
+its games with a `DeadlineChoice` (Live action clock by default, an Async pace
+where a row says so). The IN_PROGRESS rows measure `SubmitRemedy` for every
+kind (1 and 3 with the remedy key alone; 2, 4 and 5 with six seat approvals,
+seven `secp256k1_verify` in all), `RequestReview`, `ReviewAnnul` and the
+DISPUTED `AnnulByConsent` (bond back); a scaling row measures `SubmitRemedy`
+against 1…64 stored checkpoints (the trusted-sequence scan). The 2.0.0
+IN_PROGRESS `LivenessSettle` rows are gone (a 2.1.0 artifact refuses that exit;
+the bench asserts the refusal), and the compromised SETTLEABLE / DISPUTED rows
+measure 2.1.0's refunds, never a promoted checkpoint. Rows measured on the source
+approximation of the optimizer route are not the canonical figures: rerun
+against the official 2.1.0 artifact at its gate.
+
 ## Run
 
 ```sh

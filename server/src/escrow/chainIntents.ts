@@ -451,18 +451,17 @@ export function sameChainIntent(a: ChainIntentRecord, b: ChainIntentRecord): boo
 /* FP4: the remedy fence (one open remedy intent per game)              */
 /* ------------------------------------------------------------------ */
 
-/** The margin (seconds) by which the server's clock must pass an earlier attestation's usable life before a DIFFERENT
- *  decision is prepared: the chain decides by block time, which may lag the wall clock. */
-export const REMEDY_FENCE_CLOCK_MARGIN_SECS = 120;
-
-/** What preparing `candidate` (a `submit-remedy` intent) may do at `nowMs`, given every intent the game already has:
+/** What preparing `candidate` (a `submit-remedy` intent) may do, given every intent the game already has and the
+ *  chain's latest block time the caller observed (`chainTimeSecs`; null: not read):
  *  - `same`: the candidate's own slot already holds the same work (an idempotent re-prepare after a restart);
  *  - `hold`: a remedy of this game already LANDED (`confirmed`: nothing more, ever); another remedy intent is still
  *    OPEN -- pending, in flight, or held with a live attempt -- so two could both broadcast; an earlier intent of a
- *    DIFFERENT decision ended without effect here but its attestation could still land if anyone relayed it (its
- *    `usable_until`, plus `REMEDY_FENCE_CLOCK_MARGIN_SECS`, is not yet past: anyone may relay a remedy, and a key
- *    registered or a seat's approval made valid again would revive it); or the candidate's own slot holds different
- *    work;
+ *    DIFFERENT decision ended without effect here but its attestation could still land if anyone relayed it (anyone
+ *    may relay a remedy, and a key registered or a seat's approval made valid again would revive it): the chain's
+ *    observed block time has not yet reached its `usable_until` -- or was not read. Block time, never the server's
+ *    clock: block times only increase, so once one block is at or past `usable_until` no later block can accept that
+ *    attestation, whereas the first block after a halt may carry a time far behind the wall clock; or the candidate's
+ *    own slot holds different work;
  *  - `proceed`: every earlier remedy intent ended without effect -- `superseded` (its attestation expired, or the game
  *    or its trusted sequence moved on), or `held` with no live attempt (refused for good: an approver rotated its
  *    consent key, a contradiction) -- and none of another decision can still land. Those held ones are listed in
@@ -475,7 +474,7 @@ export const REMEDY_FENCE_CLOCK_MARGIN_SECS = 120;
  *  fence reads, then writes. */
 export type RemedyFence = { readonly kind: "proceed"; readonly retire: readonly ChainIntentRecord[] } | { readonly kind: "same" } | { readonly kind: "hold"; readonly why: string };
 
-export function remedyFence(existing: readonly ChainIntentRecord[], candidate: ChainIntentRecord, nowMs: number): RemedyFence {
+export function remedyFence(existing: readonly ChainIntentRecord[], candidate: ChainIntentRecord, chainTimeSecs: number | null): RemedyFence {
   if (candidate.op.kind !== "remedy") return { kind: "hold", why: "not a remedy intent" };
   const decision = candidate.op.decision;
   const remedies = existing.filter((intent) => intent.op.kind === "remedy");
@@ -485,11 +484,11 @@ export function remedyFence(existing: readonly ChainIntentRecord[], candidate: C
   if (landed !== undefined) return { kind: "hold", why: "a remedy of this game is already confirmed on chain; nothing more is prepared" };
   const open = remedies.find((intent) => intent.status === "pending" || intent.status === "in-flight" || (intent.status === "held" && intent.attempts.some(isLiveAttempt)));
   if (open !== undefined) return { kind: "hold", why: `an earlier remedy intent of this game is still ${open.status}; it must resolve before another is prepared` };
-  const nowSecs = BigInt(Math.floor(nowMs / 1000));
-  const margin = BigInt(REMEDY_FENCE_CLOCK_MARGIN_SECS);
-  const alive = remedies.find((intent) => intent.op.kind === "remedy" && intent.op.decision !== decision && nowSecs < BigInt(intent.op.usable_until) + margin);
+  const chainTime = chainTimeSecs !== null && Number.isSafeInteger(chainTimeSecs) && chainTimeSecs >= 0 ? BigInt(chainTimeSecs) : null;
+  const alive = remedies.find((intent) => intent.op.kind === "remedy" && intent.op.decision !== decision && (chainTime === null || chainTime < BigInt(intent.op.usable_until)));
   if (alive !== undefined && alive.op.kind === "remedy") {
-    return { kind: "hold", why: `an earlier attestation of another remedy decision could still land until ${alive.op.usable_until} (block time); a different decision waits until it cannot` };
+    const seen = chainTime === null ? "the chain's block time was not read" : `the chain's block time is ${chainTime}`;
+    return { kind: "hold", why: `an earlier attestation of another remedy decision could still land until ${alive.op.usable_until} (block time; ${seen}); a different decision waits until it cannot` };
   }
   return { kind: "proceed", retire: remedies.filter((intent) => intent.status === "held") };
 }

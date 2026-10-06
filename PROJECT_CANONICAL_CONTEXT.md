@@ -378,6 +378,17 @@ asset policy, OD-14(b), (c), (e)–(h), OD-15, OD-16, OD-18) are now in §7.3, w
 require explicit owner approval; recommendations, defaults and inferred choices are not rulings. The single status list is
 `docs/phase3/README.md` (at the reconciliation: OD-0, OD-5's policy questions, OD-10(b), a pause-cap confirmation -- ALL ruled by the owner on 2026-10-05; still open: the AUD-04.04 / AUD-08.01 placement and the final tutorial pass's timing).
 
+**Escrow 2.1 timed remedies (2026-10-06, `phase3/preplaytest-escrow21-timeout-remedies`; source / tests / docs only, not merged,
+nothing deployed): CONTRACT AND PROTOCOL SUPPORT ONLY.** Escrow 2.1.0 (`contracts/escrow/README.md`) carries the per-game exit
+policy (Live action clock, Timed Async paces, No-deadline), no IN_PROGRESS standings exit, the universal unanimous neutral
+annulment, the 7-day exceptional review, the dedicated REMEDY key (owner decision R1: `18JUNO/REMEDY/v1`, `18JUNO/REMEDY-APPROVE/v1`)
+and `SubmitRemedy` (the Live 20/30 TimeoutAnnul / N−1 foreclosure, the challengeable third strike, Timed Async remedies final on
+N−1 consensus); the server carries **financial protocol 4** (the durable `submit-remedy` intent, intent schema 2; fixture key
+`dc1-30d893675c773e9b609699e7`). **The server clock / system-pause lane is NOT complete**: until it exists no remedy is attested
+or relayed. Rules 13, settlement `[10, 11, 12, 13]`, the settlement codec and the hosted protocol are unchanged; escrow **2.0.0**
+(JX-1, `5ecc3022…09e8`) stays the canonical money artifact; the 2.1.0 artifact gate (official optimizer, four checkers, gas) is
+the owner's. Record: Project `claude/PHASE3_ESCROW21_TIMED_REMEDY_PASS_2026-10-06.md`.
+
 **LIVE-4 status (2026-09-29): CLOSED.** Integrated at `6da8a1f` (corpus-gate certified), tooled / documented by L4-6
 (`89a4b5b`) and certified by L4-7 (`f1736bf` on it, plus a documentation-only evidence commit). **LIVE-5 is in progress: L5-1 … L5-6 are done and integrated (`e1f1280`); L5-7 (the AWS runtime convergence: the substrate wired into `GS_STORAGE=aws`) is done on its feature branch `live5/l5-7-aws-runtime`, and L5-8 (the AWS infrastructure and deployment: `infra/aws/`, the bootstrap and verifier; nothing deployed) on `live5/l5-8-aws-infrastructure` on top of it, owner gates pending. LIVE-6 L6-1 (non-primary serving and routing) is done on its feature branch `live6/l6-1-nonprimary-routing` (from the L5-7 head), its owner gate pending; LIVE-6 L6-3 (the AWS operator tooling) is done on its own feature branch `live6/l6-3-dynamodb-operator-tooling` from L5-7, its owner gate pending; L6-2 next.**
 (the owner's brief sets its scope; its LIVE-4 inputs are the L4-7 report's handoffs and `LIVE4_COMPATIBILITY_MODEL.md`

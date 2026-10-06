@@ -51,7 +51,6 @@ import {
   isChainIntentRecord,
   junoInstanceOf,
   newChainIntent,
-  REMEDY_FENCE_CLOCK_MARGIN_SECS,
   remedyFence,
   supersededIntent,
   type ChainIntentRecord,
@@ -62,7 +61,7 @@ import { RELAYER_EXECUTE } from "./juno/junoContract";
 import { JUNO_ESCROW_CONTRACT_VERSIONS, parseJunoBackendConfig, verifyJunoDeployment } from "./juno/junoConfig";
 import { publicKeyOf, signDigest } from "./juno/secp256k1";
 import { currentMoneyContinuation, moneyContinuationVerdict } from "./moneyContinuation";
-import { ADMISSION_PUBKEY, CANONICAL_CHECKSUM, CHAIN_ID, CONSENT_KEYS, CONTRACT, GAME_A, RELAYER_ADDRESS, SETTLEMENT_SECRET, VARIANTS, fundedGame, makeWorld, startedGame, type World, type WorldOptions } from "./escrow3bSupport";
+import { ADMISSION_PUBKEY, CANONICAL_CHECKSUM, CHAIN_ID, CONSENT_KEYS, CONTRACT, GAME_A, RELAYER_ADDRESS, SETTLEMENT_SECRET, VARIANTS, WALLETS, fundedGame, makeWorld, startedGame, type World, type WorldOptions } from "./escrow3bSupport";
 
 const sha = (label: string) => createHash("sha256").update(label).digest();
 const n = (value: number) => BigInt(value);
@@ -361,12 +360,13 @@ describe("FP4: the fence -- one remedy decision per game, idempotent, renewed on
     assert.match(String((await store.load(GAME_A, first.intent_id))?.superseded?.why), /replaced by a later remedy intent/);
     /* The renewal expires unused (the relayer supersedes it). ANOTHER decision (e.g. the neutral TimeoutAnnul once a
        foreclosure can no longer land) waits until no earlier attestation of this one can land on chain either -- the
-       retired first one could, until its expiry, if anyone relayed it (a key or an approval made valid again) -- and
-       a clock margin after it. */
+       retired first one could, until its expiry, if anyone relayed it (a key or an approval made valid again): until
+       the chain's OBSERVED block time reached it (never the server's clock; unread: never). */
     await put(store, supersededIntent((await store.load(GAME_A, renewal.intent_id)) as ChainIntentRecord, "the remedy attestation expired", 4));
-    const deadMs = Number(a.expires_at + n(REMEDY_FENCE_CLOCK_MARGIN_SECS)) * 1000;
-    assert.match(JSON.stringify(await prepareRemedyIntent(store, otherDecision, { now: deadMs - 1000 })), new RegExp(`could still land until ${a.expires_at}`));
-    assert.equal((await prepareRemedyIntent(store, otherDecision, { now: deadMs })).kind, "created");
+    const dead = Number(a.expires_at);
+    assert.match(JSON.stringify(await prepareRemedyIntent(store, otherDecision, { now: (dead + 3_600) * 1000 })), new RegExp(`could still land until ${a.expires_at} \\(block time; the chain's block time was not read\\)`));
+    assert.match(JSON.stringify(await prepareRemedyIntent(store, otherDecision, { now: (dead + 3_600) * 1000, chainTime: dead - 1 })), new RegExp(`the chain's block time is ${dead - 1}`));
+    assert.equal((await prepareRemedyIntent(store, otherDecision, { chainTime: dead })).kind, "created");
     /* Confirmed on chain: nothing more is prepared for the game, and the confirmed slot answers `exists` without a poke. */
     await put(store, confirmedIntent((await store.load(GAME_A, otherDecision.intent_id)) as ChainIntentRecord, "chain-state", null, null, "remedy live_foreclose is on chain", 5));
     const third = remedyChainIntent(pureInput({ ...a, attested_at: a.attested_at + n(3_000), expires_at: a.attested_at + n(3_100) }));
@@ -381,12 +381,12 @@ describe("FP4: the fence -- one remedy decision per game, idempotent, renewed on
     const a = pureAttestation(4, { defaulting_seat: 0 });
     const record = remedyChainIntent(pureInput(a, [1, 2]));
     const finalize = newChainIntent({ game_id: GAME_A, instance: INSTANCE, key: { op: "finalize", seq: "9" }, subject: { kind: "digest", digests: [] }, op: { kind: "finalize", chain_game_id: "7", seq: "9" }, msg_json: "{}", now: 1 });
-    assert.deepEqual(remedyFence([], finalize, 0), { kind: "hold", why: "not a remedy intent" });
-    assert.deepEqual(remedyFence([finalize], record, 0), { kind: "proceed", retire: [] }, "other intents of the game do not fence a remedy");
+    assert.deepEqual(remedyFence([], finalize, null), { kind: "hold", why: "not a remedy intent" });
+    assert.deepEqual(remedyFence([finalize], record, null), { kind: "proceed", retire: [] }, "other intents of the game do not fence a remedy");
     /* The same decision attested again never waits on the earlier one's life (whichever lands, it is the same remedy). */
     const expired = supersededIntent(record, "the remedy attestation expired", 2);
     const again = remedyChainIntent(pureInput({ ...a, attested_at: a.attested_at + n(4_000), expires_at: a.attested_at + n(4_600) }, [1, 2]));
-    assert.deepEqual(remedyFence([expired], again, 0), { kind: "proceed", retire: [] });
+    assert.deepEqual(remedyFence([expired], again, null), { kind: "proceed", retire: [] });
     /* The slot is made between the fence's read and the write. */
     const racing = (existing: ChainIntentRecord): ChainIntentStore => {
       const inner = createMemoryChainIntentStore();
@@ -477,7 +477,7 @@ function intentFor(world: World, chainGameId: string, a: RemedyAttestationV1, ap
 }
 
 async function prepare(world: World, record: ChainIntentRecord): Promise<void> {
-  const outcome = await prepareRemedyIntent(world.intents, record, { poke: (gameId, intentId) => world.relayer.poke(gameId, intentId) });
+  const outcome = await prepareRemedyIntent(world.intents, record, { poke: (gameId, intentId) => world.relayer.poke(gameId, intentId), chainTime: world.chain.time });
   assert.equal(outcome.kind, "created", JSON.stringify(outcome));
 }
 
@@ -571,9 +571,9 @@ describe("FP4 end to end: the relayer, the remedy intent and an escrow 2.1.0 gam
        -- but only once the refused foreclosure can no longer land: until its attestation expires, the seat rotating its
        key back would make it valid again, and anyone may relay it. */
     const early = attestationFor(world, chainGameId, 1, { defaulting_seat: 1, attested_at: n(world.chain.time), expires_at: n(world.chain.time + 600) });
-    assert.match(JSON.stringify(await prepareRemedyIntent(world.intents, intentFor(world, chainGameId, early))), /could still land until/);
+    assert.match(JSON.stringify(await prepareRemedyIntent(world.intents, intentFor(world, chainGameId, early), { chainTime: world.chain.time })), /could still land until/);
     assert.equal(await statusOf(world, record), "held", "nothing was retired by the refused prepare");
-    advanceTo(world, Number(fore.expires_at) + REMEDY_FENCE_CLOCK_MARGIN_SECS);
+    advanceTo(world, Number(fore.expires_at));
     const annul = attestationFor(world, chainGameId, 1, { defaulting_seat: 1, attested_at: n(world.chain.time), expires_at: n(world.chain.time + 600) });
     const fallback = intentFor(world, chainGameId, annul);
     await prepare(world, fallback);
@@ -741,6 +741,13 @@ describe("FP4 end to end: the relayer, the remedy intent and an escrow 2.1.0 gam
       assert.equal(bound.ok, false, name);
       assert.match((bound as { detail: string }).detail, why, name);
     }
+    /* A seat held by a trusted resolver's wallet: the contract would refuse to start the game, so it is never bound. */
+    const seated = makeWorld({ remedyKeys: [REMEDY_PUB], remedyGate: OPEN_GATE, extraResolvers: [WALLETS[1]] });
+    assert.ok((await seated.service.createMoneyGame(GAME_A)).ok);
+    const seatedId = await fundedGame(seated, GAME_A, undefined, { live_action_clock: {} });
+    const refusedBind = await seated.service.bindChainGame(GAME_A, seatedId, VARIANTS);
+    assert.equal(refusedBind.ok, false);
+    assert.equal((refusedBind as { code: string }).code, "resolver-wallet");
     const world = makeWorld({ remedyKeys: [REMEDY_PUB], remedyGate: OPEN_GATE });
     assert.ok((await world.service.createMoneyGame(GAME_A)).ok);
     const chainGameId = await fundedGame(world, GAME_A, undefined, { live_action_clock: {} });

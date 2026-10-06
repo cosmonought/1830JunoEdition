@@ -1220,6 +1220,9 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
             ? `the chain game's exit policy is ${String(g.policy)}, not the Live action clock`
             : null;
     if (policyProblem !== null) return { ok: false, code: expect !== null ? "not-the-hosts-escrow" : "terms-mismatch", detail: policyProblem };
+    /* A seat held by a trusted resolver's wallet (a host's own CreateGame included): the contract would refuse to start
+       the game (its resolver would judge its own stake), so it is never bound -- the seats withdraw or the host cancels. */
+    if (g.seats.some((seat) => backend.trust.resolvers.includes(seat.wallet))) return { ok: false, code: "resolver-wallet", detail: "a seat of the chain game is held by an escrow resolver's wallet (it would judge its own stake)" };
     if (expect !== null) {
       const refusal = (detail: string) => ({ ok: false as const, code: "not-the-hosts-escrow", detail });
       if (g.chain_game_id !== chainGameId) return refusal("the chain answered for another game");

@@ -30,8 +30,8 @@ export interface ConductSubject extends SubjectBase {
   armUnevaluated?(ctx: CaseContext, caseId: string, landed: boolean): void;
 }
 
-const REPORTER: ConductParty = { player_id: playerId(1), principal_id: PRINCIPAL, nickname: "Reporter" };
-const REPORTED: ConductParty = { player_id: playerId(2), principal_id: "pr_conformanceconformance02", nickname: "Reported" };
+const REPORTER: ConductParty = { player_id: playerId(1), principal_id: PRINCIPAL, nickname: "Reporter", joined_at: 1 };
+const REPORTED: ConductParty = { player_id: playerId(2), principal_id: "pr_conformanceconformance02", nickname: "Reported", joined_at: 2 };
 const REVIEWER = "pr_conformancereviewer000001";
 
 /** A new case (revision 1) for the fixture game; `note` varies the content without varying the id. */

@@ -31,6 +31,7 @@ import { createDevAuthenticator } from "./identity/devAuthenticator";
 import { createJournalIdentityStore, type JournalIdentityStore } from "./identity/journalStore";
 import { createFileHoldStore } from "./rooms/holdStore";
 import { createFileConductCaseStore } from "./conduct/conductStore";
+import { readOnlyStoreFs } from "./tools/readOnlyFs";
 import { conductReviewersFromEnv, describeConductReviewers } from "./conduct/conductHttpApi";
 import { createFileFinancialGameStore } from "./escrow/financialGameStore";
 import type { FinancialGameRecord } from "./escrow/moneyLifecycle";
@@ -400,6 +401,8 @@ async function main(): Promise<void> {
   /* ESCROW-4: a money table's deal is the escrow's roster source (the chain re-checked at the deal); every other table's
      is the ordinary one. Without a backend, a money table never deals. */
   const noMoneyRoster = new NoMoneyRosterSource();
+  /* Phase 3 (P3-N032): a read-only reader of the stored logs, for re-verifying a conduct case's log pointer. */
+  const conductLogReader = createFileLogStore(dataDir, { fs: readOnlyStoreFs(), warn: () => undefined });
   const server = createGameServer({
     port,
     build,
@@ -444,7 +447,12 @@ async function main(): Promise<void> {
        release (`npm run gamesDoctor -- release`); the audit lines and the status snapshot (`ops/`). */
     holds: createFileHoldStore(dataDir, { writerCheck: () => held.verify() }),
     /* Phase 3 (P3-N032): conduct reports' durable review cases (`conduct/cases/<case_id>.json`), under the same lock. */
-    conduct: { store: createFileConductCaseStore(dataDir, { writerCheck: () => held.verify() }), reviewers: conductReviewers.ok ? conductReviewers.reviewers : new Set<string>() },
+    conduct: {
+      store: createFileConductCaseStore(dataDir, { writerCheck: () => held.verify() }),
+      reviewers: conductReviewers.ok ? conductReviewers.reviewers : new Set<string>(),
+      /* Re-verifying a case of a game that is not resident: the log read through a READ-ONLY file system (no repair). */
+      readLog: (gameId) => conductLogReader.loadLog(gameId),
+    },
     ops,
     statusExtras: () => {
       const health = identityStore.health();

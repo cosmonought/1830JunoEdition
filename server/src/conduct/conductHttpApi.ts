@@ -14,10 +14,15 @@
 //                                                                             one transition, CAS on the revision
 //
 // A REVIEWER is a signed-in account whose USERNAME is on the server's configured list (`GS_CONDUCT_REVIEWERS`, compared
-// by the same canonical login key the sign-in uses). There is no other way to become one: no route grants it, no client
-// claim is read, and an account without a username (a legacy profile) never is. Every review route answers anyone else
-// exactly as a route that does not exist (404 `not-found`). A DECISION also needs the session's live sensitive grant
-// ("Confirm it's you", the same grant a wallet change asks for): 403 `reauth-required` otherwise.
+// by the same canonical login key the sign-in uses) AND held that username when the server started: the names are bound
+// to those accounts' principals once, at startup, so a configured name nobody had registered yet can never be claimed
+// by whoever registers it first. There is no other way to become one: no route grants it, no client claim is read, and
+// an account without a username (a legacy profile) never is. Every review route answers a signed-in non-reviewer
+// 404 `not-found` (after the transport's usual method / origin / body checks, which every `/gs/api/*` route makes
+// first). A DECISION also needs the session's live sensitive grant ("Confirm it's you", the same grant a wallet change
+// asks for): 403 `reauth-required` otherwise. A reviewer never sees -- in the queue, a case or a decision -- a case
+// they are a party to (the reporter, the reported account, or anyone seated at its table): those are answered as cases
+// that do not exist.
 //
 // Reporting itself is not here: a seated player reports through the table's own socket (`room-op report-player`), in
 // the pool that serves the game, where the seat and the committed log are authoritative.
@@ -107,7 +112,7 @@ export function conductReviewersFromEnv(env: Readonly<Record<string, string | un
 export const describeConductReviewers = (reviewers: ReadonlySet<string>): string =>
   reviewers.size === 0
     ? `conduct reports: received and kept for review; NO reviewer is configured (${CONDUCT_REVIEWERS_ENV}) -- nobody can open the review panel`
-    : `conduct reports: received and kept for review; ${reviewers.size} reviewer account(s) configured (${CONDUCT_REVIEWERS_ENV})`;
+    : `conduct reports: received and kept for review; ${reviewers.size} reviewer username(s) configured (${CONDUCT_REVIEWERS_ENV}), bound at startup to the accounts holding them`;
 
 export interface ConductHttpApi {
   readonly allowedOrigins: ReadonlySet<string>;
@@ -116,7 +121,8 @@ export interface ConductHttpApi {
   readonly maxBodyBytes: number;
   readonly now: () => number;
   readonly service: ConductService;
-  /** Canonical login keys (`loginKeyOf`) of the accounts that may review. */
+  /** The PRINCIPALS of the accounts that may review: the configured usernames, bound at startup to the accounts that
+   *  held them then (`gameServer.ts`; never re-resolved per request, so a name registered later is never a reviewer). */
   readonly reviewers: ReadonlySet<string>;
   /** The committed log of a game, for re-verifying a case's pointer (`null`: not readable here now). */
   readonly readLog: (gameId: string) => Promise<readonly ServerLogEntry[] | null>;
@@ -196,9 +202,8 @@ async function serve(request: IncomingMessage, response: ServerResponse, api: Co
     json(response, 403, { error: "profile-required" });
     return;
   }
-  /* The reviewer test: this session's own account, by its username's canonical key. Asked per request. */
-  const username = api.identity.accountDetails(read, now)?.username ?? null;
-  const reviewer = username !== null && api.reviewers.has(loginKeyOf(username));
+  /* The reviewer test: this session's own principal, one of the accounts bound at startup. Asked per request. */
+  const reviewer = api.reviewers.has(auth.principalId);
   if (route === "me") {
     json(response, 200, { ok: true, reviewer: reviewer && api.service.enabled });
     return;

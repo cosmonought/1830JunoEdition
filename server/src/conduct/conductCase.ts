@@ -62,6 +62,16 @@ export const TIMELINE_LIMIT = 200;
 export const CHAT_LINES_LIMIT = 40;
 /** How many review events one case keeps. A case at the limit takes no further decision: history is never dropped. */
 export const MAX_REVIEW_EVENTS = 64;
+/** How many times the same reporter may add to an ACTIVE case about the same account and category ("it is still
+ *  happening"); each addition is charged to the reporter's budget and carries a fresh log pointer and counts. */
+export const MAX_REREPORTS = 8;
+/** How many SUCCESSIVE cases one (game, reporter, reported account, category) may have: a report after the previous case
+ *  was closed opens the next one, fresh evidence and all. */
+export const MAX_CASE_SEQUENCE = 4;
+/** A repeat of an active case is recorded only once the log has moved on, or this long after the last report. */
+export const REREPORT_QUIET_MS = 10 * 60_000;
+/** How many of the parties' chat lines a re-report copies (those newer than the case's last report). */
+export const REREPORT_CHAT_LIMIT = 20;
 /** A stored case's serialized bound (well inside a DynamoDB item and a file store's comfort). */
 export const MAX_CASE_BYTES = 200 * 1024;
 /** A lane's own clock evidence (`ConductReportInput.clock`) is kept only while its JSON stays this small. */
@@ -82,6 +92,8 @@ export interface ConductParty {
   readonly principal_id: string;
   /** The seat's nickname when the report was made (presentation only). */
   readonly nickname: string;
+  /** When this seat was taken (the GameRecord's `joined_at`): a reviewer sees a reporter who sat down a minute ago. */
+  readonly joined_at: number;
 }
 
 export type TimelineParty = "reporter" | "reported" | "other";
@@ -133,8 +145,9 @@ export interface ConductEvidence {
     readonly closed_at: number | null;
     readonly last_activity_at: number;
   };
-  /** The authoritative log, by reference: its first `entries` entries hash to `hash` (`logHash`). */
-  readonly log: { readonly entries: number; readonly hash: string | null; readonly window_from: number | null; readonly window_to: number | null };
+  /** The authoritative log, by reference: its first `entries` entries hash to `hash` (`logHash`). `captured` false: the
+   *  log could not be read into the report (a held game serves no history) -- `entries: 0` then says nothing. */
+  readonly log: { readonly captured: boolean; readonly entries: number; readonly hash: string | null; readonly window_from: number | null; readonly window_to: number | null };
   readonly timeline: readonly TimelineEntry[];
   readonly counts: { readonly reporter: OfferCounts; readonly reported: OfferCounts };
   /** `null`: no chat was available to read. */
@@ -156,19 +169,36 @@ export interface ReviewEvent {
   readonly reviewer: string;
 }
 
+/** The same reporter, again, while the case is still active: "it is still happening" -- a fresh pointer into the log,
+ *  both parties' whole-game counts as they are now, their chat since the last report, and the new note. */
+export interface ReReport {
+  readonly at: number;
+  readonly note: string | null;
+  readonly log: { readonly entries: number; readonly hash: string | null };
+  readonly counts: { readonly reporter: OfferCounts; readonly reported: OfferCounts };
+  readonly chat: readonly ChatEvidenceLine[];
+}
+
 export interface ConductCase {
   readonly format: typeof CONDUCT_CASE_FORMAT;
   readonly version: typeof CONDUCT_CASE_VERSION;
   readonly case_id: string;
+  /** Which successive case of its (game, reporter, reported account, category) this is: 0, then 1 once 0 was closed. */
+  readonly seq: number;
   readonly game_id: string;
   readonly category: ConductReportCategory;
   readonly created_at: number;
   readonly reporter: ConductParty;
   readonly reported: ConductParty;
+  /** SERVER-SIDE ONLY: every seat principal of the table when the report was made. A reviewer seated at that table is a
+   *  party to the case (a collusion partner must not judge it). Never projected. */
+  readonly table_principals: readonly string[];
   /** The reporter's note, sanitized (`checkConductNote`), or null. Shown to reviewers only. */
   readonly note: string | null;
   readonly evidence: ConductEvidence;
-  /** CAS counter: 1 at creation, +1 per review decision. */
+  /** The same reporter's later additions while the case was active (bounded). */
+  readonly rereports: readonly ReReport[];
+  /** CAS counter: 1 at creation, +1 per review decision and per re-report. */
   readonly revision: number;
   readonly status: ConductStatus;
   readonly history: readonly ReviewEvent[];
@@ -179,13 +209,15 @@ export interface ConductCase {
    ================================================================== */
 
 /**
- * The case id: ONE case per (game, reporting account, reported seat, category). A second submission of the same report
- * -- a double click, another tab, a retry after a lost answer, or the same complaint again later in the game -- finds
- * the case that stands instead of making another, so a report is never counted twice and a reporter cannot multiply
- * cases about one player at one table (the reviewer reads the whole game's record anyway).
+ * The case id: one ACTIVE case per (game, reporting account, reported ACCOUNT, category), and at most
+ * `MAX_CASE_SEQUENCE` successive ones. A second submission of the same report -- a double click, another tab, a retry
+ * after a lost answer -- finds the case that stands instead of making another, so a report is never counted twice;
+ * the same complaint again while the case is active is ADDED to it (`addReReport`); after the case was closed it opens
+ * the next case in the sequence. Keyed by the reported principal (server-side), so leaving and retaking a waiting seat
+ * (a new seat id) is the same account.
  */
-export function conductCaseId(gameId: string, reporterPrincipalId: string, reportedPlayerId: string, category: ConductReportCategory): string {
-  const digest = createHash("sha256").update(`18COSMOS/CONDUCT-CASE/v1\u0000${gameId}\u0000${reporterPrincipalId}\u0000${reportedPlayerId}\u0000${category}`, "utf8").digest("hex");
+export function conductCaseId(gameId: string, reporterPrincipalId: string, reportedPrincipalId: string, category: ConductReportCategory, seq: number): string {
+  const digest = createHash("sha256").update(`18COSMOS/CONDUCT-CASE/v1\u0000${gameId}\u0000${reporterPrincipalId}\u0000${reportedPrincipalId}\u0000${category}\u0000${seq}`, "utf8").digest("hex");
   return `cc_${digest.slice(0, 32)}`;
 }
 
@@ -229,7 +261,7 @@ export function entryKind(entry: Pick<ServerLogEntry, "payload">): { readonly ty
   return { type };
 }
 
-const emptyCounts = (): { -readonly [K in keyof OfferCounts]: number } => ({ offers: 0, accepted: 0, declined: 0, rescinded: 0, forgone: 0, undos: 0, passes: 0, actions: 0 });
+export const emptyCounts = (): { -readonly [K in keyof OfferCounts]: number } => ({ offers: 0, accepted: 0, declined: 0, rescinded: 0, forgone: 0, undos: 0, passes: 0, actions: 0 });
 
 function tally(counts: { -readonly [K in keyof OfferCounts]: number }, kind: { type: string; outcome?: "accepted" | "declined" }, derived: boolean): void {
   if (derived) return; // the server's own consequences are not a player's action
@@ -258,17 +290,41 @@ export interface EvidenceInput {
   readonly unreadableHistory?: string;
 }
 
+/** Both parties' whole-game counts (a player's own actions; the server's derived consequences are not counted). */
+export function partyCounts(entries: readonly ServerLogEntry[], reporterPlayerId: string, reportedPlayerId: string): { reporter: OfferCounts; reported: OfferCounts } {
+  const counts = { reporter: emptyCounts(), reported: emptyCounts() };
+  for (const entry of entries) {
+    const party = entry.actor === reporterPlayerId ? "reporter" : entry.actor === reportedPlayerId ? "reported" : null;
+    if (party !== null) tally(counts[party], entryKind(entry), entry.derived === true);
+  }
+  return counts;
+}
+
+/** The committed log's hash at its full length (`null` for an empty log, or one two entries of which claim an index). */
+export function logPointerOf(entries: readonly ServerLogEntry[]): { readonly entries: number; readonly hash: string | null } {
+  const ordered = [...entries].sort((left, right) => left.index - right.index);
+  if (ordered.length === 0) return { entries: 0, hash: null };
+  try {
+    return { entries: ordered.length, hash: logHash(ordered) };
+  } catch {
+    return { entries: ordered.length, hash: null };
+  }
+}
+
+/** The two parties' chat lines, as evidence (newest last, bounded). */
+export function partyChat(chat: readonly RoomChatEntry[], reporter: Pick<ConductParty, "player_id">, reported: Pick<ConductParty, "player_id">, limit: number, after = -1): ChatEvidenceLine[] {
+  return chat
+    .filter((line) => (line.author === reporter.player_id || line.author === reported.player_id) && typeof line.at === "number" && line.at > after)
+    .slice(-limit)
+    .map((line) => ({ id: String(line.id).slice(0, 64), at: line.at, by: line.author === reporter.player_id ? ("reporter" as const) : ("reported" as const), text: String(line.text).slice(0, 600) }));
+}
+
 /** What the server captures for a case, from its own records only. */
 export function deriveEvidence(input: EvidenceInput): ConductEvidence {
   const { record, entries, reporter, reported } = input;
   const ordered = [...entries].sort((left, right) => left.index - right.index);
   const partyOf = (actor: string): TimelineParty => (actor === reporter.player_id ? "reporter" : actor === reported.player_id ? "reported" : "other");
-  const counts = { reporter: emptyCounts(), reported: emptyCounts() };
-  for (const entry of ordered) {
-    const party = partyOf(entry.actor);
-    if (party === "other") continue;
-    tally(counts[party], entryKind(entry), entry.derived === true);
-  }
+  const counts = partyCounts(ordered, reporter.player_id, reported.player_id);
   const window = ordered.slice(-TIMELINE_LIMIT);
   const timeline: TimelineEntry[] = window.map((entry) => {
     const kind = entryKind(entry);
@@ -287,15 +343,7 @@ export function deriveEvidence(input: EvidenceInput): ConductEvidence {
   } catch {
     hash = null; // two entries claiming one index: the pointer is left unbound and the reviewer is told
   }
-  const chat =
-    input.chat === null
-      ? null
-      : {
-          lines: input.chat
-            .filter((line) => line.author === reporter.player_id || line.author === reported.player_id)
-            .slice(-CHAT_LINES_LIMIT)
-            .map((line) => ({ id: String(line.id).slice(0, 64), at: line.at, by: line.author === reporter.player_id ? ("reporter" as const) : ("reported" as const), text: String(line.text).slice(0, 600) })),
-        };
+  const chat = input.chat === null ? null : { lines: partyChat(input.chat, reporter, reported, CHAT_LINES_LIMIT) };
   let clock: unknown = null;
   if (input.clock !== null && input.clock !== undefined) {
     try {
@@ -329,7 +377,7 @@ export function deriveEvidence(input: EvidenceInput): ConductEvidence {
       closed_at: record.closed_at,
       last_activity_at: record.last_activity_at,
     },
-    log: { entries: ordered.length, hash, window_from: window.length > 0 ? window[0].index : null, window_to: window.length > 0 ? window[window.length - 1].index : null },
+    log: { captured: input.unreadableHistory === undefined, entries: ordered.length, hash, window_from: window.length > 0 ? window[0].index : null, window_to: window.length > 0 ? window[window.length - 1].index : null },
     timeline,
     counts,
     chat,
@@ -341,14 +389,15 @@ export function deriveEvidence(input: EvidenceInput): ConductEvidence {
 
 /** Does the authoritative log still begin with exactly the history the case points at? (`null`: cannot be judged.) */
 export function verifyLogPointer(evidence: ConductEvidence, entries: readonly ServerLogEntry[]): { readonly verified: boolean | null; readonly detail: string } {
+  if (!evidence.log.captured) return { verified: null, detail: "The report could not read the game's log (see what was not captured)." };
   if (evidence.log.entries === 0) return { verified: null, detail: "The game had no log entries when the report was made." };
   if (evidence.log.hash === null) return { verified: null, detail: "The case carries no log hash (see what was not captured)." };
   if (entries.length < evidence.log.entries) return { verified: false, detail: `The log now holds ${entries.length} entries, fewer than the ${evidence.log.entries} the report saw.` };
   let now: string;
   try {
     now = logHash(entries, evidence.log.entries);
-  } catch (error) {
-    return { verified: false, detail: `The log could not be hashed: ${error instanceof Error ? error.message : String(error)}` };
+  } catch {
+    return { verified: false, detail: "The log could not be hashed (two entries claim one index)." };
   }
   return now === evidence.log.hash
     ? { verified: true, detail: `The log's first ${evidence.log.entries} entries still hash to the value the report recorded.` }
@@ -367,22 +416,47 @@ export function newConductCase(input: {
   readonly note: string | null;
   readonly evidence: ConductEvidence;
   readonly now: number;
+  readonly seq?: number;
 }): ConductCase {
+  const seq = input.seq ?? 0;
   return {
     format: CONDUCT_CASE_FORMAT,
     version: CONDUCT_CASE_VERSION,
-    case_id: conductCaseId(input.record.game_id, input.reporter.principal_id, input.reported.player_id, input.category),
+    case_id: conductCaseId(input.record.game_id, input.reporter.principal_id, input.reported.principal_id, input.category, seq),
+    seq,
     game_id: input.record.game_id,
     category: input.category,
     created_at: input.now,
     reporter: input.reporter,
     reported: input.reported,
+    table_principals: [...new Set(input.record.seats.map((seat) => seat.principal_id))].slice(0, 16),
     note: input.note,
     evidence: input.evidence,
+    rereports: [],
     revision: 1,
     status: "open",
     history: [],
   };
+}
+
+/** The time of the case's latest report (its creation, or its latest re-report). */
+export const lastReportAt = (value: ConductCase): number => (value.rereports.length === 0 ? value.created_at : value.rereports[value.rereports.length - 1].at);
+/** The log length the case's latest report saw. */
+export const lastReportEntries = (value: ConductCase): number => (value.rereports.length === 0 ? value.evidence.log.entries : value.rereports[value.rereports.length - 1].log.entries);
+
+/** Whether `principalId` is a party to the case: the reporter, the reported account, or anyone seated at that table. */
+export const isCaseParty = (value: ConductCase, principalId: string): boolean =>
+  principalId === value.reporter.principal_id || principalId === value.reported.principal_id || value.table_principals.includes(principalId);
+
+/** The same reporter adds to an ACTIVE case (the caller has checked it is active and charged the budget). */
+export function addReReport(current: ConductCase, input: { readonly at: number; readonly note: string | null; readonly entries: readonly ServerLogEntry[]; readonly chat: readonly RoomChatEntry[] | null }): { readonly next: ConductCase } | { readonly code: "full" | "quiet" } {
+  if (current.rereports.length >= MAX_REREPORTS) return { code: "full" };
+  const pointer = logPointerOf(input.entries);
+  if (pointer.entries <= lastReportEntries(current) && input.at - lastReportAt(current) < REREPORT_QUIET_MS) return { code: "quiet" };
+  const counts = partyCounts([...input.entries].sort((left, right) => left.index - right.index), current.reporter.player_id, current.reported.player_id);
+  const chat = input.chat === null ? [] : partyChat(input.chat, current.reporter, current.reported, REREPORT_CHAT_LIMIT, lastReportAt(current));
+  const rereport: ReReport = { at: input.at, note: input.note, log: pointer, counts, chat };
+  return { next: { ...current, revision: current.revision + 1, rereports: [...current.rereports, rereport] } };
 }
 
 export type DecisionRefusal =
@@ -394,8 +468,8 @@ export type DecisionRefusal =
 /** The next case after a reviewer's decision, or why it is refused. Pure: the store's CAS decides the race. */
 export function decideCase(current: ConductCase, input: { readonly expectedRevision: number; readonly to: ConductStatus; readonly note: string | null; readonly reviewerPrincipalId: string; readonly now: number }): { readonly next: ConductCase } | DecisionRefusal {
   if (current.revision !== input.expectedRevision) return { code: "stale", reason: "This case changed since you opened it. Reload it and decide again." };
-  if (input.reviewerPrincipalId === current.reporter.principal_id || input.reviewerPrincipalId === current.reported.principal_id) {
-    return { code: "party", reason: "You are a party to this case, so another reviewer must decide it." };
+  if (isCaseParty(current, input.reviewerPrincipalId)) {
+    return { code: "party", reason: "You are a party to this case (or were seated at its table), so another reviewer must decide it." };
   }
   if (!conductTransitionAllowed(current.status, input.to)) return { code: "wrong-state", reason: "That status cannot follow the case's current status." };
   if (current.history.length >= MAX_REVIEW_EVENTS) return { code: "history-full", reason: "This case has reached its review-history limit; it takes no further decisions." };
@@ -414,9 +488,16 @@ const timeOrNull = (value: unknown) => value === null || time(value);
 const count = (value: unknown) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 const text = (value: unknown, max: number) => typeof value === "string" && value.length <= max;
 
-const PARTY_KEYS = ["player_id", "principal_id", "nickname"];
+const PARTY_KEYS = ["player_id", "principal_id", "nickname", "joined_at"];
 const isParty = (value: unknown): value is ConductParty =>
-  isObject(value) && exact(value, PARTY_KEYS) && typeof value.player_id === "string" && PLAYER_ID.test(value.player_id) && text(value.principal_id, 64) && (value.principal_id as string).length > 0 && text(value.nickname, 64);
+  isObject(value) &&
+  exact(value, PARTY_KEYS) &&
+  typeof value.player_id === "string" &&
+  PLAYER_ID.test(value.player_id) &&
+  text(value.principal_id, 64) &&
+  (value.principal_id as string).length > 0 &&
+  text(value.nickname, 64) &&
+  time(value.joined_at);
 
 const COUNT_KEYS = ["offers", "accepted", "declined", "rescinded", "forgone", "undos", "passes", "actions"];
 const isCounts = (value: unknown) => isObject(value) && exact(value, COUNT_KEYS) && COUNT_KEYS.every((key) => count(value[key]));
@@ -435,6 +516,29 @@ const isTimelineEntry = (value: unknown) => {
     (value.by === "reporter" || value.by === "reported" || value.by === "other") &&
     typeof value.derived === "boolean" &&
     (value.outcome === undefined || value.outcome === "accepted" || value.outcome === "declined")
+  );
+};
+
+const isChatLines = (value: unknown, limit: number): boolean =>
+  Array.isArray(value) &&
+  value.length <= limit &&
+  value.every((line) => isObject(line) && exact(line, ["id", "at", "by", "text"]) && text(line.id, 64) && time(line.at) && (line.by === "reporter" || line.by === "reported") && text(line.text, 600));
+
+const isReReport = (value: unknown): value is ReReport => {
+  if (!isObject(value) || !exact(value, ["at", "note", "log", "counts", "chat"])) return false;
+  const { log, counts } = value;
+  return (
+    time(value.at) &&
+    (value.note === null || (text(value.note, MAX_REPORT_NOTE_LENGTH * 2) && (value.note as string).length > 0)) &&
+    isObject(log) &&
+    exact(log, ["entries", "hash"]) &&
+    count(log.entries) &&
+    (log.hash === null || (typeof log.hash === "string" && HEX64.test(log.hash))) &&
+    isObject(counts) &&
+    exact(counts, ["reporter", "reported"]) &&
+    isCounts(counts.reporter) &&
+    isCounts(counts.reported) &&
+    isChatLines(value.chat, REREPORT_CHAT_LIMIT)
   );
 };
 
@@ -464,7 +568,8 @@ function isEvidence(value: unknown): value is ConductEvidence {
   }
   if (
     !isObject(log) ||
-    !exact(log, ["entries", "hash", "window_from", "window_to"]) ||
+    !exact(log, ["captured", "entries", "hash", "window_from", "window_to"]) ||
+    typeof log.captured !== "boolean" ||
     !count(log.entries) ||
     !(log.hash === null || (typeof log.hash === "string" && HEX64.test(log.hash))) ||
     !(log.window_from === null || count(log.window_from)) ||
@@ -475,10 +580,7 @@ function isEvidence(value: unknown): value is ConductEvidence {
   if (!Array.isArray(timeline) || timeline.length > TIMELINE_LIMIT || !timeline.every(isTimelineEntry)) return false;
   if (!isObject(counts) || !exact(counts, ["reporter", "reported"]) || !isCounts(counts.reporter) || !isCounts(counts.reported)) return false;
   if (chat !== null) {
-    if (!isObject(chat) || !exact(chat, ["lines"]) || !Array.isArray(chat.lines) || chat.lines.length > CHAT_LINES_LIMIT) return false;
-    for (const line of chat.lines) {
-      if (!isObject(line) || !exact(line, ["id", "at", "by", "text"]) || !text(line.id, 64) || !time(line.at) || !(line.by === "reporter" || line.by === "reported") || !text(line.text, 600)) return false;
-    }
+    if (!isObject(chat) || !exact(chat, ["lines"]) || !isChatLines(chat.lines, CHAT_LINES_LIMIT)) return false;
   }
   if (money !== null && (!isObject(money) || !exact(money, ["phase", "held"]) || !(money.phase === null || text(money.phase, 32)) || typeof money.held !== "boolean")) return false;
   if (!Array.isArray(notCaptured) || notCaptured.length > 16 || !notCaptured.every((line) => text(line, 300))) return false;
@@ -496,7 +598,7 @@ const isReviewEvent = (value: unknown): value is ReviewEvent =>
   typeof value.reviewer === "string" &&
   FINGERPRINT.test(value.reviewer);
 
-export const CASE_KEYS = ["format", "version", "case_id", "game_id", "category", "created_at", "reporter", "reported", "note", "evidence", "revision", "status", "history"] as const;
+export const CASE_KEYS = ["format", "version", "case_id", "seq", "game_id", "category", "created_at", "reporter", "reported", "table_principals", "note", "evidence", "rereports", "revision", "status", "history"] as const;
 
 export function isConductCase(value: unknown): value is ConductCase {
   if (!isObject(value) || !exact(value, CASE_KEYS)) return false;
@@ -504,15 +606,18 @@ export function isConductCase(value: unknown): value is ConductCase {
   if (typeof value.case_id !== "string" || !CASE_ID_PATTERN.test(value.case_id)) return false;
   if (typeof value.game_id !== "string" || !GAME_ID_PATTERN.test(value.game_id)) return false;
   if (!isConductReportCategory(value.category) || !time(value.created_at)) return false;
-  if (!isParty(value.reporter) || !isParty(value.reported) || value.reporter.player_id === value.reported.player_id) return false;
+  if (!(typeof value.seq === "number" && Number.isSafeInteger(value.seq) && value.seq >= 0 && value.seq < MAX_CASE_SEQUENCE)) return false;
+  if (!isParty(value.reporter) || !isParty(value.reported) || value.reporter.player_id === value.reported.player_id || value.reporter.principal_id === value.reported.principal_id) return false;
+  if (!Array.isArray(value.table_principals) || value.table_principals.length > 16 || !value.table_principals.every((entry) => text(entry, 64) && (entry as string).length > 0)) return false;
+  if (!Array.isArray(value.rereports) || value.rereports.length > MAX_REREPORTS || !value.rereports.every(isReReport)) return false;
   if (!(value.note === null || (text(value.note, MAX_REPORT_NOTE_LENGTH * 2) && (value.note as string).length > 0))) return false;
   if (!isEvidence(value.evidence)) return false;
   if (!(typeof value.revision === "number" && Number.isSafeInteger(value.revision) && value.revision >= 1)) return false;
   if (!isConductStatus(value.status)) return false;
   if (!Array.isArray(value.history) || value.history.length > MAX_REVIEW_EVENTS || !value.history.every(isReviewEvent)) return false;
-  /* The revision counts the decisions, and the status is the last decision's (or "open"): a case cannot disagree with
-     its own history. */
-  if (value.revision !== value.history.length + 1) return false;
+  /* The revision counts the decisions and the re-reports, and the status is the last decision's (or "open"): a case
+     cannot disagree with its own history. */
+  if (value.revision !== value.history.length + value.rereports.length + 1) return false;
   const last = value.history[value.history.length - 1] as ReviewEvent | undefined;
   if ((last?.to ?? "open") !== value.status) return false;
   return true;

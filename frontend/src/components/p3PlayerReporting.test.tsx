@@ -202,6 +202,8 @@ describe("P3-N032 the note, the closed frame and the workflow", () => {
     expect(checkConductNote(7)).toEqual({ ok: false, problem: "malformed" });
     expect(checkConductNote("x".repeat(MAX_REPORT_NOTE_LENGTH + 1))).toEqual({ ok: false, problem: "too-long" });
     expect(checkConductNote("😀".repeat(MAX_REPORT_NOTE_LENGTH))).toEqual({ ok: true, note: "😀".repeat(MAX_REPORT_NOTE_LENGTH) });
+    /* NFC can lengthen a text: measured again after cleaning, refused rather than cut. */
+    expect(checkConductNote("\ufb2c".repeat(MAX_REPORT_NOTE_LENGTH))).toEqual({ ok: false, problem: "too-long" });
   });
 
   test("`report-player` is a closed room op: a seat id, a known category, a bounded note -- nothing else", () => {
@@ -211,7 +213,8 @@ describe("P3-N032 the note, the closed frame and the workflow", () => {
     expect(frame({ playerId: "p-bbbbbbbbbbbbbbbb", category: "cheating" }).ok).toBe(false);
     expect(frame({ playerId: "p-bbbbbbbbbbbbbbbb" }).ok).toBe(false);
     expect(frame({ playerId: "pr_secret", category: "other" }).ok).toBe(false);
-    expect(frame({ playerId: "p-bbbbbbbbbbbbbbbb", category: "other", note: "x".repeat(MAX_REPORT_NOTE_LENGTH + 1) }).ok).toBe(false);
+    expect(frame({ playerId: "p-bbbbbbbbbbbbbbbb", category: "other", note: "x".repeat(MAX_REPORT_NOTE_LENGTH * 2 + 1) }).ok).toBe(false);
+    expect(frame({ playerId: "p-bbbbbbbbbbbbbbbb", category: "other", note: "😀".repeat(MAX_REPORT_NOTE_LENGTH) }).ok).toBe(true);
     expect(frame({ playerId: "p-bbbbbbbbbbbbbbbb", category: "other", evidence: {} }).ok).toBe(false);
     expect(frame({ playerId: "p-bbbbbbbbbbbbbbbb", category: "other", reporter: "p-x" }).ok).toBe(false);
   });
@@ -228,20 +231,21 @@ describe("P3-N032 the note, the closed frame and the workflow", () => {
    ================================================================== */
 
 const CASE_ID = `cc_${"a".repeat(32)}`;
-const party = (playerId: string, nickname: string, account: string) => ({ playerId, nickname, account });
+const party = (playerId: string, nickname: string, account: string) => ({ playerId, nickname, account, joinedAt: 1_779_999_000_000 });
 const summary = (over: Record<string, unknown> = {}) => ({
   caseId: CASE_ID,
   gameId: "g_0000000000000000000000000w",
   category: "offer-spam",
   categoryLabel: "Abusive trade-offer spam",
   createdAt: 1_780_000_000_000,
+  lastReportAt: 1_780_000_000_000,
+  reports: 1,
   status: "open",
   statusLabel: "Open",
   revision: 1,
   reporter: party("p-aaaaaaaaaaaaaaaa", "Ann", "acct-0123456789ab"),
   reported: party("p-bbbbbbbbbbbbbbbb", "Ben", "acct-ba9876543210"),
   hasNote: true,
-  youAreParty: false,
   ...over,
 });
 const counts = { offers: 6, accepted: 0, declined: 0, rescinded: 1, forgone: 0, undos: 0, passes: 0, actions: 7 };
@@ -254,7 +258,7 @@ const caseBody = (over: Record<string, unknown> = {}) => ({
     server_build: "b1",
     rules: { deal_pin: 13, engine: 13 },
     table: { visibility: "public", status: "active", money: false, seats: 3 },
-    log: { entries: 14, hash: "f".repeat(64), window_from: 0, window_to: 13 },
+    log: { captured: true, entries: 14, hash: "f".repeat(64), window_from: 0, window_to: 13 },
     timeline: [{ i: 1, at: 1_780_000_001_000, type: "ProposeTrainPurchase", by: "reported", derived: false }, { i: 2, at: 1_780_000_002_000, type: "AnswerTrainPurchase", by: "reporter", derived: false, outcome: "declined" }],
     counts: { reporter: { ...counts, offers: 0, declined: 6, rescinded: 0, actions: 6 }, reported: counts },
     chat: { lines: [{ id: "c1", at: 1_780_000_003_000, by: "reported", text: "lol" }] },
@@ -262,8 +266,9 @@ const caseBody = (over: Record<string, unknown> = {}) => ({
     clock: null,
     not_captured: ["Overdue and foreclosure events: this build has no such events."],
   },
+  rereports: [],
   history: [],
-  related: { total: 2, active: 1 },
+  related: { total: 2, active: 1, reporters: 1, games: 2, confirmed: 0, closedNoViolation: 1, known: true },
   verification: { verified: true, detail: "The log's first 14 entries still hash to the value the report recorded." },
   ...over,
 });
@@ -291,6 +296,8 @@ describe("P3-N032 the review panel", () => {
     expect(caseSummaryOf(summary())).not.toBeNull();
     expect(caseSummaryOf(summary({ reporter: party("p-aaaaaaaaaaaaaaaa", "Ann", "pr_0123456789") }))).toBeNull();
     expect(caseSummaryOf(summary({ caseId: "../etc" }))).toBeNull();
+    expect(caseViewOf(caseBody({ rereports: [{ at: 1, note: "again", log: { entries: 15, hash: "e".repeat(64) }, counts: { reporter: counts, reported: counts }, chat: [] }] }))?.rereports.length).toBe(1);
+    expect(caseViewOf(caseBody({ rereports: [{ at: 1, note: "again" }] }))).toBeNull();
     const view = caseViewOf(caseBody());
     expect(view).not.toBeNull();
     expect(JSON.stringify(view)).not.toMatch(/\bpr_|\bpf_|\bse_|\bsf_|\brk_/);
@@ -310,7 +317,7 @@ describe("P3-N032 the review panel", () => {
     expect(byId("conduct-case-verification")?.textContent).toMatch(/Verified/);
     expect(byId("conduct-case-counts")?.textContent).toMatch(/Offers made06/);
     expect(byId("conduct-case-chat")?.textContent).toMatch(/lol/);
-    expect(byId("conduct-case-related")?.textContent).toBe("2 (1 waiting)");
+    expect(byId("conduct-case-related")?.textContent).toBe("2 (1 waiting) · from 1 reporter(s) at 2 table(s) · 0 confirmed, 1 no violation");
     const select = byId("conduct-decision-status") as HTMLSelectElement;
     expect(Array.from(select.options).map((option) => option.value)).toEqual(["", ...CONDUCT_TRANSITIONS.open]);
     act(() => {
@@ -324,7 +331,7 @@ describe("P3-N032 the review panel", () => {
     expect(decide?.body).toEqual({ caseId: CASE_ID, revision: 1, status: "under-review", note: null });
   });
 
-  test("a stale case offers a reload; a party is never offered a decision", async () => {
+  test("a stale case offers a reload; a case the server will not serve (a party's) says so and offers nothing", async () => {
     const server = reviewServer();
     server.queue("/gs/api/conduct/review/queue", 200, { ok: true, cases: [summary()], unreadable: 1 });
     server.queue("/gs/api/conduct/review/case", 200, { ok: true, case: caseBody() });
@@ -345,13 +352,13 @@ describe("P3-N032 the review panel", () => {
     expect(byId("conduct-decision-reload")).not.toBeNull();
 
     const partyServer = reviewServer();
-    partyServer.queue("/gs/api/conduct/review/queue", 200, { ok: true, cases: [summary({ youAreParty: true })], unreadable: 0 });
-    partyServer.queue("/gs/api/conduct/review/case", 200, { ok: true, case: caseBody({ youAreParty: true }) });
+    partyServer.queue("/gs/api/conduct/review/queue", 200, { ok: true, cases: [summary()], unreadable: 0 });
+    partyServer.queue("/gs/api/conduct/review/case", 404, { error: "no-such-case" });
     act(() => show(<ConductReviewPanel key="party" onClose={() => undefined} port={partyServer.port} />));
     await flush();
     click(`conduct-case-${CASE_ID}`);
     await flush();
-    expect(byId("conduct-case-party")).not.toBeNull();
+    expect(byId("conduct-review-error")?.textContent).toMatch(/no longer exists/);
     expect(byId("conduct-decision-status")).toBeNull();
   });
 

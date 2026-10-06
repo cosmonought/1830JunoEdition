@@ -94,6 +94,8 @@ export function checkConductNote(raw: unknown, max: number = MAX_REPORT_NOTE_LEN
   if (Array.from(raw).length > max) return { ok: false, problem: "too-long" };
   /* Whitespace first (a newline is a control character and would otherwise glue two words together). */
   const spaced = raw.replace(/\s+/g, " ");
-  const clean = sanitizeText(spaced, max).replace(/ {2,}/g, " ").trim();
+  /* Cleaned with no cut (NFC can lengthen a text), then measured again: a note is refused, never shortened. */
+  const clean = sanitizeText(spaced, Number.MAX_SAFE_INTEGER).replace(/ {2,}/g, " ").trim();
+  if (Array.from(clean).length > max) return { ok: false, problem: "too-long" };
   return { ok: true, note: clean === "" ? null : clean };
 }

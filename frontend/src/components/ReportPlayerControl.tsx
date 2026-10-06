@@ -16,7 +16,8 @@
 // with at least one other seat. A watcher, a visitor, a Watch tab and a sandbox see nothing (the server refuses them
 // anyway: `roomAuthz` "report", and a visitor's socket never carries the frame). The wording is neutral and factual
 // (`conductReport.ts`), the note is short on purpose (the counter shows the bound; a longer note is refused, never cut),
-// and a second report of the same player for the same thing is answered "already received" -- never a second case.
+// and a second report of the same player for the same thing is never a second case: while the first is open it is ADDED
+// to it (with the game's record as it is then) once the game has moved on, and otherwise answered "already received".
 
 import React, { useId, useState } from "react";
 
@@ -111,7 +112,7 @@ export function ReportPlayerDialog({ players, onReport, onClose }: ReportPlayerD
         {outcome !== null ? (
           <>
             <p style={styles.notice} role="status" data-testid="report-player-received">
-              {outcome.already ? "Already received." : "Report received."}
+              {outcome.received === "already" ? "Already received." : outcome.received === "added" ? "Added to your earlier report." : "Report received."}
             </p>
             <p style={styles.text}>{outcome.message}</p>
             <div style={styles.row}>
@@ -129,7 +130,7 @@ export function ReportPlayerDialog({ players, onReport, onClose }: ReportPlayerD
             }}
           >
             <p style={styles.lead} data-testid="report-player-explainer">
-              Reports go to the operator for review. A report does not change the game, any money, or anyone's profile, and the other player is not told. The reviewer reads this game's own record — moves, offers, timing and chat — so you don't need to copy anything.
+              Reports go to the operator for review. A report does not change the game, any money, or anyone's profile, and the other player is not told. The server attaches this game's own record — moves, offers, timing and chat — so you don't need to copy anything. If it keeps happening, report it again later: it is added to your earlier report.
             </p>
             <fieldset style={fieldset}>
               <legend style={styles.subheading}>Player</legend>

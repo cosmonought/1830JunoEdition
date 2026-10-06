@@ -786,7 +786,7 @@ export const MAX_CHAT_TEXT_LENGTH = 500;
    A seated player reports another seat of the same table (`room-op report-player`). The categories are a CLOSED list
    (the wording players see lives in `utils/conductReport.ts`); the note is optional and short on purpose (a sentence or
    two -- the evidence is the server's, derived from its own records, never the reporter's). A longer note is refused,
-   never truncated. */
+   never truncated. The bound counts characters (code points); the frame allows twice as many UTF-16 units. */
 export const CONDUCT_REPORT_CATEGORIES = ["stalling", "offer-spam", "harassment", "collusion", "other"] as const;
 export type ConductReportCategory = (typeof CONDUCT_REPORT_CATEGORIES)[number];
 export const MAX_REPORT_NOTE_LENGTH = 500;
@@ -917,7 +917,9 @@ const ROOM_OPS: Readonly<Record<string, FrameFields>> = nullTable<FrameFields>({
     type: req(str(16)),
     playerId: req(str(40, PLAYER_ID_PATTERN)),
     category: req(isConductReportCategory),
-    note: opt(str(MAX_REPORT_NOTE_LENGTH)),
+    /* UTF-16 units here (twice the bound: an emoji is two); the bound itself is in characters, checked by the server's
+       one sanitizer (`checkConductNote`), which refuses -- never cuts -- a longer note. */
+    note: opt(str(MAX_REPORT_NOTE_LENGTH * 2)),
   }),
 });
 

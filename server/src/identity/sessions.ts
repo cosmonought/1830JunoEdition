@@ -2460,6 +2460,15 @@ export class IdentityService {
     return this.families.get(familyId);
   }
 
+  /** The ACTIVE principal behind a username (canonical key), or null: for binding an operator-configured list of
+   *  accounts (by username) to the accounts that exist NOW -- a name nobody holds yet binds nothing. Server-side only. */
+  principalOfUsername(name: string): string | null {
+    const profileId = this.profileOfLogin.get(loginKeyOf(name));
+    const profile = profileId === undefined ? undefined : this.profiles.get(profileId);
+    if (profile === undefined || profile.status !== "active") return null;
+    return this.activeProfileOf(profile.principal_id) === null ? null : profile.principal_id;
+  }
+
   /** Test support: a profile's stored shape (the tests assert no plaintext key is in it). */
   peekProfileOf(principalId: string): Readonly<Profile> | undefined {
     const id = this.profileOfPrincipal.get(principalId);

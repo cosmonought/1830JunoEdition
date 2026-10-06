@@ -282,7 +282,14 @@ export interface GameServerOptions {
   /** Phase 3 (P3-N032): conduct reports. `store`: the durable case store (`start.ts` the file store, the AWS runtime the
    *  DynamoDB one); absent or null, every report is refused `unavailable` (never kept in memory only). `reviewers`: the
    *  canonical login keys of the accounts that may open the review panel (`GS_CONDUCT_REVIEWERS`; none when absent). */
-  conduct?: { readonly store: ConductCaseStore | null; readonly reviewers?: ReadonlySet<string>; readonly reporterBudget?: BucketSpec };
+  conduct?: {
+    readonly store: ConductCaseStore | null;
+    readonly reviewers?: ReadonlySet<string>;
+    readonly reporterBudget?: BucketSpec;
+    /** A READ-ONLY reader of a game's committed log, for re-verifying a case whose game is not resident here (no claim,
+     *  no load, no repair, no write). Absent: such a case says "not loaded here; open the table". */
+    readonly readLog?: (gameId: string) => Promise<readonly ServerLogEntry[] | null>;
+  };
   /** LIVE-3C: the terminal seam ESCROW-3 plugs into (`rooms/lifecycle.ts`). No-money when absent. */
   settlement?: SettlementLifecycle;
   /** LIVE-4 (L4-2): THIS POOL'S DEPLOYMENT CAPABILITY, built once at startup (`start.ts`: `thisDeploymentCapability` over
@@ -1502,15 +1509,33 @@ export function createGameServer(options: GameServerOptions): {
   const trustLimiter = createTrustLimiter(identityNow);
   /* Phase 3 (P3-N032): `/gs/api/conduct/*` -- the review routes (reviewers only; reporting is the table's room op). */
   const conductLimiter = createConductLimiter(identityNow);
-  const conductReviewers: ReadonlySet<string> = options.conduct?.reviewers ?? new Set<string>();
-  /** A game's committed log, for re-verifying a case's pointer: through the registry like any reader's load; a game this
-   *  pool cannot serve (held, incompatible, routed elsewhere) answers null -- "cannot be verified here now". */
-  const committedLogOf = async (gameId: string) => {
-    try {
-      const actor = await games.get(gameId);
-      const view = actor.view;
+  /* The configured reviewer USERNAMES are bound to the accounts that hold them NOW, at startup: a name nobody holds yet
+     binds nothing (it cannot be claimed later by whoever registers it first -- a reviewer account is made first, then
+     the server is restarted with its name). Reviewers are then recognised by their principal, server-side. */
+  const conductReviewers = new Set<string>();
+  const unboundReviewers: string[] = [];
+  for (const key of options.conduct?.reviewers ?? []) {
+    const principal = identity.principalOfUsername(key);
+    if (principal === null) unboundReviewers.push(key);
+    else conductReviewers.add(principal);
+  }
+  if (unboundReviewers.length > 0) {
+    // eslint-disable-next-line no-console
+    console.warn(`  conduct: GS_CONDUCT_REVIEWERS names ${unboundReviewers.length} username(s) no account holds now (${unboundReviewers.join(", ")}): they are NOT reviewers this run. Create the account, then restart.`);
+  }
+  /** A game's committed log, for re-verifying a case's pointer -- READ-ONLY: a resident game's committed view, else the
+   *  configured read-only reader. Never `games.get` (that claims and loads a game, and a load can repair or hold it): a
+   *  reviewer opening a case must not move any game. Null: "not readable here now". */
+  const committedLogOf = async (gameId: string): Promise<readonly ServerLogEntry[] | null> => {
+    const resident = games.peek(gameId);
+    if (resident !== undefined) {
+      const view = resident.view;
       if (view.record === null || view.incompatible !== null || isMaintenanceHold(view.hold)) return null;
       return view.entries;
+    }
+    if (options.conduct?.readLog === undefined) return null;
+    try {
+      return await options.conduct.readLog(gameId);
     } catch {
       return null;
     }

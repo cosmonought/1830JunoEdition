@@ -42,6 +42,7 @@
 // Every check is reported (name, ok, detail); nothing is skipped silently: a part the caller did not ask for is reported
 // "skipped" by name, and a missing evidence file is a failure.
 
+import { conductReviewersFromEnv } from "../../conduct/conductHttpApi";
 import * as fs from "fs";
 import * as path from "path";
 
@@ -91,7 +92,8 @@ export const CACHING_DISABLED_POLICY_ID = "4135ea2d-6df8-44a3-9df3-4b5a84be39ad"
 /** L5-7 §14: the task's environment, exactly (ESCROW_MONEY_TABLES only as the non-mainnet staging switch; LIVE-6 L6-6:
  *  GS_EDGE_DIAGNOSTIC only as the staging certification's edge mirror, `staging`). */
 export const TASK_ENVIRONMENT_REQUIRED: readonly string[] = Object.freeze(["GS_MODE", "GS_STORAGE", "GS_AWS_CONFIG_PARAMETER", "BUILD_ID", "PORT", "GS_ALLOWED_ORIGINS", "GS_TRUSTED_PROXY_HOPS"]);
-export const TASK_ENVIRONMENT_OPTIONAL: readonly string[] = Object.freeze(["ESCROW_MONEY_TABLES", "GS_EDGE_DIAGNOSTIC"]);
+/** Phase 3 (P3-N032): GS_CONDUCT_REVIEWERS -- the usernames that may review conduct reports (a list of usernames, no secret). */
+export const TASK_ENVIRONMENT_OPTIONAL: readonly string[] = Object.freeze(["ESCROW_MONEY_TABLES", "GS_EDGE_DIAGNOSTIC", "GS_CONDUCT_REVIEWERS"]);
 export const TASK_ENVIRONMENT_FORBIDDEN: readonly string[] = Object.freeze(["DATA_DIR", "ESCROW_JUNO_CONFIG", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"]);
 
 /* ------------------------------------------------------------------ */
@@ -362,6 +364,7 @@ export function checkTaskDefinitionEvidence(pool: string, doc: Json, expect: { r
     env.get("PORT") === String(expect.port) ? null : `PORT=${env.get("PORT")} (the container port is ${expect.port})`,
     !env.has("ESCROW_MONEY_TABLES") || env.get("ESCROW_MONEY_TABLES") === "nonmainnet" ? null : `ESCROW_MONEY_TABLES=${env.get("ESCROW_MONEY_TABLES")}`,
     !env.has("GS_EDGE_DIAGNOSTIC") || (env.get("GS_EDGE_DIAGNOSTIC") === "staging" && !/^prod/.test(expect.environment)) ? null : `GS_EDGE_DIAGNOSTIC=${env.get("GS_EDGE_DIAGNOSTIC")} (the staging edge mirror; never in ${expect.environment})`,
+    !env.has("GS_CONDUCT_REVIEWERS") || conductReviewersFromEnv({ GS_CONDUCT_REVIEWERS: env.get("GS_CONDUCT_REVIEWERS") }).ok ? null : "GS_CONDUCT_REVIEWERS is not a list of usernames",
   ].filter((p): p is string => p !== null);
   checks.push(judge(`${label}: environment values`, values.length === 0, "production, aws, this pool's runtime document", values.join("; ")));
   const ports = arr(game.portMappings).map((p) => obj(p).containerPort);

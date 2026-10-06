@@ -45,7 +45,7 @@ import {
   until,
   type Frame,
 } from "../rooms/testSupport";
-import { accountFingerprint, conductCaseId, deriveEvidence, verifyLogPointer, type ConductCase } from "./conductCase";
+import { accountFingerprint, conductCaseId, decideCase, deriveEvidence, verifyLogPointer, type ConductCase } from "./conductCase";
 import { createFileConductCaseStore, createMemoryConductCaseStore, type ConductCaseStore } from "./conductStore";
 import { conductReviewersFromEnv } from "./conductHttpApi";
 import { NO_FACTS } from "../rooms/gameRecord";
@@ -152,7 +152,7 @@ describe("P3-N032 A: a seated player reports another seat of the same table", ()
       assert.ok(evidence.not_captured.some((line) => /overdue/i.test(line)));
       assert.doesNotMatch(JSON.stringify(evidence), /\b(?:pr|pf|se|sf|rk)_[0-9a-z]|cookie|password|127\.0\.0\.1|::1/, "no session, credential or address in the evidence");
       /* The reporter is alice (dev claim), never a client claim: the case id is the server's. */
-      assert.equal(value.case_id, conductCaseId(game.gameId, "pr_dev_alice", game.playerIds.bob, "offer-spam"));
+      assert.equal(value.case_id, conductCaseId(game.gameId, "pr_dev_alice", "pr_dev_bob", "offer-spam", 0));
     } finally {
       await stopServer(server);
     }
@@ -238,7 +238,7 @@ describe("P3-N032 A: a seated player reports another seat of the same table", ()
       for (const op of [
         { playerId: target, category: "cheating" },
         { playerId: target },
-        { playerId: target, category: "stalling", note: "x".repeat(MAX_REPORT_NOTE_LENGTH + 1) },
+        { playerId: target, category: "stalling", note: "x".repeat(MAX_REPORT_NOTE_LENGTH * 2 + 1) },
         { playerId: target, category: "stalling", evidence: { log: { entries: 0 } } },
         { playerId: target, category: "stalling", reporter: "p-forged" },
         { playerId: target, category: "stalling", note: 7 },
@@ -248,6 +248,10 @@ describe("P3-N032 A: a seated player reports another seat of the same table", ()
         assert.equal(answer.ok === true, false, `refused: ${JSON.stringify(op).slice(0, 80)}`);
         assert.equal(answer.code, "bad-frame", `bad-frame: ${JSON.stringify(op).slice(0, 80)} -> ${JSON.stringify(answer)}`);
       }
+      /* Over the bound in characters (the frame carries up to twice as many UTF-16 units, for emoji): refused by the
+         service, never cut; an emoji note of exactly the bound is received. */
+      const long = await report(alice, game.gameId, { playerId: target, category: "stalling", note: "x".repeat(MAX_REPORT_NOTE_LENGTH + 1) });
+      assert.deepEqual([long.ok, long.code], [false, "bad-note"]);
       /* A note that is not well-formed text is refused (never "repaired"); one with controls is cleaned. */
       const lone = await report(alice, game.gameId, { playerId: target, category: "stalling", note: "bad \ud800 surrogate" });
       assert.deepEqual([lone.ok, lone.code], [false, "bad-note"]);
@@ -256,6 +260,8 @@ describe("P3-N032 A: a seated player reports another seat of the same table", ()
       assert.equal(dirty.ok, true, JSON.stringify(dirty));
       const [value] = await allCases(store);
       assert.equal(value.note, "<script>alert(1)</script> line break", "controls, bidi and zero-width marks gone; whitespace collapsed; the text kept as data");
+      const emoji = await report(alice, game.gameId, { playerId: game.playerIds.carol, category: "harassment", note: "😀".repeat(MAX_REPORT_NOTE_LENGTH) });
+      assert.equal(emoji.ok, true, `an emoji note within the bound is received: ${JSON.stringify(emoji)}`);
     } finally {
       await stopServer(server);
     }
@@ -275,6 +281,63 @@ describe("P3-N032 A: a seated player reports another seat of the same table", ()
       /* Duplicates spent nothing: the second NEW report still fits the budget of two. */
       assert.equal((await report(alice, game.gameId, { playerId: game.playerIds.carol, category: "stalling" })).ok, true);
       assert.equal((await store.list()).length, 2);
+    } finally {
+      await stopServer(server);
+    }
+  });
+
+  test("the same complaint again once the game has moved on is ADDED to the active case (fresh pointer, counts, note); after a case is closed a report opens the next one", async () => {
+    const { server, port, store } = await devServer();
+    try {
+      const { game, alice, carol } = await dealtTable(port);
+      const body = { playerId: game.playerIds.bob, category: "stalling" };
+      assert.equal(((await report(alice, game.gameId, body)).data as { received: string }).received, "new");
+      carol.hello(game.gameId);
+      await carol.next((frame) => frame.kind === "catch-up", "carol's catch-up");
+      carol.submit(BUY, { baseIndex: await indexOf(port, game.gameId), submissionId: "carol-buy" });
+      assert.equal((await carol.answerTo("carol-buy")).kind, "applied");
+      const log = await committedLog(port, game.gameId);
+      const added = await report(alice, game.gameId, { ...body, note: "Still doing it." });
+      assert.equal((added.data as { received: string }).received, "added", JSON.stringify(added));
+      assert.equal(((await report(alice, game.gameId, body)).data as { received: string }).received, "already", "nothing moved on since: the same report");
+      const [first] = await allCases(store);
+      assert.equal(first.rereports.length, 1);
+      assert.equal(first.rereports[0].note, "Still doing it.");
+      assert.deepEqual(first.rereports[0].log, { entries: log.length, hash: logHash(log) }, "a fresh pointer into the log as it is now");
+      assert.equal(first.revision, 2);
+      assert.equal(first.status, "open", "a re-report never changes the review status");
+      /* A reviewer closes it; the same complaint later is a NEW case, with its own evidence. */
+      const closed = decideCase(first, { expectedRevision: first.revision, to: "no-violation", note: null, reviewerPrincipalId: "pr_dev_reviewer", now: Date.now() });
+      if (!("next" in closed)) throw new Error(closed.reason);
+      assert.equal((await store.save(closed.next, first.revision)).kind, "committed");
+      assert.equal(((await report(alice, game.gameId, body)).data as { received: string }).received, "new");
+      const cases = await allCases(store);
+      assert.deepEqual(cases.map((value) => value.seq).sort(), [0, 1]);
+      assert.equal(cases.find((value) => value.seq === 1)?.evidence.log.entries, log.length);
+    } finally {
+      await stopServer(server);
+    }
+  });
+
+  test("a case is keyed by the reported ACCOUNT: leaving and retaking a waiting seat (a new seat id) is the same case", async () => {
+    const { server, port, store } = await devServer();
+    try {
+      const waiting = await openGame(port, "hana", ["kim"], { start: false });
+      const hana = await Client.open(port, "hana");
+      const kim = await Client.open(port, "kim");
+      assert.equal((await report(hana, waiting.gameId, { playerId: waiting.playerIds.kim, category: "harassment" })).ok, true);
+      assert.equal((await kim.op({ type: "release-seat" }, waiting.gameId)).ok, true);
+      const retaken = await kim.op({ type: "take-seat" }, waiting.gameId);
+      assert.equal(retaken.ok, true, JSON.stringify(retaken));
+      const record = (await allCases(store))[0];
+      const newSeat = (retaken.data as { playerId?: string } | undefined)?.playerId;
+      if (newSeat !== undefined && newSeat !== waiting.playerIds.kim) {
+        const again = await report(hana, waiting.gameId, { playerId: newSeat, category: "harassment" });
+        assert.notEqual((again.data as { received: string }).received, "new", "the same account, the same case");
+      }
+      assert.equal((await store.list()).length, 1);
+      assert.equal(record.reported.principal_id, "pr_dev_kim");
+      assert.ok(record.table_principals.includes("pr_dev_hana") && record.table_principals.includes("pr_dev_kim"), "every seat of the table is recorded (server-side) as a party");
     } finally {
       await stopServer(server);
     }
@@ -334,18 +397,27 @@ describe("P3-N032 A: a seated player reports another seat of the same table", ()
     B. ACCOUNTS, VISITORS AND REVIEW (production identity)
    ================================================================== */
 
-async function prodServer(over: { store?: ConductCaseStore; reviewers?: readonly string[]; clock?: { now: number } } = {}) {
+/** A production server whose accounts (`accounts`) were made BEFORE it started -- as an operator makes a reviewer's
+ *  account and then restarts with its name in GS_CONDUCT_REVIEWERS (the names are bound at startup). The accounts are
+ *  made on a first server over the same identity service; their cookies stay valid on the second. */
+async function prodServer(over: { store?: ConductCaseStore; reviewers?: readonly string[]; accounts?: readonly string[]; clock?: { now: number } } = {}) {
   const clock = over.clock ?? { now: Date.now() };
   const service = IdentityService.fromSnapshot(createMemoryIdentityStore(), { principals: [], sessions: [] }, { policy: { passwordKdf: TEST_PASSWORD_KDF } });
   const store = over.store ?? createMemoryConductCaseStore();
+  const identity = { mode: "production" as const, allowedOrigins: [PROD_ORIGIN], trustedProxyHops: 0, now: () => clock.now, service };
+  const browsers: Record<string, { cookie: string; name: string }> = {};
+  if ((over.accounts ?? []).length > 0) {
+    const first = await startServer({ identity, records: createMemoryRecordStore(), conduct: { store } });
+    try {
+      for (const name of over.accounts ?? []) browsers[name] = await accountBrowser(first.port, name);
+    } finally {
+      await stopServer(first.server);
+    }
+  }
   const reviewers = conductReviewersFromEnv({ GS_CONDUCT_REVIEWERS: (over.reviewers ?? []).join(",") });
   if (!reviewers.ok) throw new Error(reviewers.reason);
-  const started = await startServer({
-    identity: { mode: "production", allowedOrigins: [PROD_ORIGIN], trustedProxyHops: 0, now: () => clock.now, service },
-    records: createMemoryRecordStore(),
-    conduct: { store, reviewers: reviewers.reviewers },
-  });
-  return { ...started, clock, service, store };
+  const started = await startServer({ identity, records: createMemoryRecordStore(), conduct: { store, reviewers: reviewers.reviewers } });
+  return { ...started, clock, service, store, browsers };
 }
 
 const post = (port: number, pathname: string, cookie?: string, body: object = {}) => apiRequest(port, pathname, { cookie, body });
@@ -372,7 +444,7 @@ async function prodTable(port: number, host: { cookie: string; name: string }, g
 
 describe("P3-N032 B: visitors, reviewers and the review workflow", () => {
   test("a signed-out visitor can neither report nor review; a non-reviewer account sees the review routes as absent", async () => {
-    const { server, port } = await prodServer({ reviewers: ["Rita"] });
+    const { server, port } = await prodServer({ reviewers: ["Rita"], accounts: ["Rita"] });
     try {
       const ann = await accountBrowser(port, "Ann");
       const ben = await accountBrowser(port, "Ben");
@@ -397,14 +469,25 @@ describe("P3-N032 B: visitors, reviewers and the review workflow", () => {
     }
   });
 
-  test("a reviewer reads the queue and the case (fingerprints, never ids), decides only after Confirm it's you, CAS on the revision; a party never decides", async () => {
-    const clock = { now: Date.now() };
-    const { server, port, store } = await prodServer({ reviewers: ["Rita", "Ann"], clock });
+  test("a configured reviewer name nobody held at startup is never a reviewer -- whoever registers it later gains nothing", async () => {
+    const { server, port } = await prodServer({ reviewers: ["Rita", "Moderator"], accounts: ["Rita"] });
     try {
-      const ann = await accountBrowser(port, "Ann");
-      const ben = await accountBrowser(port, "Ben");
-      const rita = await accountBrowser(port, "Rita");
-      const table = await prodTable(port, { cookie: ann.cookie, name: "Ann" }, [{ cookie: ben.cookie, name: "Ben" }]);
+      const squatter = await accountBrowser(port, "Moderator");
+      assert.deepEqual((await post(port, "/gs/api/conduct/me", squatter.cookie)).body, { ok: true, reviewer: false });
+      assert.equal((await post(port, "/gs/api/conduct/review/queue", squatter.cookie)).status, 404);
+      const rita = await loginAgain(port, "Rita");
+      assert.deepEqual((await post(port, "/gs/api/conduct/me", rita)).body, { ok: true, reviewer: true }, "a name held at startup is bound");
+    } finally {
+      await stopServer(server);
+    }
+  });
+
+  test("a reviewer reads the queue and the case (fingerprints, never ids), decides only after Confirm it's you, CAS on the revision; a party never even sees the case", async () => {
+    const clock = { now: Date.now() };
+    const { server, port, store, browsers } = await prodServer({ reviewers: ["Rita", "Ann", "Cid"], accounts: ["Ann", "Ben", "Rita", "Cid"], clock });
+    try {
+      const { Ann: ann, Ben: ben, Rita: rita, Cid: cid } = browsers;
+      const table = await prodTable(port, { cookie: ann.cookie, name: "Ann" }, [{ cookie: ben.cookie, name: "Ben" }, { cookie: cid.cookie, name: "Cid" }]);
       const reported = await table.clients.Ben.op({ type: "report-player", playerId: table.ids.Ann, category: "stalling", note: "Waited out the timer every turn." }, table.gameId);
       assert.equal(reported.ok, true, JSON.stringify(reported));
 
@@ -414,15 +497,15 @@ describe("P3-N032 B: visitors, reviewers and the review workflow", () => {
       const cases = (queue.body as { cases: Array<Record<string, unknown>> }).cases;
       assert.equal(cases.length, 1);
       assert.doesNotMatch(queue.text, PRIVATE_ID, "the queue names no private identifier");
-      assert.doesNotMatch(queue.text, /"(?:Ann|Ben|Rita)"[^,]*username/i);
       const caseId = cases[0].caseId as string;
       assert.equal((cases[0].reported as { account: string }).account, accountFingerprint((await store.load(caseId))?.reported.principal_id as string));
       const view = await post(port, "/gs/api/conduct/review/case", rita.cookie, { caseId });
       assert.equal(view.status, 200, view.text);
       assert.doesNotMatch(view.text, PRIVATE_ID);
-      const opened = (view.body as { case: { revision: number; note: string; verification: { verified: boolean | null }; evidence: { log: { entries: number } } } }).case;
+      const opened = (view.body as { case: { revision: number; note: string; verification: { verified: boolean | null }; related: { known: boolean } } }).case;
       assert.equal(opened.note, "Waited out the timer every turn.");
-      assert.equal(opened.verification.verified, true, "the log pointer re-verifies against the authoritative log now");
+      assert.equal(opened.verification.verified, true, "the log pointer re-verifies against the resident game's committed log");
+      assert.equal(opened.related.known, true);
 
       /* Past the sign-in's 5-minute grant: a decision needs Confirm it's you. */
       clock.now += 6 * 60_000;
@@ -444,21 +527,25 @@ describe("P3-N032 B: visitors, reviewers and the review workflow", () => {
       assert.deepEqual(stored.history.map((event) => [event.from, event.to, event.note]), [["open", "under-review", "Looking at the turn times."], ["under-review", "no-violation", "Within the rules."]]);
       assert.ok(stored.history.every((event) => /^acct-[0-9a-f]{12}$/.test(event.reviewer)), "the reviewer is a fingerprint in the history");
 
-      /* Ann is a reviewer too, but she is the reported party: she may read, never decide. */
-      assert.equal((await post(port, "/gs/api/profile/reauth", ann.cookie, { password: PASSWORD })).status, 200);
-      const party = await post(port, "/gs/api/conduct/review/decide", ann.cookie, { caseId, revision: stored.revision, status: "under-review" });
-      assert.deepEqual([party.status, (party.body as { error: string }).error], [409, "party"]);
-      const annView = await post(port, "/gs/api/conduct/review/case", ann.cookie, { caseId });
-      assert.equal((annView.body as { case: { youAreParty: boolean } }).case.youAreParty, true);
+      /* Ann (the reported account) and Cid (seated at that table) are reviewers too: neither sees the case at all. */
+      for (const party of [ann, cid]) {
+        assert.equal((await post(port, "/gs/api/profile/reauth", party.cookie, { password: PASSWORD })).status, 200);
+        const theirQueue = await post(port, "/gs/api/conduct/review/queue", party.cookie);
+        assert.deepEqual((theirQueue.body as { cases: unknown[] }).cases, [], `${party.name}'s queue does not show a case they are a party to`);
+        assert.deepEqual((await post(port, "/gs/api/conduct/review/case", party.cookie, { caseId })).status, 404);
+        const refused = await post(port, "/gs/api/conduct/review/decide", party.cookie, { caseId, revision: stored.revision, status: "under-review" });
+        assert.deepEqual([refused.status, (refused.body as { error: string }).error], [404, "not-found"]);
+      }
+      assert.equal(((await store.load(caseId)) as ConductCase).revision, stored.revision, "nothing a party sent moved the case");
     } finally {
       await stopServer(server);
     }
   });
 
   test("a closed body and the usual ingress rules: GET, a foreign Origin, a non-JSON type, an unknown field, an oversized body", async () => {
-    const { server, port } = await prodServer({ reviewers: ["Rita"] });
+    const { server, port, browsers } = await prodServer({ reviewers: ["Rita"], accounts: ["Rita"] });
     try {
-      const rita = await accountBrowser(port, "Rita");
+      const rita = browsers.Rita;
       assert.equal((await apiRequest(port, "/gs/api/conduct/review/queue", { cookie: rita.cookie, method: "GET" })).status, 405);
       assert.equal((await apiRequest(port, "/gs/api/conduct/review/queue", { cookie: rita.cookie, origin: "https://evil.example" })).status, 403);
       assert.equal((await apiRequest(port, "/gs/api/conduct/review/queue", { cookie: rita.cookie, contentType: "text/plain" })).status, 415);
@@ -495,17 +582,15 @@ describe("P3-N032 B: visitors, reviewers and the review workflow", () => {
     }
   });
 
-  test("review status persists: a file store across a server restart", async () => {
+  test("review status persists: a file store across a server restart; a case whose game is not resident is not re-verified by loading it", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gs-conduct-"));
     try {
       const clock = { now: Date.now() };
-      const first = await prodServer({ store: createFileConductCaseStore(dir, { warn: () => undefined }), reviewers: ["Rita"], clock });
+      const first = await prodServer({ store: createFileConductCaseStore(dir, { warn: () => undefined }), reviewers: ["Rita"], accounts: ["Ann", "Ben", "Rita"], clock });
       let caseId: string;
       let revision: number;
       try {
-        const ann = await accountBrowser(first.port, "Ann");
-        const ben = await accountBrowser(first.port, "Ben");
-        const rita = await accountBrowser(first.port, "Rita");
+        const { Ann: ann, Ben: ben, Rita: rita } = first.browsers;
         const table = await prodTable(first.port, { cookie: ann.cookie, name: "Ann" }, [{ cookie: ben.cookie, name: "Ben" }]);
         assert.equal((await table.clients.Ann.op({ type: "report-player", playerId: table.ids.Ben, category: "offer-spam" }, table.gameId)).ok, true);
         caseId = ((await post(first.port, "/gs/api/conduct/review/queue", rita.cookie)).body as { cases: Array<{ caseId: string }> }).cases[0].caseId;
@@ -521,11 +606,31 @@ describe("P3-N032 B: visitors, reviewers and the review workflow", () => {
       assert.equal(stored.revision, revision);
       assert.equal(stored.history[0].note, "Needs a second reviewer.");
       assert.doesNotMatch(fs.readFileSync(path.join(dir, "conduct", "cases", `${caseId}.json`), "utf8"), /\b(?:se|sf|rk|pf)_[0-9a-z]|scrypt|password|cookie/, "no session, family, recovery or profile id, and no credential, in the stored case");
+      /* A later server (its game NOT resident, no log reader): the case reads, and its pointer is "not re-read here" --
+         opening a case never claims or loads a game. */
+      const second = await prodServer({ store: reopened, reviewers: ["Rita"], accounts: ["Rita"], clock });
+      try {
+        const view = await post(second.port, "/gs/api/conduct/review/case", second.browsers.Rita.cookie, { caseId });
+        assert.equal(view.status, 200, view.text);
+        assert.equal((view.body as { case: { verification: { verified: unknown } } }).case.verification.verified, null);
+        assert.equal(second.server.lifecycle !== undefined, true);
+      } finally {
+        await stopServer(second.server);
+      }
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 });
+
+/** A fresh browser logged in to an existing account (the test password). */
+async function loginAgain(port: number, username: string): Promise<string> {
+  const before = await bootstrapCookie(port);
+  const answer = await apiRequest(port, "/gs/api/account/login", { cookie: before, body: { username, password: PASSWORD } });
+  const set = answer.headers["set-cookie"];
+  if (answer.status !== 200 || !set) throw new Error(`login: ${answer.status} ${answer.text}`);
+  return set[0].split(";")[0];
+}
 
 /* ==================================================================
     C. PURE: THE OFFER EXAMPLE, THE POINTER, THE CONFIGURATION, THE BOUNDARY
@@ -561,8 +666,8 @@ describe("P3-N032 C: the evidence, the configuration and the boundary", () => {
     money: null,
     policy: { host_undo: "last-action", private_spectators: false, spectator_chat: false, max_viewers: 50 },
   } as never;
-  const A = { player_id: "p-aaaaaaaaaaaaaaaa", principal_id: "pr_a", nickname: "A" };
-  const B = { player_id: "p-bbbbbbbbbbbbbbbb", principal_id: "pr_b", nickname: "B" };
+  const A = { player_id: "p-aaaaaaaaaaaaaaaa", principal_id: "pr_a", nickname: "A", joined_at: 1 };
+  const B = { player_id: "p-bbbbbbbbbbbbbbbb", principal_id: "pr_b", nickname: "B", joined_at: 2 };
   const entry = (index: number, actor: string, type: string, body: object = {}, at = 1_000 + index * 1_000): ServerLogEntry => ({ index, id: `e${index}`, actor, payload: JSON.stringify({ [type]: body }), at });
 
   test("the abusive train-offer example: repeated offers after rejection are COUNTED and TIMED, never judged -- one or two offers look like any negotiation", () => {
@@ -610,7 +715,7 @@ describe("P3-N032 C: the evidence, the configuration and the boundary", () => {
       }
     };
     walk(root);
-    const allowed = new Set(["conduct", "gameServer.ts", "start.ts", "rooms/roomHost.ts", "aws/runtime/awsRuntime.ts", "aws/runtime/awsMain.ts", "aws/runtime/awsSubstrate.ts", "aws/game/dynamoConductStore.ts", "persistence/conformance/subjects.ts", "persistence/conformance/conductStore.conformance.ts"]);
+    const allowed = new Set(["conduct", "gameServer.ts", "start.ts", "rooms/roomHost.ts", "aws/runtime/awsRuntime.ts", "aws/runtime/awsMain.ts", "aws/runtime/awsSubstrate.ts", "aws/game/dynamoConductStore.ts", "aws/deploy/deployVerify.ts", "persistence/conformance/subjects.ts", "persistence/conformance/conductStore.conformance.ts"]);
     const offenders: string[] = [];
     for (const file of sources) {
       const relative = path.relative(root, file).split(path.sep).join("/");

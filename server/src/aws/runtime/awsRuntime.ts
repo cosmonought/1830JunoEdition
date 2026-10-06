@@ -1136,7 +1136,7 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
       onRestartRequired: (room, detail) => failFast(room, detail, "game"),
       holds: stores.holds,
       /* Phase 3 (P3-N032): conduct reports, in the game table, pool-fenced (`aws/game/dynamoConductStore.ts`). */
-      conduct: { store: stores.conduct ?? null, reviewers: input.conductReviewers ?? new Set<string>() },
+      conduct: { store: stores.conduct ?? null, reviewers: input.conductReviewers ?? new Set<string>(), readLog: (gameId) => stores.readLog(gameId) },
       ops: input.ops,
       statusExtras,
       ownership,

@@ -7,9 +7,9 @@
 // Opened from the profile menu, only for an account the server names as a reviewer (`conduct/me`), as a full-window
 // reading page like Rules and Terms (`utils/infoPages.ts`; no router). It shows:
 //
-//   the queue        every case, newest first: when, category, status, who reported whom (nicknames), and whether the
-//                    reviewer is a party (they may read it, never decide it). "Waiting" (open / under review /
-//                    escalated) or all.
+//   the queue        every case, latest report first: when, category, status, who reported whom (nicknames), how many
+//                    times. "Waiting" (open / under review / escalated) or all. A case the reviewer is a party to (the
+//                    reporter, the reported account, or seated at its table) is never served to them at all.
 //   one case         the table and its rules / build; both parties as public seat ids, nicknames and ACCOUNT
 //                    FINGERPRINTS (the same account shows the same fingerprint in every case; never an id or username);
 //                    the reporter's note, as plain text; the server's evidence -- the log pointer and whether it still
@@ -134,8 +134,8 @@ export function ConductReviewPanel({ onClose, port = sessionPort() }: { onClose:
                       {entry.categoryLabel} · {entry.statusLabel}
                     </span>
                     <span style={styles.label}>
-                      {entry.reporter.nickname} → {entry.reported.nickname} · {when(entry.createdAt)}
-                      {entry.youAreParty ? " · you are a party" : ""}
+                      {entry.reporter.nickname} → {entry.reported.nickname} · {when(entry.lastReportAt)}
+                      {entry.reports > 1 ? ` · reported ${entry.reports} times` : ""}
                     </span>
                   </button>
                 </li>
@@ -219,15 +219,17 @@ function CaseDetail({ view, port, onDecided, onReload }: { view: CaseView; port:
         <dd>{when(view.createdAt)}</dd>
         <dt>Reporter</dt>
         <dd>
-          {view.reporter.nickname} <span style={mono}>({view.reporter.playerId}, {view.reporter.account})</span>
+          {view.reporter.nickname} <span style={mono}>({view.reporter.playerId}, {view.reporter.account})</span> · seated {when(view.reporter.joinedAt)}
         </dd>
         <dt>Reported player</dt>
         <dd>
-          {view.reported.nickname} <span style={mono}>({view.reported.playerId}, {view.reported.account})</span>
+          {view.reported.nickname} <span style={mono}>({view.reported.playerId}, {view.reported.account})</span> · seated {when(view.reported.joinedAt)}
         </dd>
         <dt>Other cases about this account</dt>
         <dd data-testid="conduct-case-related">
-          {view.related.total} ({view.related.active} waiting)
+          {view.related.known
+            ? `${view.related.total} (${view.related.active} waiting) · from ${view.related.reporters} reporter(s) at ${view.related.games} table(s) · ${view.related.confirmed} confirmed, ${view.related.closedNoViolation} no violation`
+            : "Could not be counted just now."}
         </dd>
       </dl>
       <h4 style={sectionHeading}>Reporter's note</h4>
@@ -248,7 +250,7 @@ function CaseDetail({ view, port, onDecided, onReload }: { view: CaseView; port:
         </dd>
         <dt>Game log</dt>
         <dd>
-          {evidence.log.entries} entries
+          {evidence.log.captured ? `${evidence.log.entries} entries` : "not captured"}
           {evidence.log.hash !== null ? <span style={mono}> · {evidence.log.hash.slice(0, 16)}…</span> : null}
           {evidence.log.windowFrom !== null ? ` · timeline ${evidence.log.windowFrom}–${evidence.log.windowTo}` : ""}
         </dd>
@@ -306,17 +308,47 @@ function CaseDetail({ view, port, onDecided, onReload }: { view: CaseView; port:
               <tr key={row.i}>
                 <td style={cell}>{row.i}</td>
                 <td style={cell}>{when(row.at)}</td>
-                <td style={cell}>{row.by === "reporter" ? view.reporter.nickname : row.by === "reported" ? view.reported.nickname : "—"}</td>
+                <td style={cell}>
+                  {row.derived ? "server" : ""}
+                  {row.derived && row.by !== "other" ? " (after " : ""}
+                  {row.by === "reporter" ? view.reporter.nickname : row.by === "reported" ? view.reported.nickname : row.derived ? "" : "—"}
+                  {row.derived && row.by !== "other" ? ")" : ""}
+                </td>
                 <td style={cell}>
                   {row.type}
                   {row.outcome !== undefined ? ` (${row.outcome})` : ""}
-                  {row.derived ? " · server" : ""}
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
       </details>
+      {view.rereports.length > 0 ? (
+        <>
+          <h4 style={sectionHeading}>Reported again ({view.rereports.length})</h4>
+          <ol style={plainList} data-testid="conduct-case-rereports">
+            {view.rereports.map((entry, at) => (
+              <li key={at}>
+                {when(entry.at)} · log at {entry.log.entries} entries
+                {entry.log.hash !== null ? <span style={mono}> · {entry.log.hash.slice(0, 16)}…</span> : null} · {view.reported.nickname}: {entry.counts.reported.offers} offers, {entry.counts.reported.rescinded} withdrawn, {entry.counts.reported.passes} passes, {entry.counts.reported.actions} actions in all
+                {entry.note !== null ? <div style={styles.text}>{entry.note}</div> : null}
+                {entry.chat.length > 0 ? (
+                  <ul style={plainList}>
+                    {entry.chat.map((line) => (
+                      <li key={line.id}>
+                        <span style={styles.label}>
+                          {when(line.at)} · {line.by === "reporter" ? view.reporter.nickname : view.reported.nickname}:
+                        </span>{" "}
+                        {line.text}
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+              </li>
+            ))}
+          </ol>
+        </>
+      ) : null}
       {evidence.notCaptured.length > 0 ? (
         <>
           <h4 style={sectionHeading}>Not captured</h4>
@@ -343,11 +375,7 @@ function CaseDetail({ view, port, onDecided, onReload }: { view: CaseView; port:
       )}
 
       <h4 style={sectionHeading}>Decide</h4>
-      {view.youAreParty ? (
-        <p style={styles.notice} data-testid="conduct-case-party">
-          You are a party to this case, so another reviewer must decide it.
-        </p>
-      ) : confirming ? (
+      {confirming ? (
         <ConfirmItsYou
           purpose="To record a decision on this case"
           port={port}

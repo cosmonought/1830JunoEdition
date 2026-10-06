@@ -69,6 +69,8 @@ export interface RemedyPort {
   fence(gameId: string): void;
   /** Whether a unanimous annulment intent is open for the game. */
   annulOpen(gameId: string): Promise<boolean>;
+  /** The chain's Start time (seconds) of a bound money game, read by quorum within `timeoutMs` (`null`: unknown now). */
+  startedAtSecs(gameId: string, timeoutMs?: number): Promise<number | null>;
 }
 
 export interface ApprovalCheck {
@@ -274,6 +276,24 @@ export function createRemedyPipeline(deps: RemedyPipelineDeps): RemedyPort {
 
     annulOpen(gameId) {
       return deps.service.annulOpen(gameId);
+    },
+
+    async startedAtSecs(gameId, timeoutMs = 5_000) {
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      const timeout = new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), timeoutMs);
+        (timer as { unref?: () => void }).unref?.();
+      });
+      try {
+        const found = await Promise.race([deps.service.remedyContext(gameId, null), timeout]);
+        if (found === null || ("ok" in found && found.ok === false)) return null;
+        const secs = (found as RemedyChainContext).startedAtSecs;
+        return secs > BigInt(0) && secs <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(secs) : null;
+      } catch {
+        return null;
+      } finally {
+        if (timer !== null) clearTimeout(timer);
+      }
     },
   };
 }

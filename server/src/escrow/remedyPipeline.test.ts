@@ -13,7 +13,7 @@
 //      seconds rounded up (integers only), the Live finality floor and the strike-3 rule applied;
 //   3. ONE intent per decision: a second attempt is idempotent (`exists`), a restart finds it, and the chain is
 //      confirmed once; the clock's sealed remedy is carried to a closed money game through the controller's own gate;
-//   4. the gate: a SYSTEM-PAUSED table's remedy is never relayed; an open unanimous annulment supersedes it;
+//   4. the gate: only the clock's current authority relays; a sealed decision survives a restart without any vote;
 //   5. N-1 approvals: a seat's REMEDY-APPROVE verifies under its CURRENT consent key for exactly that overdue and
 //      horizon; a horizon too short (or a self-approval, or a wrong key) is refused; a Live foreclosure whose approvals
 //      lapsed falls back to the neutral timeout annulment;
@@ -351,7 +351,7 @@ describe("FP4 end to end: the table clock's decision reaches the chain, and only
     await world.drive(async () => (await world.financial.load(GAME_A))?.phase === "closed");
   });
 
-  test("the gate: a SYSTEM-PAUSED table's sealed remedy is never relayed; every player's resume releases it", async () => {
+  test("the gate: only the clock's CURRENT authority relays (a takeover's record waits until this process adopts it); a restart releases a sealed decision without any vote", async () => {
     let gate: NonNullable<WorldOptions["remedyGate"]> = async () => ({ kind: "wait", why: "not bound yet" });
     const { world, chainGameId } = await liveWorld({ remedyGate: (g, i) => gate(g, i) });
     const table = moneyTable(world, chainGameId);
@@ -362,28 +362,27 @@ describe("FP4 end to end: the table clock's decision reaches the chain, and only
     const remedy = table.record()!.remedy!;
     const intents = await remedyIntents(world);
     assert.equal(intents.length, 1);
-    /* A continuity break lands on the stored record (another authority's write): the next process system-pauses it. */
-    const { continuityBreak } = await import("../rooms/clock/clockModel");
-    const broken = continuityBreak(table.record()!, { now: world.clock.now, preservedAt: world.clock.now, reason: "test break", authority: "auth-1" }).record;
-    assert.notEqual(broken.system, null, "an ended table with a sealed remedy still holds its relay on a break");
-    await table.store.save({ ...broken, revision: table.record()!.revision + 5 }, table.record()!.revision);
+    /* Another process took the table's clock over (its write is the stored record): this one no longer relays it. */
+    const sealedRecord = table.record()!;
+    await table.store.save({ ...sealedRecord, authority: "auth-other", revision: sealedRecord.revision + 1 }, sealedRecord.revision);
     table.clock.drop(GAME_A);
     const verdict = await table.clock.remedyGate(GAME_A, intents[0]);
     assert.equal(verdict.kind, "wait");
-    assert.match((verdict as { why: string }).why, /SYSTEM PAUSE/);
-    const sequence = (world.chain.accounts.get((await import("./escrow3bSupport")).RELAYER_ADDRESS) as { sequence: bigint }).sequence;
+    assert.match((verdict as { why: string }).why, /not the table clock's current authority/);
+    const relayer = (await import("./escrow3bSupport")).RELAYER_ADDRESS;
+    const sequence = (world.chain.accounts.get(relayer) as { sequence: bigint }).sequence;
     for (let round = 0; round < 3; round += 1) {
       await world.relayer.pass();
       world.chain.produceBlock();
     }
-    assert.equal((world.chain.accounts.get((await import("./escrow3bSupport")).RELAYER_ADDRESS) as { sequence: bigint }).sequence, sequence, "nothing relayed while system-paused");
-    assert.equal(remedy.kind, 1);
-    /* Every player resumes (the decision was sealed before the break; it is released, never re-decided). */
-    for (const seat of [ALICE, BOB]) {
-      const answer = await table.serial(() => table.clock.op(table.game, table.tx, { type: "clock-sysresume", seat }));
-      assert.equal(answer.ok, true, JSON.stringify(answer));
-    }
-    assert.equal(table.record()?.system, null);
+    assert.equal((world.chain.accounts.get(relayer) as { sequence: bigint }).sequence, sequence, "nothing relayed on another authority's word");
+    /* This process adopts the table (a load: a continuity break): the ENDED game is not paused -- its sealed decision is
+       released with no vote (a defaulter cannot hold its own remedy hostage), and never re-decided. */
+    await table.serial(() => table.clock.op(table.game, table.tx, { type: "clock-ack", seat: ALICE }).then(() => undefined));
+    const adopted = table.record()!;
+    assert.equal(adopted.system, null);
+    assert.equal(adopted.authority, "auth-1");
+    assert.deepEqual(adopted.remedy?.evidence_hash, remedy.evidence_hash);
     assert.equal((await table.clock.remedyGate(GAME_A, intents[0])).kind, "ok");
     await world.drive(async () => (await table.port.progress(GAME_A, remedy)) === "confirmed");
     assert.equal(gameOf(world, chainGameId).state, "annulled");

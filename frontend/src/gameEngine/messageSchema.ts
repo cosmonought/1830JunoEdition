@@ -889,6 +889,12 @@ const ROOM_OPS: Readonly<Record<string, FrameFields>> = nullTable<FrameFields>({
        any non-zero one. No chain's denomination is named here (GNOLAND-1 may share the backend). ESCROW-4: a non-zero
        stake opens a real-money table where the server enables them (its terms are the server's pinned deployment). */
     stake: opt(str(MAX_AMOUNT_LENGTH)),
+    /* Phase 3 final clocks: the table's deadline class (an Async table: a pace or No-deadline; a Live table is Live).
+       A money table fixes it here, before any escrow is created from it; a No-deadline money table's host acknowledges
+       the indefinite-lock disclosure with the create (`noDeadlineAck`). */
+    deadline: opt(isDeadlineClass),
+    paceSecs: opt(isClockPace),
+    noDeadlineAck: opt(isBool),
   }),
   join: nullTable({ type: req(str(16)), code: req(str(32)), takeSeat: req(isBool) }),
   "take-seat": nullTable({ type: req(str(16)) }),

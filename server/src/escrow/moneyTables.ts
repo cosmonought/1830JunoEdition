@@ -45,6 +45,7 @@
 // challenges, deposit hints and the observation cache. A restart forgets them and loses nothing -- the chain and the
 // durable records say the rest (a player confirms again; a hint is re-sent by the browser's pending transaction).
 
+import { NO_DEADLINE_DISCLOSURE } from "../../../frontend/src/utils/clockProtocol";
 import { createHash } from "crypto";
 
 import { variantsDigestV1 } from "../../../frontend/src/gameEngine/escrow/variantsDigest";
@@ -172,6 +173,10 @@ export interface MoneyTablesDeps {
   readonly challenges?: ChallengeBook;
   /** Tests: the observer's ticks are driven by hand. */
   readonly manualObserver?: boolean;
+  /** Phase 3 final clocks: whether a seat acknowledged a No-deadline table's indefinite-lock disclosure (the table
+   *  clock's record). No join admission is signed for a No-deadline table's seat that has not (nor for an Async table
+   *  whose clock cannot be read). Absent: no table has a recorded deadline (3fecd54's behaviour: Live only). */
+  readonly noDeadlineAck?: (gameId: string, playerId: string) => Promise<"not-required" | "acknowledged" | "missing" | "unknown">;
 }
 
 type Snapshot = Awaited<ReturnType<WalletTicketLedger["snapshot"]>>;
@@ -1425,6 +1430,13 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
       const budgetKey = `${record.game_id}\u0000${seat.player_id}`;
       if ((admissionsAsked.get(budgetKey) ?? 0) >= MAX_ADMISSIONS_PER_SEAT) {
         return refusal(409, "too-many-admissions", "This seat has used up its join approvals at this table (each one reserves the seat for a while). Ask the host to seat you again, or leave the seat and take it again once the last approval has lapsed.");
+      }
+      /* Phase 3 final clocks: a No-deadline table's seat antes only after acknowledging that its funds may stay locked. */
+      if (deps.noDeadlineAck !== undefined) {
+        const acked = await deps.noDeadlineAck(record.game_id, seat.player_id).catch(() => "unknown" as const);
+        const asyncTable = (record.variants as { mode?: string }).mode === "async";
+        if (acked === "missing") return refusal(409, "acknowledge-no-deadline", `${NO_DEADLINE_DISCLOSURE} Acknowledge this before your deposit.`);
+        if (acked === "unknown" && asyncTable) return refusal(503, "money-unavailable", "This table's deadline can't be read right now, so no deposit is approved. Try again later.");
       }
       const snapshot = await deps.tickets.snapshot(record.game_id);
       const link = standingLinkOf(snapshot.grants, seat.player_id);

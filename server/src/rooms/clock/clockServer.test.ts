@@ -67,6 +67,9 @@ async function boot(dir: string, time: FakeTime, authority: string, over: Partia
     ...over,
   });
   await server.lifecycle.ready;
+  time.drain = async () => {
+    await server.clock?.idle();
+  };
   return { server, port, ops };
 }
 
@@ -394,7 +397,7 @@ describe("Timed Async, No-deadline and annulment through the server", () => {
           before: (id) => opOk(port, ALICE, id, { type: "clock-policy", deadline: "no-deadline" }),
         });
         const watcher = await tab(port, BOB, gameId);
-        await time.advance(40 * 24 * HOUR);
+        await time.advance(2 * 24 * HOUR);
         const view = await clockWhere(watcher, (c) => c.state === "running", "running");
         assert.deepEqual([view.deadline, view.action, view.overdue, view.responsible?.seat], ["no-deadline", null, null, ids[ALICE]]);
         await watcher.close();

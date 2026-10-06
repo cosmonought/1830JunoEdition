@@ -52,6 +52,7 @@ import { generationProbe, takeIdentityWriterRole } from "../ownership/roles";
 import type { AwsSubstrate } from "./awsRuntime";
 import type { AwsRuntimeConfig } from "./runtimeConfig";
 import { dynamoTaskStatusWriter } from "./taskStatus";
+import { createDynamoClockStore } from "../game/dynamoClockStore";
 
 export interface AwsClients {
   /** The app account's region: the game and identity tables. */
@@ -139,6 +140,8 @@ export function realAwsSubstrate(options: AwsSubstrateOptions): AwsSubstrate<Poo
         tickets: createDynamoTicketStore(base),
         intents: relayQueue === null ? null : createDynamoIntentStore({ ...base, relayQueue }),
         relayerIntents: relayQueue === null || relayerRole === null ? null : createDynamoIntentStore({ ...base, relayQueue, relayerRole }),
+        /* Phase 3 final clocks: the table clocks, fenced by each game's HEAD like every game write. */
+        clock: createDynamoClockStore(base),
       };
     },
 

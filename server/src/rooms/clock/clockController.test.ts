@@ -155,7 +155,8 @@ describe("Live train offers through the controller (real engine offers)", () => 
     const h = harness();
     await h.deal();
     await h.submit(P1, proposeTrain(NYC, "2", "50"));
-    h.time.jump(LIVE_TRADE_MS + 1); // the timer did not get to run first
+    await h.time.advance(LIVE_TRADE_MS - 5 * SEC);
+    h.time.jump(5 * SEC + 1); // the expiry timer did not get to run before the answer arrived (a few seconds: no stall)
     const late = await h.submit(P2, answerTrain(NYC, true));
     assert.equal(late.ok, false);
     assert.equal((late as { code: string }).code, CLOCK_REFUSAL.stale);
@@ -199,6 +200,22 @@ describe("Live train offers through the controller (real engine offers)", () => 
     const accepted = await h.submit(P2, answerTrain(NYC, true));
     assert.equal(accepted.ok, true, JSON.stringify(accepted));
     assert.deepEqual([h.record().obligation?.seat, h.remaining()], [P1, LIVE_ACTION_MS]);
+  });
+
+  test("a stall inside one process (no heartbeat for over a minute) is a continuity break: SYSTEM PAUSE as of the last proof, never an overdue from it", async () => {
+    const h = harness();
+    await h.deal();
+    await h.time.advance(5 * MIN);
+    const proven = h.record().trusted_at;
+    assert.ok(proven >= T0 + 5 * MIN - 10 * SEC, "heartbeats keep the proof fresh while the clock runs");
+    h.time.jump(25 * MIN); // the process was frozen: no timer, no heartbeat ran
+    const refused = await h.submit(P1, proposeTrain(NYC, "2", "50"));
+    assert.equal(refused.ok, false);
+    assert.equal((refused as { code: string }).code, CLOCK_REFUSAL.systemPaused);
+    const r = h.record();
+    assert.deepEqual([r.phase, r.strikes, r.system?.preserved_at], ["active", {}, proven]);
+    assert.equal(r.obligation?.timer?.remaining_ms, LIVE_ACTION_MS - (proven - T0), "the time since the last proof is never charged");
+    assert.ok(h.ops.lines.some((line) => line.event === "clock.continuity-break" && line.cause === "stall"));
   });
 
   test("the recipient's response timer is never an overdue: no strike, no interruption, no remedy", async () => {

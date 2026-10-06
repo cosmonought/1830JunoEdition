@@ -13,6 +13,9 @@ export interface FakeTime {
   advance(ms: number): Promise<void>;
   /** Move the clock WITHOUT firing anything (a process that was not running: an outage). */
   jump(ms: number): void;
+  /** Awaited after every fired timer, before the clock moves on (the server's clock tasks drain at the moment they
+   *  fired, as they would in real time). Set by a test once its server exists. */
+  drain: (() => Promise<void>) | null;
 }
 
 const settle = async (turns = 4): Promise<void> => {
@@ -33,7 +36,8 @@ export function fakeTime(start: number): FakeTime {
       pending.delete(handle as number);
     },
   };
-  return {
+  const time: FakeTime = {
+    drain: null,
     timers,
     now: () => now,
     pendingCount: () => pending.size,
@@ -46,13 +50,16 @@ export function fakeTime(start: number): FakeTime {
         now = Math.max(now, due[1].at);
         due[1].fire();
         await settle();
+        if (time.drain !== null) await time.drain();
       }
       now = target;
       await settle();
+      if (time.drain !== null) await time.drain();
     },
     jump(ms: number) {
       now += ms;
       pending.clear();
     },
   };
+  return time;
 }

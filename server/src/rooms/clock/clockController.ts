@@ -105,6 +105,12 @@ export const REAL_CLOCK_TIMERS: ClockTimers = {
 export const CLOCK_HEARTBEAT_LIVE_MS = 10_000;
 /** Timed Async: the same, coarser (the paces are hours to days). */
 export const CLOCK_HEARTBEAT_ASYNC_MS = 5 * 60_000;
+/** A RUNNING clock whose last proof of continuity (a heartbeat or any write by this authority) is older than this was
+ *  not in this process's continuous control: the process stalled (suspended, frozen, starved) and no timer, vote or
+ *  move could have been served meanwhile -- a continuity break like a restart (Live: SYSTEM PAUSE as of the last proof;
+ *  Async: the gap credited). Never decided from time nobody could act in. Six missed heartbeats. */
+export const CLOCK_CONTINUITY_GAP_LIVE_MS = 6 * CLOCK_HEARTBEAT_LIVE_MS;
+export const CLOCK_CONTINUITY_GAP_ASYNC_MS = 6 * CLOCK_HEARTBEAT_ASYNC_MS;
 /** The remedy sweep: sealed-but-unconfirmed remedies are carried on (a lapsed attestation re-attested). */
 export const CLOCK_REMEDY_SWEEP_MS = 30_000;
 const MAX_TIMER_MS = 2 ** 31 - 1;
@@ -244,6 +250,8 @@ export function createClockController(deps: ClockControllerDeps) {
   const now = () => deps.now();
   const name = (gameId: string, seat: string) => deps.nameOf?.(gameId, seat) ?? seat;
   let sweepHandle: unknown | null = null;
+  /** Closed (the server is stopping): nothing more is written, armed or relayed by this controller. */
+  let closed = false;
 
   function entryOf(gameId: string): Entry {
     let entry = entries.get(gameId);
@@ -258,7 +266,7 @@ export function createClockController(deps: ClockControllerDeps) {
 
   function flush(entry: Entry): Promise<boolean> {
     const run = entry.writes.then(async (): Promise<boolean> => {
-      if (entry.lost) return false;
+      if (entry.lost || closed) return false;
       const record = entry.record;
       if (record === null) return true;
       if (entry.stored === record.revision && record.authority === deps.authority) return true;
@@ -358,7 +366,10 @@ export function createClockController(deps: ClockControllerDeps) {
       await checkContinuity(entry, game, state);
       entry.checked = true;
       firstCheck = true;
-    } else if (entry.record.phase !== "setup" && view.entries.length > 0) {
+    } else if (entry.record !== null) {
+      await checkStall(entry, game.gameId);
+    }
+    if (!firstCheck && entry.record !== null && entry.record.phase !== "setup" && view.entries.length > 0) {
       const last = view.entries[view.entries.length - 1];
       if (last.index > entry.record.watermark && state !== null) {
         /* Same authority, but the log moved past the record (a fold that never ran): recovered from the log itself. */
@@ -395,6 +406,26 @@ export function createClockController(deps: ClockControllerDeps) {
     if (step.record.system !== null && record.system === null) counters.systemPauses += 1;
     deps.ops.audit("clock.continuity-break", { game_id: game.gameId, prior_authority: String(entry.record?.authority ?? "").slice(0, 80), preserved_at: preservedAt, system_pause: step.record.system !== null, deadline: record.policy.class });
     applyStep(entry, { ...step, record: step.record }, game.gameId, true);
+    await flush(entry);
+  }
+
+  /** A running clock not proven continuous since its last proof (this process stalled): a continuity break as of that
+   *  proof -- never a transition decided from time in which nobody could have acted. */
+  async function checkStall(entry: Entry, gameId: string): Promise<void> {
+    const record = entry.record;
+    if (record === null || record.authority !== deps.authority) return;
+    const running = (record.phase === "active" || record.phase === "overdue") && record.system === null && record.pause.paused_at === null && record.policy.class !== "no-deadline";
+    if (!running) return;
+    const limit = record.policy.class === "live" ? CLOCK_CONTINUITY_GAP_LIVE_MS : CLOCK_CONTINUITY_GAP_ASYNC_MS;
+    const at = now();
+    const gap = at - record.trusted_at;
+    if (gap <= limit) return;
+    counters.breaks += 1;
+    const reason = `server continuity was not proven: this server did not run the table's clock for ${Math.floor(gap / 1000)} s (last proven at ${new Date(record.trusted_at).toISOString()})`;
+    const step = continuityBreak(record, { now: at, preservedAt: record.trusted_at, reason, authority: deps.authority });
+    if (step.record.system !== null && record.system === null) counters.systemPauses += 1;
+    deps.ops.audit("clock.continuity-break", { game_id: gameId, cause: "stall", gap_ms: gap, preserved_at: record.trusted_at, system_pause: step.record.system !== null, deadline: record.policy.class });
+    applyStep(entry, step, gameId, true);
     await flush(entry);
   }
 
@@ -442,6 +473,7 @@ export function createClockController(deps: ClockControllerDeps) {
     entry.timerDue = null;
     if (entry.beat !== null) timers.clear(entry.beat);
     entry.beat = null;
+    if (closed) return;
     const timed = record !== null && !entry.lost && (record.phase === "active" || record.phase === "overdue") && record.system === null && record.pause.paused_at === null && record.policy.class !== "no-deadline";
     pinFor(entry, timed && record?.policy.class === "live");
     if (record === null || !timed) return;
@@ -450,24 +482,44 @@ export function createClockController(deps: ClockControllerDeps) {
       entry.timerDue = due;
       entry.timer = timers.set(() => {
         entry.timer = null;
-        void deps.runOn(entry.gameId, "clock", (game, tx) => tick(game, tx)).catch((error) => deps.warn(`  clock: ${entry.gameId}: a timed transition failed -- ${describe(error)}`));
+        void track(deps.runOn(entry.gameId, "clock", (game, tx) => tick(game, tx))).catch((error) => deps.warn(`  clock: ${entry.gameId}: a timed transition failed -- ${describe(error)}`));
       }, Math.min(MAX_TIMER_MS, Math.max(0, due - now())));
     }
     const every = record.policy.class === "live" ? CLOCK_HEARTBEAT_LIVE_MS : CLOCK_HEARTBEAT_ASYNC_MS;
-    entry.beat = timers.set(() => {
+    const beat = (): void => {
       entry.beat = null;
       if (entry.lost || entry.record === null || !deps.serving(entry.gameId)) return;
+      /* The next proof is scheduled now (a slow write never stretches the cadence); a re-arm replaces it. */
+      entry.beat = timers.set(beat, every);
       /* The continuity proof -- this authority is still in control, now -- written in the table's own task (never
-         beside a transition). */
-      void deps
-        .runOn(entry.gameId, "clock-heartbeat", async () => {
+         beside a transition), and only after the stall check: a heartbeat never papers over a gap. */
+      void track(
+        deps.runOn(entry.gameId, "clock-heartbeat", async (game, tx) => {
           if (entry.lost || entry.record === null) return;
-          entry.record = heartbeat(entry.record, deps.authority, now());
+          const before = entry.record.system;
+          const record = await ensure(game, tx);
+          if (record === null) return;
+          if (record.system !== null && before === null) {
+            await settle(entry, entry.gameId);
+            return;
+          }
+          entry.record = heartbeat(record, deps.authority, now());
           await flush(entry);
-          arm(entry);
-        })
-        .catch((error) => deps.warn(`  clock: ${entry.gameId}: the heartbeat failed -- ${describe(error)}`));
-    }, every);
+        }),
+      ).catch((error) => deps.warn(`  clock: ${entry.gameId}: the heartbeat failed -- ${describe(error)}`));
+    };
+    entry.beat = timers.set(beat, every);
+  }
+
+  /** Every clock task this controller started and has not seen finish (`idle`). */
+  const inFlight = new Set<Promise<unknown>>();
+  function track<T>(task: Promise<T>): Promise<T> {
+    inFlight.add(task);
+    void task.then(
+      () => inFlight.delete(task),
+      () => inFlight.delete(task),
+    );
+    return task;
   }
 
   function pinFor(entry: Entry, on: boolean): void {
@@ -691,7 +743,7 @@ export function createClockController(deps: ClockControllerDeps) {
     if (entry === undefined) return Promise.resolve();
     if (entry.pipeline !== null) return entry.pipeline;
     const run = (async () => {
-      for (let pass = 0; pass < 3; pass += 1) {
+      for (let pass = 0; pass < 3 && !closed; pass += 1) {
         const record = entry.record;
         const remedy = record?.remedy ?? null;
         if (record === null || remedy === null || entry.lost) return;
@@ -840,41 +892,78 @@ export function createClockController(deps: ClockControllerDeps) {
       if (record === null) record = await deps.store.load(gameId).catch(() => null);
       return record === null ? null : { deadline: record.policy.class, paceSecs: record.policy.pace_secs };
     },
-    /** A money table's deadline, fixed at its creation (before any CreateGame is built from it). */
-    async createMoneyPolicy(gameId: string, deadline: ClockDeadlineClass, paceSecs: number | null): Promise<ClockAnswer> {
+    /** A table's deadline at its creation (a money table's is fixed then, before any CreateGame is built from it). A
+     *  No-deadline money table's host acknowledgement (`ackSeat`) is recorded with it, before the host's ante. */
+    async createPolicy(gameId: string, input: { readonly deadline: ClockDeadlineClass; readonly paceSecs: number | null; readonly money: boolean; readonly ackSeat?: string | null }): Promise<ClockAnswer> {
+      const { deadline, paceSecs, money } = input;
       const entry = entryOf(gameId);
       if (entry.stale) await reread(entry).catch(() => undefined);
+      if (entry.unreadable !== null || entry.lost) return { ok: false, code: CLOCK_REFUSAL.unavailable, reason: "The table's deadline could not be recorded. Try again." };
       if (entry.record !== null) {
-        return entry.record.policy.class === deadline && entry.record.policy.pace_secs === (deadline === "async-pace" ? paceSecs : null) ? { ok: true } : { ok: false, code: "wrong-state", reason: "This table's deadline is already fixed." };
+        return entry.record.policy.class === deadline && entry.record.policy.pace_secs === (deadline === "async-pace" ? paceSecs : null) && entry.record.money === money ? { ok: true } : { ok: false, code: "wrong-state", reason: "This table's deadline is already fixed." };
       }
+      let record: GameClockRecord;
       try {
-        entry.record = newClockRecord({ gameId, deadline, paceSecs, money: true, authority: deps.authority, now: now() });
+        record = newClockRecord({ gameId, deadline, paceSecs, money, authority: deps.authority, now: now() });
       } catch (error) {
         return { ok: false, code: "bad-frame", reason: describe(error) };
       }
+      if (deadline === "no-deadline" && typeof input.ackSeat === "string" && input.ackSeat !== "") {
+        const acked = acknowledge(record, input.ackSeat, now());
+        if (!("code" in acked)) record = acked.record;
+      }
+      entry.record = record;
       entry.checked = true;
       const ok = await flush(entry);
       return ok ? { ok: true } : { ok: false, code: CLOCK_REFUSAL.unavailable, reason: "The table's deadline could not be recorded. Try again." };
     },
+    async createMoneyPolicy(gameId: string, deadline: ClockDeadlineClass, paceSecs: number | null): Promise<ClockAnswer> {
+      return this.createPolicy(gameId, { deadline, paceSecs, money: true });
+    },
+    /** Whether a seat may ante at this table as far as the No-deadline disclosure goes: `not-required` (the table has a
+     *  deadline), `acknowledged`, `missing`, or `unknown` (its clock cannot be read: refuse). */
+    async ackStatus(gameId: string, seat: string): Promise<"not-required" | "acknowledged" | "missing" | "unknown"> {
+      const entry = entries.get(gameId);
+      let record = entry !== undefined && !entry.stale ? entry.record : null;
+      if (record === null) {
+        try {
+          record = await deps.store.load(gameId);
+        } catch {
+          return "unknown";
+        }
+      }
+      if (record === null) return "unknown";
+      if (record.policy.class !== "no-deadline") return "not-required";
+      return record.acks[seat] !== undefined ? "acknowledged" : "missing";
+    },
     /** An actor loaded (a first open, a restart, a reload): the clock is read and its continuity judged NOW, so a
      *  system pause is in force (and shown) before anyone moves. */
     loaded(gameId: string): void {
-      void deps.runOn(gameId, "clock-load", async (game, tx) => {
+      void track(deps.runOn(gameId, "clock-load", async (game, tx) => {
         const entry = entryOf(gameId);
         const record = await ensure(game, tx, true);
         if (record === null) return;
         await catchUp(entry, game, tx);
         await settle(entry, gameId);
-      }).catch((error) => deps.warn(`  clock: ${gameId}: the clock load failed -- ${describe(error)}`));
+      })).catch((error) => deps.warn(`  clock: ${gameId}: the clock load failed -- ${describe(error)}`));
     },
     /** A money table's financial record changed: re-check its escrow's end in the table's task. */
     moneyChanged(gameId: string): void {
       if (!entries.has(gameId)) return;
-      void deps.runOn(gameId, "clock-money", async (game, tx) => {
+      void track(deps.runOn(gameId, "clock-money", async (game, tx) => {
         const entry = entryOf(gameId);
         const record = await ensure(game, tx, true);
         if (record !== null) await settle(entry, gameId);
-      }).catch(() => undefined);
+      })).catch(() => undefined);
+    },
+    /** Every clock task this controller started (timers, heartbeats, loads) has finished, and every write settled
+     *  (tests: controlled time waits for this before moving on). */
+    async idle(): Promise<void> {
+      for (let round = 0; round < 64 && inFlight.size > 0; round += 1) await Promise.allSettled([...inFlight]);
+      for (const entry of entries.values()) {
+        await entry.writes;
+        if (entry.pipeline !== null) await entry.pipeline.catch(() => undefined);
+      }
     },
     /** Settled writes and remedy passes (tests). */
     async settled(gameId: string): Promise<void> {
@@ -887,6 +976,7 @@ export function createClockController(deps: ClockControllerDeps) {
     startSweep,
     drop,
     close(): void {
+      closed = true;
       if (sweepHandle !== null) timers.clear(sweepHandle);
       sweepHandle = null;
       for (const gameId of [...entries.keys()]) drop(gameId);

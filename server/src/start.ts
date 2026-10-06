@@ -44,6 +44,8 @@ import { createWalletTicketLedger } from "./escrow/walletTickets";
 import { fileJournalDirOf, JunoConfigError, parseJunoBackendConfig, pinOf, type JunoBackendConfig } from "./escrow/juno/junoConfig";
 import { openJunoBackend, type JunoBackend } from "./escrow/juno/junoBackend";
 import { createMoneyTables, MONEY_TABLES_SWITCH, type MoneyTables } from "./escrow/moneyTables";
+import { createFileClockStore } from "./rooms/clock/clockStore";
+import { createClockWiring } from "./rooms/clock/clockWiring";
 import type { WalletTicketLedger } from "./escrow/walletTickets";
 import { seatOf } from "./rooms/gameRecord";
 import { NoMoneyRosterSource } from "./rooms/roomService";
@@ -247,6 +249,19 @@ async function main(): Promise<void> {
      Money games stay DISABLED to players either way (a stake is refused; ESCROW-4 builds the player flow). */
   const escrowConfigPath = process.env.ESCROW_JUNO_CONFIG ?? flagValue("--escrow-config");
   let escrow: JunoBackend | null = null;
+  /* Phase 3 final clocks: the table clock (`games/clocks/`, under the same lock). Its continuity AUTHORITY is this
+     process's lock instance: every start is a new authority, so a Live table is SYSTEM-PAUSED across any restart (the
+     outage is never charged; every player resumes). Its remedy pipeline binds once the backend opens (fail closed). */
+  const clockWiring = createClockWiring({
+    // eslint-disable-next-line no-console
+    store: createFileClockStore(dataDir, { writerCheck: () => held.verify(), warn: (line) => console.warn(line) }),
+    authority: `file:${held.instanceId}`,
+    financial: financialStore,
+    now: () => Date.now(),
+    // eslint-disable-next-line no-console
+    warn: (line) => console.warn(line),
+    ops,
+  });
   const serverRef: { current: ReturnType<typeof createGameServer> | null } = { current: null };
   /* ESCROW-4: REAL-MONEY TABLES, behind the operator's explicit switch -- `ESCROW_MONEY_TABLES=nonmainnet` (or
      `--money-tables nonmainnet`) -- AND a configured, verified Juno backend that is not mainnet. Anything else: no money
@@ -318,7 +333,11 @@ async function main(): Promise<void> {
         ops,
         /* ESCROW-4: the join admission's precondition is the proof the wallet-link route recorded on the grant. */
         walletProofs: ledger,
+        /* Phase 3 final clocks (FP4): the clock lane's gate before any remedy is relayed; the table's recorded deadline
+           for an async bind. Both answer "not yet" until the game server exists (fail closed). */
+        ...clockWiring.backendDeps,
       });
+      clockWiring.backendOpened(escrow);
       junoConfigUsed = junoConfig;
       ledgerUsed = ledger;
     } catch (error) {
@@ -426,6 +445,8 @@ async function main(): Promise<void> {
        release (`npm run gamesDoctor -- release`); the audit lines and the status snapshot (`ops/`). */
     holds: createFileHoldStore(dataDir, { writerCheck: () => held.verify() }),
     ops,
+    /* Phase 3 final clocks: the table clock (Live 20:00 per required action, Timed Async, No-deadline). */
+    clock: clockWiring.server,
     statusExtras: () => {
       const health = identityStore.health();
       return {
@@ -448,6 +469,7 @@ async function main(): Promise<void> {
      -- a completed one announces its seal even if nobody ever reopens it -- and quiet funded games are looked at every
      five minutes (liveness is a state, never a refund). */
   serverRef.current = server;
+  clockWiring.serverBuilt(server, escrow?.service ?? null);
   /* LIVE-4 (integration): the session side re-asks every resident game's verdict when the chain facts change -- a
      verified contradiction the money side has just recorded stops the game here at once, on this primary pool too.
      LIVE-4 (L4-7): and the owner writes every verified conflict's canonical hold NOW (`holdConflicts`), not at the next
@@ -470,6 +492,8 @@ async function main(): Promise<void> {
         // eslint-disable-next-line no-console
         warn: (line) => console.warn(line),
         ops,
+        /* Phase 3 final clocks: a No-deadline table's seat antes only after acknowledging the indefinite-lock disclosure. */
+        noDeadlineAck: (gameId, playerId) => server.clock?.ackStatus(gameId, playerId) ?? Promise.resolve("not-required" as const),
       },
       server.rooms.moneyPort,
     );

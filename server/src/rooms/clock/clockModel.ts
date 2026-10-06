@@ -877,8 +877,12 @@ function applyIfUnanimous(x: Draft, now: number): void {
  *  continuity between them is NOT proven. Live: SYSTEM PAUSE (no vote to enter, unanimous to leave), every timer
  *  frozen as of `preservedAt` -- the last instant the earlier authority proved it was in control -- and every
  *  not-yet-final vote staled. Timed Async: the outage is credited (the timers resume, as of `preservedAt`, from now).
- *  No-deadline: nothing is timed. A game already ended stays ended (a sealed money remedy is held by the system pause
- *  until the players resume -- nothing is signed on stale elapsed time). */
+ *  No-deadline: nothing is timed. A game already ENDED stays ended and is NOT paused: its sealed money remedy was decided
+ *  (and made durable) while continuity was proven, and its attestation takes its time from the chain's block time --
+ *  nothing about it rests on elapsed time after the break, so it is never held hostage to a unanimous resume (a
+ *  defaulter could otherwise veto its own remedy by never resuming). Decisions are never made ACROSS a break: the
+ *  timers of a running game are frozen as of the last proven instant, and a stall inside one process is a break too
+ *  (`clockController.ts`, `CLOCK_CONTINUITY_GAP_*`). */
 export function continuityBreak(record: GameClockRecord, input: { readonly now: number; readonly preservedAt: number; readonly reason: string; readonly authority: string }): ClockStep {
   const x = new Draft(record, input.now);
   const d = x.d;
@@ -887,7 +891,7 @@ export function continuityBreak(record: GameClockRecord, input: { readonly now: 
     x.touch();
     return x.done();
   }
-  const timed = d.policy.class === "live" && (d.phase !== "ended" || (d.remedy !== null && d.remedy.status !== "confirmed" && d.remedy.status !== "superseded"));
+  const timed = d.policy.class === "live" && d.phase !== "ended";
   if (timed) {
     if (d.system !== null) {
       /* Already system-paused (a second break before anyone resumed): keep the first preserved state; votes restart. */

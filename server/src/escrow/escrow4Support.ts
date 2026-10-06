@@ -30,7 +30,8 @@ import type { LogStore } from "../fileLogStore";
 import { createMemorySigningJournal } from "./signingJournal";
 import { createMemoryWalletTicketStore, createWalletTicketLedger } from "./walletTickets";
 import { addressOfPublicKey } from "./juno/cosmosTx";
-import { FakeJunoChain } from "./juno/fakeJunoChain";
+import { FakeJunoChain, type FakeDeadline } from "./juno/fakeJunoChain";
+import { createMemoryClockStore } from "../rooms/clock/clockStore";
 import { DEFAULT_GAS_POLICY } from "./juno/gasPolicy";
 import { junoJoinAdmissionSigner } from "./juno/joinAdmission";
 import { createJunoRelayer, type Relayer } from "./juno/relayer";
@@ -124,6 +125,9 @@ export interface MoneyServerOptions {
   readonly store?: LogStore;
   /** JX-4B: the contract's resolver (a bech32 address when a test parses a production configuration naming it). */
   readonly resolver?: string;
+  /** Phase 3 final clocks: a table clock (memory store, inert timers, the money clock) wired as `start.ts` wires one:
+   *  the async bind's recorded deadline, the remedy gate, the No-deadline acknowledgement before a join admission. */
+  readonly clock?: boolean;
 }
 
 export async function moneyServer(options: MoneyServerOptions = {}): Promise<MoneyServer> {
@@ -190,6 +194,13 @@ export async function moneyServer(options: MoneyServerOptions = {}): Promise<Mon
     admission: { signer: junoJoinAdmissionSigner(ADMISSION_PUBKEY, JUNO_CODEC_V1, developmentDigestSigner(ADMISSION_SECRET, "admission", GUARD)), ttlSecs: ADMISSION_TTL_SECS },
     walletProofs: ledger,
     ...(options.continuation !== undefined ? { continuation: options.continuation } : {}),
+    ...(options.clock === true
+      ? {
+          tableDeadline: (gameId: string) => refs.server?.clock?.deadlineOf(gameId) ?? Promise.resolve(null),
+          remedyGate: (gameId: string, intent: Parameters<NonNullable<Parameters<typeof createEscrowService>[0]["remedyGate"]>>[1]) =>
+            refs.server?.clock?.remedyGate(gameId, intent) ?? Promise.resolve({ kind: "wait" as const, why: "no clock" }),
+        }
+      : {}),
   });
   relayer = createJunoRelayer({
     rest: chain,
@@ -246,6 +257,7 @@ export async function moneyServer(options: MoneyServerOptions = {}): Promise<Mon
     rosterSource: { plan: (record, ctx) => (record.money === null ? noMoney.plan(record, ctx) : service.rosterSource.plan(record, ctx)) },
     money: () => refs.money,
     escrow: { onGameplayCommitted: (input) => service.onGameplayCommitted(input), isRosterFrozen: (gameId) => service.isRosterFrozen(gameId) },
+    ...(options.clock === true ? { clock: { store: createMemoryClockStore(), authority: "auth-money", now: () => clock.now, timers: { set: () => null, clear: () => undefined } } } : {}),
   });
   refs.server = started.server;
   /* As `start.ts` (LIVE-4 integration): when the chain facts every verdict reads change, every resident game's
@@ -254,7 +266,21 @@ export async function moneyServer(options: MoneyServerOptions = {}): Promise<Mon
     void started.server.lifecycle.reviewContinuation().catch(() => undefined);
   });
   const money = createMoneyTables(
-    { enabled: options.enabled ?? true, service, pin: options.pin ?? PIN, symbol: "JUNOX", rest: chain, tickets: ledger, financial, appName: "Project 18XX", now: () => clock.now, warn: (line) => warnings.push(line), ops, manualObserver: true },
+    {
+      enabled: options.enabled ?? true,
+      service,
+      pin: options.pin ?? PIN,
+      symbol: "JUNOX",
+      rest: chain,
+      tickets: ledger,
+      financial,
+      appName: "Project 18XX",
+      now: () => clock.now,
+      warn: (line) => warnings.push(line),
+      ops,
+      manualObserver: true,
+      ...(options.clock === true ? { noDeadlineAck: (gameId: string, playerId: string) => started.server.clock?.ackStatus(gameId, playerId) ?? Promise.resolve("not-required" as const) } : {}),
+    },
     started.server.rooms.moneyPort,
   );
   refs.money = money;
@@ -367,10 +393,27 @@ export async function linkWallet(who: Player, gameId: string, wallet: TestWallet
 }
 
 /** The host's CreateGame on chain, exactly as the browser builds it from the view (then the deposit hint). */
-export async function hostCreates(world: MoneyServer, host: Player, gameId: string, wallet: TestWallet, consentKey: TestConsentKey, ticket: string, over: { hint?: boolean; players?: number } = {}): Promise<string> {
+export async function hostCreates(
+  world: MoneyServer,
+  host: Player,
+  gameId: string,
+  wallet: TestWallet,
+  consentKey: TestConsentKey,
+  ticket: string,
+  over: { hint?: boolean; players?: number; variants?: Record<string, unknown>; deadline?: FakeDeadline } = {},
+): Promise<string> {
+  const variants = resolveVariants((over.variants ?? {}) as never);
   const created = world.chain.createGame(
     wallet.address,
-    { max_players: over.players ?? 2, mode: "live", rules_engine_version: RULES_ENGINE_VERSION, variants_digest: variantsDigestV1(resolveVariants({} as never)), consent_pubkey: consentKey.pubkey, join_ticket: ticket },
+    {
+      max_players: over.players ?? 2,
+      mode: variants.mode === "async" ? "async" : "live",
+      rules_engine_version: RULES_ENGINE_VERSION,
+      variants_digest: variantsDigestV1(variants),
+      consent_pubkey: consentKey.pubkey,
+      join_ticket: ticket,
+      ...(over.deadline !== undefined ? { deadline: over.deadline } : {}),
+    },
     STAKE,
   );
   if (!created.ok) throw new Error(`CreateGame: ${created.error}`);

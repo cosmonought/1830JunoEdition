@@ -681,13 +681,30 @@ describe("System pause: entered with no vote on a continuity break; unanimous re
     assert.equal(t.record.ended?.kind, "live-timeout-annul", "the staled foreclosure approval no longer decides minute 30");
   });
 
-  test("a money remedy sealed before the break stays sealed and is held by the system pause until every player resumes", () => {
+  test("a money remedy sealed before the break is a durable past decision: the break neither pauses nor re-decides it", () => {
     const t = new Table("live", { money: true });
     t.advance(LIVE_ACTION_MS + LIVE_CURE_MS);
     assert.equal(t.record.remedy?.status, "sealed");
+    const sealed = t.record.remedy;
     t.ok(continuityBreak(t.record, { now: t.t + HOUR, preservedAt: t.t, reason: "lost", authority: "auth-2" }));
-    assert.notEqual(t.record.system, null, "nothing not yet final is relayed while system-paused");
-    assert.equal(t.record.remedy?.kind, 1, "the sealed decision is unchanged");
+    assert.equal(t.record.system, null, "an ended game is not system-paused (a defaulter cannot hold its own remedy hostage by never resuming)");
+    assert.deepEqual(t.record.remedy, sealed, "the sealed decision is unchanged");
+  });
+
+  test("a break DURING the cure window freezes it; nothing is sealed until every player resumes and the preserved time runs out", () => {
+    const t = new Table("live", { money: true });
+    t.advance(LIVE_ACTION_MS + 9 * MIN);
+    const proven = t.t;
+    t.t += HOUR;
+    t.ok(continuityBreak(t.record, { now: t.t, preservedAt: proven, reason: "lost", authority: "auth-2" }));
+    t.advance(5 * HOUR);
+    assert.equal(t.record.remedy, null, "no remedy from time that was never proven");
+    for (const seat of [A, B, C]) t.ok(systemResumeVote(t.record, seat, t.t));
+    assert.equal(t.cureLeft(), MIN);
+    t.advance(MIN);
+    const after = t.record as GameClockRecord;
+    assert.equal(after.remedy?.kind, 1);
+    assert.equal(after.remedy?.final_ms, t.t, "final at the resumed moment the preserved minute ran out");
   });
 
   test("Timed Async: the outage is credited automatically (no vote); No-deadline: nothing changes", () => {

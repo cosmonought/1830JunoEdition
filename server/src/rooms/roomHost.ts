@@ -71,7 +71,7 @@ import { createClockController, rescindExpiredOffer, type ClockAnswer, type Cloc
 import type { ClockStore } from "./clock/clockStore";
 import type { ClockConductHook } from "./clock/clockEvidence";
 import type { RemedyPort } from "../escrow/remedyPipeline";
-import { CLOCK_REFUSAL } from "../../../frontend/src/utils/clockProtocol";
+import { CLOCK_REFUSAL, NO_DEADLINE_DISCLOSURE } from "../../../frontend/src/utils/clockProtocol";
 import type { MoneyContinuationFacts } from "../escrow/moneyContinuation";
 import type { ContinuationWiring } from "../continuationWiring";
 import { disabledMoneyView, disabledStake, type MoneyRoomPort, type MoneyTables } from "../escrow/moneyTables";
@@ -1151,7 +1151,22 @@ export function createRoomHost(deps: RoomHostDeps) {
        or none, is an ordinary table. */
     const stakeRaw = op.stake;
     let moneyTerms: GameMoneyTerms | null = null;
-    if (stakeRaw !== undefined && !(typeof stakeRaw === "string" && /^0+$/.test(stakeRaw))) {
+    /* Phase 3 final clocks: the table's deadline class. A Live table is always Live; an Async table may name its pace
+       (or No-deadline) now -- a MONEY Async table must, since its escrow is created from it -- and a No-deadline money
+       table's host acknowledges the indefinite-lock disclosure with the create (before any ante). */
+    const asyncTable = resolveVariants(op.variants as never).mode === "async";
+    const isMoney = stakeRaw !== undefined && !(typeof stakeRaw === "string" && /^0+$/.test(stakeRaw));
+    const deadline = op.deadline === undefined ? null : (op.deadline as "live" | "async-pace" | "no-deadline");
+    const paceSecs = typeof op.paceSecs === "number" ? op.paceSecs : null;
+    if (!asyncTable && deadline !== null && deadline !== "live") return ack(socket, requestId, { ok: false, code: "bad-frame", reason: "A Live table always plays the Live action clock." });
+    if (asyncTable && deadline === "live") return ack(socket, requestId, { ok: false, code: "bad-frame", reason: "An Async table chooses a pace or no deadline." });
+    if (deadline === "async-pace" && paceSecs === null) return ack(socket, requestId, { ok: false, code: "bad-frame", reason: "Choose 12 hours, 24 hours, 2 days, 3 days or 7 days." });
+    if (isMoney && asyncTable) {
+      if (clock === null) return ack(socket, requestId, { ok: false, code: "money-games-disabled", reason: "This server can't time an Async table with stakes." });
+      if (deadline === null) return ack(socket, requestId, { ok: false, code: "bad-frame", reason: "Choose the table's pace (12 hours to 7 days) or No deadline before opening it with stakes." });
+      if (deadline === "no-deadline" && op.noDeadlineAck !== true) return ack(socket, requestId, { ok: false, code: "acknowledge-no-deadline", reason: `${NO_DEADLINE_DISCLOSURE} Acknowledge this before opening the table.` });
+    }
+    if (isMoney) {
       const money = deps.money?.() ?? null;
       if (money === null) return ack(socket, requestId, { ok: false, code: "money-games-disabled", reason: "Games with stakes are not open on this server." });
       const prepared = await money.prepareCreate({ stake: stakeRaw, exactPlayers: op.exactPlayers, variants: resolveVariants(op.variants as never) });
@@ -1176,6 +1191,7 @@ export function createRoomHost(deps: RoomHostDeps) {
       if (!(await activated(ctx.principalId))) return ack(socket, requestId, { ok: false, code: "unavailable", reason: "The server could not record who you are, so the table was not made. Try again." });
       do gameId = mintGameId();
       while (recordIndex.has(gameId) || deps.games.peek(gameId) !== undefined);
+      const hostPlayerId = mintPlayerId();
       code = await claimFreshCode(gameId);
       if (code === null) return ack(socket, requestId, { ok: false, code: "unavailable", reason: UNAVAILABLE });
       const claimed = code;
@@ -1186,6 +1202,15 @@ export function createRoomHost(deps: RoomHostDeps) {
         if (!opened.ok) {
           releaseLater(claimed, gameId);
           return ack(socket, requestId, { ok: false, code: opened.code, reason: opened.reason });
+        }
+        /* Phase 3 final clocks: the deadline is recorded BEFORE the table exists, so no escrow is ever created (or bound)
+           from a table whose deadline was not fixed. */
+        if (clock !== null) {
+          const fixed = await clock.createPolicy(gameId, { deadline: deadline ?? "live", paceSecs: deadline === "async-pace" ? paceSecs : null, money: true, ackSeat: deadline === "no-deadline" ? hostPlayerId : null });
+          if (!fixed.ok) {
+            releaseLater(claimed, gameId);
+            return ack(socket, requestId, { ok: false, code: fixed.code, reason: fixed.reason });
+          }
         }
         /* LIVE-4 (L4-2): into the settlement index BEFORE the table's first session is made, so the continuation verdict
            that session asks sees the money facts (identity, pin) of the record just written -- never a money table the
@@ -1214,7 +1239,7 @@ export function createRoomHost(deps: RoomHostDeps) {
           /* LIVE-2E: a create that names nobody is the profile's name, not "Host". */
           nickname: typeof op.nickname === "string" && op.nickname.trim() !== "" ? op.nickname : (deps.profileNameOf?.(ctx.principalId) ?? op.nickname),
           color: (op.color as string | null | undefined) ?? null,
-          hostPlayerId: mintPlayerId(),
+          hostPlayerId,
           money: moneyTerms,
         });
         if (!result.ok || result.record === null) return result.ok ? { ok: false as const, code: "internal", reason: "No table." } : result;
@@ -1234,6 +1259,11 @@ export function createRoomHost(deps: RoomHostDeps) {
         return ack(socket, requestId, result);
       }
       counters.created += 1;
+      /* A free Async table that named its deadline at the create: recorded now (the host may still change it before
+         play). A failure here changes nothing (the table plays No-deadline unless the host chooses again). */
+      if (clock !== null && moneyTerms === null && asyncTable && deadline !== null) {
+        await clock.createPolicy(gameId, { deadline, paceSecs: deadline === "async-pace" ? paceSecs : null, money: false }).catch(() => undefined);
+      }
       return ack(socket, requestId, { ok: true, data: result.data });
     } finally {
       pendingCreates.set(ctx.principalId, (pendingCreates.get(ctx.principalId) ?? 1) - 1);

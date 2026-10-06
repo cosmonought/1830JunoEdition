@@ -200,6 +200,12 @@ export type RoomOpBody =
       /** ESCROW-4: a real-money table's gross ante per seat, in the deployment's base units (a canonical decimal).
        *  The server refuses it `money-games-disabled` unless it has real-money tables enabled. */
       stake?: string;
+      /** Phase 3 final clocks: the deadline class (an Async table: `async-pace` with `paceSecs`, or `no-deadline`);
+       *  required for an Async MONEY table, fixed with its escrow. */
+      deadline?: ClockDeadlineClass;
+      paceSecs?: number | null;
+      /** A No-deadline money table's host: the indefinite-lock disclosure acknowledged (before the ante). */
+      noDeadlineAck?: boolean;
     }
   | { type: "join"; code: string; takeSeat: boolean }
   | { type: "take-seat" }

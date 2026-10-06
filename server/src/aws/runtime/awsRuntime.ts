@@ -130,6 +130,8 @@ import type { InspectableSigningJournal } from "../../escrow/signingJournal";
 import { createWalletTicketLedger, type WalletTicketStore } from "../../escrow/walletTickets";
 import type { LogStore } from "../../fileLogStore";
 import { createGameServer } from "../../gameServer";
+import type { ClockStore } from "../../rooms/clock/clockStore";
+import { createClockWiring } from "../../rooms/clock/clockWiring";
 import type { SensitiveAuthGrantStore } from "../../identity/grants";
 import type { GsMode } from "../../identity/mode";
 import type { SecurityEventJournal } from "../../identity/securityEvents";
@@ -224,6 +226,9 @@ export interface AwsGameStores {
   readonly intents: ChainIntentStore | null;
   /** The relayer's view, ROLE_RL-fenced (null without escrow). */
   readonly relayerIntents: ChainIntentStore | null;
+  /** Phase 3 final clocks: the table clocks (`GAME#<id>` / `CLOCK`, fenced by the game's HEAD). Absent (a test
+   *  substrate): no table is timed. */
+  readonly clock?: ClockStore;
 }
 
 export interface AwsSubstrate<W extends PoolWriterPort = PoolWriterPort, L extends InspectableSigningJournal = InspectableSigningJournal> {
@@ -913,6 +918,13 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
 
   const serverRef: { current: ReturnType<typeof createGameServer> | null } = { current: null };
   const moneyRef: { current: MoneyTables | null } = { current: null };
+  /* Phase 3 final clocks: the table clock's continuity AUTHORITY is this task's hold of its pool -- the generation, the
+     pool, its epoch and the task: a takeover (or a restart) is a new authority, so a Live table is SYSTEM-PAUSED across
+     it (the outage is never charged; every player resumes). The remedy pipeline binds once the backend opens. */
+  const clockWiring =
+    stores.clock === undefined
+      ? null
+      : createClockWiring({ store: stores.clock, authority: `aws:${config.generation}:${w.pool}:${w.epoch}:${w.task}`, financial: stores.financial, now: input.now, warn: input.warn, ops: input.ops });
   const ticketLedger = createWalletTicketLedger({
     store: stores.tickets,
     standing: (context) => identity.securityStanding(context),
@@ -978,12 +990,16 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
         /* LIVE-6 L6-2: a RESTORED game table (its marker's origin, step 1) serves its money games read-only until each is
            verified in this process (F1 + the chain); the check re-runs at every start, so a restart never bypasses it. */
         ...(restoredTable ? { restoreSafeMode: true } : {}),
+        /* Phase 3 final clocks (FP4): the clock lane's gate before any remedy is relayed, and the table's recorded
+           deadline for an async bind -- "not yet" until the game server exists (fail closed). */
+        ...(clockWiring !== null ? clockWiring.backendDeps : {}),
       });
     } catch (error) {
       assertAlive();
       return refuse(`the Juno backend could not be opened (${describe(error)})`);
     }
     assertAlive();
+    if (clockWiring !== null && backend !== null) clockWiring.backendOpened(backend);
     step("escrow-backend", `Juno backend OPENED (KMS keys by ARN, public keys checked against the configuration; every Sign behind the pool writer's gate), NOT started; no roster preload (claim-time refresh)`);
   }
   const opened = backend;
@@ -1134,11 +1150,13 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
       routes,
       ...(input.limits !== undefined ? { limits: input.limits } : {}),
       ...(input.edgeDiagnostic === true ? { edgeDiagnostic: { trustedProxyHops: input.server.trustedProxyHops } } : {}),
+      ...(clockWiring !== null ? { clock: clockWiring.server } : {}),
     });
   } catch (error) {
     return refuse(`the game server could not be built (${describe(error)})`);
   }
   serverRef.current = server;
+  clockWiring?.serverBuilt(server, opened?.service ?? null);
   closers.push(() => void server.close().catch(() => undefined));
   step("game-server", `game server built with POOL ownership, listening on ${input.bindHost}:${input.port}; /gs/readyz answers from the pool writer's readiness`);
   if (input.edgeDiagnostic === true) input.warn("  edge: GS_EDGE_DIAGNOSTIC=staging -- /gs/diag/edge answers the staging certification's edge probe (hashed mirror of each request; never on mainnet)");
@@ -1157,6 +1175,8 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
         now: input.now,
         warn: input.warn,
         ops: input.ops,
+        /* Phase 3 final clocks: a No-deadline table's seat antes only after acknowledging the indefinite-lock disclosure. */
+        noDeadlineAck: (gameId, playerId) => server.clock?.ackStatus(gameId, playerId) ?? Promise.resolve("not-required" as const),
       },
       server.rooms.moneyPort,
     );

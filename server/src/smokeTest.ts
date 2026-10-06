@@ -32,17 +32,24 @@
 // ==================================================================
 //
 // A bootstrap now gives an UNPROFILED session (`profile: null`) whose socket upgrade is refused 403; HALF A creates
-// "Alice" and "Bob" (`POST /gs/api/profile`, a recovery key shown once, 409 on a second try) before either may open a
-// socket, and the seats start with those names. Then, around the crash:
-//   LINK      A mints a single-use code; a brand-new browser C redeems it and gets a fresh cookie for A's EXISTING
-//             principal (its temporary session answers 401 `replaced`); C's sockets see A's seat and A's log; the code
-//             replayed from another browser is 403; both devices play the seat; "sign out this device" on A's first
-//             device closes its sockets 4401 (401 `logout`) while C plays on.
-//   RECOVER   after the SIGKILL and restart: A's key is rotated (the old one is 403 at once) and a NEW browser D
-//             recovers with the new one -> the same seat, player id and log; B's cookie still works; "sign out other
-//             devices" from D closes C (4401, 401 `signed-out-remotely`).
-//   NOTHING COPIED   the log holds the deal and gameplay only (no seat transfer or copy entry), and no recovery key,
-//             link code or cookie secret ever appears in the server's stdout/stderr.
+// the accounts "Alice" and "Bob" before either may open a socket -- PHASE 3 FINAL: an account is a username, a password
+// and ONE Authorization Wallet: `POST /gs/api/account/authorization` mints the CREATE text, the wallet signs it (ADR-036,
+// exactly as Keplr's `signArbitrary`; a deterministic test Keplr account here), `POST /gs/api/account/create` makes the
+// account on a FRESH cookie (the temporary one answers 401 `replaced`), 409 on a second try -- and the seats start with
+// those names. No recovery key and no device-link code exists (their routes answer 410 `retired`). Then, around the
+// crash:
+//   SIGN IN   a brand-new browser C logs in with A's username and password and gets a fresh cookie for A's EXISTING
+//             principal (its temporary session answers 401 `replaced`); C's sockets see A's seat and A's log; a wrong
+//             password is 403; both devices play the seat; "sign out this device" on A's first device closes its
+//             sockets 4401 (401 `logout`) while C plays on.
+//   RECOVER   after the SIGKILL and restart: device C replaces A's Authorization Wallet ("Confirm it's you" with the
+//             password, then the current wallet approves and the new one accepts); a NEW browser D runs "Forgot
+//             password?" -- the OLD wallet is 403 at once, the NEW one recovers the account with a new password, which
+//             signs every earlier device out (C's sockets 4401, 401 `signed-out-remotely`) -> the same seat, player id and
+//             log on D; B's cookie still works; a browser F signs in with the new password (the old one is 403), and
+//             "sign out other devices" from D closes F (4401, 401 `signed-out-remotely`).
+//   NOTHING COPIED   the log holds the deal and gameplay only (no seat transfer or copy entry), and no password or
+//             cookie secret ever appears in the server's stdout/stderr.
 // HALF B -- DEVELOPMENT (GS_MODE=development). Two `?dev_claim=` tabs are two principals, each with a synthetic
 //   development profile (a joining seat's nickname is its claim); the same table is walked from both, each acts only
 //   when the board says it may, and a "reload" -- a brand-new socket with the same claim -- keeps its seat, before the
@@ -64,18 +71,21 @@ import { WebSocket } from "ws";
 
 import { SESSION_COOKIE_NAME } from "./identity/cookies";
 import {
+  ACCOUNT_AUTHORIZATION_PATH,
+  ACCOUNT_CREATE_PATH,
+  ACCOUNT_LOGIN_PATH,
+  ACCOUNT_RECOVER_PATH,
+  ACCOUNT_WALLET_CHALLENGE_PATH,
+  ACCOUNT_WALLET_REPLACE_PATH,
   HEALTH_PATH,
-  LINK_CODE_PATH,
-  LINK_PATH,
-  PROFILE_PATH,
-  RECOVER_PATH,
   REAUTH_PATH,
-  RECOVERY_KEY_PATH,
   REVOKE_PATH,
   SESSION_PATH,
   SIGN_OUT_OTHERS_PATH,
 } from "./identity/httpApi";
-import { RECOVERY_KEY_PATTERN } from "./identity/ids";
+/* PHASE 3 FINAL: deterministic test Keplr accounts that sign ADR-036 exactly as Keplr's `signArbitrary` does (the
+   accounts' Authorization Wallets). */
+import { keplrAccount, type KeplrAccount } from "./testSupport/authorizationWallets";
 import { LOCK_DIRECTORY, LOCK_STALE_AFTER_MS } from "./persistence/processLock";
 import { GAME_ID_PATTERN, PLAYER_ID_PATTERN, parseJoinCode } from "./rooms/gameRecord";
 /* The engine's own undo sentences, so the harness cannot drift from what the Undo button and the server both say --
@@ -133,10 +143,12 @@ const PRINCIPAL_ON_WIRE = /\bpr_[0-9a-z]{26}\b|pr_dev_/;
 /** LIVE-2E: nor a profile's private id (`pf_…`), nor a session id (`se_…`) outside the cookie that carries it. */
 const PROFILE_ON_WIRE = /\bpf_[0-9a-z]{26}\b/;
 const SESSION_ID_IN_BODY = /\bse_[0-9a-z]{26}\b/;
-/** LIVE-2E: "Link another device" codes, as the server shows them -- 20 Crockford symbols in fives of four. */
-const LINK_CODE_SHAPE = /^[0-9A-HJKMNP-TV-Z]{4}(?:-[0-9A-HJKMNP-TV-Z]{4}){4}$/;
-/** The link code's single-use lifetime (LIVE-2E): 10 minutes. */
-const LINK_CODE_TTL_MS = 10 * 60_000;
+/** PHASE 3 FINAL: the recovery-key and device-link routes, retired -- each answers 410 `retired` and reads nothing. */
+const RETIRED_PROFILE_PATH = "/gs/api/profile";
+const RETIRED_LINK_CODE_PATH = "/gs/api/profile/link-code";
+const RETIRED_LINK_PATH = "/gs/api/profile/link";
+const RETIRED_RECOVER_PATH = "/gs/api/profile/recover";
+const RETIRED_RECOVERY_KEY_PATH = "/gs/api/profile/recovery-key";
 /** Everything a game log may hold once LIVE-2E has moved a seat's player between devices: the deal and gameplay.
  *  No seat transfer, copy, claim or re-assignment of any kind -- a new device is the SAME principal, not a new seat. */
 const LOG_KINDS = new Set(["SetupGame", "WaterfallBuyLowest", "RevertTo"]);
@@ -685,7 +697,7 @@ async function productionHalf(): Promise<void> {
   const port = await freePort();
   const settings = { GS_MODE: "production", GS_ALLOWED_ORIGINS: PRODUCTION_ORIGIN, GS_TRUSTED_PROXY_HOPS: "0" };
   const socketUrl = `ws://127.0.0.1:${port}/gs`;
-  /** Every recovery key, link code and cookie secret this half is handed: none may ever appear in a server window. */
+  /** Every password and cookie secret this half handles: none may ever appear in a server window. */
   const secrets: Array<{ what: string; value: string }> = [];
   const keep = (what: string, value: string) => secrets.push({ what, value });
 
@@ -714,8 +726,8 @@ async function productionHalf(): Promise<void> {
     const boot = await bootstrap(cookie);
     return { status: boot.status, profile: boot.body?.profile as { name?: unknown; otherSessions?: unknown } | null | undefined, text: boot.text };
   };
-  /** A redemption (link code or recovery key) from an unprofiled browser: 200 {profile} and a fresh, ordinary session
-   *  cookie for the profile's EXISTING principal. */
+  /** A sign-in (username and password) from an unprofiled browser: 200 {profile} and a fresh, ordinary session cookie
+   *  for the account's EXISTING principal. */
   const redeemed = (answer: Bootstrap, who: string, name: string): string => {
     check(
       `${who}: 200 {ok: true, profile: {name: "${name}"}} -- a name, and no id of any kind`,
@@ -744,11 +756,11 @@ async function productionHalf(): Promise<void> {
   step("A1", `bootstrap cookie A: POST ${SESSION_PATH} from ${PRODUCTION_ORIGIN}`);
   const foreign = await postSession(port, { Origin: FOREIGN_ORIGIN });
   check("a bootstrap from an origin not on the list is refused 403, and sets no cookie", foreign.status === 403 && foreign.setCookie.length === 0, foreign);
-  const cookieA = await freshBrowser("A");
+  const tempA = await freshBrowser("A");
 
   step("A2", "bootstrap cookie B: the second browser");
-  const cookieB = await freshBrowser("B");
-  check("two browsers, two different sessions", cookieA !== cookieB);
+  const tempB = await freshBrowser("B");
+  check("two browsers, two different sessions", tempA !== tempB);
 
   step("A2+", "the production socket gate refuses ?dev_claim=, a missing cookie and an UNPROFILED session at the upgrade");
   check(
@@ -759,40 +771,61 @@ async function productionHalf(): Promise<void> {
     "a socket on /?dev_claim= is refused 404 -- development's second path does not exist here",
     (await upgradeStatus(`ws://127.0.0.1:${port}/?dev_claim=smoke-alice`, PRODUCTION_ORIGIN)) === 404,
   );
-  check("unprofiled cookie A's upgrade is refused 403 -- no profile, no game socket", (await upgradeStatus(socketUrl, PRODUCTION_ORIGIN, { Cookie: cookieA })) === 403);
-  check("and so is unprofiled cookie B's", (await upgradeStatus(socketUrl, PRODUCTION_ORIGIN, { Cookie: cookieB })) === 403);
-  const earlyCode = await api(LINK_CODE_PATH, {}, cookieA);
-  check("an unprofiled browser cannot mint a link code either: 403 profile-required", earlyCode.status === 403 && earlyCode.body?.error === "profile-required", earlyCode.text);
+  check("unprofiled cookie A's upgrade is refused 403 -- no account, no game socket", (await upgradeStatus(socketUrl, PRODUCTION_ORIGIN, { Cookie: tempA })) === 403);
+  check("and so is unprofiled cookie B's", (await upgradeStatus(socketUrl, PRODUCTION_ORIGIN, { Cookie: tempB })) === 403);
+  for (const retired of [RETIRED_PROFILE_PATH, RETIRED_LINK_CODE_PATH, RETIRED_LINK_PATH, RETIRED_RECOVER_PATH, RETIRED_RECOVERY_KEY_PATH]) {
+    const answer = await api(retired, {}, tempA);
+    check(`the recovery-key / device-link route ${retired} is retired: 410 retired, and sets no cookie`, answer.status === 410 && answer.body?.error === "retired" && answer.setCookie.length === 0, answer.text);
+  }
 
-  /* ---- LIVE-2E: the profile gate ---- */
-  step("A2P", `profiles: POST ${PROFILE_PATH} {name} -- "Alice" on browser A, "Bob" on browser B`);
-  const createProfile = async (cookie: string, name: string, who: string): Promise<string> => {
-    const made = await api(PROFILE_PATH, { name }, cookie);
-    const key = String(made.body?.recoveryKey ?? "");
+  /* ---- PHASE 3 FINAL: the account gate -- username, password, Authorization Wallet ---- */
+  step("A2P", `accounts: the CREATE text (${ACCOUNT_AUTHORIZATION_PATH}), the Authorization Wallet's signature, ${ACCOUNT_CREATE_PATH} -- "Alice" on browser A, "Bob" on browser B`);
+  const walletA = keplrAccount("smoke/alice/0");
+  const walletA2 = keplrAccount("smoke/alice/1");
+  const walletB = keplrAccount("smoke/bob/0");
+  const createAccount = async (temporary: string, name: string, who: string, wallet: KeplrAccount): Promise<{ cookie: string; username: string; password: string }> => {
+    const username = name.toLowerCase();
+    const password = `${name} smoke passphrase`;
+    keep(`${who}'s password`, password);
+    const minted = await api(ACCOUNT_AUTHORIZATION_PATH, { purpose: "create", username, wallet: wallet.address }, temporary);
+    const texts = minted.body?.texts as Array<{ purpose: string; signer: string; text: string }> | undefined;
     check(
-      `${who}: 201 {ok: true, profile: {name: "${name}", otherSessions: 0}, recoveryKey}`,
-      made.status === 201 && made.body?.ok === true && same(made.body?.profile, { name, otherSessions: 0 }) && same(Object.keys(made.body ?? {}).sort(), ["ok", "profile", "recoveryKey"]),
-      made.status,
+      `${who}: the CREATE text -- 200 {ok, operation, texts: [one, signed by the wallet Keplr is on], expiresAt}`,
+      minted.status === 200 && typeof minted.body?.operation === "string" && Array.isArray(texts) && texts.length === 1 && texts[0].signer === wallet.address && typeof minted.body?.expiresAt === "number",
+      minted.text,
     );
-    keep(`${who}'s recovery key`, key);
-    check(`${who}: the recovery key is rk_<26>.<43> -- shown this once`, RECOVERY_KEY_PATTERN.test(key));
-    const rest = JSON.stringify({ ...made.body, recoveryKey: undefined });
-    check(`${who}: the body names no principal, profile or session id`, !PRINCIPAL_ON_WIRE.test(rest) && !PROFILE_ON_WIRE.test(rest) && !SESSION_ID_IN_BODY.test(rest), rest);
-    check(`${who}: and sets no cookie -- the browser's session is the profile's session now`, made.setCookie.length === 0, made.setCookie.length);
-    return key;
+    const signed = wallet.sign((texts as Array<{ text: string }>)[0].text);
+    const made = await api(ACCOUNT_CREATE_PATH, { username, password, name, operation: minted.body?.operation as string, pubKey: signed.pubKey, signature: signed.signature }, temporary);
+    check(
+      `${who}: 201 {ok: true, profile: {name: "${name}", otherSessions: 0}, username: "${username}"} -- no recovery key`,
+      made.status === 201 && made.body?.ok === true && same(made.body?.profile, { name, otherSessions: 0 }) && made.body?.username === username && same(Object.keys(made.body ?? {}).sort(), ["ok", "profile", "username"]),
+      made.text,
+    );
+    check(`${who}: the body names no principal, profile or session id`, !PRINCIPAL_ON_WIRE.test(made.text) && !PROFILE_ON_WIRE.test(made.text) && !SESSION_ID_IN_BODY.test(made.text), made.text);
+    const cookie = sessionCookieOf(made, who);
+    keep(`${who}'s account cookie secret`, cookieSecretOf(cookie));
+    check(`${who}: the account is signed in on a FRESH cookie -- not the temporary one`, cookie !== temporary);
+    await endedAs(temporary, "replaced", `${who}'s temporary cookie (its unprofiled session)`);
+    return { cookie, username, password };
   };
-  const keyA = await createProfile(cookieA, "Alice", "A");
-  const twice = await api(PROFILE_PATH, { name: "Alicia" }, cookieA);
+  const accountAlice = await createAccount(tempA, "Alice", "A", walletA);
+  const cookieA = accountAlice.cookie;
+  const twice = await api(ACCOUNT_CREATE_PATH, { username: "alicia", password: "Alicia smoke passphrase", name: "Alicia", operation: "x".repeat(32), pubKey: "A".repeat(44), signature: "A".repeat(88) }, cookieA);
   check(
-    `a second create on browser A is refused 409 already-profiled, naming the profile it has ("Alice")`,
-    twice.status === 409 && twice.body?.error === "already-profiled" && same(twice.body?.profile, { name: "Alice" }) && twice.body?.recoveryKey === undefined,
+    `a second create on browser A is refused 409 already-profiled, naming the account it has ("Alice")`,
+    twice.status === 409 && twice.body?.error === "already-profiled" && same(twice.body?.profile, { name: "Alice" }) && twice.setCookie.length === 0,
     twice.text,
   );
-  const keyB = await createProfile(cookieB, "Bob", "B");
-  check("two profiles, two different recovery keys", keyA !== keyB);
+  const accountBob = await createAccount(tempB, "Bob", "B", walletB);
+  const cookieB = accountBob.cookie;
+  check("two accounts, two different cookies", cookieA !== cookieB);
   const accountA = await accountOf(cookieA);
-  check(`A's bootstrap now says profile {name: "Alice", otherSessions: 0}`, accountA.status === 200 && same(accountA.profile, { name: "Alice", otherSessions: 0 }), accountA.text);
-  check("cookie A (profiled) now opens a socket: 101", (await upgradeStatus(socketUrl, PRODUCTION_ORIGIN, { Cookie: cookieA })) === 101);
+  check(
+    `A's bootstrap now says profile {name: "Alice", otherSessions: 0, username: "alice"}`,
+    accountA.status === 200 && same(accountA.profile, { name: "Alice", otherSessions: 0, username: "alice" }),
+    accountA.text,
+  );
+  check("cookie A (an account) now opens a socket: 101", (await upgradeStatus(socketUrl, PRODUCTION_ORIGIN, { Cookie: cookieA })) === 101);
   check("cookie A from a foreign Origin is still refused 403", (await upgradeStatus(socketUrl, FOREIGN_ORIGIN, { Cookie: cookieA })) === 403);
 
   const principal = (cookie: string) => (label: string) => WireClient.open(label, socketUrl, PRODUCTION_ORIGIN, { Cookie: cookie });
@@ -999,29 +1032,20 @@ async function productionHalf(): Promise<void> {
     return reverted;
   };
 
-  /* ---- 12: link another device ---- */
-  step("A12", `link another device: A mints a code (${LINK_CODE_PATH}); a brand-new browser C redeems it (${LINK_PATH})`);
-  const minted = await api(LINK_CODE_PATH, {}, cookieA);
-  const linkCode = String(minted.body?.code ?? "");
-  const expiresAt = Number(minted.body?.expiresAt);
-  keep("the link code", linkCode);
-  keep("the link code (canonical)", linkCode.replace(/-/g, ""));
-  check(`A's link-code: 201 {ok: true, code, expiresAt} -- no id`, minted.status === 201 && minted.body?.ok === true && same(Object.keys(minted.body ?? {}).sort(), ["code", "expiresAt", "ok"]), minted.status);
-  check("the code is XXXX-XXXX-XXXX-XXXX-XXXX (20 Crockford symbols)", LINK_CODE_SHAPE.test(linkCode));
-  check("it expires within 10 minutes", Number.isFinite(expiresAt) && expiresAt > Date.now() && expiresAt <= Date.now() + LINK_CODE_TTL_MS + 5_000, expiresAt);
-
+  /* ---- 12: another device signs in (PHASE 3 FINAL: no device-link code exists -- the username and password) ---- */
+  step("A12", `another device: a brand-new browser C signs in with Alice's username and password (${ACCOUNT_LOGIN_PATH})`);
   const cookieC = await freshBrowser("C (a new device)");
   check("C's unprofiled session opens no socket: 403", (await upgradeStatus(socketUrl, PRODUCTION_ORIGIN, { Cookie: cookieC })) === 403);
-  const wrongCode = await api(LINK_PATH, { code: "0000-0000-0000-0000-0000" }, cookieC);
-  check("a wrong code is refused 403 invalid-credential, and sets no cookie", wrongCode.status === 403 && wrongCode.body?.error === "invalid-credential" && wrongCode.setCookie.length === 0, wrongCode.text);
-  /* Typed on the second device the way a person types it: lower case forgiven. */
-  const cookieC2 = redeemed(await api(LINK_PATH, { code: linkCode.toLowerCase() }, cookieC), "C redeeming A's code", "Alice");
+  const wrongPassword = await api(ACCOUNT_LOGIN_PATH, { username: accountAlice.username, password: "not Alice's passphrase" }, cookieC);
+  check("a wrong password is refused 403 invalid-credential, and sets no cookie", wrongPassword.status === 403 && wrongPassword.body?.error === "invalid-credential" && wrongPassword.setCookie.length === 0, wrongPassword.text);
+  /* Typed on the second device the way a person types it: the username's case forgiven. */
+  const cookieC2 = redeemed(await api(ACCOUNT_LOGIN_PATH, { username: accountAlice.username.toUpperCase(), password: accountAlice.password }, cookieC), "C signing in as Alice", "Alice");
   check("C now holds a new cookie -- not A's, and not its own temporary one", cookieC2 !== cookieA && cookieC2 !== cookieC);
   await endedAs(cookieC, "replaced", "C's temporary cookie (its unprofiled session)");
   const accountA2 = await accountOf(cookieA);
-  check(`A's first device now sees one other device: profile {name: "Alice", otherSessions: 1}`, same(accountA2.profile, { name: "Alice", otherSessions: 1 }), accountA2.text);
+  check(`A's first device now sees one other device: profile {name: "Alice", otherSessions: 1, username: "alice"}`, same(accountA2.profile, { name: "Alice", otherSessions: 1, username: "alice" }), accountA2.text);
   const accountC2 = await accountOf(cookieC2);
-  check(`and so does C: profile {name: "Alice", otherSessions: 1}`, accountC2.status === 200 && same(accountC2.profile, { name: "Alice", otherSessions: 1 }), accountC2.text);
+  check(`and so does C: profile {name: "Alice", otherSessions: 1, username: "alice"}`, accountC2.status === 200 && same(accountC2.profile, { name: "Alice", otherSessions: 1, username: "alice" }), accountC2.text);
 
   step("A12+", "C is Alice's seat: sockets on C's cookie, hello + room-hello -> the same seat and the same log as A's first device");
   const connectC2 = principal(cookieC2);
@@ -1038,8 +1062,8 @@ async function productionHalf(): Promise<void> {
   });
 
   const cookieE = await freshBrowser("E (yet another browser)");
-  const replay = await api(LINK_PATH, { code: linkCode }, cookieE);
-  check("A's code replayed from browser E is refused 403 invalid-credential -- single use", replay.status === 403 && replay.body?.error === "invalid-credential" && replay.setCookie.length === 0, replay.text);
+  const linkAttempt = await api(RETIRED_LINK_PATH, { code: "0000-0000-0000-0000-0000" }, cookieE);
+  check("a device-link redemption from browser E answers 410 retired -- nothing redeems a code any more", linkAttempt.status === 410 && linkAttempt.body?.error === "retired" && linkAttempt.setCookie.length === 0, linkAttempt.text);
   const accountE = await accountOf(cookieE);
   check("and E is still unprofiled (profile: null)", accountE.status === 200 && accountE.profile === null, accountE.text);
 
@@ -1116,28 +1140,87 @@ async function productionHalf(): Promise<void> {
   check("device C's RoomView after the restart: the same seats, the same host, the same you", same(afterA, storedA), { before: storedA, after: afterA });
   check("B's too", same(afterB, storedB), { before: storedB, after: afterB });
 
-  /* ---- 14: recovery on a new browser, with a rotated key ---- */
-  step("A14", `recovery: rotate A's key from device C (${RECOVERY_KEY_PATH}); a NEW browser D recovers with it (${RECOVER_PATH})`);
-  /* ESCROW-3A (brief §10B): a live session alone cannot rotate the key -- device C re-authenticates with the key first. */
-  const unauthorized = await api(RECOVERY_KEY_PATH, {}, cookieC2);
-  check("rotate without re-authentication: 403 reauth-required, the key unchanged", unauthorized.status === 403 && unauthorized.body?.error === "reauth-required", unauthorized.text);
-  const reauthC = await api(REAUTH_PATH, { recoveryKey: keyA }, cookieC2);
-  check(`re-authenticate device C with A's key (${REAUTH_PATH}): 200 {ok, expiresAt}`, reauthC.status === 200 && reauthC.body?.ok === true && typeof reauthC.body?.expiresAt === "number", reauthC.text);
-  const rotated = await api(RECOVERY_KEY_PATH, {}, cookieC2);
-  const keyA2 = String(rotated.body?.recoveryKey ?? "");
-  keep("A's rotated recovery key", keyA2);
-  check(
-    "rotate: 200 {ok: true, recoveryKey} -- a new rk_<26>.<43>, not the old one",
-    rotated.status === 200 && rotated.body?.ok === true && same(Object.keys(rotated.body ?? {}).sort(), ["ok", "recoveryKey"]) && RECOVERY_KEY_PATTERN.test(keyA2) && keyA2 !== keyA,
-    rotated.status,
+  /* ---- 14: the Authorization Wallet replaced; then "Forgot password?" on a new browser, with the new wallet ---- */
+  step("A14", `replace A's Authorization Wallet from device C (${ACCOUNT_WALLET_CHALLENGE_PATH}, ${ACCOUNT_WALLET_REPLACE_PATH}); a NEW browser D runs "Forgot password?" with it (${ACCOUNT_RECOVER_PATH})`);
+  /* A live session alone -- even one a sign-in made minutes ago -- cannot begin a replacement: it takes an explicit
+     "Confirm it's you" (the password), and then both wallets' signatures. */
+  const unauthorized = await api(ACCOUNT_WALLET_CHALLENGE_PATH, { newWallet: walletA2.address }, cookieC2);
+  check(`a replacement without "Confirm it's you": 403 reauth-required, the wallet unchanged`, unauthorized.status === 403 && unauthorized.body?.error === "reauth-required", unauthorized.text);
+  const reauthC = await api(REAUTH_PATH, { password: accountAlice.password }, cookieC2);
+  check(`"Confirm it's you" on device C with A's password (${REAUTH_PATH}): 200 {ok, expiresAt}`, reauthC.status === 200 && reauthC.body?.ok === true && typeof reauthC.body?.expiresAt === "number", reauthC.text);
+  const replacementTexts = async (): Promise<{ operation: string; approve: string; accept: string }> => {
+    const challenge = await api(ACCOUNT_WALLET_CHALLENGE_PATH, { newWallet: walletA2.address }, cookieC2);
+    const texts = challenge.body?.texts as Array<{ purpose: string; signer: string; text: string }> | undefined;
+    check(
+      "the replacement texts: 200 {ok, operation, texts: [the CURRENT wallet approves, the NEW one accepts], expiresAt}",
+      challenge.status === 200 && typeof challenge.body?.operation === "string" && Array.isArray(texts) && texts.length === 2 && texts[0].signer === walletA.address && texts[1].signer === walletA2.address,
+      challenge.text,
+    );
+    const [approve, accept] = (texts as Array<{ text: string }>).map((entry) => entry.text);
+    return { operation: challenge.body?.operation as string, approve, accept };
+  };
+  const forged = await replacementTexts();
+  const forgedApprove = walletA2.sign(forged.approve); // the NEW wallet signing the current one's approval
+  const forgedAccept = walletA2.sign(forged.accept);
+  const refusedReplace = await api(
+    ACCOUNT_WALLET_REPLACE_PATH,
+    { operation: forged.operation, approvePubKey: forgedApprove.pubKey, approveSignature: forgedApprove.signature, acceptPubKey: forgedAccept.pubKey, acceptSignature: forgedAccept.signature },
+    cookieC2,
   );
+  check("the new wallet cannot approve its own designation: 403 authorization-invalid", refusedReplace.status === 403 && refusedReplace.body?.error === "authorization-invalid", refusedReplace.text);
+  const proper = await replacementTexts();
+  const approved = walletA.sign(proper.approve);
+  const accepted = walletA2.sign(proper.accept);
+  const replaced = await api(
+    ACCOUNT_WALLET_REPLACE_PATH,
+    { operation: proper.operation, approvePubKey: approved.pubKey, approveSignature: approved.signature, acceptPubKey: accepted.pubKey, acceptSignature: accepted.signature },
+    cookieC2,
+  );
+  check(
+    "both wallets signed: 200 {ok: true, authorizationWallet: {address: the new wallet, since}}",
+    replaced.status === 200 && replaced.body?.ok === true && (replaced.body?.authorizationWallet as { address?: unknown } | undefined)?.address === walletA2.address,
+    replaced.text,
+  );
+  check("and no device was signed out by it: device C's socket is open", aliceC.isOpen);
   const cookieD = await freshBrowser("D (a new browser)");
-  const oldKey = await api(RECOVER_PATH, { recoveryKey: keyA }, cookieD);
-  check("A's OLD key is refused 403 invalid-credential at once, and sets no cookie", oldKey.status === 403 && oldKey.body?.error === "invalid-credential" && oldKey.setCookie.length === 0, oldKey.text);
-  const cookieD2 = redeemed(await api(RECOVER_PATH, { recoveryKey: keyA2 }, cookieD), "D recovering with the new key", "Alice");
+  /** "Forgot password?" from browser D: the RECOVER text for (Alice's username, `wallet`), the wallet's signature. */
+  const forgotPassword = async (wallet: KeplrAccount, newPassword: string): Promise<Bootstrap> => {
+    const minted = await api(ACCOUNT_AUTHORIZATION_PATH, { purpose: "recover", username: accountAlice.username, wallet: wallet.address }, cookieD);
+    const texts = minted.body?.texts as Array<{ purpose: string; signer: string; text: string }> | undefined;
+    check(
+      "the RECOVER text: 200 -- it looks nothing up (nothing is said about a username to a browser that has not proven its wallet)",
+      minted.status === 200 && typeof minted.body?.operation === "string" && Array.isArray(texts) && texts.length === 1 && texts[0].signer === wallet.address,
+      minted.text,
+    );
+    const signed = wallet.sign((texts as Array<{ text: string }>)[0].text);
+    return api(ACCOUNT_RECOVER_PATH, { operation: minted.body?.operation as string, pubKey: signed.pubKey, signature: signed.signature, newPassword }, cookieD);
+  };
+  const newPassword = "Alice recovered smoke passphrase";
+  keep("A's new password", newPassword);
+  const oldWallet = await forgotPassword(walletA, newPassword);
+  check("A's OLD Authorization Wallet is refused 403 invalid-credential at once, and sets no cookie", oldWallet.status === 403 && oldWallet.body?.error === "invalid-credential" && oldWallet.setCookie.length === 0, oldWallet.text);
+  const recovered = await forgotPassword(walletA2, newPassword);
+  check(
+    `D recovering with the NEW wallet: 200 {ok: true, profile: {name: "Alice"}, signedOut: 1} -- a name and a count, and no id of any kind`,
+    recovered.status === 200 &&
+      recovered.body?.ok === true &&
+      same(recovered.body?.profile, { name: "Alice" }) &&
+      recovered.body?.signedOut === 1 &&
+      same(Object.keys(recovered.body ?? {}).sort(), ["ok", "profile", "signedOut"]) &&
+      !PRINCIPAL_ON_WIRE.test(recovered.text) &&
+      !PROFILE_ON_WIRE.test(recovered.text) &&
+      !SESSION_ID_IN_BODY.test(recovered.text),
+    recovered.text,
+  );
+  const cookieD2 = sessionCookieOf(recovered, "D recovering with the new wallet");
+  keep("D's account cookie secret", cookieSecretOf(cookieD2));
   await endedAs(cookieD, "replaced", "D's temporary cookie (its unprofiled session)");
+  /* "Forgot password?" signs EVERY earlier device of the account out -- device C at once. */
+  await until(() => aliceC.closed !== null, "device C's socket to close");
+  check(`device C's socket is closed 4401 at once (${String(aliceC.closed?.code)} ${String(aliceC.closed?.reason)})`, aliceC.closed?.code === 4401, aliceC.closed);
+  await endedAs(cookieC2, "signed-out-remotely", "device C's cookie");
   const accountD2 = await accountOf(cookieD2);
-  check(`D's bootstrap: profile {name: "Alice", otherSessions: 1} (device C)`, accountD2.status === 200 && same(accountD2.profile, { name: "Alice", otherSessions: 1 }), accountD2.text);
+  check(`D's bootstrap: profile {name: "Alice", otherSessions: 0, username: "alice"} -- every other device is out`, accountD2.status === 200 && same(accountD2.profile, { name: "Alice", otherSessions: 0, username: "alice" }), accountD2.text);
   const connectD2 = principal(cookieD2);
   const aliceD = await connectD2("Alice (recovered browser D)");
   aliceD.hello(gameId);
@@ -1146,7 +1229,7 @@ async function productionHalf(): Promise<void> {
   check(`browser D is handed the stored log: ${logSummary(entriesOf(caughtD))}`, sameLog(entriesOf(caughtD), storedLog), entriesOf(caughtD).length);
   const seatingD = seatingOf(await aliceD.view());
   check(`and the same seat: role ${seatingD.you.role}, playerId ${String(seatingD.you.playerId)} (${alicePid})`, same(seatingD, storedA) && seatingD.you.playerId === alicePid, { before: storedA, after: seatingD });
-  const further = await aliceActs(aliceD, "the recovered browser D", "after-restart", [aliceC]);
+  const further = await aliceActs(aliceD, "the recovered browser D", "after-restart", []);
   check(
     `  it extends the stored log (#${further.index}), with an id the stored log does not hold`,
     further.index > storedLog[storedLog.length - 1].index && !storedLog.some((entry) => entry.id === further.id),
@@ -1155,26 +1238,32 @@ async function productionHalf(): Promise<void> {
   const bobSeat: Seat = { who: "Bob", connect: connectB, client: bob, playerId: bobPid };
   const aliceSeatD: Seat = { who: "Alice (browser D)", connect: connectD2, client: aliceD, playerId: alicePid };
   if (onTurn === bobPid) {
-    await legalMove(bobSeat, aliceSeatD, BUY, "bob-after-restart", "B, on turn, moves on the restarted server", [aliceC]);
+    await legalMove(bobSeat, aliceSeatD, BUY, "bob-after-restart", "B, on turn, moves on the restarted server");
     onTurn = alicePid;
   } else {
     await refusedMove(bobSeat, BUY, "bob-after-restart", NOT_YOUR_TURN, "B, not on turn, is refused on the restarted server -- read as B's seat");
   }
 
-  step("A14+", `"sign out other devices" from browser D (${SIGN_OUT_OTHERS_PATH}), after re-authenticating with the rotated key`);
-  const reauthD = await api(REAUTH_PATH, { recoveryKey: keyA2 }, cookieD2);
-  check("browser D re-authenticates with the rotated key: 200", reauthD.status === 200 && reauthD.body?.ok === true, reauthD.text);
+  step("A14+", `the NEW password signs in on a browser F (the old one is 403); "sign out other devices" from browser D (${SIGN_OUT_OTHERS_PATH}) closes F`);
+  const cookieF = await freshBrowser("F (another browser)");
+  const oldPassword = await api(ACCOUNT_LOGIN_PATH, { username: accountAlice.username, password: accountAlice.password }, cookieF);
+  check("A's OLD password is refused 403 invalid-credential -- the recovery replaced it", oldPassword.status === 403 && oldPassword.body?.error === "invalid-credential" && oldPassword.setCookie.length === 0, oldPassword.text);
+  const cookieF2 = redeemed(await api(ACCOUNT_LOGIN_PATH, { username: accountAlice.username, password: newPassword }, cookieF), "F signing in with the new password", "Alice");
+  const aliceF = await principal(cookieF2)("Alice (browser F)");
+  check("browser F opens a socket as Alice", aliceF.isOpen);
+  const reauthD = await api(REAUTH_PATH, { password: newPassword }, cookieD2);
+  check(`browser D confirms it's you with the NEW password: 200`, reauthD.status === 200 && reauthD.body?.ok === true, reauthD.text);
   const signedOut = await api(SIGN_OUT_OTHERS_PATH, {}, cookieD2);
   check(
-    `200 {ok: true, signedOut: ${String(signedOut.body?.signedOut)}} -- at least device C`,
+    `200 {ok: true, signedOut: ${String(signedOut.body?.signedOut)}} -- at least browser F`,
     signedOut.status === 200 && signedOut.body?.ok === true && typeof signedOut.body?.signedOut === "number" && signedOut.body.signedOut >= 1,
     signedOut.text,
   );
-  await until(() => aliceC.closed !== null, "device C's socket to close");
-  check(`device C's socket is closed 4401 (${String(aliceC.closed?.code)} ${String(aliceC.closed?.reason)})`, aliceC.closed?.code === 4401, aliceC.closed);
-  await endedAs(cookieC2, "signed-out-remotely", "device C's cookie");
+  await until(() => aliceF.closed !== null, "browser F's socket to close");
+  check(`browser F's socket is closed 4401 (${String(aliceF.closed?.code)} ${String(aliceF.closed?.reason)})`, aliceF.closed?.code === 4401, aliceF.closed);
+  await endedAs(cookieF2, "signed-out-remotely", "browser F's cookie");
   const accountD3 = await accountOf(cookieD2);
-  check(`browser D is the one device left: profile {name: "Alice", otherSessions: 0}`, same(accountD3.profile, { name: "Alice", otherSessions: 0 }), accountD3.text);
+  check(`browser D is the one device left: profile {name: "Alice", otherSessions: 0, username: "alice"}`, same(accountD3.profile, { name: "Alice", otherSessions: 0, username: "alice" }), accountD3.text);
   const againB2 = await bootstrap(cookieB);
   check("B is untouched: its socket open, its cookie 200", aliceD.isOpen && bob.isOpen && againB2.status === 200 && same((againB2.body?.profile as { name?: unknown } | null)?.name, "Bob"), againB2.text);
 
@@ -1192,7 +1281,7 @@ async function productionHalf(): Promise<void> {
     finalLog.every((entry) => entry.actor === alicePid || entry.actor === bobPid),
     finalLog.map((entry) => entry.actor),
   );
-  check("and no principal or profile id is on any socket", noPrincipalOnWire(alice, aliceC, aliceD, bob));
+  check("and no principal or profile id is on any socket", noPrincipalOnWire(alice, aliceC, aliceD, aliceF, bob));
 
   step("A16", "cleanup: close the sockets, stop the server, remove the data directory");
   await Promise.all([aliceD.close(), bob.close()]);
@@ -1204,11 +1293,11 @@ async function productionHalf(): Promise<void> {
   const windows = servers.filter((each) => each.label.startsWith("production")).flatMap((each) => [...each.output, each.output.join("")]);
   const leaked = secrets.filter((secret) => secret.value.length > 0 && windows.some((text) => text.includes(secret.value)));
   check(
-    `no recovery key, link code or cookie secret (${secrets.length} of them) appears in either production server's stdout/stderr`,
+    `no password or cookie secret (${secrets.length} of them) appears in either production server's stdout/stderr`,
     secrets.length >= 10 && secrets.every((secret) => secret.value.length > 0) && leaked.length === 0,
     leaked.map((secret) => secret.what),
   );
-  check("nor anything shaped like a recovery key", !windows.some((text) => /\brk_[0-9a-z]{26}\b/.test(text)));
+  check("nor anything shaped like a recovery selector (the internal credential epoch)", !windows.some((text) => /\brk_[0-9a-z]{26}\b/.test(text)));
   removeTempDir(dataDir);
   check("the temp data directory is gone", !fs.existsSync(dataDir));
 }

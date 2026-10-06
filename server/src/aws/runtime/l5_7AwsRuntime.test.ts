@@ -65,6 +65,7 @@ import { ALICE, BOB, controlledStore, quietConsole, seedGame, seededRecord, stor
 import { WebSocket } from "ws";
 import { readSessionCookie } from "../../identity/cookies";
 import { IdentityService } from "../../identity/sessions";
+import { createAccountWith, keplrAccount } from "../../testSupport/authorizationWallets";
 import type { Session } from "../../identity/store";
 import type { GameRecord } from "../../rooms/gameRecord";
 import { clientAnnouncementQuery } from "../../../../frontend/src/gameEngine/compat/clientCompatibility";
@@ -1317,11 +1318,20 @@ const configV2 = (over: Record<string, unknown> = {}) => parseAwsRuntimeConfig(r
 /** A profiled browser whose records a WRITER (the primary's identity service) commits to the shared durable store the
  *  non-primary task's verifier reads. */
 async function writerBrowser(h: Harness, name: string) {
-  const writer = await IdentityService.open(h.sharedIdentity);
-  const boot = await writer.bootstrap({ kind: "none" }, false, Date.now());
-  const cookie = (boot as { setCookie: string }).setCookie.split(";")[0];
+  const writer = await IdentityService.open(h.sharedIdentity, { policy: { passwordKdf: { logN: 10, r: 1, p: 1 } } });
+  const now = Date.now();
+  const boot = await writer.bootstrap({ kind: "none" }, false, now);
+  /* PHASE 3 FINAL: an account (username, password, Authorization Wallet); the create signs the browser in on a FRESH
+     session (the bootstrap's is replaced), so the cookie is the create's. */
+  const created = await createAccountWith(
+    writer,
+    readSessionCookie((boot as { setCookie: string }).setCookie.split(";")[0]),
+    { username: name.toLowerCase(), password: "correct horse battery", displayName: name, wallet: keplrAccount(`l5-7/${name}`) },
+    now,
+  );
+  assert.equal(created.kind, "ok", JSON.stringify(created));
+  const cookie = (created as { setCookie: string }).setCookie.split(";")[0];
   const read = readSessionCookie(cookie);
-  assert.equal((await writer.createProfile(read, name, Date.now())).kind, "ok");
   const sessionId = read.kind === "session" ? read.sessionId : "";
   return { writer, cookie, sessionId, principalId: (writer.peekSession(sessionId) as Session).principal_id };
 }

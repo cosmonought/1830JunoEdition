@@ -15,11 +15,12 @@
 //   D. DAMAGE. Every way an item can be wrong refuses the load; nothing is guessed.
 //   E. A TABLE CHANGED BEHIND THE WRITER. The conditions refuse what the writer's view accepted: DEFINITE, nothing
 //      written, and the store holds itself for a restart.
-//   F. THE SERVICE ON DYNAMODB. The identity service over this adapter, with the security substrate: profiles, a second
-//      device, re-authentication, sign-outs and a key rotation across restarts; the security events written FIRST (an
+//   F. THE SERVICE ON DYNAMODB. The identity service over this adapter, with the security substrate: accounts (PHASE 3
+//      FINAL: username, password, Authorization Wallet), a second device (a sign-in), "Confirm it's you", sign-outs, a
+//      password change and an Authorization Wallet replacement across restarts; the security events written FIRST (an
 //      event that cannot be written stops its change) and confirmed after; a grant that survives a restart (OD-5-4) and
-//      dies with its key; a writer that was taken over journals nothing, and one taken over while its event is written
-//      leaves that event unconfirmed (review F2).
+//      dies with its session; a writer that was taken over journals nothing, and one taken over while its event is
+//      written leaves that event unconfirmed (review F2).
 //   Review fixes also shown here: F1 (a sign-out's security effects land in the FIRST transaction: the other families,
 //   the link codes, the kept family's other members), F3 (a takeover writes only a role item its codec can read), F4 (a
 //   grant write is bounded), F6 (a writer whose epoch is not the table's learns it at the load), F7 (a later chunk that
@@ -39,6 +40,7 @@ import { readSessionCookie, type SessionCookieRead } from "../../identity/cookie
 import type { SecurityEvent } from "../../identity/securityEvents";
 import { familyIdOf, mintPrincipalId, mintProfileId, mintRecoveryKey, mintSecret, mintSessionId, secretHash } from "../../identity/ids";
 import { IdentityService } from "../../identity/sessions";
+import { createAccountWith, keplrAccount, replaceWith } from "../../testSupport/authorizationWallets";
 import {
   applyChange,
   changeShapeProblem,
@@ -1030,6 +1032,13 @@ describe("L5-4 F: the identity service over the DynamoDB adapter", () => {
     return readSessionCookie(setCookie.split(";")[0]);
   };
   const sessionIdOf = (read: SessionCookieRead) => (read.kind === "session" ? read.sessionId : "");
+  /** PHASE 3 FINAL: Ann's account -- a username, a password ("Confirm it's you") and her Authorization Wallet. */
+  const USERNAME = "ann";
+  const PASSWORD = "correct horse battery";
+  const NEW_PASSWORD = "a brand new passphrase";
+  const WALLET = keplrAccount("l5-4-dynamo/ann");
+  /** Cheap scrypt parameters for the test writer (a stored hash carries its own). */
+  const POLICY = { passwordKdf: { logN: 10, r: 1, p: 1 } };
 
   async function world() {
     const identityTableName = await identityTable("service", null);
@@ -1049,45 +1058,64 @@ describe("L5-4 F: the identity service over the DynamoDB adapter", () => {
       const fenced: string[] = [];
       const store = openStore(client, identityTableName, epoch, held, fenced);
       const failures: string[] = [];
-      const identity = await IdentityService.open(store, { security: { journal, grants: store.grants, clock: () => clock }, hooks: { onStoreFailure: (what) => failures.push(what) } });
+      const identity = await IdentityService.open(store, { policy: POLICY, security: { journal, grants: store.grants, clock: () => clock }, hooks: { onStoreFailure: (what) => failures.push(what) } });
       return { identity, store, failures, held, fenced };
     };
     return { identityTableName, ledger, client, journal, identityFaults, ledgerFaults, restart, now: () => clock, advance: (ms: number) => (clock += ms) };
   }
 
-  test("a profile's life across restarts: every security change journaled first and in order; the grant survives a restart (OD-5-4) and dies with its key", async () => {
+  /** Ann's account, made on a new browser of `identity`: the create's FRESH session is the browser's. */
+  async function createAnn(identity: IdentityService, now: number): Promise<SessionCookieRead> {
+    const boot = await identity.bootstrap({ kind: "none" }, false, now);
+    const created = await createAccountWith(identity, readOf((boot as { setCookie: string | null }).setCookie), { username: USERNAME, password: PASSWORD, displayName: "Ann", wallet: WALLET }, now);
+    assert.equal(created.kind, "ok", JSON.stringify(created));
+    return readOf((created as { setCookie: string }).setCookie);
+  }
+
+  /** A second device: a sign-in with the username and password on a new browser (its own family). */
+  async function signIn(identity: IdentityService, password: string, now: number): Promise<SessionCookieRead> {
+    const boot = await identity.bootstrap({ kind: "none" }, false, now);
+    const signedIn = await identity.login(readOf((boot as { setCookie: string | null }).setCookie), { username: USERNAME, password }, now);
+    assert.equal(signedIn.kind, "ok", JSON.stringify(signedIn));
+    return readOf((signedIn as { setCookie: string }).setCookie);
+  }
+
+  /** What a sign-in with `password` answers on a new browser (nothing is journaled by a sign-in). */
+  async function loginWith(identity: IdentityService, password: string, now: number): Promise<string> {
+    const boot = await identity.bootstrap({ kind: "none" }, false, now);
+    return (await identity.login(readOf((boot as { setCookie: string | null }).setCookie), { username: USERNAME, password }, now)).kind;
+  }
+
+  test("an account's life across restarts: every security change journaled first and in order; the grant survives a restart (OD-5-4) and dies with its session", async () => {
     const w = await world();
     let { identity } = await w.restart();
-    const boot = await identity.bootstrap({ kind: "none" }, false, w.now());
-    const ann = readOf((boot as { setCookie: string | null }).setCookie);
-    const created = await identity.createProfile(ann, "Ann", w.now());
-    assert.equal(created.kind, "ok");
-    const key = (created as { recoveryKey: string }).recoveryKey;
+    let ann = await createAnn(identity, w.now());
     const principalId = identity.peekSession(sessionIdOf(ann))?.principal_id as string;
     w.advance(1000);
-    /* A second device, by the recovery key. */
-    const phoneBoot = await identity.bootstrap({ kind: "none" }, false, w.now());
-    const recovered = await identity.recover(readOf((phoneBoot as { setCookie: string | null }).setCookie), key, w.now());
-    assert.equal(recovered.kind, "ok");
-    const phone = readOf((recovered as { setCookie: string }).setCookie);
-    /* Re-authenticate, then restart: the grant is still there. */
-    assert.equal((await identity.reauthenticate(ann, key, w.now())).kind, "ok");
+    /* A second device: a sign-in (PHASE 3 FINAL: the recovery key is gone). */
+    const phone = await signIn(identity, PASSWORD, w.now());
+    /* "Confirm it's you" (the password), then restart: the grant is still there. */
+    assert.equal((await identity.reauthenticateWithPassword(ann, PASSWORD, w.now())).kind, "ok");
     ({ identity } = await w.restart());
     w.advance(1000);
     assert.equal(identity.hasSensitiveAuth(ann, w.now()), true, "OD-5-4: a restart does not drop a live grant");
-    assert.equal(identity.hasSensitiveAuth(phone, w.now()), false, "another session never borrows it");
-    /* Sign out the other devices (it needs the grant), then rotate the key. */
+    assert.equal(identity.hasSensitiveAuth(phone, w.now()), false, "another session never borrows it (and a sign-in's own grant is memory only)");
+    /* Sign out the other devices (it needs the grant), then change the password. */
     const others = await identity.signOutOthers(ann, w.now());
     assert.equal(others.kind, "ok");
     assert.equal(identity.authenticate(phone, w.now()).kind, "refused");
     w.advance(1000);
-    const rotated = await identity.rotateRecoveryKey(ann, w.now());
-    assert.equal(rotated.kind, "ok");
+    const changed = await identity.changePassword(ann, { currentPassword: PASSWORD, newPassword: NEW_PASSWORD }, w.now());
+    assert.equal(changed.kind, "ok");
+    const replaced = ann;
+    ann = readOf((changed as { setCookie: string }).setCookie);
     await identity.settled(); // the confirmation follows the answer (R3-1); a graceful restart drains it first
     ({ identity } = await w.restart());
-    assert.equal(identity.hasSensitiveAuth(ann, w.now()), false, "the reloaded grant names the old key: it is dead");
+    assert.equal(identity.hasSensitiveAuth(replaced, w.now()), false, "the reloaded grant names the session the change replaced: it is dead");
+    assert.equal(identity.hasSensitiveAuth(ann, w.now()), false, "the change's own sign-in grant is memory only: the restart dropped it");
+    assert.equal(identity.authenticate(ann, w.now()).kind, "ok", "the changer's fresh cookie survives the restart");
     assert.equal(identity.authenticate(phone, w.now()).kind, "refused", "the signed-out device stays out across a restart");
-    assert.equal((await identity.recover(readOf(((await identity.bootstrap({ kind: "none" }, false, w.now())) as { setCookie: string | null }).setCookie), key, w.now())).kind, "invalid", "the old key is dead");
+    assert.equal(await loginWith(identity, PASSWORD, w.now()), "invalid", "the old password is dead");
     /* Sign this device out. */
     w.advance(1000);
     assert.equal(await identity.revoke(sessionIdOf(ann), "logout", w.now()), true);
@@ -1097,27 +1125,23 @@ describe("L5-4 F: the identity service over the DynamoDB adapter", () => {
     const events = await w.journal.eventsOf(principalId);
     assert.deepEqual(
       events.map((event) => event.kind),
-      ["profile-created", "confirmed", "signed-out-others", "confirmed", "recovery-key-rotated", "confirmed", "family-revoked", "confirmed"],
+      ["profile-created", "confirmed", "signed-out-others", "confirmed", "password-replaced", "confirmed", "family-revoked", "confirmed"],
     );
     for (let at = 0; at < events.length; at += 2) {
       const confirmation = events[at + 1] as Extract<SecurityEvent, { kind: "confirmed" }>;
       assert.deepEqual([confirmation.confirms, confirmation.confirmed_kind, confirmation.at], [events[at].event_id, events[at].kind, events[at].at], "each change confirmed, straight after its event");
     }
     const serialized = JSON.stringify(events);
-    assert.ok(!serialized.includes(key.split(".")[1]), "no recovery-key secret in the journal");
+    for (const password of [PASSWORD, NEW_PASSWORD]) assert.ok(!serialized.includes(password), "no password in the journal (only its scrypt hash)");
   });
 
   test("review F2: a writer that was taken over journals NOTHING (it reads its role before the event); one taken over while its event is written leaves that event UNCONFIRMED and its change refused DEFINITE, inside the write", async () => {
     const w = await world();
     const first = await w.restart();
-    const boot = await first.identity.bootstrap({ kind: "none" }, false, w.now());
-    const ann = readOf((boot as { setCookie: string | null }).setCookie);
-    const created = await first.identity.createProfile(ann, "Ann", w.now());
-    const key = (created as { recoveryKey: string }).recoveryKey;
+    const ann = await createAnn(first.identity, w.now());
     const principalId = first.identity.peekSession(sessionIdOf(ann))?.principal_id as string;
-    const phoneBoot = await first.identity.bootstrap({ kind: "none" }, false, w.now());
-    const phone = readOf(((await first.identity.recover(readOf((phoneBoot as { setCookie: string | null }).setCookie), key, w.now())) as { setCookie: string }).setCookie);
-    assert.equal((await first.identity.reauthenticate(ann, key, w.now())).kind, "ok");
+    const phone = await signIn(first.identity, PASSWORD, w.now());
+    assert.equal((await first.identity.reauthenticateWithPassword(ann, PASSWORD, w.now())).kind, "ok");
     const journaled = (await w.journal.eventsOf(principalId)).length;
     assert.equal(journaled, 2, "the creation and its confirmation");
 
@@ -1132,7 +1156,7 @@ describe("L5-4 F: the identity service over the DynamoDB adapter", () => {
     /* (b) The role moves WHILE the event is being written: the event lands, the write is refused inside the write. */
     w.advance(1000);
     const second = await w.restart();
-    assert.equal((await second.identity.reauthenticate(ann, key, w.now())).kind, "ok");
+    assert.equal((await second.identity.reauthenticateWithPassword(ann, PASSWORD, w.now())).kind, "ok");
     const before = await tableItems(admin, w.identityTableName, [ROLE_KEY.pk]);
     const stall = gate();
     w.ledgerFaults.add({ op: "TransactWriteItemsCommand", action: { kind: "stall", gate: stall }, label: "the event's append stalls" });
@@ -1154,33 +1178,31 @@ describe("L5-4 F: the identity service over the DynamoDB adapter", () => {
     assert.equal(third.identity.authenticate(phone, w.now()).kind, "ok");
   });
 
-  /** A profile with a second device, and a re-authentication (the grant sign-out-others and a rotation need). */
+  /** An account with a second device, and a "Confirm it's you" (the grant sign-out-others and a wallet replacement need). */
   async function annWithPhone(w: Awaited<ReturnType<typeof world>>) {
     const writer = await w.restart();
-    const boot = await writer.identity.bootstrap({ kind: "none" }, false, w.now());
-    const ann = readOf((boot as { setCookie: string | null }).setCookie);
-    const created = await writer.identity.createProfile(ann, "Ann", w.now());
-    const key = (created as { recoveryKey: string }).recoveryKey;
+    const ann = await createAnn(writer.identity, w.now());
     const principalId = writer.identity.peekSession(sessionIdOf(ann))?.principal_id as string;
-    const phoneBoot = await writer.identity.bootstrap({ kind: "none" }, false, w.now());
-    const phone = readOf(((await writer.identity.recover(readOf((phoneBoot as { setCookie: string | null }).setCookie), key, w.now())) as { setCookie: string }).setCookie);
-    assert.equal((await writer.identity.reauthenticate(ann, key, w.now())).kind, "ok");
+    const phone = await signIn(writer.identity, PASSWORD, w.now());
+    assert.equal((await writer.identity.reauthenticateWithPassword(ann, PASSWORD, w.now())).kind, "ok");
     w.advance(1000);
-    return { ...writer, ann, key, principalId, phone };
+    return { ...writer, ann, principalId, phone };
   }
 
   test("re-review N1: once its event is recorded, a change whose FIRST transaction is only throttled is retried -- it commits and is confirmed, not left a phantom", async () => {
     const w = await world();
     const { identity, ann, principalId, held } = await annWithPhone(w);
-    for (let n = 1; n <= 2; n += 1) w.identityFaults.add({ op: "TransactWriteItemsCommand", nth: n, action: { kind: "fail" }, label: `the rotation's transaction is throttled (${n})` });
-    const rotated = await identity.rotateRecoveryKey(ann, w.now());
-    assert.equal(rotated.kind, "ok");
+    for (let n = 1; n <= 2; n += 1) w.identityFaults.add({ op: "TransactWriteItemsCommand", nth: n, action: { kind: "fail" }, label: `the replacement's transaction is throttled (${n})` });
+    /* PHASE 3 FINAL: the Authorization Wallet replacement (a profile-only change, as the retired key rotation was). */
+    const replaced = await replaceWith(identity, ann, { current: WALLET, next: keplrAccount("l5-4-dynamo/ann-2") }, w.now());
+    assert.equal(replaced.kind, "ok", JSON.stringify(replaced));
     assert.deepEqual(w.identityFaults.unfired(), []);
     assert.deepEqual(held, []);
     await identity.settled();
     const events = await w.journal.eventsOf(principalId);
-    const rotation = events.find((event) => event.kind === "recovery-key-rotated") as SecurityEvent;
-    assert.ok(events.some((event) => event.kind === "confirmed" && event.confirms === rotation.event_id), "the rotation is confirmed");
+    const replacement = events.find((event) => event.kind === "authorization-wallet-replaced") as SecurityEvent;
+    assert.ok(events.some((event) => event.kind === "confirmed" && event.confirms === replacement.event_id), "the replacement is confirmed");
+    assert.equal(identity.authorizationWallet(principalId)?.address, keplrAccount("l5-4-dynamo/ann-2").address);
   });
 
   test("re-review N2 and R3-1: a committed sign-out is enforced AND answered while its confirmation is stalled; only the queue behind it waits", { timeout: 10_000 }, async () => {
@@ -1207,44 +1229,43 @@ describe("L5-4 F: the identity service over the DynamoDB adapter", () => {
     assert.ok(events.some((event) => event.kind === "confirmed" && event.confirms === signOut.event_id));
   });
 
-  test("round-3 R3-1: a key rotation answers the new key while its confirmation is stalled -- a stalled ledger can no longer hold back the only copy of the key", { timeout: 10_000 }, async () => {
+  test("round-3 R3-1: a password change answers this browser's fresh cookie while its confirmation is stalled -- a stalled ledger can no longer hold back the only copy of the new session", { timeout: 10_000 }, async () => {
     const w = await world();
     const { identity, ann, principalId } = await annWithPhone(w);
     const stall = gate();
-    w.ledgerFaults.add({ op: "TransactWriteItemsCommand", nth: 2, action: { kind: "stall", gate: stall }, label: "the rotation's confirmation stalls" });
-    const rotated = await identity.rotateRecoveryKey(ann, w.now());
-    assert.equal(rotated.kind, "ok", "the new key is answered");
-    const newKey = (rotated as { recoveryKey: string }).recoveryKey;
+    w.ledgerFaults.add({ op: "TransactWriteItemsCommand", nth: 2, action: { kind: "stall", gate: stall }, label: "the change's confirmation stalls" });
+    const changed = await identity.changePassword(ann, { currentPassword: PASSWORD, newPassword: NEW_PASSWORD }, w.now());
+    assert.equal(changed.kind, "ok", "the fresh cookie is answered");
+    const fresh = readOf((changed as { setCookie: string }).setCookie);
     await stall.reached;
-    assert.equal(identity.peekProfileOf(principalId)?.recovery_selector, newKey.split(".")[0]);
+    assert.equal(identity.authenticate(fresh, w.now()).kind, "ok", "and the cookie that was answered already works");
     stall.release();
     await identity.settled();
     const events = await w.journal.eventsOf(principalId);
-    const rotation = events.find((event) => event.kind === "recovery-key-rotated") as SecurityEvent;
-    assert.ok(events.some((event) => event.kind === "confirmed" && event.confirms === rotation.event_id), "and confirmed once the ledger answers");
-    /* The key that was answered is the key that works. */
-    const boot = await identity.bootstrap({ kind: "none" }, false, w.now());
-    assert.equal((await identity.recover(readOf((boot as { setCookie: string | null }).setCookie), newKey, w.now())).kind, "ok");
+    const change = events.find((event) => event.kind === "password-replaced") as SecurityEvent;
+    assert.ok(events.some((event) => event.kind === "confirmed" && event.confirms === change.event_id), "and confirmed once the ledger answers");
+    /* The password that was set is the password that works. */
+    assert.equal(await loginWith(identity, NEW_PASSWORD, w.now()), "ok");
   });
 
   test("journal first: an event that cannot be recorded stops its change -- nothing committed, the action answers unavailable", async () => {
     const w = await world();
     const { identity } = await w.restart();
-    const boot = await identity.bootstrap({ kind: "none" }, false, w.now());
-    const ann = readOf((boot as { setCookie: string | null }).setCookie);
-    const created = await identity.createProfile(ann, "Ann", w.now());
-    const key = (created as { recoveryKey: string }).recoveryKey;
-    assert.equal((await identity.reauthenticate(ann, key, w.now())).kind, "ok");
+    const ann = await createAnn(identity, w.now());
+    const principalId = identity.peekSession(sessionIdOf(ann))?.principal_id as string;
+    assert.equal((await identity.reauthenticateWithPassword(ann, PASSWORD, w.now())).kind, "ok");
     const before = await tableItems(admin, w.identityTableName, [ROLE_KEY.pk]);
+    const next = keplrAccount("l5-4-dynamo/ann-2");
     for (const fault of [{ kind: "fail" as const }, { kind: "fail" as const, code: "TimeoutError" }]) {
       const sends = fault.code === "TimeoutError" ? 4 : 1;
       for (let n = 1; n <= sends; n += 1) w.ledgerFaults.add({ op: "TransactWriteItemsCommand", nth: n, action: fault, label: `ledger send ${n}` });
-      const outcome = await identity.rotateRecoveryKey(ann, w.now());
-      assert.equal(outcome.kind, "unavailable", `a ${fault.code ?? "definite"} journal failure fails the rotation`);
+      const outcome = await replaceWith(identity, ann, { current: WALLET, next }, w.now());
+      assert.equal(outcome.kind, "unavailable", `a ${fault.code ?? "definite"} journal failure fails the replacement`);
       assert.deepEqual(await tableItems(admin, w.identityTableName, [ROLE_KEY.pk]), before, "no identity change was committed");
       assert.equal(identity.hasSensitiveAuth(ann, w.now()), true, "and the service's own state did not move");
+      assert.equal(identity.authorizationWallet(principalId)?.address, WALLET.address);
     }
     assert.deepEqual(w.ledgerFaults.unfired(), []);
-    assert.equal((await identity.rotateRecoveryKey(ann, w.now())).kind, "ok", "with the journal back, the rotation goes through");
+    assert.equal((await replaceWith(identity, ann, { current: WALLET, next }, w.now())).kind, "ok", "with the journal back, the replacement goes through");
   });
 });

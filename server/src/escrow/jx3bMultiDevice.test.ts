@@ -5,8 +5,9 @@
 // ==================================================================
 //
 // Every step goes through the production surface (`escrow4Support.ts`): profiled browsers, "Confirm it's you", the
-// identity routes that found a second session family (a device-link code, a recovery), sign-out, sign-out-others and
-// recovery-key rotation, and `/gs/api/money/*` over the offline Juno. What is pinned:
+// identity routes that found a second session family (PHASE 3 FINAL: a sign-in with the username and password, and
+// "Forgot password?" by the account's Authorization Wallet -- device-link codes and recovery keys are retired),
+// sign-out, sign-out-others and "Change password", and `/gs/api/money/*` over the offline Juno. What is pinned:
 //
 //   1. two families of one principal linking the SAME wallet: the second family's proof re-homes the grant (a new
 //      epoch, the same ticket) -- the first family's sign-out no longer ends it, the proving family's does;
@@ -15,8 +16,10 @@
 //   3. two families linking DIFFERENT wallets at once: serialized by the game's actor task -- one link, one
 //      replace-required; nothing moves a seat;
 //   4. a link racing the proving family's sign-out: no grant stands under a context that ended;
-//   5. recovery on a new device, then the same wallet: the grant re-homes to the recovered family;
-//   6. recovery-key rotation ends the pre-freeze grant (re-homed or not);
+//   5. "Forgot password?" on a new device ends every family of the account, so every pre-freeze link ends; the same
+//      wallet proven from the recovered family is a fresh link (nothing stood to re-home);
+//   6. "Forgot password?" ends the pre-freeze grant, re-homed or not; "Change password" ends every OTHER device's (the
+//      changer's own family, and its link, are kept);
 //   7. consent from two devices after a key move: only the chain-current key authorizes; repeats are idempotent.
 
 import { describe, test } from "node:test";
@@ -35,7 +38,8 @@ const cookieOf = (answer: ApiAnswer): string => answer.headers["set-cookie"]![0]
 /** One browser of a principal: its own session (and so its own session family). */
 interface Device {
   cookie: string;
-  recoveryKey: string;
+  /** The account's password ("Confirm it's you"), as this device last knew it. */
+  password: string;
   api(route: string, body?: object): Promise<ApiAnswer>;
   confirm(): Promise<void>;
   link(gameId: string, wallet: TestWallet, key: TestConsentKey, replace?: boolean): Promise<ApiAnswer>;
@@ -44,13 +48,13 @@ interface Device {
   familyId(): string;
 }
 
-function deviceOf(world: MoneyServer, cookie: string, recoveryKey: string): Device {
+function deviceOf(world: MoneyServer, cookie: string, password: string): Device {
   const device: Device = {
     cookie,
-    recoveryKey,
+    password,
     api: (route, body = {}) => apiRequest(world.port, `/gs/api/money/${route}`, { cookie: device.cookie, body }),
     async confirm() {
-      const answer = await apiRequest(world.port, "/gs/api/profile/reauth", { cookie: device.cookie, body: { recoveryKey: device.recoveryKey } });
+      const answer = await apiRequest(world.port, "/gs/api/profile/reauth", { cookie: device.cookie, body: { password: device.password } });
       assert.equal(answer.status, 200, `reauth: ${answer.text}`);
     },
     async link(gameId, wallet, key, replace) {
@@ -71,22 +75,37 @@ function deviceOf(world: MoneyServer, cookie: string, recoveryKey: string): Devi
 }
 
 /** The player's first browser, as a Device. */
-const firstDevice = (world: MoneyServer, who: Player): Device => deviceOf(world, who.browser.cookie, who.browser.recoveryKey);
+const firstDevice = (world: MoneyServer, who: Player): Device => deviceOf(world, who.browser.cookie, who.browser.password);
 
-/** A second browser of the same profile, signed in by a device-link code from the first (a new family, origin "link"). */
-async function linkedDevice(world: MoneyServer, who: Player): Promise<Device> {
-  const code = await apiRequest(world.port, "/gs/api/profile/link-code", { cookie: who.browser.cookie, body: {} });
-  assert.equal(code.status, 201, code.text);
-  const linked = await apiRequest(world.port, "/gs/api/profile/link", { cookie: await freshCookie(world), body: { code: code.body?.code } });
-  assert.equal(linked.status, 200, linked.text);
-  return deviceOf(world, cookieOf(linked), who.browser.recoveryKey);
+/** A second browser of the same account, signed in with the username and password (a new family, origin "login").
+ *  PHASE 3 FINAL: "Link another device" codes are retired (410) -- another device simply signs in. */
+async function signedInDevice(world: MoneyServer, who: Player, password = who.browser.password): Promise<Device> {
+  const signedIn = await apiRequest(world.port, "/gs/api/account/login", { cookie: await freshCookie(world), body: { username: who.browser.username, password } });
+  assert.equal(signedIn.status, 200, signedIn.text);
+  return deviceOf(world, cookieOf(signedIn), password);
 }
 
-/** A new browser that recovers the profile with its recovery key (a new family, origin "recovery"). */
-async function recoveredDevice(world: MoneyServer, who: Player): Promise<Device> {
-  const recovered = await apiRequest(world.port, "/gs/api/profile/recover", { cookie: await freshCookie(world), body: { recoveryKey: who.browser.recoveryKey } });
+/** A new browser that recovers the account by "Forgot password?": the account's AUTHORIZATION WALLET signs a fresh
+ *  RECOVER text and a new password is set (a new family, origin "recovery"). Every earlier session of the account ends. */
+async function recoveredDevice(world: MoneyServer, who: Player, newPassword: string): Promise<Device> {
+  const cookie = await freshCookie(world);
+  const minted = await apiRequest(world.port, "/gs/api/account/authorization", { cookie, body: { purpose: "recover", username: who.browser.username, wallet: who.browser.wallet.address } });
+  assert.equal(minted.status, 200, minted.text);
+  const signed = who.browser.wallet.sign((minted.body?.texts as Array<{ text: string }>)[0].text);
+  const recovered = await apiRequest(world.port, "/gs/api/account/recover", { cookie, body: { operation: minted.body?.operation, pubKey: signed.pubKey, signature: signed.signature, newPassword } });
   assert.equal(recovered.status, 200, recovered.text);
-  return deviceOf(world, cookieOf(recovered), who.browser.recoveryKey);
+  return deviceOf(world, cookieOf(recovered), newPassword);
+}
+
+/** "Change password" on `device` (the CURRENT password in the request): every OTHER device is signed out; this one goes
+ *  on with a fresh cookie in its own family. */
+async function changePassword(world: MoneyServer, device: Device, newPassword: string): Promise<ApiAnswer> {
+  const changed = await apiRequest(world.port, "/gs/api/account/password", { cookie: device.cookie, body: { currentPassword: device.password, newPassword } });
+  assert.equal(changed.status, 200, changed.text);
+  device.cookie = cookieOf(changed);
+  device.password = newPassword;
+  await world.money.idle();
+  return changed;
 }
 
 async function seatJoiner(world: MoneyServer, name: string, code: string): Promise<{ who: Player; playerId: string }> {
@@ -125,7 +144,9 @@ describe("JX-3B / OD-JX3-1: the same wallet proven from another family re-homes 
     try {
       const { table, joiner } = await hostOpened(world);
       const laptop = firstDevice(world, joiner.who);
-      const phone = await linkedDevice(world, joiner.who);
+      const retired = await apiRequest(world.port, "/gs/api/profile/link-code", { cookie: laptop.cookie, body: {} });
+      assert.deepEqual([retired.status, retired.body?.error], [410, "retired"], "device-link codes are retired: a second device signs in");
+      const phone = await signedInDevice(world, joiner.who);
       assert.notEqual(laptop.familyId(), phone.familyId(), "two session families of one principal");
       const w1 = testWallet("jo");
       const first = await laptop.link(table.gameId, w1, testConsentKey("jo-laptop"));
@@ -178,7 +199,7 @@ describe("JX-3B / OD-JX3-1: the same wallet proven from another family re-homes 
     try {
       const { host, table, joiner } = await hostOpened(world);
       const laptop = firstDevice(world, joiner.who);
-      const phone = await linkedDevice(world, joiner.who);
+      const phone = await signedInDevice(world, joiner.who);
       const w1 = testWallet("jo");
       const k1 = testConsentKey("jo");
       const linked = await laptop.link(table.gameId, w1, k1);
@@ -224,7 +245,7 @@ describe("JX-3B / OD-JX3-1: the same wallet proven from another family re-homes 
     try {
       const { table, joiner } = await hostOpened(world);
       const laptop = firstDevice(world, joiner.who);
-      const phone = await linkedDevice(world, joiner.who);
+      const phone = await signedInDevice(world, joiner.who);
       const w1 = testWallet("jo-1");
       const w2 = testWallet("jo-2");
       /* Both confirm and hold a challenge; then both links arrive together. */
@@ -288,7 +309,7 @@ describe("JX-3B / OD-JX3-1: the same wallet proven from another family re-homes 
       const first = await laptop.link(table.gameId, w1, testConsentKey("jo"));
       assert.equal(first.status, 200, first.text);
       for (const order of ["link-first", "revoke-first"] as const) {
-        const phone = await linkedDevice(world, joiner.who);
+        const phone = await signedInDevice(world, joiner.who);
         await phone.confirm();
         const challenge = await phone.api("wallet-challenge", { gameId: table.gameId, wallet: w1.address });
         const signed = w1.signArbitrary(challenge.body?.text as string);
@@ -318,7 +339,7 @@ describe("JX-3B / OD-JX3-1: the same wallet proven from another family re-homes 
     }
   });
 
-  test("recovery on a new device, then the same wallet: the grant re-homes to the recovered device's new family", async () => {
+  test("\"Forgot password?\" on a new device ends every pre-freeze link of the account; the same wallet proven there is a fresh link under the recovered family", async () => {
     const world = await moneyServer();
     try {
       const { table, joiner } = await hostOpened(world);
@@ -326,16 +347,20 @@ describe("JX-3B / OD-JX3-1: the same wallet proven from another family re-homes 
       const w1 = testWallet("jo");
       const first = await laptop.link(table.gameId, w1, testConsentKey("jo"));
       assert.equal(first.status, 200, first.text);
-      const recovered = await recoveredDevice(world, joiner.who);
+      /* PHASE 3 FINAL: "Forgot password?" by the Authorization Wallet signs EVERY device of the account out. */
+      const recovered = await recoveredDevice(world, joiner.who, "a brand new passphrase");
       assert.equal(world.identity.peekFamily(recovered.familyId())?.origin, "recovery");
+      await world.money.idle();
+      assert.deepEqual(await standingOf(world, table.gameId, joiner.playerId), [], "the laptop's family ended with the recovery: its link no longer stands");
+      assert.equal((await grantsOf(world, table.gameId, joiner.playerId)).at(-1)?.revoke_reason, "security-event");
+      assert.equal((await laptop.api("join-admission", { gameId: table.gameId })).status, 401, "the laptop is signed out");
       const relinked = await recovered.link(table.gameId, w1, testConsentKey("jo-recovered"));
       assert.equal(relinked.status, 200, relinked.text);
-      assert.deepEqual([relinked.body?.mode, relinked.body?.rehomed, relinked.body?.ticket], ["unchanged", true, first.body?.ticket]);
+      assert.deepEqual([relinked.body?.mode, relinked.body?.rehomed], ["issued", undefined], "nothing stood to re-home");
+      assert.notEqual(relinked.body?.ticket, first.body?.ticket, "a fresh ticket (no deposit to re-adopt)");
       const standing = await standingOf(world, table.gameId, joiner.playerId);
       assert.deepEqual(standing.map((grant) => grant.issued_under.family_id), [recovered.familyId()]);
-      /* The old device signs out (or is lost): the link stands, and the recovered device's proof feeds the admission. */
-      await laptop.signOut();
-      assert.equal((await standingOf(world, table.gameId, joiner.playerId)).length, 1);
+      /* The recovered device's proof feeds the admission. */
       const admitted = await recovered.api("join-admission", { gameId: table.gameId });
       assert.equal(admitted.status, 200, admitted.text);
     } finally {
@@ -343,32 +368,60 @@ describe("JX-3B / OD-JX3-1: the same wallet proven from another family re-homes 
     }
   });
 
-  test("recovery-key rotation ends the pre-freeze grant, re-homed or not; the new key confirms a fresh link", async () => {
+  /* PHASE 3 FINAL: the recovery-key rotation is retired (410). The account's credential replacements are "Forgot
+     password?" (every family ends) and "Change password" (every OTHER family ends). */
+  test("\"Forgot password?\" ends the pre-freeze grant, re-homed or not; the old password no longer confirms; the new one confirms a fresh link", async () => {
     const world = await moneyServer();
     try {
       const { table, joiner } = await hostOpened(world);
       const laptop = firstDevice(world, joiner.who);
-      const phone = await linkedDevice(world, joiner.who);
+      const phone = await signedInDevice(world, joiner.who);
       const w1 = testWallet("jo");
       assert.equal((await laptop.link(table.gameId, w1, testConsentKey("jo"))).status, 200);
       const rehomed = await phone.link(table.gameId, w1, testConsentKey("jo-phone"));
       assert.equal(rehomed.body?.rehomed, true, rehomed.text);
-      /* The phone rotates the recovery key (after Confirm it's you): the selector changes, the grant ends. */
-      await phone.confirm();
-      const rotated = await apiRequest(world.port, "/gs/api/profile/recovery-key", { cookie: phone.cookie, body: {} });
-      assert.equal(rotated.status, 200, rotated.text);
+      const rotate = await apiRequest(world.port, "/gs/api/profile/recovery-key", { cookie: phone.cookie, body: {} });
+      assert.deepEqual([rotate.status, rotate.body?.error], [410, "retired"], "no recovery key exists to rotate");
+      /* A third browser recovers the account with its Authorization Wallet: the phone's family -- the grant's -- ends too. */
+      const recovered = await recoveredDevice(world, joiner.who, "a brand new passphrase");
       await world.money.idle();
-      assert.deepEqual(await standingOf(world, table.gameId, joiner.playerId), [], "the rotating device's own re-homed grant ends too");
+      assert.deepEqual(await standingOf(world, table.gameId, joiner.playerId), [], "the re-homed grant ends with every family of the account");
       const ended = (await grantsOf(world, table.gameId, joiner.playerId)).at(-1);
       assert.equal(ended?.revoke_reason, "security-event");
-      /* The old key no longer confirms; the new one does, and a fresh link stands. */
-      const stale = await apiRequest(world.port, "/gs/api/profile/reauth", { cookie: phone.cookie, body: { recoveryKey: joiner.who.browser.recoveryKey } });
+      /* The old password no longer confirms; the new one does, and a fresh link stands. */
+      const stale = await apiRequest(world.port, "/gs/api/profile/reauth", { cookie: recovered.cookie, body: { password: joiner.who.browser.password } });
       assert.notEqual(stale.status, 200);
-      phone.recoveryKey = rotated.body?.recoveryKey as string;
-      const fresh = await phone.link(table.gameId, w1, testConsentKey("jo-phone"));
+      const fresh = await recovered.link(table.gameId, w1, testConsentKey("jo-recovered"));
       assert.equal(fresh.status, 200, fresh.text);
       assert.equal(fresh.body?.mode, "issued", "nothing stood: a fresh ticket (no deposit to re-adopt)");
-      assert.deepEqual((await standingOf(world, table.gameId, joiner.playerId)).map((grant) => grant.issued_under.family_id), [phone.familyId()]);
+      assert.deepEqual((await standingOf(world, table.gameId, joiner.playerId)).map((grant) => grant.issued_under.family_id), [recovered.familyId()]);
+    } finally {
+      await world.close();
+    }
+  });
+
+  test("\"Change password\" ends every OTHER device's pre-freeze grant; the changer's own family -- and its link -- stand", async () => {
+    const world = await moneyServer();
+    try {
+      const { table, joiner } = await hostOpened(world);
+      const laptop = firstDevice(world, joiner.who);
+      const phone = await signedInDevice(world, joiner.who);
+      const w1 = testWallet("jo");
+      const linked = await laptop.link(table.gameId, w1, testConsentKey("jo"));
+      assert.equal(linked.status, 200, linked.text);
+      const family = laptop.familyId();
+      /* The laptop changes the password: the phone is signed out; the laptop goes on in its own family. */
+      const changed = await changePassword(world, laptop, "a brand new passphrase");
+      assert.equal(changed.body?.signedOut, 1);
+      assert.equal((await phone.api("join-admission", { gameId: table.gameId })).status, 401, "the other device is signed out");
+      assert.equal(laptop.familyId(), family, "the changer's fresh session is in its own family");
+      assert.deepEqual((await standingOf(world, table.gameId, joiner.playerId)).map((grant) => [grant.epoch, grant.issued_under.family_id]), [[linked.body?.epoch, family]], "the changer's own link stands");
+      /* A new phone signs in with the NEW password and re-homes the same wallet; the laptop's next change ends it. */
+      const phone2 = await signedInDevice(world, joiner.who, "a brand new passphrase");
+      const rehomed = await phone2.link(table.gameId, w1, testConsentKey("jo-phone"));
+      assert.equal(rehomed.body?.rehomed, true, rehomed.text);
+      await changePassword(world, laptop, "yet another passphrase");
+      assert.deepEqual(await standingOf(world, table.gameId, joiner.playerId), [], "the re-homed link ended with the phone's family");
     } finally {
       await world.close();
     }
@@ -411,7 +464,7 @@ describe("JX-3B: consent from two devices after the signing key moved (the chain
     try {
       const { joiner, jWallet, jKey, table, domain, seq, digest, chainGameId } = await settleable(world);
       const laptop = firstDevice(world, joiner.who);
-      const phone = await linkedDevice(world, joiner.who);
+      const phone = await signedInDevice(world, joiner.who);
       const phoneKey = testConsentKey("jo-phone");
       /* The phone registers its key (Confirm it's you) -- registered is not yet authorized: the chain still names the
          laptop's key. */

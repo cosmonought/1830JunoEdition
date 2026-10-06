@@ -8,7 +8,7 @@
 //   - `gamesDoctor wallet-grants` (file mode, as a CLI over a real data directory) and the shared view: every grant's
 //     seat, epoch, wallet, proof digests, standing as the server judges it, revoke reason and freeze; contexts only as
 //     fingerprints (a re-home shows a new family fingerprint and the SAME ticket fingerprint); no session id, selector,
-//     recovery key, cookie or raw principal/family id anywhere in the output;
+//     password (PHASE 3 FINAL: no recovery key exists), cookie or raw principal/family id anywhere in the output;
 //   - (`gamesDoctor aws wallet-grants` -- the same view over DynamoDB -- is pinned in `aws/operator/jx3bWalletGrants.test.ts`);
 //   - `jx3VerifyLink`: a captured wallet-challenge answer + wallet-link body recompute the canonical text,
 //     challenge_digest, the ADR-036 sign doc, the wallet from the key, the signature and proof_hash -- PASS against the
@@ -80,7 +80,7 @@ describe("JX-3B C-4a: the wallet-grant view", () => {
       assert.equal(text.status, 0, text.stderr);
       assert.match(text.stdout, /epoch 2 \(newest\)\s+STANDING\s+wallet juno1/);
       assert.match(text.stdout, /re-adopted from epoch 1/);
-      const secrets = [e.families.laptop, e.families.phone, e.joiner.browser.recoveryKey, e.joiner.browser.cookie, e.phoneCookie, document.grants[0].ticket, document.grants[0].issued_under.recovery_selector, document.grants[0].issued_under.principal_id];
+      const secrets = [e.families.laptop, e.families.phone, e.joiner.browser.password, e.joiner.browser.cookie, e.phoneCookie, document.grants[0].ticket, document.grants[0].issued_under.recovery_selector, document.grants[0].issued_under.principal_id];
       assertRedacted(run.stdout, secrets);
       assertRedacted(text.stdout, secrets);
       /* The CLI only reads: the directory is byte-identical afterwards. */

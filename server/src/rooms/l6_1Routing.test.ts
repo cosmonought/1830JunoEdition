@@ -30,6 +30,7 @@ import { createGameServer } from "../gameServer";
 import { createRouterServer, ROUTER_UNAVAILABLE_SENTENCE } from "../routerServer";
 import { readSessionCookie, sessionSetCookie } from "../identity/cookies";
 import { IdentityService } from "../identity/sessions";
+import { createAccountWith, keplrAccount } from "../testSupport/authorizationWallets";
 import { createMemoryIdentityStore, type Session } from "../identity/store";
 import { createSessionVerifier, type IdentityRecordReader } from "../identity/verifier";
 import { thisDeploymentCapability } from "../deploymentCapability";
@@ -379,7 +380,7 @@ const T0 = Date.now();
 async function routerWorld(options: { readonly delayMs?: number; readonly limits?: import("../ingress/limits").IngressLimitOverrides } = {}) {
   /* The writer (the primary's identity service) and the durable records it commits. */
   const store = createMemoryIdentityStore();
-  const writer = await IdentityService.open(store);
+  const writer = await IdentityService.open(store, { policy: { passwordKdf: { logN: 10, r: 1, p: 1 } } });
   const reads = { count: 0, fail: false };
   const pick = <T>(list: T[], match: (record: T) => boolean): T | null => list.find(match) ?? null;
   const reader: IdentityRecordReader = {
@@ -395,9 +396,17 @@ async function routerWorld(options: { readonly delayMs?: number; readonly limits
   };
   const cookieOf = async (name: string) => {
     const boot = await writer.bootstrap({ kind: "none" }, false, T0);
-    const setCookie = (boot as { setCookie: string }).setCookie;
+    /* PHASE 3 FINAL: an account (username, password, Authorization Wallet); the create signs this browser in on a FRESH
+       session (the bootstrap's is replaced), so the cookie is the create's. */
+    const created = await createAccountWith(
+      writer,
+      readSessionCookie((boot as { setCookie: string }).setCookie.split(";")[0]),
+      { username: name.toLowerCase(), password: "correct horse battery", displayName: name, wallet: keplrAccount(`l6-1/${name}`) },
+      T0,
+    );
+    assert.equal(created.kind, "ok", JSON.stringify(created));
+    const setCookie = (created as { setCookie: string }).setCookie;
     const read = readSessionCookie(setCookie.split(";")[0]);
-    assert.equal((await writer.createProfile(read, name, T0)).kind, "ok");
     const sessionId = read.kind === "session" ? read.sessionId : "";
     const principalId = (writer.peekSession(sessionId) as Session).principal_id;
     return { cookie: setCookie.split(";")[0], sessionId, principalId };

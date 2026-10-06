@@ -70,6 +70,7 @@ import type { ParameterSource } from "../../aws/runtime/configSource";
 import { AWS_RUNTIME_CONFIG_FORMAT_V2, parseAwsRuntimeConfig } from "../../aws/runtime/runtimeConfig";
 import { readSessionCookie, type SessionCookieRead } from "../../identity/cookies";
 import { IdentityService } from "../../identity/sessions";
+import { createAccountWith, keplrAccount } from "../../testSupport/authorizationWallets";
 import { createMemoryOpsRecorder } from "../opsRecorder";
 import { quietConsole, seededRecord, ALICE, BOB } from "../../rooms/testSupport";
 import { ConformanceTables, installFaults, newRunId, requireLocal } from "./dynamoLocal";
@@ -771,14 +772,16 @@ describe("§4 the identity verifier refuses every table the serving path refuses
     let clock = 1_780_000_000_000;
     const now = () => clock;
     const store = createDynamoIdentityStore(admin, source, { epoch, sleep: noSleep });
-    const identity = await IdentityService.open(store, { security: { journal: createDynamoSecurityJournal(admin, ledger, { generation: 1, sleep: noSleep }), grants: store.grants, clock: now } });
+    const TEST_KDF = { passwordKdf: { logN: 10, r: 1, p: 1 } };
+    const identity = await IdentityService.open(store, { policy: TEST_KDF, security: { journal: createDynamoSecurityJournal(admin, ledger, { generation: 1, sleep: noSleep }), grants: store.grants, clock: now } });
+    /* PHASE 3 FINAL: an account (username, password, Authorization Wallet); the create's FRESH session is the browser's. */
     const profile = async (service: IdentityService, name: string) => {
       clock += 60_000;
       const boot = await service.bootstrap({ kind: "none" }, false, now());
-      const read = readOf((boot as { setCookie: string | null }).setCookie);
-      assert.equal((await service.createProfile(read, name, now())).kind, "ok");
+      const created = await createAccountWith(service, readOf((boot as { setCookie: string | null }).setCookie), { username: name.toLowerCase(), password: "correct horse battery", displayName: name, wallet: keplrAccount(`l6-2/${name}`) }, now());
+      assert.equal(created.kind, "ok", JSON.stringify(created));
       await service.settled();
-      return read;
+      return readOf((created as { setCookie: string }).setCookie);
     };
     const ann = await profile(identity, "Ann");
     await profile(identity, "Bea");
@@ -803,7 +806,7 @@ describe("§4 the identity verifier refuses every table the serving path refuses
     assert.equal((await verify(source, ann)).kind, "unavailable", "the superseded source serves nothing");
     assert.notEqual((await verify(restored, ann)).kind, "ok", "an old session is signed out by the restore");
     const taken = await takeOverIdentityWriter(admin, restored, { task: "t-new", pool: "p1", now: () => 2, checks: identityServingChecks(restored) });
-    const served = await IdentityService.open(createDynamoIdentityStore(admin, restored, { epoch: taken.epoch, sleep: noSleep }));
+    const served = await IdentityService.open(createDynamoIdentityStore(admin, restored, { epoch: taken.epoch, sleep: noSleep }), { policy: TEST_KDF });
     const cat = await profile(served, "Cat");
     const ok = await verify(restored, cat);
     assert.equal(ok.kind, "ok", JSON.stringify(ok));

@@ -14,6 +14,7 @@ import { readSessionCookie, type SessionCookieRead } from "../identity/cookies";
 import { IdentityService } from "../identity/sessions";
 import { createMemoryIdentityStore } from "../identity/store";
 import { quietConsole } from "../rooms/testSupport";
+import { createAccountWith, keplrAccount, recoverWith, replaceWith } from "../testSupport/authorizationWallets";
 import { joinTicketV1 } from "../../../frontend/src/gameEngine/escrow/escrowRoster";
 import { createMemoryWalletTicketStore, createWalletTicketLedger, type WalletLinkProof, type WalletTicketContext, type WalletTicketStore } from "./walletTickets";
 
@@ -29,15 +30,22 @@ const OTHER_WALLET = "juno1wallet1111111111111111111111111111111";
 
 const readOf = (setCookie: string | null): SessionCookieRead => readSessionCookie((setCookie as string).split(";")[0]);
 const sessionIdOf = (read: SessionCookieRead) => (read.kind === "session" ? read.sessionId : "");
+/** PHASE 3 FINAL: Ann's account -- a username, a password ("Confirm it's you") and her Authorization Wallet. */
+const USERNAME = "ann";
+const PASSWORD = "correct horse battery";
+const AUTHORIZATION_WALLET = keplrAccount("wallet-tickets/ann");
 
 async function world(options: { readonly store?: WalletTicketStore } = {}) {
-  const identity = await IdentityService.open(createMemoryIdentityStore());
+  const identity = await IdentityService.open(createMemoryIdentityStore(), { policy: { passwordKdf: { logN: 10, r: 1, p: 1 } } });
   const boot = await identity.bootstrap({ kind: "none" }, false, T0);
-  const laptop = readOf((boot as { setCookie: string }).setCookie);
-  const created = await identity.createProfile(laptop, "Ann", T0);
-  const key = (created as { recoveryKey: string }).recoveryKey;
+  const created = await createAccountWith(identity, readOf((boot as { setCookie: string }).setCookie), { username: USERNAME, password: PASSWORD, displayName: "Ann", wallet: AUTHORIZATION_WALLET }, T0);
+  assert.equal(created.kind, "ok", JSON.stringify(created));
+  const laptop = readOf((created as { setCookie: string }).setCookie);
+  /* A second device: a sign-in (username + password) on a fresh browser -- its own session family. */
   const second = await identity.bootstrap({ kind: "none" }, false, T0 + 1);
-  const phone = readOf((await identity.recover(readOf((second as { setCookie: string }).setCookie), key, T0 + 1) as { setCookie: string }).setCookie);
+  const signedIn = await identity.login(readOf((second as { setCookie: string }).setCookie), { username: USERNAME, password: PASSWORD }, T0 + 1);
+  assert.equal(signedIn.kind, "ok", JSON.stringify(signedIn));
+  const phone = readOf((signedIn as { setCookie: string }).setCookie);
   const principalId = identity.securityContextOf(laptop, T0 + 2)!.principalId;
   let seatHolder = principalId;
   const ledger = createWalletTicketLedger({
@@ -50,7 +58,9 @@ async function world(options: { readonly store?: WalletTicketStore } = {}) {
     const context = identity.securityContextOf(read, now) as WalletTicketContext;
     return ledger.issue({ binding: BINDING, gameId: GAME, playerId: SEAT, wallet, context, reauthorized: identity.hasSensitiveAuth(read, now) });
   };
-  return { identity, laptop, phone, key, ledger, issueFrom, setSeatHolder: (p: string) => (seatHolder = p) };
+  /** "Confirm it's you" (the password). */
+  const confirm = async (read: SessionCookieRead, now: number) => assert.equal((await identity.reauthenticateWithPassword(read, PASSWORD, now)).kind, "ok");
+  return { identity, laptop, phone, confirm, ledger, issueFrom, setSeatHolder: (p: string) => (seatHolder = p) };
 }
 
 describe("ESCROW-3A F-2: one outstanding wallet ticket per seat, ended by every security event", () => {
@@ -58,7 +68,7 @@ describe("ESCROW-3A F-2: one outstanding wallet ticket per seat, ended by every 
     const w = await world();
     const t = T0 + 2 * 60 * MIN;
     assert.deepEqual(await w.issueFrom(w.phone, t), { ok: false, refusal: "reauth-required" });
-    await w.identity.reauthenticate(w.phone, w.key, t);
+    await w.confirm(w.phone, t);
     const issued = await w.issueFrom(w.phone, t);
     assert.equal(issued.ok, true);
     assert.match((issued as { ticket: string }).ticket, /^[0-9a-f]{64}$/);
@@ -71,7 +81,7 @@ describe("ESCROW-3A F-2: one outstanding wallet ticket per seat, ended by every 
   test("single outstanding: a new issue supersedes the old one (epoch + 1); the old ticket adopts nothing", async () => {
     const w = await world();
     const t = T0 + 2 * 60 * MIN;
-    await w.identity.reauthenticate(w.laptop, w.key, t);
+    await w.confirm(w.laptop, t);
     const first = (await w.issueFrom(w.laptop, t)) as { ticket: string; epoch: number };
     const second = (await w.issueFrom(w.laptop, t, OTHER_WALLET)) as { ticket: string; epoch: number };
     assert.deepEqual([first.epoch, second.epoch], [1, 2]);
@@ -82,7 +92,7 @@ describe("ESCROW-3A F-2: one outstanding wallet ticket per seat, ended by every 
   test("outstanding ticket + sign out of the issuing device: ended; retried afterwards: adopts nothing", async () => {
     const w = await world();
     const t = T0 + 2 * 60 * MIN;
-    await w.identity.reauthenticate(w.phone, w.key, t);
+    await w.confirm(w.phone, t);
     const issued = (await w.issueFrom(w.phone, t)) as { ticket: string };
     await w.identity.revoke(sessionIdOf(w.phone), "logout", t + 1);
     assert.equal(await w.ledger.ticketOf(GAME, SEAT, WALLET), "");
@@ -93,28 +103,71 @@ describe("ESCROW-3A F-2: one outstanding wallet ticket per seat, ended by every 
   test("outstanding ticket + sign-out-others from another device: ended", async () => {
     const w = await world();
     const t = T0 + 2 * 60 * MIN;
-    await w.identity.reauthenticate(w.phone, w.key, t);
+    await w.confirm(w.phone, t);
     await w.issueFrom(w.phone, t);
-    await w.identity.reauthenticate(w.laptop, w.key, t + 1);
+    await w.confirm(w.laptop, t + 1);
     await w.identity.signOutOthers(w.laptop, t + 1);
     assert.equal(await w.ledger.ticketOf(GAME, SEAT, WALLET), "");
   });
 
-  test("outstanding ticket + recovery-key rotation (by any device): ended -- including the rotating device's own", async () => {
+  /* PHASE 3 FINAL: the recovery-key rotation is gone (no recovery key exists). The account's credential actions now are
+     "Forgot password?" by the Authorization Wallet (every family of the account ends), "Change password" (every OTHER
+     device's family ends; the changer's own family is kept) and "Change Authorization Wallet" (no session ends). */
+  test("outstanding ticket + \"Forgot password?\" by the Authorization Wallet (from a new browser): ended -- every family of the account, the issuing one included", async () => {
     const w = await world();
     const t = T0 + 2 * 60 * MIN;
-    await w.identity.reauthenticate(w.laptop, w.key, t);
-    await w.issueFrom(w.laptop, t);
-    await w.identity.rotateRecoveryKey(w.laptop, t + 1);
-    assert.equal(await w.ledger.ticketOf(GAME, SEAT, WALLET), "");
-    // A fresh re-authentication (with the new key) and a fresh ticket stand again.
-    assert.deepEqual(await w.issueFrom(w.laptop, t + 2), { ok: false, refusal: "reauth-required" }, "the rotation made the grant stale");
+    await w.confirm(w.laptop, t);
+    const issued = (await w.issueFrom(w.laptop, t)) as { ticket: string };
+    assert.match(issued.ticket, /^[0-9a-f]{64}$/);
+    const fresh = await w.identity.bootstrap({ kind: "none" }, false, t + 1);
+    const recovered = await recoverWith(w.identity, readOf((fresh as { setCookie: string }).setCookie), { username: USERNAME, wallet: AUTHORIZATION_WALLET, newPassword: "a brand new passphrase" }, t + 1);
+    assert.equal(recovered.kind, "ok", JSON.stringify(recovered));
+    assert.equal(await w.ledger.ticketOf(GAME, SEAT, WALLET), "", "the issuing family ended with the recovery");
+    assert.equal(await w.ledger.revokeForSecurityEvent(GAME), 1, "the ledger records what ended it");
+    assert.equal(w.identity.securityContextOf(w.laptop, t + 2), null, "the issuing device is signed out");
+    assert.equal(w.identity.securityContextOf(w.phone, t + 2), null, "and so is every other device");
+    assert.equal(w.identity.hasSensitiveAuth(w.laptop, t + 2), false, "its grant died with its session");
+    /* The recovered browser is signed in on a NEW family: a ticket issued there stands (nothing was re-adopted). */
+    const rescued = readOf((recovered as { setCookie: string }).setCookie);
+    const again = (await w.issueFrom(rescued, t + 2)) as { ok: boolean; ticket: string; epoch: number };
+    assert.equal(again.ok, true, "the recovery's own sign-in is a recent authentication");
+    assert.notEqual(again.ticket, issued.ticket, "a fresh ticket, never the ended one");
+    assert.equal(await w.ledger.ticketOf(GAME, SEAT, WALLET), again.ticket);
+  });
+
+  test("outstanding tickets + \"Change password\" on one device: the OTHER device's ticket ends; the changer's own family -- and its ticket -- stand", async () => {
+    const w = await world();
+    const t = T0 + 2 * 60 * MIN;
+    await w.confirm(w.phone, t);
+    assert.equal((await w.issueFrom(w.phone, t)).ok, true);
+    const changed = await w.identity.changePassword(w.laptop, { currentPassword: PASSWORD, newPassword: "a brand new passphrase" }, t + 1);
+    assert.equal(changed.kind, "ok", JSON.stringify(changed));
+    assert.equal(await w.ledger.ticketOf(GAME, SEAT, WALLET), "", "the phone's family was signed out by the change");
+    /* The changer keeps going on a fresh session of ITS OWN family: a ticket issued there stands through another change. */
+    const laptop = readOf((changed as { setCookie: string }).setCookie);
+    await w.identity.reauthenticateWithPassword(laptop, "a brand new passphrase", t + 2);
+    const onLaptop = (await w.issueFrom(laptop, t + 2)) as { ok: boolean; ticket: string };
+    assert.equal(onLaptop.ok, true);
+    const changedAgain = await w.identity.changePassword(laptop, { currentPassword: "a brand new passphrase", newPassword: "yet another passphrase" }, t + 3);
+    assert.equal(changedAgain.kind, "ok", JSON.stringify(changedAgain));
+    assert.equal(await w.ledger.ticketOf(GAME, SEAT, WALLET), onLaptop.ticket, "the changer's own family is kept: its pre-freeze link stands");
+  });
+
+  test("outstanding ticket + \"Change Authorization Wallet\": the ticket stands (no session, family or credential epoch moves)", async () => {
+    const w = await world();
+    const t = T0 + 2 * 60 * MIN;
+    await w.confirm(w.laptop, t);
+    const issued = (await w.issueFrom(w.laptop, t)) as { ticket: string };
+    const replaced = await replaceWith(w.identity, w.laptop, { current: AUTHORIZATION_WALLET, next: keplrAccount("wallet-tickets/ann-2") }, t + 1);
+    assert.equal(replaced.kind, "ok", JSON.stringify(replaced));
+    assert.equal(await w.ledger.ticketOf(GAME, SEAT, WALLET), issued.ticket, "a game's wallet binding never depends on the Authorization Wallet");
+    assert.equal(await w.ledger.revokeForSecurityEvent(GAME), 0);
   });
 
   test("a principal that does not hold the seat cannot be issued a ticket, and a disabled principal's tickets end", async () => {
     const w = await world();
     const t = T0 + 2 * 60 * MIN;
-    await w.identity.reauthenticate(w.laptop, w.key, t);
+    await w.confirm(w.laptop, t);
     w.setSeatHolder("pr_someone_else");
     assert.deepEqual(await w.issueFrom(w.laptop, t), { ok: false, refusal: "not-seated" });
     w.setSeatHolder(w.identity.securityContextOf(w.laptop, t)!.principalId);
@@ -126,12 +179,12 @@ describe("ESCROW-3A F-2: one outstanding wallet ticket per seat, ended by every 
   test("FROZEN with the roster: a sign-out after the freeze cannot un-bind a deposit the chain already started with", async () => {
     const w = await world();
     const t = T0 + 2 * 60 * MIN;
-    await w.identity.reauthenticate(w.phone, w.key, t);
+    await w.confirm(w.phone, t);
     const issued = (await w.issueFrom(w.phone, t)) as { ticket: string };
     assert.equal(await w.ledger.freeze(GAME), "committed");
     await w.identity.revoke(sessionIdOf(w.phone), "logout", t + 1);
     assert.equal(await w.ledger.ticketOf(GAME, SEAT, WALLET), issued.ticket, "the frozen claim stands");
-    await w.identity.reauthenticate(w.laptop, w.key, t + 2);
+    await w.confirm(w.laptop, t + 2);
     assert.deepEqual(await w.issueFrom(w.laptop, t + 2), { ok: false, refusal: "frozen" }, "no new ticket after the freeze");
   });
 
@@ -139,7 +192,7 @@ describe("ESCROW-3A F-2: one outstanding wallet ticket per seat, ended by every 
     const w = await world();
     const t = T0 + 2 * 60 * MIN;
     assert.equal(await w.ledger.freeze(GAME), "committed");
-    await w.identity.reauthenticate(w.laptop, w.key, t);
+    await w.confirm(w.laptop, t);
     assert.deepEqual(await w.issueFrom(w.laptop, t), { ok: false, refusal: "frozen" });
     assert.equal(await w.ledger.freeze(GAME), "committed", "a repeated freeze changes nothing");
   });
@@ -147,7 +200,7 @@ describe("ESCROW-3A F-2: one outstanding wallet ticket per seat, ended by every 
   test("the ticket is GNOLAND-1's joinTicketV1 (unchanged), over a secret the ledger does not keep", async () => {
     const w = await world();
     const t = T0 + 2 * 60 * MIN;
-    await w.identity.reauthenticate(w.laptop, w.key, t);
+    await w.confirm(w.laptop, t);
     const issued = (await w.issueFrom(w.laptop, t)) as { ticket: string };
     const recomputed = joinTicketV1({ ...BINDING, game_id: GAME, player_id: SEAT, wallet: WALLET, secret_hex: "00".repeat(32) });
     assert.notEqual(issued.ticket, recomputed, "a guessed secret recomputes nothing");
@@ -213,8 +266,8 @@ describe("JX-3B OD-JX3-1: the ledger's re-home (issue({ rehome: true }))", () =>
   async function linkedOnLaptop(options: { readonly store?: WalletTicketStore } = {}) {
     const w = await world(options);
     const t = T0 + 2 * 60 * MIN;
-    await w.identity.reauthenticate(w.laptop, w.key, t);
-    await w.identity.reauthenticate(w.phone, w.key, t);
+    await w.confirm(w.laptop, t);
+    await w.confirm(w.phone, t);
     const laptopContext = w.identity.securityContextOf(w.laptop, t) as WalletTicketContext;
     const phoneContext = w.identity.securityContextOf(w.phone, t) as WalletTicketContext;
     const first = await w.ledger.issue({ binding: BINDING, gameId: GAME, playerId: SEAT, wallet: WALLET, context: laptopContext, reauthorized: true, proof: proofFor("laptop"), consentKey: KEY_A, createFloor: "7" });

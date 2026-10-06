@@ -42,6 +42,7 @@ import { realAwsSubstrate } from "../../aws/runtime/awsSubstrate";
 import { AWS_RUNTIME_CONFIG_FORMAT_V2, parseAwsRuntimeConfig } from "../../aws/runtime/runtimeConfig";
 import { readSessionCookie, type SessionCookieRead } from "../../identity/cookies";
 import { IdentityService } from "../../identity/sessions";
+import { createAccountWith, keplrAccount } from "../../testSupport/authorizationWallets";
 import type { Session } from "../../identity/store";
 import { createMemoryOpsRecorder } from "../opsRecorder";
 import { poolRoutes, routeOfGame } from "../../rooms/gameRoutes";
@@ -113,20 +114,25 @@ async function tableBytes(table: string): Promise<string> {
 
 const readOf = (setCookie: string): SessionCookieRead => readSessionCookie(setCookie.split(";")[0]);
 const T0 = Date.now();
+/** PHASE 3 FINAL: every account's password (test KDF parameters keep the writer fast). */
+const PASSWORD = "correct horse battery";
+const TEST_KDF = { passwordKdf: { logN: 10, r: 1, p: 1 } };
 
 /** The identity WRITER on a real identity table (L5-4's store, the identity service), and a profiled browser of it. */
 async function writerOn(table: string) {
   const { epoch } = await takeOverIdentityWriter(admin, table, { task: "t-writer", pool: "p0", now: () => T0 });
   const store = createDynamoIdentityStore(await freshClient(), table, { epoch, warn: () => undefined });
-  const writer = await IdentityService.open(store);
+  const writer = await IdentityService.open(store, { policy: TEST_KDF });
+  /** An account (username, password, Authorization Wallet): the create signs this browser in on a FRESH session. */
   const browser = async (name: string) => {
     const boot = await writer.bootstrap({ kind: "none" }, false, T0);
-    const setCookie = (boot as { setCookie: string }).setCookie;
-    const read = readOf(setCookie);
-    const created = await writer.createProfile(read, name, T0);
+    const username = name.toLowerCase();
+    const created = await createAccountWith(writer, readOf((boot as { setCookie: string }).setCookie), { username, password: PASSWORD, displayName: name, wallet: keplrAccount(`l6-1-dynamo/${name}`) }, T0);
     assert.equal(created.kind, "ok", JSON.stringify(created));
+    const setCookie = (created as { setCookie: string }).setCookie;
+    const read = readOf(setCookie);
     const sessionId = read.kind === "session" ? read.sessionId : "";
-    return { read, cookie: setCookie.split(";")[0], sessionId, principalId: (writer.peekSession(sessionId) as Session).principal_id, key: (created as { recoveryKey: string }).recoveryKey };
+    return { read, cookie: setCookie.split(";")[0], sessionId, principalId: (writer.peekSession(sessionId) as Session).principal_id, username };
   };
   return { writer, browser };
 }
@@ -168,12 +174,13 @@ describe("§1 the identity verifier on the real identity table: read-only, stron
     const ann = await browser("Ann");
     const bob = await browser("Bob");
     const verifier = createDynamoIdentityVerifier(await freshClient(), table);
-    /* Ann's phone (the recovery key: its own family), then "sign out other devices" from her first browser. */
+    /* Ann's phone (PHASE 3 FINAL: a sign-in with her username and password -- its own family), then "sign out other
+       devices" from her first browser. */
     const phoneBoot = await writer.bootstrap({ kind: "none" }, false, T0 + 10);
-    const phone = readOf(((await writer.recover(readOf((phoneBoot as { setCookie: string }).setCookie), ann.key, T0 + 10)) as { setCookie: string }).setCookie);
+    const phone = readOf(((await writer.login(readOf((phoneBoot as { setCookie: string }).setCookie), { username: ann.username, password: PASSWORD }, T0 + 10)) as { setCookie: string }).setCookie);
     const phoneAuth = await verifier.authenticate(phone, T0 + 11);
     assert.equal(phoneAuth.kind, "ok");
-    assert.equal((await writer.reauthenticate(ann.read, ann.key, T0 + 12)).kind, "ok");
+    assert.equal((await writer.reauthenticateWithPassword(ann.read, PASSWORD, T0 + 12)).kind, "ok");
     assert.equal((await writer.signOutOthers(ann.read, T0 + 12)).kind, "ok");
     assert.deepEqual(await verifier.authenticate(phone, T0 + 13), { kind: "refused", why: "ended" }, "the signed-out family");
     if (phoneAuth.kind === "ok") assert.deepEqual(await verifier.recheck({ principalId: phoneAuth.principalId, sessionId: phoneAuth.sessionId, sessionExpiresAt: phoneAuth.sessionExpiresAt }, T0 + 13), { kind: "revoked" });
@@ -326,11 +333,12 @@ describe("§3 a primary and a non-primary task on the same tables; the routing f
     try {
       assert.equal(a.runtime.role, "primary");
       const primaryIdentity = a.runtime.identity as IdentityService;
-      /* A browser profiled on the primary (the identity writer). */
+      /* A browser with an account made on the primary (the identity writer): the create's FRESH session is its cookie. */
       const boot = await primaryIdentity.bootstrap({ kind: "none" }, false, Date.now());
-      const cookie = (boot as { setCookie: string }).setCookie.split(";")[0];
+      const created = await createAccountWith(primaryIdentity, readOf((boot as { setCookie: string }).setCookie), { username: "ann", password: PASSWORD, displayName: "Ann", wallet: keplrAccount("l6-1-dynamo/primary-ann") }, Date.now());
+      assert.equal(created.kind, "ok", JSON.stringify(created));
+      const cookie = (created as { setCookie: string }).setCookie.split(";")[0];
       const read = readSessionCookie(cookie);
-      assert.equal((await primaryIdentity.createProfile(read, "Ann", Date.now())).kind, "ok");
       await primaryIdentity.flush(Date.now());
       const principalId = (primaryIdentity.peekSession(read.kind === "session" ? read.sessionId : "") as Session).principal_id;
       /* A game the primary created (its HEAD names p0), in which Ann holds a seat. */

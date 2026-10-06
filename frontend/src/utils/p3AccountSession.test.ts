@@ -10,10 +10,14 @@
 //   `requireAccount` runs the action at once for a signed-in page, and otherwise holds it until the sign-in -- the
 //   sockets renewed first, then the action, exactly once; closing the dialog drops it.
 //   The account API sends each credential once, in a POST body, to a closed list of paths.
+//
+// PHASE 3 FINAL (owner ruling 2026-10-06): the session-replacing routes are the four sign-ins of the Authorization-Wallet
+// account (create, log in, "Forgot password?" = `account/recover`, change password); the profile-era ones
+// (`profile/recover`, `profile/link`, `account/reset`) are retired.
 
 import { httpSessionPort, SESSION_REPLACING_PATHS } from "./sessionBootstrap";
 import { accountSignedIn, accountPromptState, closeAccountDialog, requireAccount, resetAccountPromptForTests } from "./accountPrompt";
-import { accountDetails, createAccount, establishCredentials, forgetWallet, logIn, profileErrorSentence, reauthenticateWithPassword, type ProfileFailure } from "./profileApi";
+import { accountDetails, createAccount, logIn, profileErrorSentence, reauthenticateWithPassword, type ProfileFailure } from "./profileApi";
 
 const ENDPOINT = "https://play.example/gs/api/session";
 
@@ -46,8 +50,8 @@ const tick = async () => {
 };
 
 describe("P3-ACCT: the session under a sign-in", () => {
-  it("the routes that replace a session are exactly the sign-ins (P3-ACCT POLICY: and a password change or reset)", () => {
-    expect(Array.from(SESSION_REPLACING_PATHS).sort()).toEqual(["account/create", "account/login", "account/password", "account/reset", "profile/link", "profile/recover"]);
+  it("the routes that replace a session are exactly the sign-ins (PHASE 3 FINAL: create, log in, recover by the Authorization Wallet, change password)", () => {
+    expect(Array.from(SESSION_REPLACING_PATHS).sort()).toEqual(["account/create", "account/login", "account/password", "account/recover"]);
   });
 
   it("a bootstrap asked while a sign-in is on the wire waits for it, then asks -- with the new cookie in place", async () => {
@@ -181,18 +185,24 @@ describe("P3-ACCT: requireAccount -- asked at the action, resumed after the sign
 });
 
 describe("P3-ACCT: the account API -- one POST body per credential, a closed list of paths", () => {
-  it("create, log in, details, credentials, forget-wallet and the password re-check", async () => {
+  const OPERATION = "0123456789abcdef0123456789abcdef";
+  const SIGNED = { pubKey: "Ai1R5vzeZFvF73ROli+IbV7OuNG7bM6HeI0rthBGJzvf", signature: "c2lnbmF0dXJl" };
+  const WALLET = "juno12gdmst084pz888ds7g80nv27p9wadknwdl783a";
+
+  it("create (with the Authorization Wallet's signature), log in, details and the password re-check", async () => {
     const http = manualFetch();
     const port = httpSessionPort({ endpoint: ENDPOINT, fetch: http.fetch });
-    const created = createAccount({ username: " Ann ", password: " spaces count ", name: "Ann" }, port);
+    const created = createAccount({ username: " Ann ", password: " spaces count ", name: "Ann", operation: OPERATION, signed: SIGNED }, port);
     await flush();
-    await http.answer("/gs/api/account/create", 201, { ok: true, profile: { name: "Ann", otherSessions: 0 }, username: "Ann", recoveryKey: "rk_0123456789abcdefghjkmnpqr0.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" });
-    await http.answer("/gs/api/session", 200, { ok: true, profile: { name: "Ann", otherSessions: 0 } });
-    expect(await created).toEqual({ ok: true, name: "Ann", recoveryKey: "rk_0123456789abcdefghjkmnpqr0.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" });
+    await http.answer("/gs/api/account/create", 201, { ok: true, profile: { name: "Ann", otherSessions: 0 }, username: "Ann" });
+    await http.answer("/gs/api/session", 200, { ok: true, profile: { name: "Ann", otherSessions: 0, username: "Ann" } });
+    /* PHASE 3 FINAL: nothing is revealed after creation -- there is no recovery key. */
+    expect(await created).toEqual({ ok: true, name: "Ann" });
+    expect(port.account).toEqual({ name: "Ann", otherSessions: 0, username: "Ann" });
     /* The username is trimmed; the password never is (spaces are part of it). */
-    expect(JSON.parse(http.calls[0].body)).toEqual({ username: "Ann", password: " spaces count ", name: "Ann" });
+    expect(JSON.parse(http.calls[0].body)).toEqual({ username: "Ann", password: " spaces count ", name: "Ann", operation: OPERATION, pubKey: SIGNED.pubKey, signature: SIGNED.signature });
 
-    const taken = createAccount({ username: "Bea", password: "long enough now", name: "Bea" }, port);
+    const taken = createAccount({ username: "Bea", password: "long enough now", name: "Bea", operation: OPERATION, signed: SIGNED }, port);
     await flush();
     await http.answer("/gs/api/account/create", 409, { error: "username-taken" });
     await flush();
@@ -203,16 +213,13 @@ describe("P3-ACCT: the account API -- one POST body per credential, a closed lis
 
     const details = accountDetails(port);
     await flush();
-    await http.answer("/gs/api/account/me", 200, { ok: true, account: { name: "Ann", username: "Ann", recoveryKey: false, wallet: null, memberSince: 5, otherSessions: 0 } });
-    expect(await details).toEqual({ ok: true, account: { name: "Ann", username: "Ann", recoveryKey: false, wallet: null, memberSince: 5, otherSessions: 0 } });
+    const account = { name: "Ann", username: "Ann", authorizationWallet: { address: WALLET, since: 4 }, memberSince: 5, otherSessions: 0 };
+    await http.answer("/gs/api/account/me", 200, { ok: true, account });
+    expect(await details).toEqual({ ok: true, account });
 
-    const legacy = establishCredentials({ username: "Old", password: "short" }, port);
-    expect(await legacy).toEqual({ ok: false, error: "bad-password", problem: "too-short" });
-
-    const forgot = forgetWallet(port);
-    await flush();
-    await http.answer("/gs/api/account/forget-wallet", 403, { error: "reauth-required" });
-    expect(await forgot).toEqual({ ok: false, error: "reauth-required" });
+    /* Removed here with the model they belonged to (PHASE 3 FINAL): `establishCredentials` (a legacy profile's
+       username + password -- legacy profiles are retired, `legacy-account`) and `forgetWallet` (no remembered
+       wallet: the Authorization Wallet is replaced, never forgotten -- `profileApi.test.ts`). */
 
     const check = reauthenticateWithPassword("the password", port);
     await flush();
@@ -222,7 +229,7 @@ describe("P3-ACCT: the account API -- one POST body per credential, a closed lis
     /* Nothing went anywhere but /gs/api, and no credential was ever in a URL. */
     for (const call of http.calls) {
       expect(call.path.startsWith("/gs/api/")).toBe(true);
-      expect(call.path).not.toMatch(/password|spaces|Ann\b/);
+      expect(call.path).not.toMatch(/password|spaces|Ann\b|c2lnbmF0dXJl|0123456789abcdef/);
     }
   });
 

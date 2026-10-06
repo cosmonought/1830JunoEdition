@@ -1,18 +1,22 @@
 /** @jest-environment jsdom */
 //
-// LIVE-2E / P3-ACCT: THE ACCOUNT CORNER AND THE SIGNED-OUT NOTICE. Signed out, the corner offers Log in and Create
-// account. Signed in, the chip names the account; its menu shows (under "Older sign-in options", for a profile made
-// before accounts) a device-link code large with a live countdown and the recovery-key rotation (asked first, the new
-// key revealed once); it says how many other devices are signed in before signing them out and how many were, and asks
-// before signing this device out -- then reloads to the public homepage. A development build offers no credential
-// actions. The signed-out notice says nothing of guests: the account and its seats are kept.
+// LIVE-2E / P3-ACCT / PHASE 3 FINAL: THE ACCOUNT CORNER AND THE SIGNED-OUT NOTICE. Signed out, the corner offers Log in
+// and Create account. Signed in, the chip names the account; its menu shows the account (username, member since) and
+// its ONE Authorization Wallet (shortened, since when); "Confirm it's you" is the PASSWORD, sent once and never kept; it
+// says how many other devices are signed in before signing them out and how many were, and asks before signing this
+// device out -- then reloads to the public homepage. A development build offers no credential actions. The signed-out
+// notice says nothing of guests: the account and its seats are kept.
+//
+// PHASE 3 FINAL (owner ruling 2026-10-06) removed from this menu: "Link another device" (a second device LOGS IN), the
+// recovery key and its rotation (none exists), the legacy profile's "set a username and password" (legacy profiles are
+// retired) and "Forget this wallet" (nothing remembers a wallet; the Authorization Wallet is replaced, never
+// forgotten). The Authorization Wallet's replacement order is pinned in `p3FinalAccountWallet.test.tsx`.
 
 import React from "react";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 
-import { ProfileMenu, countdownText, linkCodeDeadline } from "./ProfileMenu";
-import { LINK_CODE_HOW } from "./AccountDialog";
+import { ProfileMenu } from "./ProfileMenu";
 import { SessionEndedNotice } from "./SessionEndedNotice";
 import { httpSessionPort, readySessionPort } from "../utils/sessionBootstrap";
 import { readStripped } from "../utils/sourceScan";
@@ -24,8 +28,7 @@ declare global {
 global.IS_REACT_ACT_ENVIRONMENT = true;
 
 const ENDPOINT = "https://play.example/gs/api/session";
-const KEY = "rk_0123456789abcdefghjkmnpqr0.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
-const CODE = "ABCD-EFGH-JKMN-PQRS-TVWX";
+const AUTHORIZATION_WALLET = "juno1qyqszqgpqyqszqgpqyqszqgpqyqszqgpypz92q";
 
 type Queued = { status: number; body?: unknown; then?: () => void };
 
@@ -106,8 +109,11 @@ const type = (input: HTMLInputElement | null, value: string) => {
   });
 };
 
-/** A profile made before accounts (no username): the menu's legacy options (P3-ACCT POLICY: only for such a profile). */
-const LEGACY_ME = { ok: true, account: { name: "Brad", otherSessions: 2, username: null, recoveryKey: true, wallet: null, memberSince: Date.UTC(2026, 0, 2) } };
+/** PHASE 3 FINAL: what `/gs/api/account/me` tells an account's own session. */
+const accountMe = (otherSessions: number) => ({
+  ok: true,
+  account: { name: "Brad", otherSessions, username: "Brad.Player", authorizationWallet: { address: AUTHORIZATION_WALLET, since: Date.UTC(2026, 9, 1) }, memberSince: Date.UTC(2026, 8, 30) },
+});
 
 async function profiled(otherSessions = 2): Promise<ReturnType<typeof fakeServer>> {
   const server = fakeServer({ name: "Brad", otherSessions });
@@ -116,57 +122,26 @@ async function profiled(otherSessions = 2): Promise<ReturnType<typeof fakeServer
 }
 
 describe("the profile menu (LIVE-2E)", () => {
-  it("names the profile, and 'Link another device' shows a code large, with Copy and a live countdown", async () => {
-    jest.useFakeTimers();
-    jest.setSystemTime(new Date("2026-09-26T12:00:00Z"));
+  /* PHASE 3 FINAL: "'Link another device' shows a code large, with Copy and a live countdown" and "'Make a new recovery
+     key' asks first, then shows the new key once" are removed with link codes and the recovery key -- a second
+     device logs in; a forgotten password is "Forgot password?" with the Authorization Wallet (`p3AccountPolicy`). */
+  it("names the account, its username and its Authorization Wallet (shortened, since when) -- and nothing of link codes or recovery keys", async () => {
     const server = await profiled();
-    server.queue("/gs/api/account/me", 200, LEGACY_ME);
+    server.queue("/gs/api/account/me", 200, accountMe(2));
     await render(<ProfileMenu port={server.port} />);
     expect(byTestId("profile-chip")?.textContent).toBe("Brad");
     await click(byTestId("profile-chip"));
-    const now = Date.now();
-    server.queue("/gs/api/profile/link-code", 201, { ok: true, code: CODE, expiresAt: now + 10 * 60 * 1000 });
-    await click(buttonNamed("Link another device"));
-    expect(byTestId("link-code-value")?.textContent).toBe(CODE);
-    /* Review L9: the directions name the sign-in dialog's own controls (the old "Link existing profile" is gone). */
-    expect(container.textContent).toContain("“Made a profile before accounts? Other ways to sign in” → “Code from a signed-in device”");
-    expect(container.textContent).not.toContain("Link existing profile");
-    expect(container.textContent).toContain("It works once, for 10 minutes.");
-    expect(buttonNamed("Copy")).toBeTruthy();
-    expect(byTestId("link-code-countdown")?.textContent).toBe("Expires in 10:00");
-    act(() => {
-      jest.advanceTimersByTime(61_000);
-    });
-    expect(byTestId("link-code-countdown")?.textContent).toBe("Expires in 8:59");
-    act(() => {
-      jest.advanceTimersByTime(9 * 60 * 1000);
-    });
-    expect(byTestId("link-code-value")).toBeNull();
-    expect(container.textContent).toContain("This code has expired.");
-    /* Closing the menu drops the code. */
-    await click(buttonNamed("Close"));
-    expect(container.innerHTML).not.toContain(CODE);
-  });
-
-  it("'Make a new recovery key' asks first, then shows the new key once", async () => {
-    const server = await profiled();
-    server.queue("/gs/api/account/me", 200, LEGACY_ME);
-    await render(<ProfileMenu port={server.port} />);
-    await click(byTestId("profile-chip"));
-    await click(byTestId("profile-menu-rotate"));
-    expect(container.textContent).toContain("Your current recovery key stops working immediately");
-    expect(server.calls.some((call) => call.path === "/gs/api/profile/recovery-key")).toBe(false);
-    server.queue("/gs/api/profile/recovery-key", 200, { ok: true, recoveryKey: KEY });
-    await click(buttonNamed("Make a new recovery key"));
-    expect(byTestId("recovery-key-value")?.textContent).toBe(KEY);
-    expect(container.textContent).toContain("Your old recovery key no longer works.");
-    const done = byTestId<HTMLButtonElement>("recovery-key-continue")!;
-    expect(done.textContent).toBe("Done");
-    expect(done.disabled).toBe(true);
-    await click(byTestId("recovery-key-saved"));
-    await click(byTestId("recovery-key-continue"));
-    expect(container.innerHTML).not.toContain(KEY);
-    expect(byTestId("profile-menu-panel")).toBeNull();
+    expect(byTestId("profile-menu-account")?.textContent).toBe("Username Brad.Player · Member since 2026-09-30");
+    expect(byTestId("profile-menu-authorization-wallet")?.textContent).toBe("juno1qyqsz…ypz92q · since 2026-10-01");
+    expect(byTestId("profile-menu-authorization-wallet")?.querySelector("span")?.getAttribute("title")).toBe(AUTHORIZATION_WALLET);
+    expect(byTestId("profile-menu-authorization-note")?.textContent).toContain("the wallet Keplr has selected never changes who you are");
+    expect(byTestId("profile-menu-replace-wallet")?.textContent).toBe("Change Authorization Wallet");
+    expect(byTestId("profile-menu-password")?.textContent).toBe("Change password");
+    for (const gone of ["profile-menu-older", "profile-menu-link", "profile-menu-rotate", "profile-menu-credentials", "profile-menu-wallet", "link-code-value", "recovery-key-value"]) {
+      expect([gone, byTestId(gone)]).toEqual([gone, null]);
+    }
+    expect(buttonNamed("Link another device")).toBeUndefined();
+    expect(container.textContent).not.toMatch(/recovery[\s-]?key|link code|forget this wallet/i);
   });
 
   it("'Sign out other devices' says how many are signed in, asks, then says how many were signed out", async () => {
@@ -197,81 +172,52 @@ describe("the profile menu (LIVE-2E)", () => {
     expect(reloads).toBe(1);
   });
 
-  it("ESCROW-3A: a rotation the server holds for re-authentication asks 'Confirm it's you', then rotates at once", async () => {
+  it("PHASE 3 FINAL: 'Change Authorization Wallet' always asks 'Confirm it's you' with the PASSWORD first -- a wrong one is one sentence and dropped; the right one opens the first step", async () => {
     const server = await profiled();
-    const OLD = "rk_0123456789abcdefghjkmnpqr0.BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
-    server.queue("/gs/api/account/me", 200, LEGACY_ME);
+    server.queue("/gs/api/account/me", 200, accountMe(2));
     await render(<ProfileMenu port={server.port} />);
     await click(byTestId("profile-chip"));
-    await click(byTestId("profile-menu-rotate"));
-    server.queue("/gs/api/profile/recovery-key", 403, { error: "reauth-required" });
-    await click(buttonNamed("Make a new recovery key"));
+    await click(byTestId("profile-menu-replace-wallet"));
+    /* Asked before anything is minted: a sign-in's standing grant never begins a replacement. */
+    expect(server.calls.some((call) => call.path.startsWith("/gs/api/account/authorization-wallet"))).toBe(false);
     expect(container.textContent).toContain("Confirm it’s you");
-    expect(container.textContent).toContain("To make a new recovery key, paste your current recovery key.");
+    expect(container.textContent).toContain("To change your Authorization Wallet, enter your password.");
     const input = byTestId<HTMLInputElement>("profile-reauth-key");
     expect(input?.type).toBe("password");
+    expect(input?.autocomplete).toBe("current-password");
     expect(byTestId<HTMLButtonElement>("profile-reauth-confirm")?.disabled).toBe(true);
-    /* A wrong key: one sentence, the typed key is dropped, and nothing rotates. */
+    /* A wrong password: one sentence, the typed password is dropped, and nothing else happens. */
     server.queue("/gs/api/profile/reauth", 403, { error: "invalid-credential" });
-    type(input, "rk_wrong");
+    type(input, "not the password");
     await click(byTestId("profile-reauth-confirm"));
-    expect(container.querySelector('[role="alert"]')?.textContent).toBe("That recovery key doesn't work for this profile. Check it and try again.");
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe("That password doesn't match this account. Check it and try again.");
     expect(byTestId<HTMLInputElement>("profile-reauth-key")?.value).toBe("");
-    /* The right key: re-authenticated, and the rotation the player chose runs again -- the new key is shown once. */
+    expect(byTestId("profile-replace-step-new")).toBeNull();
+    /* The right password: the first step -- Keplr on the NEW wallet -- with the current one named. */
     server.queue("/gs/api/profile/reauth", 200, { ok: true, expiresAt: 1 });
-    server.queue("/gs/api/profile/recovery-key", 200, { ok: true, recoveryKey: KEY });
-    type(byTestId<HTMLInputElement>("profile-reauth-key"), ` ${OLD}\n`);
+    type(byTestId<HTMLInputElement>("profile-reauth-key"), "correct horse battery");
     await click(byTestId("profile-reauth-confirm"));
-    expect(byTestId("recovery-key-value")?.textContent).toBe(KEY);
-    expect(container.innerHTML).not.toContain(OLD);
-    expect(server.calls.filter((call) => call.path === "/gs/api/profile/reauth").map((call) => JSON.parse(call.body))).toEqual([
-      { recoveryKey: "rk_wrong" },
-      { recoveryKey: OLD },
-    ]);
-    expect(server.calls.map((call) => call.path).filter((path) => path !== "/gs/api/session" && path !== "/gs/api/account/me" && path !== "/gs/api/trust/me")).toEqual([
-      "/gs/api/profile/recovery-key",
-      "/gs/api/profile/reauth",
-      "/gs/api/profile/reauth",
-      "/gs/api/profile/recovery-key",
-    ]);
+    expect(byTestId("profile-replace-step-new")?.textContent).toContain("Your current one, juno1qyqsz…ypz92q, approves next.");
+    expect(server.calls.filter((call) => call.path === "/gs/api/profile/reauth").map((call) => JSON.parse(call.body))).toEqual([{ password: "not the password" }, { password: "correct horse battery" }]);
+    expect(container.innerHTML).not.toContain("correct horse battery");
+    expect(server.calls.some((call) => call.path.startsWith("/gs/api/account/authorization-wallet"))).toBe(false);
   });
 
-  it("ESCROW-3A / P3-ACCT: 'Sign out other devices' held for re-authentication asks a LEGACY profile for its key, then signs them out", async () => {
+  /* PHASE 3 FINAL: "'Sign out other devices' held for re-authentication asks a LEGACY profile for its key" is removed --
+     legacy profiles are retired (their sessions end `retired`; their password answers `legacy-account`), and every
+     account confirms with its password (the next case). */
+  it("P3-ACCT: 'Sign out other devices' held for re-authentication confirms with the PASSWORD (sent once, never kept), then signs them out", async () => {
     const server = await profiled(1);
-    /* The menu reads the account (a profile made before accounts: no username) -- and so does "Confirm it's you". */
-    const legacy = { ok: true, account: { name: "Brad", otherSessions: 1, username: null, recoveryKey: true, wallet: null, memberSince: Date.UTC(2026, 0, 2) } };
-    server.queue("/gs/api/account/me", 200, legacy);
+    server.queue("/gs/api/account/me", 200, accountMe(1));
     await render(<ProfileMenu port={server.port} />);
     await click(byTestId("profile-chip"));
-    await click(buttonNamed("Sign out other devices"));
-    server.queue("/gs/api/profile/sign-out-others", 403, { error: "reauth-required" });
-    server.queue("/gs/api/account/me", 200, legacy);
-    await click(byTestId("profile-others-confirm"));
-    expect(container.textContent).toContain("To sign out your other devices, paste your current recovery key.");
-    server.queue("/gs/api/profile/reauth", 200, { ok: true, expiresAt: 1 });
-    server.queue("/gs/api/profile/sign-out-others", 200, { ok: true, signedOut: 1 }, () => server.setProfile({ name: "Brad", otherSessions: 0 }));
-    type(byTestId<HTMLInputElement>("profile-reauth-key"), KEY);
-    await click(byTestId("profile-reauth-confirm"));
-    expect(byTestId("profile-others-done")?.textContent).toBe("Signed out 1 other device.");
-    expect(container.innerHTML).not.toContain(KEY);
-    expect(server.calls.filter((call) => call.path === "/gs/api/profile/reauth").map((call) => JSON.parse(call.body))).toEqual([{ recoveryKey: KEY }]);
-  });
-
-  it("P3-ACCT: a username/password account confirms with its PASSWORD (sent once, never kept), and shows no recovery-key ceremony", async () => {
-    const server = await profiled(1);
-    const account = { ok: true, account: { name: "Brad", otherSessions: 1, username: "Brad.Player", recoveryKey: false, wallet: { address: "juno1qyqszqgpqyqszqgpqyqszqgpqyqszqgpypz92q", verifiedAt: Date.UTC(2026, 9, 1) }, memberSince: Date.UTC(2026, 9, 1) } };
-    server.queue("/gs/api/account/me", 200, account);
-    await render(<ProfileMenu port={server.port} />);
-    await click(byTestId("profile-chip"));
-    expect(byTestId("profile-menu-account")?.textContent).toBe("Username Brad.Player · Member since 2026-10-01");
-    expect(byTestId("profile-menu-wallet")?.textContent).toContain("juno1qyqsz…z92q · verified 2026-10-01");
-    expect(byTestId("profile-menu-wallet")?.textContent).toContain("never your password");
-    /* No recovery key: no "Older sign-in options", no key rotation, no link code. */
+    expect(byTestId("profile-menu-account")?.textContent).toBe("Username Brad.Player · Member since 2026-09-30");
+    /* No recovery key anywhere: no key rotation, no link code, no remembered "verified wallet". */
     expect(byTestId("profile-menu-older")).toBeNull();
+    expect(byTestId("profile-menu-wallet")).toBeNull();
     expect(buttonNamed("Rotate recovery key")).toBeUndefined();
     await click(buttonNamed("Sign out other devices"));
     server.queue("/gs/api/profile/sign-out-others", 403, { error: "reauth-required" });
-    server.queue("/gs/api/account/me", 200, account);
     await click(byTestId("profile-others-confirm"));
     expect(container.textContent).toContain("To sign out your other devices, enter your password.");
     expect(byTestId<HTMLInputElement>("profile-reauth-key")?.autocomplete).toBe("current-password");
@@ -284,34 +230,34 @@ describe("the profile menu (LIVE-2E)", () => {
     expect(container.innerHTML).not.toContain("correct horse battery");
   });
 
-  it("P3-ACCT: a legacy profile sets a username and password -- its recovery key confirms it -- and is not orphaned", async () => {
-    const server = await profiled(0);
-    const legacy = { ok: true, account: { name: "Brad", otherSessions: 0, username: null, recoveryKey: true, wallet: null, memberSince: Date.UTC(2026, 0, 2) } };
-    server.queue("/gs/api/account/me", 200, legacy);
+  /* PHASE 3 FINAL: "a legacy profile sets a username and password -- its recovery key confirms it" is removed: no legacy
+     credential migration exists (owner ruling: legacy profiles are disposable test profiles, retired with no
+     migration). What the menu offers instead -- "Change password" with the CURRENT password -- is the next case. */
+  it("PHASE 3 FINAL: 'Change password' sends the current password and the new one in one request (the new one checked first); every other device is signed out, this one stays", async () => {
+    const server = await profiled(2);
+    server.queue("/gs/api/account/me", 200, accountMe(2));
     await render(<ProfileMenu port={server.port} />);
     await click(byTestId("profile-chip"));
-    expect(byTestId("profile-menu-older")).toBeTruthy(); // its recovery key and link code stay reachable
-    /* Review L9: the sign-in dialog's directions name exactly what this menu shows. */
-    expect(byTestId("profile-menu-older")?.querySelector("summary")?.textContent).toBe("Older sign-in options");
-    expect(byTestId("profile-menu-link")?.textContent).toBe("Link another device");
-    expect(LINK_CODE_HOW).toContain("“Older sign-in options” → “Link another device”");
-    await click(byTestId("profile-menu-credentials"));
-    type(byTestId<HTMLInputElement>("profile-new-username"), "Brad.Player");
-    type(byTestId<HTMLInputElement>("profile-new-password"), "a long new password");
-    server.queue("/gs/api/account/credentials", 403, { error: "reauth-required" });
-    await click(byTestId("profile-credentials-save"));
-    expect(container.textContent).toContain("To set a username and password, paste your current recovery key.");
-    server.queue("/gs/api/profile/reauth", 200, { ok: true, expiresAt: 1 });
-    server.queue("/gs/api/account/credentials", 200, { ok: true, username: "Brad.Player" });
-    type(byTestId<HTMLInputElement>("profile-reauth-key"), KEY);
-    await click(byTestId("profile-reauth-confirm"));
-    expect(byTestId("profile-credentials-done")?.textContent).toContain("Log in as Brad.Player");
-    const sent = server.calls.filter((call) => call.path === "/gs/api/account/credentials").map((call) => JSON.parse(call.body));
-    expect(sent).toEqual([
-      { username: "Brad.Player", password: "a long new password" },
-      { username: "Brad.Player", password: "a long new password" },
-    ]);
-    expect(container.innerHTML).not.toContain("a long new password");
+    await click(byTestId("profile-menu-password"));
+    expect(byTestId<HTMLInputElement>("profile-current-secret")?.autocomplete).toBe("current-password");
+    expect(byTestId<HTMLInputElement>("profile-changed-password")?.autocomplete).toBe("new-password");
+    /* A forgotten current password is not this form's business: it points to "Forgot password?" -- no key option. */
+    expect(byTestId("profile-password-forgot-note")?.textContent).toBe("Forgot your current password? Sign out, then use “Forgot password?” with your Authorization Wallet.");
+    expect(byTestId("profile-password-use-key")).toBeNull();
+    type(byTestId<HTMLInputElement>("profile-current-secret"), "the old passphrase");
+    type(byTestId<HTMLInputElement>("profile-changed-password"), "too short");
+    await click(byTestId("profile-password-save"));
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe("A password is at least 12 characters.");
+    expect(server.calls.some((call) => call.path === "/gs/api/account/password")).toBe(false);
+    type(byTestId<HTMLInputElement>("profile-changed-password"), "the new passphrase!");
+    server.queue("/gs/api/account/password", 200, { ok: true, signedOut: 2 }, () => server.setProfile({ name: "Brad", otherSessions: 0 }));
+    server.queue("/gs/api/account/me", 200, accountMe(0));
+    await click(byTestId("profile-password-save"));
+    expect(server.calls.filter((call) => call.path === "/gs/api/account/password").map((call) => JSON.parse(call.body))).toEqual([{ currentPassword: "the old passphrase", newPassword: "the new passphrase!" }]);
+    expect(byTestId("profile-password-done")?.textContent).toBe("Password changed. Signed out 2 other devices. This device stays signed in.");
+    expect(server.port.state).toBe("ready");
+    expect(container.innerHTML).not.toContain("the new passphrase!");
+    expect(container.innerHTML).not.toContain("the old passphrase");
   });
 
   it("a development build names the tab's profile and offers no credential actions", async () => {
@@ -338,15 +284,8 @@ describe("the profile menu (LIVE-2E)", () => {
     expect(readStripped("components/TopBar.tsx")).toContain("<ProfileMenu />");
   });
 
-  it("counts down on this device's clock, whatever the server's clock says", () => {
-    expect(linkCodeDeadline(1_000 + 600_000, 1_000)).toBe(601_000);
-    expect(linkCodeDeadline(1_000 + 590_000, 1_000)).toBe(591_000);
-    expect(linkCodeDeadline(1_000 - 5_000, 1_000)).toBe(601_000); // server behind: never starts expired
-    expect(linkCodeDeadline(1_000 + 3_600_000, 1_000)).toBe(601_000); // server ahead: never longer than the lifetime
-    expect(countdownText(600_000)).toBe("10:00");
-    expect(countdownText(59_001)).toBe("1:00");
-    expect(countdownText(0)).toBe("0:00");
-  });
+  /* PHASE 3 FINAL: "counts down on this device's clock" (`linkCodeDeadline` / `countdownText`) is removed with link
+     codes. */
 });
 
 describe("the signed-out notice (LIVE-2E)", () => {
@@ -374,5 +313,13 @@ describe("the signed-out notice (LIVE-2E)", () => {
     await server.port.ensure();
     await render(<SessionEndedNotice port={server.port} />);
     expect(container.textContent).toContain("This browser signed in to an account, which replaced its earlier session.");
+  });
+
+  it("PHASE 3 FINAL: says 'retired' in its own words -- an account made before Authorization Wallets; make a new one", async () => {
+    const server = fakeServer({ name: "Brad", otherSessions: 0 }, "retired");
+    await server.port.ensure();
+    await render(<SessionEndedNotice port={server.port} />);
+    expect(container.textContent).toContain("It belonged to an account made before Authorization Wallets. That account is retired: create a new account to keep playing.");
+    expect(container.textContent).not.toMatch(/recovery key|guest/i);
   });
 });

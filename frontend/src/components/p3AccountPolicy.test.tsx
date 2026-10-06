@@ -1,24 +1,29 @@
 /** @jest-environment jsdom */
 //
 // ==================================================================
-//  PHASE 3 -- ACCOUNT POLICY / RECOVERY FOLLOW-UP (owner rulings 2026-10-05): THE BROWSER'S SIDE
+//  PHASE 3 -- ACCOUNT POLICY (owner rulings 2026-10-05, as superseded by PHASE 3 FINAL 2026-10-06): THE BROWSER'S SIDE
 // ==================================================================
 //
 // The real Lobby, the real account dialog and the real profile menu over a session port answered by a fake server (the
-// same `httpSessionPort` the app installs). What is pinned:
+// same `httpSessionPort` the app installs), with Keplr played by the money test support's fake wallet. What is pinned:
 //
-//   CREATE ACCOUNT  signed in at once; then ONE screen with the account's recovery key (account-recovery wording, Copy,
-//                   "I have saved my recovery key somewhere safe") -- left only by acknowledging it (no Escape, no
-//                   scrim, no close button), never asking for the key to be typed back; then the action that asked
-//                   for an account resumes. The key is in no storage and gone from the page afterwards.
-//   ROUTINE PLAY    a later Log in, Host and Join never ask for the key.
-//   FORGOT PASSWORD from Log in: the recovery key + a new password (no username, no email) -> signed in, the action
-//                   resumes; a wrong key is one sentence; a short password is refused before anything is sent; a
-//                   password account's key typed into the legacy "recovery key" sign-in is sent to "Forgot password?".
-//   PROFILE MENU    "Change password" (the current password, or the recovery key, in the request; the other devices
-//                   signed out, this one kept); "Make a new recovery key" asks "Confirm it's you" with the PASSWORD and
-//                   shows the new key once; a password account has no legacy link-code options.
+//   CREATE ACCOUNT  username + password (12+) + display name + the AUTHORIZATION WALLET: Keplr connects on an explicit
+//                   press, and that wallet signs the CREATE text the server minted for this browser and this username.
+//                   Signed in at once, and the action that asked for an account resumes. PHASE 3 FINAL: NO recovery
+//                   key is issued, shown, acknowledged or kept -- the reveal screen of the 2026-10-05 policy is gone.
+//   ROUTINE PLAY    a later Log in is the username and password only (Keplr is never asked); Host and Join never ask
+//                   for any key.
+//   FORGOT PASSWORD from Log in: the username + the account's Authorization Wallet (Keplr signs a RECOVER text) + a new
+//                   password -> signed in, the action resumes; a refusal is one sentence that names nothing; a short
+//                   password is refused before anything is signed or sent; a RECOVER text for another account is
+//                   refused before Keplr signs it.
+//   PROFILE MENU    "Change password" (the CURRENT password, in the request; the other devices signed out, this one
+//                   kept); "Change Authorization Wallet" asks "Confirm it's you" with the PASSWORD; no recovery key, no
+//                   link code, no "Forget this wallet".
 //   NO GATE         the public site stays public-first: no ProfileGate anywhere.
+
+import fs from "fs";
+import path from "path";
 
 import React from "react";
 import { act } from "react";
@@ -34,6 +39,10 @@ import { resetAccountPromptForTests } from "../utils/accountPrompt";
 import { roomLinkRenewals } from "../utils/roomLink";
 import { readStripped } from "../utils/sourceScan";
 import { PASSWORD_MIN_LENGTH } from "../utils/profileApi";
+import { profileAuthorizationText, type ProfileAuthorizationFields, type ProfileAuthorizationPurpose } from "../utils/profileAuthorizationV1";
+import { installMoneyServicesForTests } from "../money/moneySession";
+import { T0, TEST_WALLET, testServices, type FakeWallet } from "../money/moneyTestSupport";
+import { APP_NAME } from "../config";
 
 jest.mock("../config/backend", () => ({ isBackendConfigured: () => true, backendConfigError: () => null }));
 
@@ -44,9 +53,13 @@ declare global {
 global.IS_REACT_ACT_ENVIRONMENT = true;
 
 const ENDPOINT = "https://play.example/gs/api/session";
-const KEY = "rk_0123456789abcdefghjkmnpqr0.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
-const NEW_KEY = "rk_abcdefghjkmnpqrstvwxyz0120.BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
-const ACCOUNT_ME = { ok: true, account: { name: "Ann", otherSessions: 2, username: "Ann", recoveryKey: true, wallet: null, memberSince: Date.UTC(2026, 9, 5) } };
+const OPERATION = "0123456789abcdef0123456789abcdef";
+const NONCE = "fedcba9876543210fedcba9876543210";
+const PASSWORD = "a long enough secret";
+const ACCOUNT_ME = {
+  ok: true,
+  account: { name: "Ann", otherSessions: 2, username: "Ann", authorizationWallet: { address: TEST_WALLET, since: Date.UTC(2026, 9, 5) }, memberSince: Date.UTC(2026, 9, 5) },
+};
 
 type Answer = { status: number; body?: unknown; then?: () => void; wait?: Promise<void> };
 
@@ -79,8 +92,35 @@ function fakeServer(initial: { name: string; otherSessions: number } | null) {
   };
 }
 
+/** The text the server mints for one account action (`profileAuthorizationV1.ts`), naming this page's own site. */
+function authorizationText(purpose: ProfileAuthorizationPurpose, over: Partial<ProfileAuthorizationFields> = {}): string {
+  const wallet = over.authorizationWallet ?? TEST_WALLET;
+  return profileAuthorizationText({
+    appName: APP_NAME,
+    purpose,
+    site: window.location.origin,
+    account: "Ann",
+    authorizationWallet: wallet,
+    replaces: null,
+    signer: wallet,
+    operation: OPERATION,
+    nonce: NONCE,
+    expiresAt: T0 + 300_000,
+    ...over,
+  });
+}
+
+/** The mint route's answer for one text. */
+const minted = (purpose: ProfileAuthorizationPurpose, over: Partial<ProfileAuthorizationFields> = {}): Answer => ({
+  status: 200,
+  body: { ok: true, operation: OPERATION, texts: [{ purpose, signer: over.signer ?? TEST_WALLET, text: authorizationText(purpose, over) }], expiresAt: T0 + 300_000 },
+});
+
 let container: HTMLDivElement;
 let root: Root;
+let wallet: FakeWallet;
+/** Every text Keplr was asked to sign, whole. */
+let signedTexts: string[];
 beforeEach(() => {
   container = document.createElement("div");
   document.body.appendChild(container);
@@ -88,17 +128,31 @@ beforeEach(() => {
   resetAccountPromptForTests();
   window.localStorage.clear();
   window.sessionStorage.clear();
+  const services = testServices();
+  wallet = services.wallet;
+  signedTexts = [];
+  const sign = wallet.signLink.bind(wallet);
+  wallet.signLink = async (pin, signer, text) => {
+    signedTexts.push(text);
+    return sign(pin, signer, text);
+  };
+  installMoneyServicesForTests(services);
 });
 afterEach(() => {
   act(() => root.unmount());
   container.remove();
   installSessionPort(null);
+  installMoneyServicesForTests(null);
   jest.restoreAllMocks();
 });
 
+/** Microtasks and a few macrotasks: a create runs Keplr, the mint, the signature and the create in one press. */
 const settle = async () => {
   await act(async () => {
-    for (let n = 0; n < 40; n += 1) await Promise.resolve();
+    for (let round = 0; round < 3; round += 1) {
+      for (let n = 0; n < 40; n += 1) await Promise.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
   });
 };
 const all = () => document.body;
@@ -124,6 +178,7 @@ const submit = async (form: HTMLElement | null) => {
   await settle();
 };
 const storageText = () => JSON.stringify({ ...window.localStorage }) + JSON.stringify({ ...window.sessionStorage });
+const signLinks = () => wallet.calls.filter((call) => call.startsWith("signLink"));
 
 async function homepage(port: SessionPort) {
   installSessionPort(port);
@@ -141,88 +196,71 @@ async function homepage(port: SessionPort) {
   await settle();
 }
 
-async function createAnn(server: ReturnType<typeof fakeServer>) {
+/** The create form filled in, Keplr connected on the Authorization Wallet step, the server's answers queued. */
+async function fillCreate(server: ReturnType<typeof fakeServer>, create: Answer = { status: 201, body: { ok: true, profile: { name: "Ann", otherSessions: 0 }, username: "Ann" }, then: () => server.signIn("Ann") }) {
   await click(byTestId("account-tab-create"));
   type(byTestId<HTMLInputElement>("account-username"), "Ann");
-  type(byTestId<HTMLInputElement>("account-password"), "a long enough secret");
+  type(byTestId<HTMLInputElement>("account-password"), PASSWORD);
   type(byTestId<HTMLInputElement>("account-name"), "Ann");
-  server.queue("/gs/api/account/create", { status: 201, body: { ok: true, profile: { name: "Ann", otherSessions: 0 }, username: "Ann", recoveryKey: KEY }, then: () => server.signIn("Ann") });
-  await submit(byTestId("account-form"));
+  await click(byTestId("account-wallet-connect"));
+  server.queue("/gs/api/account/authorization", minted("CREATE"));
+  server.queue("/gs/api/account/create", create);
 }
 
-describe("account policy: creating an account shows its recovery key ONCE, then the site", () => {
-  it("the reveal: account-recovery wording, Copy, an acknowledgement before leaving, nothing typed back; then the action resumes and the key is gone", async () => {
-    const writeText = jest.fn(async () => undefined);
-    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+describe("account policy (PHASE 3 FINAL): creating an account designates its Authorization Wallet -- and shows no recovery key", () => {
+  it("one signed request: signed in at once, the sockets renewed, the action resumes -- no key shown, acknowledged or kept", async () => {
     const server = fakeServer(null);
     await homepage(server.port);
     const renewals = roomLinkRenewals();
     await click(buttonNamed("Host game"));
-    await createAnn(server);
-    /* Signed in at once (the sockets move to the new session now), and the reveal is up. */
+    await fillCreate(server);
+    expect(byTestId("account-wallet-address")?.textContent).toBe("Will be designated: juno12gdms…dl783a");
+    await submit(byTestId("account-form"));
+    /* The CREATE text was the one Keplr signed, with the wallet shown, after the mint and before the create. */
+    expect(signedTexts).toEqual([authorizationText("CREATE")]);
+    expect(signLinks()).toEqual([`signLink:${TEST_WALLET}:1830JUNO/PROFILE-AUTHORIZATION/v1`]);
+    expect(server.bodiesOf("/gs/api/account/authorization")).toEqual([{ purpose: "create", username: "Ann", wallet: TEST_WALLET }]);
+    expect(server.bodiesOf("/gs/api/account/create")).toEqual([{ username: "Ann", password: PASSWORD, name: "Ann", operation: OPERATION, pubKey: "Ai1R5vzeZFvF73ROli+IbV7OuNG7bM6HeI0rthBGJzvf", signature: "c2ln" }]);
+    /* Signed in at once (the sockets move to the new session), and the action that asked resumed -- no reveal between. */
     expect(server.port.state).toBe("ready");
     expect(roomLinkRenewals()).toBeGreaterThan(renewals);
-    expect(byTestId("recovery-key-value")?.textContent).toBe(KEY);
-    const purpose = byTestId("recovery-key-purpose")?.textContent ?? "";
-    expect(purpose).toContain("Save this recovery key somewhere safe");
-    expect(purpose).toContain("If you ever forget your password, it lets you choose a new one");
-    expect(purpose).toContain("You don't need it to log in or to play");
-    expect(byTestId("recovery-key-reveal")?.textContent).toContain("There is no email reset");
-    /* Copy. */
-    await click(buttonNamed("Copy"));
-    expect(writeText).toHaveBeenCalledWith(KEY);
-    /* Nothing asks for the key back: the only input is the acknowledgement. */
-    const inputs = Array.from(byTestId("recovery-key-reveal")?.querySelectorAll("input") ?? []);
-    expect(inputs.map((input) => input.type)).toEqual(["checkbox"]);
-    /* Left only by acknowledging it: no close button, Escape refused, Continue disabled until the box is ticked. */
-    expect(all().querySelector('[aria-label="Close"]')).toBeNull();
-    expect(byTestId("account-dialog")?.getAttribute("closedby")).toBe("none");
-    expect(byTestId<HTMLButtonElement>("recovery-key-continue")?.disabled).toBe(true);
-    expect(byTestId("host-body")).toBeNull();
-    /* The site is behind it, public-first as ever (the reveal is not a gate around the app). */
-    expect(buttonNamed("Host game")).toBeTruthy();
-    expect(storageText()).not.toContain(KEY.split(".")[1]);
-    await click(byTestId("recovery-key-saved"));
-    expect(byTestId<HTMLButtonElement>("recovery-key-continue")?.textContent).toBe("Continue");
-    await click(byTestId("recovery-key-continue"));
-    expect(byTestId("host-body")).toBeTruthy();
     expect(byTestId("account-dialog")).toBeNull();
-    expect(all().innerHTML).not.toContain(KEY);
-    expect(storageText()).not.toContain(KEY.split(".")[1]);
+    expect(byTestId("host-body")).toBeTruthy();
+    for (const gone of ["recovery-key-reveal", "recovery-key-value", "recovery-key-saved", "recovery-key-continue"]) expect([gone, byTestId(gone)]).toEqual([gone, null]);
+    expect(all().textContent).not.toMatch(/recovery key/i);
+    expect(all().innerHTML).not.toContain(PASSWORD);
+    expect(storageText()).not.toContain(PASSWORD);
   });
 
-  it("review M1: while Create account is on its way the dialog cannot be closed (its answer is the key's one appearance)", async () => {
+  it("review M1: while Create account is on its way the dialog cannot be closed (its answer signs this browser in)", async () => {
     const server = fakeServer(null);
     await homepage(server.port);
     await click(byTestId("account-create"));
-    await click(byTestId("account-tab-create"));
-    type(byTestId<HTMLInputElement>("account-username"), "Ann");
-    type(byTestId<HTMLInputElement>("account-password"), "a long enough secret");
-    type(byTestId<HTMLInputElement>("account-name"), "Ann");
     let answer: () => void = () => undefined;
     const wait = new Promise<void>((resolve) => (answer = resolve));
-    server.queue("/gs/api/account/create", { status: 201, body: { ok: true, profile: { name: "Ann", otherSessions: 0 }, username: "Ann", recoveryKey: KEY }, then: () => server.signIn("Ann"), wait });
+    await fillCreate(server, { status: 201, body: { ok: true, profile: { name: "Ann", otherSessions: 0 }, username: "Ann" }, then: () => server.signIn("Ann"), wait });
     await submit(byTestId("account-form"));
+    expect(byTestId("account-submit")?.textContent).toBe("Creating…");
     expect(byTestId("account-dialog")?.getAttribute("closedby")).toBe("none");
     expect((all().querySelector('[aria-label="Close"]') as HTMLButtonElement | null)?.disabled).toBe(true);
     answer();
     await settle();
-    expect(byTestId("recovery-key-value")?.textContent).toBe(KEY);
+    expect(server.port.state).toBe("ready");
+    expect(byTestId("account-dialog")).toBeNull();
   });
 
-  it("from the homepage's own Create account (nothing to resume): Continue to the site", async () => {
+  it("from the homepage's own Create account (nothing to resume): the dialog closes and the corner names the account", async () => {
     const server = fakeServer(null);
     await homepage(server.port);
     await click(byTestId("account-create"));
-    await createAnn(server);
-    expect(byTestId<HTMLButtonElement>("recovery-key-continue")?.textContent).toBe("Continue to the site");
-    await click(byTestId("recovery-key-saved"));
-    await click(byTestId("recovery-key-continue"));
+    await fillCreate(server);
+    await submit(byTestId("account-form"));
     expect(byTestId("account-dialog")).toBeNull();
     expect(byTestId("profile-chip")?.textContent).toBe("Ann");
+    expect(byTestId("host-body")).toBeNull();
   });
 
-  it("the new-account form says 12 characters, and an 11-character password is refused before anything is sent", async () => {
+  it("the new-account form says 12 characters, and an 11-character password is refused before Keplr or the server is asked", async () => {
     const server = fakeServer(null);
     await homepage(server.port);
     await click(byTestId("account-create"));
@@ -234,32 +272,37 @@ describe("account policy: creating an account shows its recovery key ONCE, then 
     type(byTestId<HTMLInputElement>("account-name"), "Cy");
     await submit(byTestId("account-form"));
     expect(byTestId("account-error")?.textContent).toBe("A password is at least 12 characters.");
-    expect(server.calls.some((call) => call.path === "/gs/api/account/create")).toBe(false);
+    expect(server.calls.some((call) => call.path === "/gs/api/account/create" || call.path === "/gs/api/account/authorization")).toBe(false);
+    expect(wallet.calls).toEqual([]);
   });
 
-  it("no ProfileGate returns: the app renders for everyone, and the reveal lives inside the account dialog", () => {
+  it("no ProfileGate returns, and the recovery-key reveal is gone from the tree (PHASE 3 FINAL)", () => {
     expect(readStripped("index.tsx")).not.toContain("ProfileGate");
-    expect(readStripped("components/AccountDialog.tsx")).toContain("RecoveryKeyReveal");
+    expect(readStripped("components/AccountDialog.tsx")).not.toContain("RecoveryKeyReveal");
+    expect(readStripped("components/ProfileMenu.tsx")).not.toContain("RecoveryKeyReveal");
+    expect(fs.existsSync(path.join(__dirname, "RecoveryKeyReveal.tsx"))).toBe(false);
   });
 });
 
-describe("account policy: routine play never asks for the key", () => {
-  it("a later Log in is the username and password only, and the action resumes", async () => {
+describe("account policy: routine play never asks for a wallet or a key", () => {
+  it("a later Log in is the username and password only -- Keplr is never asked -- and the action resumes", async () => {
     const server = fakeServer(null);
     await homepage(server.port);
     await click(buttonNamed("Host game"));
     expect(byTestId("account-forgot")).toBeTruthy();
     expect(all().querySelector('[data-testid="account-dialog"] [data-testid="account-secret"]')).toBeNull();
+    expect(byTestId("account-wallet-step")).toBeNull(); // the wallet step is Create account's alone
     type(byTestId<HTMLInputElement>("account-username"), "Ann");
-    type(byTestId<HTMLInputElement>("account-password"), "a long enough secret");
+    type(byTestId<HTMLInputElement>("account-password"), PASSWORD);
     server.queue("/gs/api/account/login", { status: 200, body: { ok: true, profile: { name: "Ann" } }, then: () => server.signIn("Ann") });
     await submit(byTestId("account-form"));
-    expect(server.bodiesOf("/gs/api/account/login")).toEqual([{ username: "Ann", password: "a long enough secret" }]);
+    expect(server.bodiesOf("/gs/api/account/login")).toEqual([{ username: "Ann", password: PASSWORD }]);
     expect(byTestId("host-body")).toBeTruthy();
-    expect(byTestId("recovery-key-reveal")).toBeNull();
+    expect(wallet.calls).toEqual([]);
+    expect(server.calls.some((call) => call.path === "/gs/api/account/authorization")).toBe(false);
   });
 
-  it("signed in: Host and Join open straight away -- no key, no confirmation", async () => {
+  it("signed in: Host and Join open straight away -- no key, no wallet, no confirmation", async () => {
     const server = fakeServer({ name: "Ann", otherSessions: 0 });
     await server.port.ensure();
     await homepage(server.port);
@@ -268,59 +311,79 @@ describe("account policy: routine play never asks for the key", () => {
     expect(byTestId("host-body")).toBeTruthy();
     await click(buttonNamed("Join game"));
     expect(byTestId("account-dialog")).toBeNull();
-    expect(server.calls.some((call) => /reauth|recover|reset|recovery-key/.test(call.path) || call.body.includes("rk_"))).toBe(false);
+    expect(server.calls.some((call) => /reauth|recover|reset|recovery-key|authorization/.test(call.path) || call.body.includes("rk_"))).toBe(false);
+    expect(wallet.calls).toEqual([]);
   });
 });
 
-describe("account policy: Forgot password? (the recovery key, no username, no email)", () => {
-  it("the key and a new password sign this browser in, and the action resumes", async () => {
-    const server = fakeServer(null);
+describe("account policy (PHASE 3 FINAL): Forgot password? -- the username and the Authorization Wallet, no email, no key", () => {
+  async function openForgot(server: ReturnType<typeof fakeServer>, via: "host" | "login") {
     await homepage(server.port);
-    await click(buttonNamed("Host game"));
+    await click(via === "host" ? buttonNamed("Host game") : byTestId("account-login"));
     await click(byTestId("account-forgot"));
+  }
+
+  it("the username, Keplr on the Authorization Wallet signing RECOVER, and a new password sign this browser in -- and the action resumes", async () => {
+    const server = fakeServer(null);
+    await openForgot(server, "host");
     expect(byTestId("account-username")).toBeNull();
-    expect(byTestId("account-forgot-nokey")?.textContent).toContain("There is no email reset");
-    type(byTestId<HTMLInputElement>("account-forgot-key"), ` ${KEY}\n`);
+    expect(byTestId("account-forgot-username")).toBeTruthy();
+    expect(byTestId("account-forgot-explain")?.textContent).toContain("a wallet you only used for games can't recover it");
+    expect(byTestId("account-forgot-nowallet")?.textContent).toBe(
+      "There is no email reset and no recovery key: without your password and your Authorization Wallet, the account can't be recovered.",
+    );
+    type(byTestId<HTMLInputElement>("account-forgot-username"), "Ann");
+    await click(byTestId("account-forgot-connect"));
+    expect(byTestId("account-forgot-address")?.textContent).toBe("Keplr is on: juno12gdms…dl783a");
     type(byTestId<HTMLInputElement>("account-forgot-password"), "my brand new passphrase");
-    server.queue("/gs/api/account/reset", { status: 200, body: { ok: true, profile: { name: "Ann" }, signedOut: 2 }, then: () => server.signIn("Ann") });
+    server.queue("/gs/api/account/authorization", minted("RECOVER"));
+    server.queue("/gs/api/account/recover", { status: 200, body: { ok: true, profile: { name: "Ann" }, signedOut: 2 }, then: () => server.signIn("Ann") });
     await submit(byTestId("account-form"));
-    expect(server.bodiesOf("/gs/api/account/reset")).toEqual([{ recoveryKey: KEY, newPassword: "my brand new passphrase" }]);
+    expect(server.bodiesOf("/gs/api/account/authorization")).toEqual([{ purpose: "recover", username: "Ann", wallet: TEST_WALLET }]);
+    expect(signedTexts).toEqual([authorizationText("RECOVER")]);
+    expect(server.bodiesOf("/gs/api/account/recover")).toEqual([{ operation: OPERATION, pubKey: "Ai1R5vzeZFvF73ROli+IbV7OuNG7bM6HeI0rthBGJzvf", signature: "c2ln", newPassword: "my brand new passphrase" }]);
+    expect(server.port.state).toBe("ready");
     expect(byTestId("host-body")).toBeTruthy();
-    expect(all().innerHTML).not.toContain(KEY);
+    expect(all().innerHTML).not.toContain("my brand new passphrase");
   });
 
-  it("a wrong key is one sentence and the fields are cleared; a short new password is refused before anything is sent", async () => {
+  it("a refusal is one sentence that names nothing, and the new password is cleared; a short new password is refused before Keplr or the server is asked", async () => {
     const server = fakeServer(null);
-    await homepage(server.port);
-    await click(byTestId("account-login"));
-    await click(byTestId("account-forgot"));
-    type(byTestId<HTMLInputElement>("account-forgot-key"), KEY);
+    await openForgot(server, "login");
+    type(byTestId<HTMLInputElement>("account-forgot-username"), "Ann");
     type(byTestId<HTMLInputElement>("account-forgot-password"), "short");
     await submit(byTestId("account-form"));
     expect(byTestId("account-error")?.textContent).toBe("A password is at least 12 characters.");
-    expect(server.calls.some((call) => call.path === "/gs/api/account/reset")).toBe(false);
-    type(byTestId<HTMLInputElement>("account-forgot-key"), KEY);
+    expect(server.calls.some((call) => call.path === "/gs/api/account/recover" || call.path === "/gs/api/account/authorization")).toBe(false);
+    expect(wallet.calls).toEqual([]);
+    await click(byTestId("account-forgot-connect"));
     type(byTestId<HTMLInputElement>("account-forgot-password"), "my brand new passphrase");
-    server.queue("/gs/api/account/reset", { status: 403, body: { error: "invalid-credential" } });
+    server.queue("/gs/api/account/authorization", minted("RECOVER"));
+    server.queue("/gs/api/account/recover", { status: 403, body: { error: "invalid-credential" } });
     await submit(byTestId("account-form"));
-    expect(byTestId("account-error")?.textContent).toBe("That recovery key doesn't work. Check it and try again — a key you replaced no longer works.");
-    expect(byTestId<HTMLInputElement>("account-forgot-key")?.value).toBe("");
+    expect(byTestId("account-error")?.textContent).toBe(
+      "That didn't recover an account. Check the username, and that Keplr is on the account's Authorization Wallet — a wallet you only used for games can't recover it.",
+    );
     expect(byTestId<HTMLInputElement>("account-forgot-password")?.value).toBe("");
     expect(server.port.state).not.toBe("ready");
   });
 
-  it("a password account's key typed into the legacy recovery-key sign-in is sent to Forgot password? (it recovers, it never signs in)", async () => {
+  it("a RECOVER text naming another account is refused BEFORE Keplr signs it: nothing is signed, nothing recovered", async () => {
     const server = fakeServer(null);
-    await homepage(server.port);
-    await click(byTestId("account-login"));
-    await click(byTestId("account-other-recovery"));
-    type(byTestId<HTMLInputElement>("account-secret"), KEY);
-    server.queue("/gs/api/profile/recover", { status: 409, body: { error: "use-password-reset" } });
+    await openForgot(server, "login");
+    type(byTestId<HTMLInputElement>("account-forgot-username"), "Ann");
+    await click(byTestId("account-forgot-connect"));
+    type(byTestId<HTMLInputElement>("account-forgot-password"), "my brand new passphrase");
+    server.queue("/gs/api/account/authorization", minted("RECOVER", { account: "Mallory" }));
     await submit(byTestId("account-form"));
+    expect(byTestId("account-error")?.textContent).toBe("The authorization message names another account, so nothing was signed.");
+    expect(signLinks()).toEqual([]);
+    expect(server.calls.some((call) => call.path === "/gs/api/account/recover")).toBe(false);
     expect(server.port.state).not.toBe("ready");
-    expect(byTestId("account-forgot-key")).toBeTruthy();
-    expect(byTestId("account-error")?.textContent).toContain("Use “Forgot password?”");
   });
+
+  /* PHASE 3 FINAL: "a password account's key typed into the legacy recovery-key sign-in is sent to Forgot password?" is
+     removed -- there is no recovery-key sign-in (no "Other ways", no `account-secret` field) and no recovery key. */
 });
 
 /* ==================================================================
@@ -338,14 +401,16 @@ async function signedInMenu(otherSessions = 2) {
   return server;
 }
 
-describe("account policy: the profile menu of a password account", () => {
-  it("shows Change password and Make a new recovery key -- and no legacy link-code options", async () => {
+describe("account policy: the profile menu of an account", () => {
+  it("shows Change password and the Authorization Wallet -- and no recovery key, link code or 'Forget this wallet'", async () => {
     await signedInMenu();
     expect(byTestId("profile-menu-password")?.textContent).toBe("Change password");
-    expect(byTestId("profile-menu-rotate")?.textContent).toBe("Make a new recovery key");
-    expect(byTestId("profile-menu-key-note")?.textContent).toContain("never need it to log in or play");
-    expect(byTestId("profile-menu-older")).toBeNull();
-    expect(byTestId("profile-menu-link")).toBeNull();
+    expect(byTestId("profile-menu-authorization-wallet")?.textContent).toBe("juno12gdms…dl783a · since 2026-10-05");
+    expect(byTestId("profile-menu-replace-wallet")?.textContent).toBe("Change Authorization Wallet");
+    for (const gone of ["profile-menu-rotate", "profile-menu-key-note", "profile-menu-older", "profile-menu-link", "profile-menu-wallet", "profile-menu-forget-wallet"]) {
+      expect([gone, byTestId(gone)]).toEqual([gone, null]);
+    }
+    expect(all().textContent).not.toMatch(/recovery key|link another device|forget this wallet/i);
   });
 
   it("Change password with the current password: one request carrying both, the other devices signed out, this one kept (fresh session, sockets renewed)", async () => {
@@ -365,37 +430,16 @@ describe("account policy: the profile menu of a password account", () => {
     expect(all().innerHTML).not.toContain("the new passphrase!");
   });
 
-  it("security review M2 (residual): after a change, the kept verified wallet is shown with 'Forget this wallet'", async () => {
-    const withWallet = { ok: true, account: { ...ACCOUNT_ME.account, wallet: { address: "juno1qyqszqgpqyqszqgpqyqszqgpqyqszqgpypz92q", verifiedAt: Date.UTC(2026, 9, 1) } } };
-    const server = fakeServer({ name: "Ann", otherSessions: 0 });
-    await server.port.ensure();
-    server.queue("/gs/api/account/me", { status: 200, body: withWallet });
-    installSessionPort(server.port);
-    act(() => root.render(<ProfileMenu port={server.port} />));
-    await settle();
-    await click(byTestId("profile-chip"));
+  /* PHASE 3 FINAL: "security review M2 (residual): after a change, the kept verified wallet is shown with 'Forget this
+     wallet'" is removed -- the profile remembers no wallet (`account/forget-wallet` is retired, 410), so a password
+     change has no wallet to show. "Change password with the recovery key instead" is removed with the recovery key;
+     a forgotten current password is "Forgot password?" by the Authorization Wallet, which the form says: */
+  it("a forgotten current password: the form points to 'Forgot password?' with the Authorization Wallet -- no key option", async () => {
+    await signedInMenu();
     await click(byTestId("profile-menu-password"));
-    type(byTestId<HTMLInputElement>("profile-current-secret"), "the old passphrase");
-    type(byTestId<HTMLInputElement>("profile-changed-password"), "the new passphrase!");
-    server.queue("/gs/api/account/password", { status: 200, body: { ok: true, signedOut: 0 } });
-    server.queue("/gs/api/account/me", { status: 200, body: withWallet });
-    await submit(byTestId("profile-password-form"));
-    expect(byTestId("profile-password-wallet")?.textContent).toContain("Not yours?");
-    await click(byTestId("profile-password-forget-wallet"));
-    expect(byTestId("profile-forget-wallet-summary")).toBeTruthy();
-  });
-
-  it("Change password with the recovery key instead (a forgotten current password)", async () => {
-    const server = await signedInMenu();
-    await click(byTestId("profile-menu-password"));
-    await click(byTestId("profile-password-use-key"));
-    type(byTestId<HTMLInputElement>("profile-current-secret"), `${KEY}\n`);
-    type(byTestId<HTMLInputElement>("profile-changed-password"), "the new passphrase!");
-    server.queue("/gs/api/account/password", { status: 200, body: { ok: true, signedOut: 0 }, then: () => server.signIn("Ann", 0) });
-    server.queue("/gs/api/account/me", { status: 200, body: ACCOUNT_ME });
-    await submit(byTestId("profile-password-form"));
-    expect(server.bodiesOf("/gs/api/account/password")).toEqual([{ recoveryKey: KEY, newPassword: "the new passphrase!" }]);
-    expect(byTestId("profile-password-done")).toBeTruthy();
+    expect(byTestId("profile-password-use-key")).toBeNull();
+    expect(byTestId("profile-password-forgot-note")?.textContent).toBe("Forgot your current password? Sign out, then use “Forgot password?” with your Authorization Wallet.");
+    expect(byTestId("profile-password-form")?.querySelectorAll("input")).toHaveLength(2);
   });
 
   it("a wrong current password is one sentence, both fields cleared, nothing changed; a short new one is refused before anything is sent", async () => {
@@ -410,29 +454,27 @@ describe("account policy: the profile menu of a password account", () => {
     type(byTestId<HTMLInputElement>("profile-changed-password"), "the new passphrase!");
     server.queue("/gs/api/account/password", { status: 403, body: { error: "invalid-credential" } });
     await submit(byTestId("profile-password-form"));
-    expect(all().querySelector('[role="alert"]')?.textContent).toBe("That current password or recovery key doesn't match this account. Check it and try again.");
+    expect(all().querySelector('[role="alert"]')?.textContent).toBe("That current password doesn't match this account. Check it and try again.");
     expect(byTestId<HTMLInputElement>("profile-current-secret")?.value).toBe("");
     expect(byTestId<HTMLInputElement>("profile-changed-password")?.value).toBe("");
+    expect(server.port.account?.otherSessions).toBe(2);
   });
 
-  it("Make a new recovery key: Confirm it's you with the PASSWORD (never the key), then the new key once with account-recovery wording", async () => {
+  /* PHASE 3 FINAL: "Make a new recovery key: Confirm it's you with the PASSWORD, then the new key once" is replaced by
+     the one credential action that now asks "Confirm it's you" every time: */
+  it("Change Authorization Wallet: Confirm it's you with the PASSWORD (no other way offered), then the first step -- nothing minted before", async () => {
     const server = await signedInMenu();
-    await click(byTestId("profile-menu-rotate"));
-    expect(all().textContent).toContain("You'll confirm with your password first.");
-    server.queue("/gs/api/profile/recovery-key", { status: 403, body: { error: "reauth-required" } });
-    await click(byTestId("profile-rotate-confirm"));
-    expect(all().textContent).toContain("To make a new recovery key, enter your password.");
+    await click(byTestId("profile-menu-replace-wallet"));
+    expect(all().textContent).toContain("To change your Authorization Wallet, enter your password.");
     expect(byTestId("profile-reauth-switch")).toBeNull();
+    expect(byTestId("profile-reauth-form")?.querySelectorAll("input")).toHaveLength(1);
     type(byTestId<HTMLInputElement>("profile-reauth-key"), "the passphrase");
     server.queue("/gs/api/profile/reauth", { status: 200, body: { ok: true, expiresAt: 1 } });
-    server.queue("/gs/api/profile/recovery-key", { status: 200, body: { ok: true, recoveryKey: NEW_KEY } });
     await click(byTestId("profile-reauth-confirm"));
     expect(server.bodiesOf("/gs/api/profile/reauth")).toEqual([{ password: "the passphrase" }]);
-    expect(byTestId("recovery-key-value")?.textContent).toBe(NEW_KEY);
-    expect(all().textContent).toContain("Your old recovery key no longer works.");
-    expect(byTestId("recovery-key-purpose")?.textContent).toContain("If you ever forget your password");
-    await click(byTestId("recovery-key-saved"));
-    await click(byTestId("recovery-key-continue"));
-    expect(all().innerHTML).not.toContain(NEW_KEY);
+    expect(byTestId("profile-replace-step-new")).toBeTruthy();
+    expect(server.calls.some((call) => call.path.startsWith("/gs/api/account/authorization-wallet"))).toBe(false);
+    expect(wallet.calls).toEqual([]);
+    expect(all().innerHTML).not.toContain("the passphrase");
   });
 });

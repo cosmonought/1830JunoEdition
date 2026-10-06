@@ -116,7 +116,8 @@ describe("no player-visible guest or seat-PIN vocabulary (LIVE-2E)", () => {
   });
 
   it("the profile screens name no id: no principal, profile, session or key selector, and no game id", () => {
-    for (const name of ["components/AccountDialog.tsx", "components/ProfileMenu.tsx", "components/RecoveryKeyReveal.tsx", "components/SessionEndedNotice.tsx", "components/TrustFacts.tsx", "components/ConfirmItsYou.tsx"]) {
+    /* PHASE 3 FINAL: `RecoveryKeyReveal.tsx` is deleted (no recovery key); the account's new screens are scanned instead. */
+    for (const name of ["components/AccountDialog.tsx", "components/ProfileMenu.tsx", "components/TableAccountNotice.tsx", "components/SessionEndedNotice.tsx", "components/TrustFacts.tsx", "components/ConfirmItsYou.tsx", "utils/authorizationWalletFlow.ts", "utils/profileAuthorizationV1.ts"]) {
       for (const { text } of readableText(path.join(SRC, name))) {
         expect([name, text, /\b(?:pr|pf|se|rk)_[0-9a-z]/i.test(text) || /\bg_[0-9a-z]{6,}/i.test(text)]).toEqual([name, text, false]);
       }
@@ -131,7 +132,12 @@ describe("no player-visible guest or seat-PIN vocabulary (LIVE-2E)", () => {
       "utils/accountPrompt.ts",
       "utils/trustApi.ts",
       "components/ProfileMenu.tsx",
-      "components/RecoveryKeyReveal.tsx",
+      /* PHASE 3 FINAL: the Authorization Wallet's screens and helpers, and the open table's account guard, in place of
+         the deleted `RecoveryKeyReveal.tsx`. */
+      "components/TableAccountNotice.tsx",
+      "utils/authorizationWalletFlow.ts",
+      "utils/profileAuthorizationV1.ts",
+      "utils/tableAccountGuard.ts",
       "components/SessionEndedNotice.tsx",
       "utils/profileApi.ts",
       "utils/sessionBootstrap.ts",

@@ -9,7 +9,8 @@
 //
 //   the statuses, in the owner's words, in order: Connecting wallet… -> Verifying wallet… -> Waiting for deposit…;
 //   the Keplr prompts, in order and counted: first table -- connect, ONE link signature, ONE transaction; a returning
-//   player whose account proved the wallet -- no password, no recovery key: one link signature, one transaction;
+//   player antes from the account's Authorization Wallet, or within five minutes of signing in -- no password (PHASE 3
+//   FINAL: there is no recovery key at all): one link signature, one transaction;
 //   the deposit is sent FROM the seat's verified wallet (the wallet the frozen roster pays: server-side test);
 //   cancelling in Keplr stops it safely (nothing linked, nothing sent) and pressing again resumes;
 //   a double click is one Ante; two tabs pressing at once open Keplr once (the other is told, never queued).
@@ -141,11 +142,12 @@ describe("P3-ACCT anteNow: only the steps still needed, in order, with the owner
     expect(statuses).toEqual([ANTE_STATUS.connecting, ANTE_STATUS.verifying, ANTE_STATUS.depositing]);
     expect(prompts(services.wallet)).toEqual(["connect", `signLink:${TEST_WALLET}:18COSMOS/WALLET-LINK/v1`, `signTx:${TEST_WALLET}:createGame`]);
     expect(port.requests.map((request) => request.path)).toEqual(["money/wallet-challenge", "money/wallet-link", "money/deposit-sent"]);
-    /* No password, no recovery key: the server never asked (a fresh sign-in, or this account's own wallet). */
+    /* No password: the server never asked (a fresh sign-in, or the account's own Authorization Wallet -- PHASE 3 FINAL
+       `linkAuthority: "authorization-wallet"`). */
     expect(port.requests.some((request) => request.path === "profile/reauth")).toBe(false);
   });
 
-  it("a returning player (Keplr already connected on this page; the account's own wallet): no connect prompt, no password -- one link signature, one transaction", async () => {
+  it("a returning player (Keplr already connected on this page; the account's Authorization Wallet): no connect prompt, no password -- one link signature, one transaction", async () => {
     const services = testServices();
     installMoneyServicesForTests(services);
     updateMoneySession({ wallet: "connected", address: TEST_WALLET, confirmedUntil: null });

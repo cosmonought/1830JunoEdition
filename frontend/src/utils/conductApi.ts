@@ -25,13 +25,13 @@ export function reportPlayerOp(playerId: string, category: ConductReportCategory
 }
 
 /** What the server said to a report: received (new or already), or its refusal sentence. */
-export type ReportOutcome = { readonly ok: true; readonly received: "new" | "added" | "already"; readonly message: string } | { readonly ok: false; readonly code: string; readonly reason: string };
+export type ReportOutcome = { readonly ok: true; readonly received: "new" | "already"; readonly message: string } | { readonly ok: false; readonly code: string; readonly reason: string };
 
 export function reportOutcomeOf(answer: { ok: true; data: Record<string, unknown> } | { ok: false; code: string; reason: string }): ReportOutcome {
   if (!answer.ok) return { ok: false, code: answer.code, reason: answer.reason };
   const received = answer.data.received;
   const message = typeof answer.data.message === "string" ? answer.data.message : "Your report was sent to the operator for review.";
-  return { ok: true, received: received === "already" ? "already" : received === "added" ? "added" : "new", message };
+  return { ok: true, received: received === "already" ? "already" : "new", message };
 }
 
 

@@ -72,6 +72,8 @@ export const MAX_CASE_SEQUENCE = 4;
 export const REREPORT_QUIET_MS = 10 * 60_000;
 /** How many of the parties' chat lines a re-report copies (those newer than the case's last report). */
 export const REREPORT_CHAT_LIMIT = 20;
+/** How many seat principals a case keeps as parties (a table seats at most seven at once; seats change while it waits). */
+export const MAX_TABLE_PRINCIPALS = 32;
 /** A stored case's serialized bound (well inside a DynamoDB item and a file store's comfort). */
 export const MAX_CASE_BYTES = 200 * 1024;
 /** A lane's own clock evidence (`ConductReportInput.clock`) is kept only while its JSON stays this small. */
@@ -174,7 +176,8 @@ export interface ReviewEvent {
 export interface ReReport {
   readonly at: number;
   readonly note: string | null;
-  readonly log: { readonly entries: number; readonly hash: string | null };
+  /** `captured` false: the log could not be read then (a held game) -- the pointer and counts say nothing. */
+  readonly log: { readonly captured: boolean; readonly entries: number; readonly hash: string | null };
   readonly counts: { readonly reporter: OfferCounts; readonly reported: OfferCounts };
   readonly chat: readonly ChatEvidenceLine[];
 }
@@ -190,8 +193,9 @@ export interface ConductCase {
   readonly created_at: number;
   readonly reporter: ConductParty;
   readonly reported: ConductParty;
-  /** SERVER-SIDE ONLY: every seat principal of the table when the report was made. A reviewer seated at that table is a
-   *  party to the case (a collusion partner must not judge it). Never projected. */
+  /** SERVER-SIDE ONLY: every seat principal of the table when the report (or a re-report) was made. A reviewer seated at
+   *  that table is a party to the case (a collusion partner must not judge it); the service also asks who sits there
+   *  NOW. Never projected. */
   readonly table_principals: readonly string[];
   /** The reporter's note, sanitized (`checkConductNote`), or null. Shown to reviewers only. */
   readonly note: string | null;
@@ -429,7 +433,7 @@ export function newConductCase(input: {
     created_at: input.now,
     reporter: input.reporter,
     reported: input.reported,
-    table_principals: [...new Set(input.record.seats.map((seat) => seat.principal_id))].slice(0, 16),
+    table_principals: [...new Set(input.record.seats.map((seat) => seat.principal_id))].slice(0, MAX_TABLE_PRINCIPALS),
     note: input.note,
     evidence: input.evidence,
     rereports: [],
@@ -448,15 +452,29 @@ export const lastReportEntries = (value: ConductCase): number => (value.rereport
 export const isCaseParty = (value: ConductCase, principalId: string): boolean =>
   principalId === value.reporter.principal_id || principalId === value.reported.principal_id || value.table_principals.includes(principalId);
 
-/** The same reporter adds to an ACTIVE case (the caller has checked it is active and charged the budget). */
-export function addReReport(current: ConductCase, input: { readonly at: number; readonly note: string | null; readonly entries: readonly ServerLogEntry[]; readonly chat: readonly RoomChatEntry[] | null }): { readonly next: ConductCase } | { readonly code: "full" | "quiet" } {
+/** Whether a repeat of the latest report is the SAME report (nothing has moved on): the log is no longer and the quiet
+ *  window has not passed. Judged against the latest case of the sequence, whatever its status. */
+export const isQuietRepeat = (latest: ConductCase, entries: number, at: number): boolean => entries <= lastReportEntries(latest) && at - lastReportAt(latest) < REREPORT_QUIET_MS;
+
+/** The same reporter adds to an ACTIVE case (the caller has checked it is active and charged the budget). The case's
+ *  serialized bound is kept: the addition's chat is trimmed to fit, and an addition that cannot fit is `full`. */
+export function addReReport(
+  current: ConductCase,
+  input: { readonly at: number; readonly note: string | null; readonly entries: readonly ServerLogEntry[]; readonly captured: boolean; readonly chat: readonly RoomChatEntry[] | null; readonly seatPrincipals: readonly string[] },
+): { readonly next: ConductCase } | { readonly code: "full" | "quiet" } {
   if (current.rereports.length >= MAX_REREPORTS) return { code: "full" };
   const pointer = logPointerOf(input.entries);
-  if (pointer.entries <= lastReportEntries(current) && input.at - lastReportAt(current) < REREPORT_QUIET_MS) return { code: "quiet" };
+  if (isQuietRepeat(current, pointer.entries, input.at)) return { code: "quiet" };
   const counts = partyCounts([...input.entries].sort((left, right) => left.index - right.index), current.reporter.player_id, current.reported.player_id);
-  const chat = input.chat === null ? [] : partyChat(input.chat, current.reporter, current.reported, REREPORT_CHAT_LIMIT, lastReportAt(current));
-  const rereport: ReReport = { at: input.at, note: input.note, log: pointer, counts, chat };
-  return { next: { ...current, revision: current.revision + 1, rereports: [...current.rereports, rereport] } };
+  let chat = input.chat === null ? [] : partyChat(input.chat, current.reporter, current.reported, REREPORT_CHAT_LIMIT, lastReportAt(current));
+  const principals = [...new Set([...current.table_principals, ...input.seatPrincipals])].slice(0, MAX_TABLE_PRINCIPALS);
+  for (;;) {
+    const rereport: ReReport = { at: input.at, note: input.note, log: { captured: input.captured, ...pointer }, counts, chat };
+    const next: ConductCase = { ...current, table_principals: principals, revision: current.revision + 1, rereports: [...current.rereports, rereport] };
+    if (serializeConductCase(next) !== null) return { next };
+    if (chat.length === 0) return { code: "full" };
+    chat = chat.slice(Math.ceil(chat.length / 2));
+  }
 }
 
 export type DecisionRefusal =
@@ -527,11 +545,12 @@ const isChatLines = (value: unknown, limit: number): boolean =>
 const isReReport = (value: unknown): value is ReReport => {
   if (!isObject(value) || !exact(value, ["at", "note", "log", "counts", "chat"])) return false;
   const { log, counts } = value;
+  if (!isObject(log) || typeof log.captured !== "boolean") return false;
   return (
     time(value.at) &&
     (value.note === null || (text(value.note, MAX_REPORT_NOTE_LENGTH * 2) && (value.note as string).length > 0)) &&
     isObject(log) &&
-    exact(log, ["entries", "hash"]) &&
+    exact(log, ["captured", "entries", "hash"]) &&
     count(log.entries) &&
     (log.hash === null || (typeof log.hash === "string" && HEX64.test(log.hash))) &&
     isObject(counts) &&
@@ -608,7 +627,7 @@ export function isConductCase(value: unknown): value is ConductCase {
   if (!isConductReportCategory(value.category) || !time(value.created_at)) return false;
   if (!(typeof value.seq === "number" && Number.isSafeInteger(value.seq) && value.seq >= 0 && value.seq < MAX_CASE_SEQUENCE)) return false;
   if (!isParty(value.reporter) || !isParty(value.reported) || value.reporter.player_id === value.reported.player_id || value.reporter.principal_id === value.reported.principal_id) return false;
-  if (!Array.isArray(value.table_principals) || value.table_principals.length > 16 || !value.table_principals.every((entry) => text(entry, 64) && (entry as string).length > 0)) return false;
+  if (!Array.isArray(value.table_principals) || value.table_principals.length > MAX_TABLE_PRINCIPALS || !value.table_principals.every((entry) => text(entry, 64) && (entry as string).length > 0)) return false;
   if (!Array.isArray(value.rereports) || value.rereports.length > MAX_REREPORTS || !value.rereports.every(isReReport)) return false;
   if (!(value.note === null || (text(value.note, MAX_REPORT_NOTE_LENGTH * 2) && (value.note as string).length > 0))) return false;
   if (!isEvidence(value.evidence)) return false;

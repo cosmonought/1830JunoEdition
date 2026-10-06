@@ -623,6 +623,12 @@ export function createRoomHost(deps: RoomHostDeps) {
     return record.seats.map((seat) => ({ playerId: seat.player_id, principalId: seat.principal_id }));
   }
 
+  /** Phase 3 (P3-N032): who is seated at a table now (server-side only: a conduct reviewer seated there is a party). */
+  function seatPrincipalsOf(gameId: string): readonly string[] {
+    const record = peekLoaded(gameId)?.view.record ?? recordIndex.get(gameId) ?? null;
+    return record === null ? [] : record.seats.map((seat) => seat.principal_id);
+  }
+
   /** P3-ACCT (trust indicators): every table the index knows that `principalId` holds a seat at (server-side only). */
   function tablesOf(principalId: string): GameRecord[] {
     return [...recordIndex.values()].filter((record) => seatOf(record, principalId) !== null);
@@ -2242,6 +2248,7 @@ export function createRoomHost(deps: RoomHostDeps) {
     moneyPort,
     /* P3-ACCT: the trust indicators' reads (server-side only). */
     readableSeats,
+    seatPrincipalsOf,
     tablesOf,
     /* ESCROW-3A (brief §6): the money games the index knows (never a replay; the coordinator loads them). */
     financialGameIds: (): string[] => [...recordIndex.values()].filter((record) => settlement.retentionOf(record).kind === "financial").map((record) => record.game_id),

@@ -50,6 +50,7 @@ import {
   decideCase,
   deriveEvidence,
   isCaseParty,
+  isQuietRepeat,
   lastReportAt,
   MAX_CASE_SEQUENCE,
   newConductCase,
@@ -65,9 +66,8 @@ import type { ConductCaseStore } from "./conductStore";
 export const DEFAULT_REPORTER_BUDGET: BucketSpec = Object.freeze({ capacity: 3, refillPerSecond: 1 / 1200 });
 
 export const REPORT_SENTENCES = Object.freeze({
-  received: "Your report was sent to the operator for review. It does not change the game, any money or anyone's profile.",
-  already: "You have already reported this player for this at this table, and nothing new has happened in the game since. Your earlier report is with the reviewer.",
-  added: "Your report was added to your earlier one about this player, with the game's record as it is now. It does not change the game, any money or anyone's profile.",
+  received: "Your report is with the operator for review, with the game's record as it is now. It does not change the game, any money or anyone's profile.",
+  already: "You reported this player for this a moment ago, and nothing new has happened in the game since. That report is with the operator.",
   unconfirmed: "Your earlier report about this player could not be confirmed just now. Try again later.",
   self: "You cannot report yourself.",
   notAtTable: "That player is not at this table.",
@@ -80,7 +80,9 @@ export const REPORT_SENTENCES = Object.freeze({
 });
 
 export type ReportAnswer =
-  | { readonly ok: true; readonly received: "new" | "added" | "already"; readonly message: string }
+  /* "new": recorded (a new case or an addition to the open one -- never told apart, so a reporter cannot tell whether a
+     reviewer has closed anything); "already": the same report a moment ago. */
+  | { readonly ok: true; readonly received: "new" | "already"; readonly message: string }
   | { readonly ok: false; readonly code: string; readonly reason: string; readonly retryAfterMs?: number };
 
 export interface ReportInput {
@@ -109,6 +111,8 @@ export interface ConductServiceDeps {
   readonly warn: (line: string) => void;
   readonly ops?: OpsRecorder;
   readonly reporterBudget?: BucketSpec;
+  /** Who is seated at a table now (server-side; reviewers seated there are parties). Absent: the case's own record. */
+  readonly seatPrincipalsOf?: (gameId: string) => readonly string[];
 }
 
 /* ---- the reviewer's views (never a principal id; parties as public seat ids, nicknames and fingerprints) ---- */
@@ -189,6 +193,9 @@ export function createConductService(deps: ConductServiceDeps): ConductService {
      the residual is recorded in the report.) */
   const budget = new KeyedBuckets(deps.reporterBudget ?? DEFAULT_REPORTER_BUDGET, deps.now, 50_000);
   const store = deps.store;
+  /** A party to a case: its reporter, its reported account, anyone seated at its table when it was reported (or re-reported),
+   *  or anyone seated there NOW. Such a reviewer never sees the case. */
+  const partyTo = (value: ConductCase, principalId: string): boolean => isCaseParty(value, principalId) || (deps.seatPrincipalsOf?.(value.game_id) ?? []).includes(principalId);
   let cached: { readonly at: number; readonly value: Promise<{ readonly cases: ConductCase[]; readonly unreadable: number }> } | null = null;
 
   const summaryOf = (value: ConductCase): CaseSummary => ({
@@ -250,7 +257,18 @@ export function createConductService(deps: ConductServiceDeps): ConductService {
     let verification: CaseView["verification"];
     try {
       const entries = await readLog(value.game_id);
-      verification = entries === null ? { verified: null, detail: "The game is not loaded on this server now, so its log was not re-read. Open the table, then reload the case." } : verifyLogPointer(value.evidence, entries);
+      if (entries === null) verification = { verified: null, detail: "The game's log cannot be read on this server just now." };
+      else {
+        const first = verifyLogPointer(value.evidence, entries);
+        const newest = [...value.rereports].reverse().find((entry) => entry.log.captured && entry.log.hash !== null);
+        const last = newest === undefined ? null : verifyLogPointer({ ...value.evidence, log: { ...value.evidence.log, captured: true, entries: newest.log.entries, hash: newest.log.hash } }, entries);
+        verification =
+          last === null || first.verified === false
+            ? first
+            : last.verified === false
+              ? { verified: false, detail: `The latest report's pointer: ${last.detail}` }
+              : { verified: first.verified === null ? last.verified : first.verified && last.verified === true, detail: `${first.detail} The latest report's pointer: ${last.detail}` };
+      }
     } catch (error) {
       deps.warn(`  conduct: re-verifying case ${value.case_id} failed -- ${error instanceof Error ? error.message.slice(0, 200) : String(error)}`);
       verification = { verified: null, detail: "The game's log could not be read just now." };
@@ -285,7 +303,13 @@ export function createConductService(deps: ConductServiceDeps): ConductService {
   }
 
   /** The case a new report from this reporter about this account in this category lands in, by sequence. */
-  async function standingCase(gameId: string, reporterPrincipalId: string, reportedPrincipalId: string, category: ConductReportCategory): Promise<{ readonly kind: "active"; readonly value: ConductCase } | { readonly kind: "free"; readonly seq: number } | { readonly kind: "exhausted" } | { readonly kind: "unreadable" }> {
+  async function standingCase(
+    gameId: string,
+    reporterPrincipalId: string,
+    reportedPrincipalId: string,
+    category: ConductReportCategory,
+  ): Promise<{ readonly kind: "active"; readonly value: ConductCase } | { readonly kind: "free"; readonly seq: number; readonly latest: ConductCase | null } | { readonly kind: "exhausted"; readonly latest: ConductCase } | { readonly kind: "unreadable" }> {
+    let latest: ConductCase | null = null;
     for (let seq = 0; seq < MAX_CASE_SEQUENCE; seq += 1) {
       let value: ConductCase | null;
       try {
@@ -294,11 +318,12 @@ export function createConductService(deps: ConductServiceDeps): ConductService {
         if (error instanceof ConductCaseUnreadableError) return { kind: "unreadable" };
         throw error;
       }
-      if (value === null) return { kind: "free", seq };
+      if (value === null) return { kind: "free", seq, latest };
       if (isConductCaseActive(value.status)) return { kind: "active", value };
       /* Closed: a report now is a new matter -- the next case in the sequence. */
+      latest = value;
     }
-    return { kind: "exhausted" };
+    return { kind: "exhausted", latest: latest as ConductCase };
   }
 
   return {
@@ -328,21 +353,34 @@ export function createConductService(deps: ConductServiceDeps): ConductService {
         return { ok: false, code: "unavailable", reason: REPORT_SENTENCES.unavailable };
       }
       if (standing.kind === "unreadable") return { ok: false, code: "unavailable", reason: REPORT_SENTENCES.unconfirmed };
-      if (standing.kind === "exhausted") return { ok: true, received: "already", message: REPORT_SENTENCES.already };
       const now = deps.now();
+      /* THE REPORTER LEARNS NOTHING ABOUT THE REVIEW. Whether the case is open or a reviewer has closed it, the answers
+         are the same: "already" when nothing has moved on since this reporter's latest report about this account and
+         category (judged against the latest case of the sequence, whatever its status), otherwise "received" -- a new
+         case, an addition to the open one, or (past the bounds) nothing new recorded: one sentence for all three. */
+      const latest = standing.kind === "active" ? standing.value : standing.latest;
+      if (latest !== null && isQuietRepeat(latest, input.entries.length, now)) return { ok: true, received: "already", message: REPORT_SENTENCES.already };
+      if (standing.kind === "exhausted") return { ok: true, received: "new", message: REPORT_SENTENCES.received };
 
       if (standing.kind === "active") {
-        /* The same report again while the case is active: ADDED to it when something has moved on (the log, or time),
-           charged like a new report; otherwise it is the same report -- answered free. */
-        const probe = addReReport(standing.value, { at: now, note: note.note, entries: input.entries, chat: input.chat });
-        if (!("next" in probe)) return { ok: true, received: "already", message: REPORT_SENTENCES.already };
+        /* The same report again while the case is active, and something has moved on (the log, or time): ADDED to it,
+           charged like a new report. */
+        const probe = addReReport(standing.value, {
+          at: now,
+          note: note.note,
+          entries: input.entries,
+          captured: input.unreadableHistory === undefined,
+          chat: input.chat,
+          seatPrincipals: record.seats.map((seat) => seat.principal_id),
+        });
+        if (!("next" in probe)) return probe.code === "quiet" ? { ok: true, received: "already", message: REPORT_SENTENCES.already } : { ok: true, received: "new", message: REPORT_SENTENCES.received };
         const wait = budget.take(reporterSeat.principal_id);
         if (wait > 0) return { ok: false, code: "rate-limited", reason: REPORT_SENTENCES.budget, retryAfterMs: wait };
         const written = await store.save(probe.next, standing.value.revision);
         if (written.kind === "committed") {
           forget();
           deps.ops?.audit("conduct.rereported", { case_id: standing.value.case_id, game_id: record.game_id, category, reports: probe.next.rereports.length + 1 });
-          return { ok: true, received: "added", message: REPORT_SENTENCES.added };
+          return { ok: true, received: "new", message: REPORT_SENTENCES.received };
         }
         budget.give(reporterSeat.principal_id);
         deps.warn(`  conduct: an addition to case ${standing.value.case_id} was not saved (${written.kind}) -- ${written.detail.slice(0, 200)}`);
@@ -372,7 +410,7 @@ export function createConductService(deps: ConductServiceDeps): ConductService {
     async queue(reviewerPrincipalId) {
       const { cases, unreadable } = await readAll();
       /* A case the reviewer is a party to (reporter, reported, or seated at its table) is not theirs to see. */
-      const ordered = cases.filter((value) => !isCaseParty(value, reviewerPrincipalId)).sort((left, right) => lastReportAt(right) - lastReportAt(left) || (left.case_id < right.case_id ? -1 : 1));
+      const ordered = cases.filter((value) => !partyTo(value, reviewerPrincipalId)).sort((left, right) => lastReportAt(right) - lastReportAt(left) || (left.case_id < right.case_id ? -1 : 1));
       return { cases: ordered.map((value) => summaryOf(value)), unreadable };
     },
 
@@ -380,7 +418,7 @@ export function createConductService(deps: ConductServiceDeps): ConductService {
       if (store === null || !CASE_ID_PATTERN.test(caseId)) return null;
       const value = await store.load(caseId); // an unreadable case rejects: the caller says so
       /* A party is answered exactly as for a case that does not exist. */
-      return value === null || isCaseParty(value, reviewerPrincipalId) ? null : viewOf(value, reviewerPrincipalId, readLog);
+      return value === null || partyTo(value, reviewerPrincipalId) ? null : viewOf(value, reviewerPrincipalId, readLog);
     },
 
     async decide(input, readLog): Promise<DecideAnswer> {
@@ -398,7 +436,7 @@ export function createConductService(deps: ConductServiceDeps): ConductService {
         throw error;
       }
       /* A party -- who cannot see the case at all -- is answered as for a case that does not exist. */
-      if (current === null || isCaseParty(current, input.reviewerPrincipalId)) return { ok: false, code: "not-found", reason: "There is no such case." };
+      if (current === null || partyTo(current, input.reviewerPrincipalId)) return { ok: false, code: "not-found", reason: "There is no such case." };
       const decided = decideCase(current, { expectedRevision: input.revision, to: input.status, note: note.note, reviewerPrincipalId: input.reviewerPrincipalId, now: deps.now() });
       if (!("next" in decided)) return { ok: false, code: decided.code, reason: decided.reason };
       const written: StoreWriteOutcome = await store.save(decided.next, current.revision);

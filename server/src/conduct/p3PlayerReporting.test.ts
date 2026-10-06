@@ -48,6 +48,8 @@ import {
 import { accountFingerprint, conductCaseId, decideCase, deriveEvidence, verifyLogPointer, type ConductCase } from "./conductCase";
 import { createFileConductCaseStore, createMemoryConductCaseStore, type ConductCaseStore } from "./conductStore";
 import { conductReviewersFromEnv } from "./conductHttpApi";
+import { readStoredLogForReview } from "./conductLogReader";
+import { createFileLogStore } from "../fileLogStore";
 import { NO_FACTS } from "../rooms/gameRecord";
 
 quietConsole();
@@ -298,22 +300,28 @@ describe("P3-N032 A: a seated player reports another seat of the same table", ()
       assert.equal((await carol.answerTo("carol-buy")).kind, "applied");
       const log = await committedLog(port, game.gameId);
       const added = await report(alice, game.gameId, { ...body, note: "Still doing it." });
-      assert.equal((added.data as { received: string }).received, "added", JSON.stringify(added));
+      assert.equal((added.data as { received: string }).received, "new", `an addition is answered exactly like a new report: ${JSON.stringify(added)}`);
       assert.equal(((await report(alice, game.gameId, body)).data as { received: string }).received, "already", "nothing moved on since: the same report");
       const [first] = await allCases(store);
       assert.equal(first.rereports.length, 1);
       assert.equal(first.rereports[0].note, "Still doing it.");
-      assert.deepEqual(first.rereports[0].log, { entries: log.length, hash: logHash(log) }, "a fresh pointer into the log as it is now");
+      assert.deepEqual(first.rereports[0].log, { captured: true, entries: log.length, hash: logHash(log) }, "a fresh pointer into the log as it is now");
       assert.equal(first.revision, 2);
       assert.equal(first.status, "open", "a re-report never changes the review status");
       /* A reviewer closes it; the same complaint later is a NEW case, with its own evidence. */
       const closed = decideCase(first, { expectedRevision: first.revision, to: "no-violation", note: null, reviewerPrincipalId: "pr_dev_reviewer", now: Date.now() });
       if (!("next" in closed)) throw new Error(closed.reason);
       assert.equal((await store.save(closed.next, first.revision)).kind, "committed");
-      assert.equal(((await report(alice, game.gameId, body)).data as { received: string }).received, "new");
+      /* The reporter cannot tell the case was closed: a repeat with nothing new is "already", exactly as while open. */
+      assert.equal(((await report(alice, game.gameId, body)).data as { received: string }).received, "already");
+      /* The game moves on (alice's turn again), and the same complaint is recorded -- answered as any new report. */
+      alice.submit(BUY, { baseIndex: await indexOf(port, game.gameId), submissionId: "alice-2" });
+      assert.equal((await alice.answerTo("alice-2")).kind, "applied");
+      const afterClose = await report(alice, game.gameId, body);
+      assert.equal((afterClose.data as { received: string }).received, "new");
       const cases = await allCases(store);
       assert.deepEqual(cases.map((value) => value.seq).sort(), [0, 1]);
-      assert.equal(cases.find((value) => value.seq === 1)?.evidence.log.entries, log.length);
+      assert.equal((cases.find((value) => value.seq === 1)?.evidence.log.entries ?? 0) >= log.length, true);
     } finally {
       await stopServer(server);
     }
@@ -469,14 +477,14 @@ describe("P3-N032 B: visitors, reviewers and the review workflow", () => {
     }
   });
 
-  test("a configured reviewer name nobody held at startup is never a reviewer -- whoever registers it later gains nothing", async () => {
-    const { server, port } = await prodServer({ reviewers: ["Rita", "Moderator"], accounts: ["Rita"] });
+  test("a configured reviewer name nobody holds refuses the start (a typo or a not-yet-made account can never be squatted); a held name is bound", async () => {
+    await assert.rejects(prodServer({ reviewers: ["Rita", "Moderator"], accounts: ["Rita"] }), /GS_CONDUCT_REVIEWERS names 1 username\(s\) no account holds/);
+    const { server, port } = await prodServer({ reviewers: ["Rita"], accounts: ["Rita"] });
     try {
-      const squatter = await accountBrowser(port, "Moderator");
-      assert.deepEqual((await post(port, "/gs/api/conduct/me", squatter.cookie)).body, { ok: true, reviewer: false });
-      assert.equal((await post(port, "/gs/api/conduct/review/queue", squatter.cookie)).status, 404);
       const rita = await loginAgain(port, "Rita");
       assert.deepEqual((await post(port, "/gs/api/conduct/me", rita)).body, { ok: true, reviewer: true }, "a name held at startup is bound");
+      const other = await accountBrowser(port, "Moderator");
+      assert.deepEqual((await post(port, "/gs/api/conduct/me", other.cookie)).body, { ok: true, reviewer: false });
     } finally {
       await stopServer(server);
     }
@@ -694,6 +702,28 @@ describe("P3-N032 C: the evidence, the configuration and the boundary", () => {
     assert.equal(verifyLogPointer(evidence, [...log, entry(3, B.player_id, "PassTurn")]).verified, true, "an append-only log keeps the pointer valid");
     assert.equal(verifyLogPointer(evidence, [log[0], { ...log[1], payload: JSON.stringify({ PassTurn: { x: 1 } }) }, log[2]]).verified, false);
     assert.equal(verifyLogPointer(evidence, log.slice(0, 2)).verified, false);
+  });
+
+  test("the file-mode review reader: the stored log's committed history, read-only (a torn tail's complete batches; a damaged log, a missing one: null; no byte changes)", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gs-conduct-log-"));
+    try {
+      const gameId = "g_0000000000000000000000000w";
+      const writer = createFileLogStore(dir, { warn: () => undefined });
+      const log = [entry(0, A.player_id, "SetupGame"), entry(1, B.player_id, "PassTurn")];
+      assert.equal((await writer.appendBatch?.(gameId, log))?.kind, "committed");
+      const file = path.join(dir, `${gameId}.log.jsonl`);
+      const read = await readStoredLogForReview(dir, gameId);
+      assert.equal(read?.length, 2);
+      assert.equal(logHash(read ?? []), logHash(log));
+      fs.appendFileSync(file, '{"torn":');
+      const before = fs.readFileSync(file);
+      assert.equal((await readStoredLogForReview(dir, gameId))?.length, 2, "a torn tail: the complete batches");
+      assert.deepEqual(fs.readFileSync(file), before, "nothing was repaired or written");
+      assert.equal(await readStoredLogForReview(dir, "g_0000000000000000000000004w"), null, "no log file");
+      assert.equal(await readStoredLogForReview(dir, "../etc"), null);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("GS_CONDUCT_REVIEWERS: usernames by their canonical key; anything else refuses the start", () => {

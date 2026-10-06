@@ -8,7 +8,7 @@
 
 import assert from "node:assert/strict";
 
-import { ConductCaseUnreadableError, decideCase, deriveEvidence, newConductCase, type ConductCase, type ConductParty } from "../../conduct/conductCase";
+import { addReReport, ConductCaseUnreadableError, decideCase, deriveEvidence, newConductCase, REREPORT_QUIET_MS, type ConductCase, type ConductParty } from "../../conduct/conductCase";
 import type { ConductCaseStore } from "../../conduct/conductStore";
 import { NO_FACTS } from "../../rooms/gameRecord";
 import type { StoreWriteOutcome } from "../storeResult";
@@ -361,6 +361,26 @@ export const CONDUCT_CASES: readonly ConformanceCase<ConductSubject>[] = [
       const outcome = await pending;
       assert.equal(outcome.kind, "definite", `CAS-IN-WRITE: the first reviewer's in-flight decision overwrote the one that stood (${JSON.stringify(outcome)})`);
       assert.deepEqual(await (await subject.open(ctx)).load(r1.case_id), theirs, "CAS-IN-WRITE: the stalled decision overwrote the one that stood");
+    },
+  },
+  {
+    id: "CND-17",
+    title: "a re-report and a review decision made on the same revision: the first saved stands, the other is DEFINITE and writes nothing",
+    async run(subject, ctx) {
+      const store = await subject.open(ctx);
+      const r1 = conductFixture(ctx);
+      ok((await store.create(r1)).outcome);
+      const at = ctx.tick(REREPORT_QUIET_MS + 1);
+      const added = addReReport(r1, { at, note: "again", entries: [], captured: true, chat: [], seatPrincipals: [] });
+      if (!("next" in added)) throw new Error(`the re-report was ${added.code}`);
+      ok(await store.save(added.next, 1));
+      const before = await subject.stored(ctx, r1.case_id);
+      definite(await store.save(decided(r1, ctx), 1));
+      await unchanged(subject, ctx, r1.case_id, before);
+      const stored = (await store.load(r1.case_id)) as ConductCase;
+      assert.equal(stored.rereports.length, 1);
+      assert.equal(stored.revision, 2);
+      ok(await store.save(decided(stored, ctx), 2));
     },
   },
   {

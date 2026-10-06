@@ -514,6 +514,26 @@ export function createGameServer(options: GameServerOptions): {
   }
   const identityNow = identityOptions.now ?? (() => Date.now());
   const identity = identityOptions.service ?? IdentityService.fromSnapshot(createMemoryIdentityStore(), { principals: [], sessions: [] });
+  /* The configured reviewer USERNAMES are bound to the accounts that hold them, at startup, and reviewers are then
+     recognised by their principal, server-side. A configured name NOBODY holds refuses the start: otherwise whoever
+     registered it first (a typo, a name not yet made) would be bound as a reviewer at some later restart. Make the
+     reviewer's account first, then name it. A name held by an inactive account binds nothing (said once). */
+  const conductReviewers = new Set<string>();
+  const unheldReviewers: string[] = [];
+  let inactiveReviewers = 0;
+  for (const key of options.conduct?.reviewers ?? []) {
+    const holder = identity.usernameHolder(key);
+    if (holder.kind === "active") conductReviewers.add(holder.principalId);
+    else if (holder.kind === "inactive") inactiveReviewers += 1;
+    else unheldReviewers.push(key);
+  }
+  if (unheldReviewers.length > 0) {
+    throw new Error(`GS_CONDUCT_REVIEWERS names ${unheldReviewers.length} username(s) no account holds: make each reviewer's account first, then name it (or remove the name)`);
+  }
+  if (inactiveReviewers > 0) {
+    // eslint-disable-next-line no-console
+    console.warn(`  conduct: GS_CONDUCT_REVIEWERS names ${inactiveReviewers} username(s) whose account is not active: not reviewers this run`);
+  }
   /** Who each LOG socket said it was at `hello`, and which room. Identity only: the subscription itself lives on
    *  the room's actor (LIVE-3A), which is what fan-out reads. */
   const sockets = new Map<WebSocket, Attached>();
@@ -1390,6 +1410,7 @@ export function createGameServer(options: GameServerOptions): {
       LIVE-2C: THE SERVER-OWNED ROOM AUTHORITY (rooms/roomHost.ts)
      ================================================================== */
   /* Phase 3 (P3-N032): conduct reports -- their own durable store, read by reviewers only, writing nothing else. */
+  const conductSeats: { current: ((gameId: string) => readonly string[]) | null } = { current: null };
   const conduct = createConductService({
     store: options.conduct?.store ?? null,
     build: options.build,
@@ -1398,6 +1419,8 @@ export function createGameServer(options: GameServerOptions): {
     warn: (line) => console.warn(line),
     ...(options.ops !== undefined ? { ops: options.ops } : {}),
     ...(options.conduct?.reporterBudget !== undefined ? { reporterBudget: options.conduct.reporterBudget } : {}),
+    /* Who is seated at a case's table NOW (a reviewer seated there is a party too): the room host's record, read-only. */
+    seatPrincipalsOf: (gameId) => conductSeats.current?.(gameId) ?? [],
   });
   const host: RoomHost = createRoomHost({
     build: options.build,
@@ -1465,6 +1488,7 @@ export function createGameServer(options: GameServerOptions): {
       ...(options.statusExtras ? options.statusExtras() : {}),
     }),
   });
+  conductSeats.current = (gameId) => host.seatPrincipalsOf(gameId);
   roomHost = host;
 
   /** LIVE-2C (LIVE-2 §14.3 item 5): a log subscriber of a server-owned game is re-authorized on EVERY push, so a
@@ -1509,20 +1533,6 @@ export function createGameServer(options: GameServerOptions): {
   const trustLimiter = createTrustLimiter(identityNow);
   /* Phase 3 (P3-N032): `/gs/api/conduct/*` -- the review routes (reviewers only; reporting is the table's room op). */
   const conductLimiter = createConductLimiter(identityNow);
-  /* The configured reviewer USERNAMES are bound to the accounts that hold them NOW, at startup: a name nobody holds yet
-     binds nothing (it cannot be claimed later by whoever registers it first -- a reviewer account is made first, then
-     the server is restarted with its name). Reviewers are then recognised by their principal, server-side. */
-  const conductReviewers = new Set<string>();
-  const unboundReviewers: string[] = [];
-  for (const key of options.conduct?.reviewers ?? []) {
-    const principal = identity.principalOfUsername(key);
-    if (principal === null) unboundReviewers.push(key);
-    else conductReviewers.add(principal);
-  }
-  if (unboundReviewers.length > 0) {
-    // eslint-disable-next-line no-console
-    console.warn(`  conduct: GS_CONDUCT_REVIEWERS names ${unboundReviewers.length} username(s) no account holds now (${unboundReviewers.join(", ")}): they are NOT reviewers this run. Create the account, then restart.`);
-  }
   /** A game's committed log, for re-verifying a case's pointer -- READ-ONLY: a resident game's committed view, else the
    *  configured read-only reader. Never `games.get` (that claims and loads a game, and a load can repair or hold it): a
    *  reviewer opening a case must not move any game. Null: "not readable here now". */

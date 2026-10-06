@@ -2460,13 +2460,15 @@ export class IdentityService {
     return this.families.get(familyId);
   }
 
-  /** The ACTIVE principal behind a username (canonical key), or null: for binding an operator-configured list of
-   *  accounts (by username) to the accounts that exist NOW -- a name nobody holds yet binds nothing. Server-side only. */
-  principalOfUsername(name: string): string | null {
+  /** Who holds a username (canonical key) NOW: an active account's principal, a held but inactive one, or nobody. For
+   *  binding an operator-configured list of accounts (by username) to the accounts that exist; usernames are never
+   *  released, so a held name can never pass to someone else. Server-side only. */
+  usernameHolder(name: string): { readonly kind: "active"; readonly principalId: string } | { readonly kind: "inactive" } | { readonly kind: "unheld" } {
     const profileId = this.profileOfLogin.get(loginKeyOf(name));
     const profile = profileId === undefined ? undefined : this.profiles.get(profileId);
-    if (profile === undefined || profile.status !== "active") return null;
-    return this.activeProfileOf(profile.principal_id) === null ? null : profile.principal_id;
+    if (profile === undefined) return { kind: "unheld" };
+    if (profile.status !== "active" || this.activeProfileOf(profile.principal_id) === null) return { kind: "inactive" };
+    return { kind: "active", principalId: profile.principal_id };
   }
 
   /** Test support: a profile's stored shape (the tests assert no plaintext key is in it). */

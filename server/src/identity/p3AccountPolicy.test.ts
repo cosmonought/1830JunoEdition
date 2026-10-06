@@ -23,7 +23,7 @@ import assert from "node:assert/strict";
 import { createMemoryRecordStore } from "../rooms/recordStore";
 import { accountBrowser, apiRequest, bootstrapCookie, Client, cookieFromAnswer, cookieRead, loginOnFreshBrowser, PROD_ORIGIN, profiledBrowser, quietConsole, sleep, startServer, stopServer, type ApiAnswer } from "../rooms/testSupport";
 import { TEST_PASSWORD_KDF } from "../escrow/escrow4Support";
-import { createTrustFacts, isEstablished } from "../rooms/trustFacts";
+import { createTrustFacts, INCOMPLETE_REUSE_MS, isEstablished } from "../rooms/trustFacts";
 import type { GameRecord } from "../rooms/gameRecord";
 import type { FinancialGameRecord } from "../escrow/moneyLifecycle";
 import { StoreDefiniteError } from "../persistence/storeResult";
@@ -330,7 +330,12 @@ describe("account policy C: change password", () => {
       limits: { identity: { passwordChangesPerAccount: { capacity: 2, refillPerSecond: 0.000001 } } },
     });
     try {
-      let cookie = (await account(started.port, "Ann")).cookie;
+      const made = await account(started.port, "Ann");
+      let cookie = made.cookie;
+      /* Wrong KEYS cost nothing and spend nothing (a cookie thief cannot block the owner's change this way). */
+      for (let n = 0; n < 3; n += 1) {
+        assert.equal((await changePassword(started.port, cookie, { recoveryKey: `${made.recoveryKey.split(".")[0]}.${WELL_FORMED_WRONG_SECRET}`, newPassword: NEW_PASSWORD })).status, 403);
+      }
       const passwords = [PASSWORD, "second passphrase", "third passphrase!"];
       for (let n = 0; n < 2; n += 1) {
         const changed = await changePassword(started.port, cookie, { currentPassword: passwords[n], newPassword: passwords[n + 1] });
@@ -791,20 +796,23 @@ describe("account policy H: trust -- 'established' is one completed real-money g
     assert.equal((await facts.factsOf("pr_a"))?.establishedOpponents, 2, "pr_a: me (twice, counted once) and pr_b");
   });
 
-  test("review L5: an answer computed while a record could not be read is never reused", async () => {
+  test("review L5: an answer computed while a record could not be read is reused only briefly", async () => {
     const me = "pr_me";
+    let clock = NOW;
     let readable = false;
     const one = record([me, "pr_y"]);
     const facts = createTrustFacts({
       profileFacts: () => ({ createdAt: NOW, walletVerifiedAt: null }),
       tablesOf: () => [one],
       financial: async () => (readable ? fin("closed", "SETTLED") : null),
-      now: () => NOW,
+      now: () => clock,
       reuseMs: 60_000,
     });
     assert.equal((await facts.factsOf(me))?.completedMoneyGames, 0);
     readable = true;
-    assert.equal((await facts.factsOf(me))?.completedMoneyGames, 1, "read again, not the cached zero");
+    assert.equal((await facts.factsOf(me))?.completedMoneyGames, 0, "briefly reused (a failing store is not hammered)");
+    clock += INCOMPLETE_REUSE_MS;
+    assert.equal((await facts.factsOf(me))?.completedMoneyGames, 1, "read again after the short window, not the cached zero");
   });
 
   test("a game completing makes its opponent established -- and only then do they count", async () => {

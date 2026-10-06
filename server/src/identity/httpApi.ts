@@ -696,7 +696,9 @@ async function serveProfile(
       api.limiter.passwordReauthFailures.give(familyKey);
       if (accountKey !== null) api.limiter.passwordReauthFailuresPerAccount.give(accountKey);
     }
-    if (changed.kind !== "ok" && changed.kind !== "invalid") api.limiter.passwordChanges.give(changeKey);
+    /* Re-review LOW: a wrong RECOVERY KEY did no KDF and wrote nothing -- it is not charged to the account (a cookie thief
+       sending wrong keys cannot spend the owner's change budget; a key cannot be guessed). */
+    if (changed.kind !== "ok" && (changed.kind !== "invalid" || !byPassword)) api.limiter.passwordChanges.give(changeKey);
     switch (changed.kind) {
       case "ok":
         json(response, 200, { ok: true, signedOut: changed.signedOut }, { "Set-Cookie": changed.setCookie });

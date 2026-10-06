@@ -90,6 +90,8 @@ const DAY = 24 * 60 * 60 * 1000;
 /** A profile's real-money tables looked at, newest first (a bound on the financial reads of one answer). */
 export const MAX_MONEY_TABLES_READ = 200;
 const MAX_CACHED = 5_000;
+/** How long an answer computed while a financial record could not be read is reused. */
+export const INCOMPLETE_REUSE_MS = 5_000;
 
 /* Review L4: published to the MONTH -- an exact day, beside the other facts, would single a player out across tables. */
 const monthOf = (ms: number): string => new Date(ms).toISOString().slice(0, 7);
@@ -109,7 +111,7 @@ const notCounted = (fin: FinancialGameRecord): boolean => cancelledOrAnnulled(fi
 const isInactivityRoute = (route: string | undefined): boolean => typeof route === "string" && (route.startsWith("liveness_") || route.startsWith("settleable_timeout_"));
 
 export function createTrustFacts(deps: TrustFactsDeps) {
-  const cache = new Map<string, { readonly at: number; readonly facts: TrustFacts | null }>();
+  const cache = new Map<string, { readonly at: number; readonly facts: TrustFacts | null; readonly reuseMs: number }>();
   const reuseMs = deps.reuseMs ?? 60_000;
 
   /** The real-money tables of this principal that COUNT as completed (see the header), newest first, with the
@@ -178,14 +180,12 @@ export function createTrustFacts(deps: TrustFactsDeps) {
   async function factsOf(principalId: string, useCache = true): Promise<TrustFacts | null> {
     const at = deps.now();
     const cached = cache.get(principalId);
-    if (useCache && cached !== undefined && at - cached.at < reuseMs) return cached.facts;
+    if (useCache && cached !== undefined && at - cached.at < cached.reuseMs) return cached.facts;
     const computed = await compute(principalId);
-    if (computed.reusable) {
-      cache.set(principalId, { at, facts: computed.facts });
-      while (cache.size > MAX_CACHED) cache.delete(cache.keys().next().value as string);
-    } else {
-      cache.delete(principalId);
-    }
+    /* Review L5 / re-review LOW: an answer with an unreadable record is reused only briefly (a failing store is not
+       re-read for every request, and the zero it shows does not stand for a minute). */
+    cache.set(principalId, { at, facts: computed.facts, reuseMs: computed.reusable ? reuseMs : Math.min(reuseMs, INCOMPLETE_REUSE_MS) });
+    while (cache.size > MAX_CACHED) cache.delete(cache.keys().next().value as string);
     return computed.facts;
   }
 

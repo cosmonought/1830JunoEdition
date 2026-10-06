@@ -315,7 +315,7 @@ export function AccountDialog({ mode, reason, port = sessionPort(), onModeChange
             {other === "forgot" ? (
               <>
                 <p style={styles.text} data-testid="account-forgot-explain">
-                  Paste the recovery key you saved when you created your account, and choose a new password. Every other device signed in to the account is signed out.
+                  Paste the recovery key you saved when you created your account, and choose a new password. Every other device signed in to the account is signed out, and your verified payout wallet is forgotten (your next real-money table asks Keplr to sign for it again).
                 </p>
                 <label style={styles.label} htmlFor="account-forgot-key">
                   Recovery key

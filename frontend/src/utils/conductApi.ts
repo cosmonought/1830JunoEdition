@@ -24,14 +24,15 @@ export function reportPlayerOp(playerId: string, category: ConductReportCategory
   return { type: "report-player", playerId, category, ...(trimmed === "" ? {} : { note: trimmed }) };
 }
 
-/** What the server said to a report: received (new or already), or its refusal sentence. */
-export type ReportOutcome = { readonly ok: true; readonly received: "new" | "already"; readonly message: string } | { readonly ok: false; readonly code: string; readonly reason: string };
+/** What the server said to a report: received (new, already, or capped -- this reporter's own reports about it have
+ *  reached the bound), or its refusal sentence. */
+export type ReportOutcome = { readonly ok: true; readonly received: "new" | "already" | "capped"; readonly message: string } | { readonly ok: false; readonly code: string; readonly reason: string };
 
 export function reportOutcomeOf(answer: { ok: true; data: Record<string, unknown> } | { ok: false; code: string; reason: string }): ReportOutcome {
   if (!answer.ok) return { ok: false, code: answer.code, reason: answer.reason };
   const received = answer.data.received;
   const message = typeof answer.data.message === "string" ? answer.data.message : "Your report was sent to the operator for review.";
-  return { ok: true, received: received === "already" ? "already" : "new", message };
+  return { ok: true, received: received === "already" || received === "capped" ? received : "new", message };
 }
 
 
@@ -96,7 +97,8 @@ export interface CaseEvidence {
 export interface ReReportView {
   readonly at: number;
   readonly note: string | null;
-  readonly log: { readonly entries: number; readonly hash: string | null };
+  /** `captured: false`: the game's log could not be read into this addition (a held game) -- its counts are not zeros. */
+  readonly log: { readonly captured: boolean; readonly entries: number; readonly hash: string | null };
   readonly counts: { readonly reporter: OfferCounts; readonly reported: OfferCounts };
   readonly chat: ReadonlyArray<{ readonly id: string; readonly at: number; readonly by: "reporter" | "reported"; readonly text: string }>;
 }
@@ -174,7 +176,7 @@ function reReportOf(raw: unknown): ReReportView | null {
   const reporter = countsOf(raw.counts.reporter);
   const reported = countsOf(raw.counts.reported);
   if (reporter === null || reported === null) return null;
-  return { at: raw.at, note: raw.note as string | null, log: { entries: raw.log.entries, hash: hashOf(raw.log.hash) }, counts: { reporter, reported }, chat: chatOf(raw.chat) };
+  return { at: raw.at, note: raw.note as string | null, log: { captured: raw.log.captured !== false, entries: raw.log.entries, hash: hashOf(raw.log.hash) }, counts: { reporter, reported }, chat: chatOf(raw.chat) };
 }
 
 function evidenceOf(raw: unknown): CaseEvidence | null {

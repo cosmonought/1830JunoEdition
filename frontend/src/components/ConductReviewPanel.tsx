@@ -329,8 +329,14 @@ function CaseDetail({ view, port, onDecided, onReload }: { view: CaseView; port:
           <ol style={plainList} data-testid="conduct-case-rereports">
             {view.rereports.map((entry, at) => (
               <li key={at}>
-                {when(entry.at)} · log at {entry.log.entries} entries
-                {entry.log.hash !== null ? <span style={mono}> · {entry.log.hash.slice(0, 16)}…</span> : null} · {view.reported.nickname}: {entry.counts.reported.offers} offers, {entry.counts.reported.rescinded} withdrawn, {entry.counts.reported.passes} passes, {entry.counts.reported.actions} actions in all
+                {entry.log.captured ? (
+                  <>
+                    {when(entry.at)} · log at {entry.log.entries} entries
+                    {entry.log.hash !== null ? <span style={mono}> · {entry.log.hash.slice(0, 16)}…</span> : null} · {view.reported.nickname}: {entry.counts.reported.offers} offers, {entry.counts.reported.rescinded} withdrawn, {entry.counts.reported.passes} passes, {entry.counts.reported.actions} actions in all
+                  </>
+                ) : (
+                  <>{when(entry.at)} · the game's log was not captured for this report (the game could not be read then), so it has no counts</>
+                )}
                 {entry.note !== null ? <div style={styles.text}>{entry.note}</div> : null}
                 {entry.chat.length > 0 ? (
                   <ul style={plainList}>

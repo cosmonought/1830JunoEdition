@@ -65,9 +65,16 @@ export const MAX_REVIEW_EVENTS = 64;
 /** How many times the same reporter may add to an ACTIVE case about the same account and category ("it is still
  *  happening"); each addition is charged to the reporter's budget and carries a fresh log pointer and counts. */
 export const MAX_REREPORTS = 8;
+/** How many reports ONE reporter may have recorded about one account in one category at one table, across every case
+ *  of the sequence (the first report and every addition count; an "already received" repeat records nothing). The cap
+ *  depends only on the reporter's own reports -- never on whether a reviewer has opened, closed or reopened anything --
+ *  so reaching it tells the reporter nothing about the review. A report past it is answered so, charged like any other,
+ *  and recorded in the operations audit (`conduct.report-capped`); the reports already kept stay with the operator. */
+export const MAX_REPORTS_PER_SUBJECT = 1 + MAX_REREPORTS;
 /** How many SUCCESSIVE cases one (game, reporter, reported account, category) may have: a report after the previous case
- *  was closed opens the next one, fresh evidence and all. */
-export const MAX_CASE_SEQUENCE = 4;
+ *  was closed (or once the active one cannot take another addition) opens the next one, fresh evidence and all. Every
+ *  case holds at least one report, so the sequence can never run out before `MAX_REPORTS_PER_SUBJECT` does. */
+export const MAX_CASE_SEQUENCE = MAX_REPORTS_PER_SUBJECT;
 /** A repeat of an active case is recorded only once the log has moved on, or this long after the last report. */
 export const REREPORT_QUIET_MS = 10 * 60_000;
 /** How many of the parties' chat lines a re-report copies (those newer than the case's last report). */
@@ -452,9 +459,19 @@ export const lastReportEntries = (value: ConductCase): number => (value.rereport
 export const isCaseParty = (value: ConductCase, principalId: string): boolean =>
   principalId === value.reporter.principal_id || principalId === value.reported.principal_id || value.table_principals.includes(principalId);
 
-/** Whether a repeat of the latest report is the SAME report (nothing has moved on): the log is no longer and the quiet
- *  window has not passed. Judged against the latest case of the sequence, whatever its status. */
-export const isQuietRepeat = (latest: ConductCase, entries: number, at: number): boolean => entries <= lastReportEntries(latest) && at - lastReportAt(latest) < REREPORT_QUIET_MS;
+/** How many reports a case holds (its first, and every addition). */
+export const reportsIn = (value: ConductCase): number => 1 + value.rereports.length;
+
+/** Whether either party has said anything in the table's chat since the case's latest report (harassment is mostly
+ *  chat, which never lengthens the game log). `null` chat (not readable): nothing is known to be new. */
+export const partyChattedSince = (value: ConductCase, chat: readonly RoomChatEntry[] | null): boolean =>
+  chat !== null && chat.some((line) => (line.author === value.reporter.player_id || line.author === value.reported.player_id) && typeof line.at === "number" && line.at > lastReportAt(value));
+
+/** Whether a repeat of the latest report is the SAME report (nothing has moved on): the log is no longer, neither party
+ *  has chatted since, and the quiet window has not passed. Judged against the latest case of the sequence, whatever its
+ *  status. */
+export const isQuietRepeat = (latest: ConductCase, entries: number, at: number, chat: readonly RoomChatEntry[] | null = null): boolean =>
+  entries <= lastReportEntries(latest) && at - lastReportAt(latest) < REREPORT_QUIET_MS && !partyChattedSince(latest, chat);
 
 /** The same reporter adds to an ACTIVE case (the caller has checked it is active and charged the budget). The case's
  *  serialized bound is kept: the addition's chat is trimmed to fit, and an addition that cannot fit is `full`. */
@@ -464,7 +481,7 @@ export function addReReport(
 ): { readonly next: ConductCase } | { readonly code: "full" | "quiet" } {
   if (current.rereports.length >= MAX_REREPORTS) return { code: "full" };
   const pointer = logPointerOf(input.entries);
-  if (isQuietRepeat(current, pointer.entries, input.at)) return { code: "quiet" };
+  if (isQuietRepeat(current, pointer.entries, input.at, input.chat)) return { code: "quiet" };
   const counts = partyCounts([...input.entries].sort((left, right) => left.index - right.index), current.reporter.player_id, current.reported.player_id);
   let chat = input.chat === null ? [] : partyChat(input.chat, current.reporter, current.reported, REREPORT_CHAT_LIMIT, lastReportAt(current));
   const principals = [...new Set([...current.table_principals, ...input.seatPrincipals])].slice(0, MAX_TABLE_PRINCIPALS);

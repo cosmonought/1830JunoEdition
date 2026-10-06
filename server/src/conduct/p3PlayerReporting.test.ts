@@ -45,7 +45,10 @@ import {
   until,
   type Frame,
 } from "../rooms/testSupport";
-import { accountFingerprint, conductCaseId, decideCase, deriveEvidence, verifyLogPointer, type ConductCase } from "./conductCase";
+import { accountFingerprint, conductCaseId, decideCase, deriveEvidence, MAX_REPORTS_PER_SUBJECT, serializeConductCase, verifyLogPointer, type ConductCase } from "./conductCase";
+import { createConductService, REPORT_SENTENCES } from "./conductService";
+import { createMemoryOpsRecorder } from "../persistence/opsRecorder";
+import type { RoomChatEntry } from "../../../frontend/src/utils/roomProtocol";
 import { createFileConductCaseStore, createMemoryConductCaseStore, type ConductCaseStore } from "./conductStore";
 import { conductReviewersFromEnv } from "./conductHttpApi";
 import { readStoredLogForReview } from "./conductLogReader";
@@ -693,6 +696,129 @@ describe("P3-N032 C: the evidence, the configuration and the boundary", () => {
     const light = deriveEvidence({ record, facts: NO_FACTS, entries: [entry(0, "server", "SetupGame"), entry(1, B.player_id, "ProposePrivateTrade"), entry(2, A.player_id, "AnswerPrivateTrade", { accept: false })], reporter: A, reported: B, chat: null, money: null, clock: null, build: "t", now: 9 });
     assert.deepEqual([light.counts.reported.offers, light.counts.reporter.declined], [1, 1]);
     assert.equal(Object.keys(heavy).includes("verdict") || Object.keys(heavy).includes("score"), false, "the evidence carries no verdict or score");
+  });
+
+  test("caps, budget and races (service): every non-repeat is charged first; the cap counts only the reporter's own reports, whatever a reviewer did; new chat is 'moved on'; a two-tab addition is 'already'", async () => {
+    const seat = (who: typeof A) => ({ player_id: who.player_id, principal_id: who.principal_id, binding_epoch: 0, joined_at: who.joined_at, bound_at: who.joined_at, ready: true, nickname: who.nickname, color: null, payout_address: null, chain_seat_index: null });
+    const seated = { ...(record as object), seats: [seat(A), seat(B)] } as never;
+    let clock = 1_000_000;
+    const ops = createMemoryOpsRecorder();
+    const fresh = (budget = { capacity: 100, refillPerSecond: 0 }) => {
+      const store = createMemoryConductCaseStore();
+      const service = createConductService({ store, build: "t", now: () => clock, warn: () => undefined, ops, reporterBudget: budget });
+      return { store, service };
+    };
+    const log: ServerLogEntry[] = [entry(0, "server", "SetupGame")];
+    const send = (service: ReturnType<typeof fresh>["service"], over: { chat?: RoomChatEntry[] | null; note?: string } = {}) =>
+      service.report({ record: seated, facts: NO_FACTS, entries: [...log], reporterPrincipalId: A.principal_id, reportedPlayerId: B.player_id, category: "harassment", note: over.note ?? null, chat: over.chat ?? [], money: null });
+    const grow = () => log.push(entry(log.length, B.player_id, "PassTurn"));
+
+    /* The cap counts the reporter's OWN recorded reports: nine, whether the case stayed open or a reviewer closed it after every report. */
+    for (const closeEach of [false, true]) {
+      const { store, service } = fresh();
+      for (let n = 0; n < MAX_REPORTS_PER_SUBJECT; n += 1) {
+        grow();
+        const answer = await send(service);
+        assert.equal(answer.ok && answer.received, "new", `report ${n + 1} (${closeEach ? "closed after each" : "left open"}): ${JSON.stringify(answer)}`);
+        if (closeEach) {
+          for (const value of await allCases(store)) {
+            if (value.status !== "open") continue;
+            const closed = decideCase(value, { expectedRevision: value.revision, to: "no-violation", note: null, reviewerPrincipalId: "pr_r", now: clock });
+            if (!("next" in closed)) throw new Error(closed.reason);
+            assert.equal((await store.save(closed.next, value.revision)).kind, "committed");
+          }
+        }
+      }
+      const kept = await allCases(store);
+      assert.equal(kept.reduce((sum, value) => sum + 1 + value.rereports.length, 0), MAX_REPORTS_PER_SUBJECT);
+      assert.equal(kept.length, closeEach ? MAX_REPORTS_PER_SUBJECT : 1);
+      grow();
+      const audited = ops.lines.length;
+      const past = await send(service);
+      assert.deepEqual(past, { ok: true, received: "capped", message: REPORT_SENTENCES.capped }, "the same answer either way: nothing about the review");
+      assert.equal(ops.lines.slice(audited).some((line) => line.event === "conduct.report-capped"), true, "a capped report is recorded in the audit");
+      assert.equal((await allCases(store)).length, kept.length);
+    }
+
+    /* The budget is spent BEFORE the cap or any write: a capped report costs a token like any other (no free probe). */
+    {
+      const { service } = fresh({ capacity: MAX_REPORTS_PER_SUBJECT + 1, refillPerSecond: 0 });
+      for (let n = 0; n <= MAX_REPORTS_PER_SUBJECT; n += 1) {
+        grow();
+        assert.equal((await send(service)).ok, true);
+      }
+      grow();
+      const refused = await send(service);
+      assert.equal(!refused.ok && refused.code, "rate-limited", "the capped report took the last token");
+    }
+
+    /* New chat from either party since the last report is "moved on" (harassment rarely grows the log). */
+    {
+      const { store, service } = fresh();
+      assert.equal((await send(service)).ok, true);
+      const quiet = await send(service);
+      assert.equal(quiet.ok && quiet.received, "already");
+      clock += 1_000;
+      const chat: RoomChatEntry[] = [{ id: "c1", author: B.player_id, displayName: "B", text: "abusive line", at: clock }];
+      const moved = await send(service, { chat });
+      assert.equal(moved.ok && moved.received, "new");
+      const [only] = await allCases(store);
+      assert.deepEqual(only.rereports[0].chat.map((line) => line.text), ["abusive line"]);
+      assert.equal(((await send(service, { chat })) as { received?: string }).received, "already", "the same chat again is nothing new");
+    }
+
+    /* Two tabs add the same report on the same revision: the second save is refused, the case read again, and the answer is "already". */
+    {
+      const { store, service } = fresh();
+      assert.equal((await send(service)).ok, true);
+      grow();
+      const [one, two] = await Promise.all([send(service), send(service)]);
+      assert.deepEqual([one, two].map((answer) => (answer.ok ? answer.received : answer.code)).sort(), ["already", "new"]);
+      assert.equal((await allCases(store))[0].rereports.length, 1);
+    }
+
+    /* An addition the case cannot hold (its byte bound) opens the next case of the sequence -- never a silent drop. */
+    {
+      const { store, service } = fresh();
+      assert.equal((await send(service)).ok, true);
+      const [first] = await allCases(store);
+      /* Fill the case to within a few bytes of its bound with (valid) chat lines of three-byte characters. */
+      const line = (n: number, k = 600) => ({ id: `l${n}`, at: clock, by: "reported" as const, text: "\u20ac".repeat(k) });
+      let stuffed: ConductCase = { ...first, evidence: { ...first.evidence, chat: { lines: Array.from({ length: 40 }, (_, n) => line(n)) } } };
+      const withLast = (base: ConductCase, lines: ReturnType<typeof line>[]): ConductCase => {
+        const rereports = [...base.rereports.slice(0, -1), { ...base.rereports[base.rereports.length - 1], chat: lines }];
+        return { ...base, rereports };
+      };
+      for (let r = 0; r < 6; r += 1) {
+        const next: ConductCase = { ...stuffed, revision: stuffed.revision + 1, rereports: [...stuffed.rereports, { at: clock, note: null, log: { captured: true, entries: 1, hash: null }, counts: first.evidence.counts, chat: [] }] };
+        if (serializeConductCase(next) === null) break;
+        stuffed = next;
+        const lines: ReturnType<typeof line>[] = [];
+        for (let n = 0; n < 20; n += 1) {
+          if (serializeConductCase(withLast(stuffed, [...lines, line(n)])) === null) {
+            let lo = 0;
+            let hi = 600;
+            while (lo < hi) {
+              const mid = Math.ceil((lo + hi) / 2);
+              if (serializeConductCase(withLast(stuffed, [...lines, line(n, mid)])) === null) hi = mid - 1;
+              else lo = mid;
+            }
+            if (lo > 0) lines.push(line(n, lo));
+            break;
+          }
+          lines.push(line(n));
+        }
+        stuffed = withLast(stuffed, lines);
+        if (lines.length < 20) break;
+      }
+      assert.notEqual(serializeConductCase(stuffed), null, "the stuffed case still fits on its own");
+      store.cases.set(first.case_id, stuffed);
+      grow();
+      const answer = await send(service, { note: "\u20ac".repeat(MAX_REPORT_NOTE_LENGTH) });
+      assert.equal(answer.ok && answer.received, "new");
+      const cases = await allCases(store);
+      assert.deepEqual(cases.map((value) => value.seq).sort(), [0, 1], "a second case, both active");
+    }
   });
 
   test("the log pointer: verified on the same prefix (and after the log grows), refused when the history differs or is shorter", () => {

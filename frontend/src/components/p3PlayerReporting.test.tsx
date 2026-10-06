@@ -24,7 +24,7 @@ import { ProfileMenu } from "./ProfileMenu";
 import { ModalLayerHost } from "./ModalPortal";
 import type { RoomView } from "../utils/roomProtocol";
 import { checkConductNote, CONDUCT_CATEGORY_LABELS, CONDUCT_TRANSITIONS, MAX_REPORT_NOTE_LENGTH } from "../utils/conductReport";
-import { caseSummaryOf, caseViewOf, reportPlayerOp, type ReportPlayerBody } from "../utils/conductApi";
+import { caseSummaryOf, caseViewOf, reportOutcomeOf, reportPlayerOp, type ReportPlayerBody } from "../utils/conductApi";
 import { parseClientFrame } from "../gameEngine/messageSchema";
 import { httpSessionPort } from "../utils/sessionBootstrap";
 
@@ -186,6 +186,10 @@ describe("P3-N032 the Report control", () => {
     await flush();
     expect(byId("report-player-received")?.textContent).toBe("Already received.");
   });
+
+  test("past the bound on the reporter's own reports the answer says so, in the server's words", () => {
+    expect(reportOutcomeOf({ ok: true, data: { received: "capped", message: "You have reported this player for this several times in this game." } })).toEqual({ ok: true, received: "capped", message: "You have reported this player for this several times in this game." });
+  });
 });
 
 /* ==================================================================
@@ -297,6 +301,7 @@ describe("P3-N032 the review panel", () => {
     expect(caseSummaryOf(summary({ reporter: party("p-aaaaaaaaaaaaaaaa", "Ann", "pr_0123456789") }))).toBeNull();
     expect(caseSummaryOf(summary({ caseId: "../etc" }))).toBeNull();
     expect(caseViewOf(caseBody({ rereports: [{ at: 1, note: "again", log: { entries: 15, hash: "e".repeat(64) }, counts: { reporter: counts, reported: counts }, chat: [] }] }))?.rereports.length).toBe(1);
+    expect(caseViewOf(caseBody({ rereports: [{ at: 1, note: null, log: { captured: false, entries: 0, hash: null }, counts: { reporter: counts, reported: counts }, chat: [] }] }))?.rereports[0].log.captured).toBe(false);
     expect(caseViewOf(caseBody({ rereports: [{ at: 1, note: "again" }] }))).toBeNull();
     const view = caseViewOf(caseBody());
     expect(view).not.toBeNull();

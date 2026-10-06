@@ -8,8 +8,8 @@
 // seat at this table -- `report` row): the reported seat must be ANOTHER seat of the same GameRecord; the category is
 // from the closed list; the note passes the one sanitizer or the report is refused (never truncated). The case id is
 // derived (`conductCaseId`): the same report again is the same case, answered "already received" -- whatever tab, retry
-// or race sent it -- and costs nothing. A NEW case spends one token of the reporter's own budget (per account: a burst,
-// then a slow refill), so a flood from one account is refused while every other account's reports are untouched: there
+// or race sent it -- and costs nothing. Any other report spends one token of the reporter's own budget (per account: a
+// burst, then a slow refill), taken before anything is hashed or written, so a flood from one account is refused while every other account's reports are untouched: there
 // is no shared, global budget an attacker could exhaust. The store's three outcomes are answered honestly: committed
 // ("received"), definite ("not saved; try again"), uncertain ("could not confirm; a repeat is never counted twice").
 //
@@ -53,6 +53,8 @@ import {
   isQuietRepeat,
   lastReportAt,
   MAX_CASE_SEQUENCE,
+  MAX_REPORTS_PER_SUBJECT,
+  reportsIn,
   newConductCase,
   verifyLogPointer,
   type ConductCase,
@@ -67,6 +69,7 @@ export const DEFAULT_REPORTER_BUDGET: BucketSpec = Object.freeze({ capacity: 3, 
 
 export const REPORT_SENTENCES = Object.freeze({
   received: "Your report is with the operator for review, with the game's record as it is now. It does not change the game, any money or anyone's profile.",
+  capped: "You have reported this player for this several times in this game, and the operator has those reports. Further reports about it in this game are not added. It does not change the game, any money or anyone's profile.",
   already: "You reported this player for this a moment ago, and nothing new has happened in the game since. That report is with the operator.",
   unconfirmed: "Your earlier report about this player could not be confirmed just now. Try again later.",
   self: "You cannot report yourself.",
@@ -81,8 +84,9 @@ export const REPORT_SENTENCES = Object.freeze({
 
 export type ReportAnswer =
   /* "new": recorded (a new case or an addition to the open one -- never told apart, so a reporter cannot tell whether a
-     reviewer has closed anything); "already": the same report a moment ago. */
-  | { readonly ok: true; readonly received: "new" | "already"; readonly message: string }
+     reviewer has closed anything); "already": the same report a moment ago; "capped": this reporter's own reports about
+     this have reached `MAX_REPORTS_PER_SUBJECT` (nothing new recorded in the case; the drop is audited). */
+  | { readonly ok: true; readonly received: "new" | "already" | "capped"; readonly message: string }
   | { readonly ok: false; readonly code: string; readonly reason: string; readonly retryAfterMs?: number };
 
 export interface ReportInput {
@@ -302,14 +306,15 @@ export function createConductService(deps: ConductServiceDeps): ConductService {
     };
   }
 
-  /** The case a new report from this reporter about this account in this category lands in, by sequence. */
-  async function standingCase(
+  /** Every case of one (game, reporter, reported account, category) sequence, in order, and the first free sequence
+   *  number (`null`: none left). At most `MAX_CASE_SEQUENCE` reads; an unreadable case stops the report. */
+  async function sequenceOf(
     gameId: string,
     reporterPrincipalId: string,
     reportedPrincipalId: string,
     category: ConductReportCategory,
-  ): Promise<{ readonly kind: "active"; readonly value: ConductCase } | { readonly kind: "free"; readonly seq: number; readonly latest: ConductCase | null } | { readonly kind: "exhausted"; readonly latest: ConductCase } | { readonly kind: "unreadable" }> {
-    let latest: ConductCase | null = null;
+  ): Promise<{ readonly kind: "read"; readonly cases: readonly ConductCase[]; readonly free: number | null } | { readonly kind: "unreadable" }> {
+    const cases: ConductCase[] = [];
     for (let seq = 0; seq < MAX_CASE_SEQUENCE; seq += 1) {
       let value: ConductCase | null;
       try {
@@ -318,13 +323,15 @@ export function createConductService(deps: ConductServiceDeps): ConductService {
         if (error instanceof ConductCaseUnreadableError) return { kind: "unreadable" };
         throw error;
       }
-      if (value === null) return { kind: "free", seq, latest };
-      if (isConductCaseActive(value.status)) return { kind: "active", value };
-      /* Closed: a report now is a new matter -- the next case in the sequence. */
-      latest = value;
+      if (value === null) return { kind: "read", cases, free: seq };
+      cases.push(value);
     }
-    return { kind: "exhausted", latest: latest as ConductCase };
+    return { kind: "read", cases, free: null };
   }
+
+  /** The most recently reported of `cases` (a later sequence number wins a tie). */
+  const mostRecent = (cases: readonly ConductCase[]): ConductCase | null =>
+    cases.reduce<ConductCase | null>((best, value) => (best === null || lastReportAt(value) >= lastReportAt(best) ? value : best), null);
 
   return {
     enabled: store !== null,
@@ -344,28 +351,44 @@ export function createConductService(deps: ConductServiceDeps): ConductService {
       if (!note.ok) return { ok: false, code: "bad-note", reason: REPORT_SENTENCES.note };
       const category = input.category;
 
-      /* Which case this report lands in -- read before any budget is spent or any evidence is derived. */
-      let standing: Awaited<ReturnType<typeof standingCase>>;
+      /* The sequence this report belongs to -- read before any budget is spent or any evidence is derived. */
+      let sequence: Awaited<ReturnType<typeof sequenceOf>>;
       try {
-        standing = await standingCase(record.game_id, reporterSeat.principal_id, reportedSeat.principal_id, category);
+        sequence = await sequenceOf(record.game_id, reporterSeat.principal_id, reportedSeat.principal_id, category);
       } catch (error) {
         deps.warn(`  conduct: could not read the cases of a report -- ${error instanceof Error ? error.message.slice(0, 200) : String(error)}`);
         return { ok: false, code: "unavailable", reason: REPORT_SENTENCES.unavailable };
       }
-      if (standing.kind === "unreadable") return { ok: false, code: "unavailable", reason: REPORT_SENTENCES.unconfirmed };
+      if (sequence.kind === "unreadable") return { ok: false, code: "unavailable", reason: REPORT_SENTENCES.unconfirmed };
       const now = deps.now();
-      /* THE REPORTER LEARNS NOTHING ABOUT THE REVIEW. Whether the case is open or a reviewer has closed it, the answers
-         are the same: "already" when nothing has moved on since this reporter's latest report about this account and
-         category (judged against the latest case of the sequence, whatever its status), otherwise "received" -- a new
-         case, an addition to the open one, or (past the bounds) nothing new recorded: one sentence for all three. */
-      const latest = standing.kind === "active" ? standing.value : standing.latest;
-      if (latest !== null && isQuietRepeat(latest, input.entries.length, now)) return { ok: true, received: "already", message: REPORT_SENTENCES.already };
-      if (standing.kind === "exhausted") return { ok: true, received: "new", message: REPORT_SENTENCES.received };
+      const cases = sequence.cases;
+      /* THE REPORTER LEARNS NOTHING ABOUT THE REVIEW. Every answer below depends only on this reporter's own reports and
+         on the game they can see -- never on whether a reviewer has opened, closed or reopened a case:
+           - "already": nothing has moved on (log, chat, time) since this reporter's latest report about this account and
+             category -- judged against the most recent case of the sequence, whatever its status. Free.
+           - otherwise ONE budget token is spent, before anything else is read, hashed or written (every recorded report
+             and every capped one costs the same, so the budget cannot tell an open case from a closed one); it is given
+             back only when nothing was written;
+           - "capped": the reporter has already had `MAX_REPORTS_PER_SUBJECT` reports recorded about this (a count of
+             their OWN reports); said plainly, and recorded in the operations audit so the operator sees reports kept
+             coming;
+           - "received": a new case, or an addition to the active one -- one sentence for both. */
+      const latest = mostRecent(cases);
+      if (latest !== null && isQuietRepeat(latest, input.entries.length, now, input.chat)) return { ok: true, received: "already", message: REPORT_SENTENCES.already };
+      const wait = budget.take(reporterSeat.principal_id);
+      if (wait > 0) return { ok: false, code: "rate-limited", reason: REPORT_SENTENCES.budget, retryAfterMs: wait };
+      const recorded = cases.reduce((sum, value) => sum + reportsIn(value), 0);
+      const capped = (): ReportAnswer => {
+        deps.ops?.audit("conduct.report-capped", { case_id: (latest as ConductCase).case_id, game_id: record.game_id, category, reports: recorded });
+        return { ok: true, received: "capped", message: REPORT_SENTENCES.capped };
+      };
+      if (recorded >= MAX_REPORTS_PER_SUBJECT) return capped();
 
-      if (standing.kind === "active") {
-        /* The same report again while the case is active, and something has moved on (the log, or time): ADDED to it,
-           charged like a new report. */
-        const probe = addReReport(standing.value, {
+      const active = mostRecent(cases.filter((value) => isConductCaseActive(value.status)));
+      if (active !== null) {
+        /* Something has moved on and a case is active: the report is ADDED to it. An addition the case cannot hold (its
+           serialized bound) opens the next case of the sequence instead, below -- never a silent drop. */
+        const probe = addReReport(active, {
           at: now,
           note: note.note,
           entries: input.entries,
@@ -373,26 +396,40 @@ export function createConductService(deps: ConductServiceDeps): ConductService {
           chat: input.chat,
           seatPrincipals: record.seats.map((seat) => seat.principal_id),
         });
-        if (!("next" in probe)) return probe.code === "quiet" ? { ok: true, received: "already", message: REPORT_SENTENCES.already } : { ok: true, received: "new", message: REPORT_SENTENCES.received };
-        const wait = budget.take(reporterSeat.principal_id);
-        if (wait > 0) return { ok: false, code: "rate-limited", reason: REPORT_SENTENCES.budget, retryAfterMs: wait };
-        const written = await store.save(probe.next, standing.value.revision);
-        if (written.kind === "committed") {
-          forget();
-          deps.ops?.audit("conduct.rereported", { case_id: standing.value.case_id, game_id: record.game_id, category, reports: probe.next.rereports.length + 1 });
-          return { ok: true, received: "new", message: REPORT_SENTENCES.received };
+        if ("next" in probe) {
+          const written = await store.save(probe.next, active.revision);
+          if (written.kind === "committed") {
+            forget();
+            deps.ops?.audit("conduct.rereported", { case_id: active.case_id, game_id: record.game_id, category, reports: reportsIn(probe.next) });
+            return { ok: true, received: "new", message: REPORT_SENTENCES.received };
+          }
+          budget.give(reporterSeat.principal_id);
+          if (written.kind === "definite") {
+            /* Most often the same report from another tab, landed a moment earlier (or a reviewer's decision): read the
+               case again once, and if it now holds this same report, say so. */
+            try {
+              const now2 = await store.load(active.case_id);
+              if (now2 !== null && isQuietRepeat(now2, input.entries.length, now, input.chat)) return { ok: true, received: "already", message: REPORT_SENTENCES.already };
+            } catch {
+              /* the refusal below stands */
+            }
+          }
+          deps.warn(`  conduct: an addition to case ${active.case_id} was not saved (${written.kind}) -- ${written.detail.slice(0, 200)}`);
+          return { ok: false, code: "unavailable", reason: written.kind === "uncertain" ? REPORT_SENTENCES.uncertain : REPORT_SENTENCES.notSaved };
         }
-        budget.give(reporterSeat.principal_id);
-        deps.warn(`  conduct: an addition to case ${standing.value.case_id} was not saved (${written.kind}) -- ${written.detail.slice(0, 200)}`);
-        return { ok: false, code: "unavailable", reason: written.kind === "uncertain" ? REPORT_SENTENCES.uncertain : REPORT_SENTENCES.notSaved };
+        if (probe.code === "quiet") {
+          budget.give(reporterSeat.principal_id);
+          return { ok: true, received: "already", message: REPORT_SENTENCES.already };
+        }
       }
+      /* Every case holds at least one report, so below the cap a free sequence number always remains. */
+      if (sequence.free === null) return capped();
+      const seq = sequence.free;
 
-      const wait = budget.take(reporterSeat.principal_id);
-      if (wait > 0) return { ok: false, code: "rate-limited", reason: REPORT_SENTENCES.budget, retryAfterMs: wait };
       const reporter = party(reporterSeat);
       const reported = party(reportedSeat);
       const evidence = deriveEvidence({ record, facts: input.facts, entries: input.entries, reporter, reported, chat: input.chat, money: input.money, clock: input.clock ?? null, build: deps.build, now, ...(input.unreadableHistory !== undefined ? { unreadableHistory: input.unreadableHistory } : {}) });
-      const value = newConductCase({ record, category, reporter, reported, note: note.note, evidence, now, seq: standing.seq });
+      const value = newConductCase({ record, category, reporter, reported, note: note.note, evidence, now, seq });
       const created = await store.create(value);
       if (created.outcome.kind === "committed" && created.existing === null && created.existingUnreadable !== true) {
         forget();

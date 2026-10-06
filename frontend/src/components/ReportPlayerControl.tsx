@@ -17,8 +17,9 @@
 // anyway: `roomAuthz` "report", and a visitor's socket never carries the frame). The wording is neutral and factual
 // (`conductReport.ts`), the note is short on purpose (the counter shows the bound; a longer note is refused, never cut),
 // and a second report of the same player for the same thing is never a second case: while the first is open it is added
-// to it (with the game's record as it is then) once the game has moved on, and otherwise answered "already received".
-// The reporter is never told which, nor anything about the review.
+// to it (with the game's record as it is then) once the game or its chat has moved on, and otherwise answered "already
+// received"; past a bound on the reporter's OWN reports about it, the answer says so. The reporter is never told which
+// case a report went to, nor anything about the review.
 
 import React, { useId, useState } from "react";
 
@@ -113,7 +114,7 @@ export function ReportPlayerDialog({ players, onReport, onClose }: ReportPlayerD
         {outcome !== null ? (
           <>
             <p style={styles.notice} role="status" data-testid="report-player-received">
-              {outcome.received === "already" ? "Already received." : "Report received."}
+              {outcome.received === "already" ? "Already received." : outcome.received === "capped" ? "Reports noted." : "Report received."}
             </p>
             <p style={styles.text}>{outcome.message}</p>
             <div style={styles.row}>

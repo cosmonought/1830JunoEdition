@@ -1,24 +1,26 @@
 // server/src/identity/live2eProfiles.test.ts
 //
 // ==================================================================
-//  LIVE-2E: MANDATORY PROFILES, AGAINST THE REAL SERVER
+//  LIVE-2E: MANDATORY PROFILES, AGAINST THE REAL SERVER (PHASE 3 FINAL: AUTHORIZATION WALLET ACCOUNTS)
 // ==================================================================
 //
 // A PROFILE (application identity, mandatory to play) controls exactly one durable PRINCIPAL, which any number of
 // SESSIONS (devices) authenticate, and which owns GameRecord seats. These suites drive `createGameServer` in production
 // mode over real HTTP and real WebSockets, with real cookies and an allowed Origin, as a browser does:
-//   - creation: the cleaned name, the recovery key (shown once, stored only as a digest), no id on the wire, and one
-//     profile per principal however many tabs press "Create" at once;
+//   - creation: the cleaned name, the account's ONE Authorization Wallet (no recovery key: a sealed digest), a FRESH
+//     session cookie, no id on the wire, and one profile per principal however many tabs press "Create" at once;
 //   - the unprofiled principal: bootstrap `profile: null`, the profiled actions 403 `profile-required`, and -- P3-ACCT
 //     (owner, 2026-10-05: public first) -- a PUBLIC, READ-ONLY socket (no longer an upgrade 403): the per-frame
 //     allow-list answers only the public reads and refuses everything else `profile-required`;
-//   - recovery and device linking: a fresh session for the SAME principal (so the same seats), the browser's temporary
-//     session `replaced`, one indistinguishable answer for every wrong credential, single-use and expiring codes;
+//   - "Forgot password?" by the Authorization Wallet: a fresh session for the SAME principal (so the same seats), the
+//     browser's temporary session `replaced`, every earlier session of the account ended, one indistinguishable answer
+//     for every wrong proof; a second device signs in with the username and password;
 //   - rotation, "sign out this device", "sign out other devices" -- and their sockets closing 4401;
 //   - persistence: a restart over the file store keeps all of it; a v1 file migrates; a half-bound profile refuses to
 //     load; an injected store failure changes nothing;
-//   - the redemption and creation budgets; nothing secret printed;
+//   - the recovery and creation budgets; nothing secret printed;
 //   - SEAT CONTINUITY: one seat across two devices, a sign-out, a restart and a recovery -- nothing copied or moved.
+// PHASE 3 FINAL retired the LIVE-2E recovery key and "Link another device" codes: their routes answer 410 `retired`.
 
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
@@ -41,8 +43,9 @@ import {
   apiRequest,
   bootstrapCookie,
   cookieFromAnswer,
-  cookieRead,
+  createAuthorization,
   devIdentity,
+  loginOnFreshBrowser,
   profiledBrowser,
   quietConsole,
   seededRecord,
@@ -52,30 +55,27 @@ import {
   stopServer,
   until,
   type ApiAnswer,
+  type ProfiledBrowser,
 } from "../rooms/testSupport";
+import { TEST_PASSWORD_KDF } from "../escrow/escrow4Support";
+import { keplrAccount, type KeplrAccount } from "../testSupport/authorizationWallets";
 import type { ServerLogEntry } from "../../../frontend/src/utils/roomSession";
+import { hashPassword, sealedRecoveryDigest } from "./accountCredentials";
 import { decideUpgrade, type UpgradeGate } from "./authenticateUpgrade";
 import { readSessionCookie } from "./cookies";
 import { createFileIdentityStore, IDENTITY_FILE, IDENTITY_FILE_VERSION } from "./fileStore";
-import {
-  canonicalLinkCode,
-  linkCodeHash,
-  mintPrincipalId,
-  mintProfileId,
-  mintRecoverySelector,
-  mintSecret,
-  mintSessionId,
-  RECOVERY_KEY_PATTERN,
-  secretHash,
-} from "./ids";
+import { linkCodeHash, mintPrincipalId, mintProfileId, mintRecoverySelector, mintSecret, mintSessionId, secretHash } from "./ids";
 import { IdentityLimiter } from "./limiter";
 import { IdentityService } from "./sessions";
-import { createMemoryIdentityStore, IdentityStoreCorruptError, type MemoryIdentityStore } from "./store";
+import { createMemoryIdentityStore, IdentityStoreCorruptError, type MemoryIdentityStore, type Profile } from "./store";
 
 quietConsole();
 
 const DAY = 24 * 60 * 60 * 1000;
-const LINK_CODE_DISPLAY = /^[0-9A-HJKMNP-TV-Z]{4}(-[0-9A-HJKMNP-TV-Z]{4}){4}$/;
+/** `profiledBrowser`'s password, and the ones a recovery or a change sets. */
+const PASSWORD = "correct horse battery";
+const NEW_PASSWORD = "a brand new passphrase";
+const POLICY = { passwordKdf: TEST_PASSWORD_KDF };
 
 /* ==================================================================
     FIXTURES
@@ -86,13 +86,14 @@ interface Clock {
 }
 
 /** A production server: cookies, `/gs`, the allowed Origin, and a clock the test may step. Every identity budget is
- *  wide (testSupport's roomy limits) unless `limits` narrows one. */
+ *  wide (testSupport's roomy limits) unless `limits` narrows one. The identity uses the cheap test KDF. */
 async function prodServer(
   over: { clock?: Clock; service?: IdentityService; limits?: Partial<IdentityLimits>; rooms?: Partial<RoomLimits>; records?: RecordStore; store?: LogStore } = {},
 ) {
   const clock = over.clock ?? { now: Date.now() };
+  const service = over.service ?? IdentityService.fromSnapshot(createMemoryIdentityStore(), { principals: [], sessions: [] }, { policy: POLICY });
   const started = await startServer({
-    identity: { mode: "production", allowedOrigins: [PROD_ORIGIN], trustedProxyHops: 0, now: () => clock.now, ...(over.service ? { service: over.service } : {}) },
+    identity: { mode: "production", allowedOrigins: [PROD_ORIGIN], trustedProxyHops: 0, now: () => clock.now, service },
     ...(over.records ? { records: over.records } : {}),
     ...(over.store ? { store: over.store } : {}),
     limits: { identity: { ...(over.limits ?? {}) }, rooms: { ...(over.rooms ?? {}) } },
@@ -103,41 +104,70 @@ async function prodServer(
 /** An in-memory identity service whose store the test can read and fail. */
 function memoryService(): { service: IdentityService; store: MemoryIdentityStore } {
   const store = createMemoryIdentityStore();
-  return { store, service: IdentityService.fromSnapshot(store, { principals: [], sessions: [] }) };
+  return { store, service: IdentityService.fromSnapshot(store, { principals: [], sessions: [] }, { policy: POLICY }) };
 }
 
 const post = (port: number, pathname: string, cookie?: string, body: object = {}) => apiRequest(port, pathname, { cookie, body });
 const session = (port: number, cookie?: string, body: object = {}) => post(port, "/gs/api/session", cookie, body);
-const createProfile = (port: number, cookie: string | undefined, name: unknown) => post(port, "/gs/api/profile", cookie, { name });
-const recover = (port: number, cookie: string | undefined, recoveryKey: string) => post(port, "/gs/api/profile/recover", cookie, { recoveryKey });
-const redeem = (port: number, cookie: string | undefined, code: string) => post(port, "/gs/api/profile/link", cookie, { code });
-const linkCode = (port: number, cookie: string) => post(port, "/gs/api/profile/link-code", cookie);
-/* ESCROW-3A (brief §10B): rotating the key and signing out other devices are SENSITIVE -- they need a recent
-   re-authentication of the same session with the profile's recovery key. There is no time-window exemption (the
-   lost-create-response rescue needs the creating page's receipt: escrow3aIdentity E). `key`, when given, re-authenticates
-   first. */
-const reauth = (port: number, cookie: string, recoveryKey: string) => post(port, "/gs/api/profile/reauth", cookie, { recoveryKey });
-const rotateKey = async (port: number, cookie: string, key?: string) => {
-  if (key !== undefined) assert.equal((await reauth(port, cookie, key)).status, 200, "re-authenticated");
-  return post(port, "/gs/api/profile/recovery-key", cookie);
-};
-const signOutOthers = async (port: number, cookie: string, key?: string) => {
-  if (key !== undefined) assert.equal((await reauth(port, cookie, key)).status, 200, "re-authenticated");
+const login = (port: number, cookie: string, username: string, password: string) => post(port, "/gs/api/account/login", cookie, { username, password });
+const changePassword = (port: number, cookie: string, currentPassword: string, newPassword: string) => post(port, "/gs/api/account/password", cookie, { currentPassword, newPassword });
+/* ESCROW-3A (brief §10B): signing out other devices is SENSITIVE -- a recent sign-in, or "Confirm it's you" with the
+   account's PASSWORD (PHASE 3 FINAL: no recovery key exists). `password`, when given, confirms first. */
+const reauth = (port: number, cookie: string, password: string) => post(port, "/gs/api/profile/reauth", cookie, { password });
+const signOutOthers = async (port: number, cookie: string, password?: string) => {
+  if (password !== undefined) assert.equal((await reauth(port, cookie, password)).status, 200, "re-authenticated");
   return post(port, "/gs/api/profile/sign-out-others", cookie);
 };
 const signOut = (port: number, cookie: string) => post(port, "/gs/api/session/revoke", cookie);
 
-/** A fresh browser redeems a credential; its new cookie on success. */
-async function recoverOnFreshBrowser(port: number, recoveryKey: string): Promise<{ answer: ApiAnswer; before: string; cookie: string | null }> {
-  const before = await bootstrapCookie(port);
-  const answer = await recover(port, before, recoveryKey);
-  return { answer, before, cookie: answer.status === 200 ? cookieFromAnswer(answer) : null };
+/** Create an account on this browser: the CREATE text for the username, signed by `wallet`, then the create. */
+async function createAccount(port: number, cookie: string, input: { username: string; password?: string; name: unknown; wallet: KeplrAccount }): Promise<ApiAnswer> {
+  const proof = await createAuthorization(port, cookie, input.username, input.wallet);
+  return post(port, "/gs/api/account/create", cookie, { username: input.username, password: input.password ?? PASSWORD, name: input.name, ...proof });
 }
-async function linkOnFreshBrowser(port: number, code: string): Promise<{ answer: ApiAnswer; before: string; cookie: string | null }> {
-  const before = await bootstrapCookie(port);
-  const answer = await redeem(port, before, code);
-  return { answer, before, cookie: answer.status === 200 ? cookieFromAnswer(answer) : null };
+
+/** "Forgot password?" on this browser: the RECOVER text for (username, wallet), signed by `signer` (normally the wallet
+ *  itself) -- or by `forge` -- then the recovery. A refused mint is answered as it came. */
+async function recover(
+  port: number,
+  cookie: string,
+  input: { username: string; wallet: KeplrAccount; signer?: KeplrAccount; forge?: (text: string) => { pubKey: string; signature: string }; newPassword?: string },
+): Promise<ApiAnswer & { signed?: { pubKey: string; signature: string } }> {
+  const minted = await post(port, "/gs/api/account/authorization", cookie, { purpose: "recover", username: input.username, wallet: input.wallet.address });
+  if (minted.status !== 200) return minted;
+  const text = (minted.body?.texts as Array<{ text: string }>)[0].text;
+  const signed = input.forge !== undefined ? input.forge(text) : (input.signer ?? input.wallet).sign(text);
+  const answer = await post(port, "/gs/api/account/recover", cookie, { operation: minted.body?.operation, ...signed, newPassword: input.newPassword ?? NEW_PASSWORD });
+  return { ...answer, signed };
 }
+
+/** A fresh browser recovers an account; its new cookie on success. */
+async function recoverOnFreshBrowser(port: number, input: Parameters<typeof recover>[2]): Promise<{ answer: ApiAnswer; before: string; cookie: string | null; signed?: { pubKey: string; signature: string } }> {
+  const before = await bootstrapCookie(port);
+  const answer = await recover(port, before, input);
+  return { answer, before, cookie: answer.status === 200 ? cookieFromAnswer(answer) : null, signed: answer.signed };
+}
+
+/** "Change Authorization Wallet": Confirm it's you (the password), the two texts, the CURRENT wallet approves, the NEW one
+ *  accepts. */
+async function replaceAuthorizationWallet(port: number, browser: { cookie: string; password: string }, current: KeplrAccount, next: KeplrAccount): Promise<ApiAnswer> {
+  assert.equal((await reauth(port, browser.cookie, browser.password)).status, 200);
+  const challenge = await post(port, "/gs/api/account/authorization-wallet/challenge", browser.cookie, { newWallet: next.address });
+  assert.equal(challenge.status, 200, challenge.text);
+  const texts = challenge.body?.texts as Array<{ text: string }>;
+  const approve = current.sign(texts[0].text);
+  const accept = next.sign(texts[1].text);
+  return post(port, "/gs/api/account/authorization-wallet/replace", browser.cookie, {
+    operation: challenge.body?.operation,
+    approvePubKey: approve.pubKey,
+    approveSignature: approve.signature,
+    acceptPubKey: accept.pubKey,
+    acceptSignature: accept.signature,
+  });
+}
+
+/** What the bootstrap names: a signed-in account by its name, its other sessions and its username -- never an id. */
+const profileOf = (browser: Pick<ProfiledBrowser, "name" | "username">, otherSessions: number) => ({ name: browser.name, otherSessions, username: browser.username });
 
 /** A response as a client can observe it -- status, headers (less the clock and the connection) and body -- so two
  *  refusals can be compared for sameness. */
@@ -200,7 +230,7 @@ const readIdentityFile = (dir: string) => JSON.parse(fs.readFileSync(path.join(d
 /** A production server over the file stores in `dir` -- identity, game records and logs, as `start.ts` wires them (a
  *  restart is another call over the same directory). */
 async function fileServer(dir: string, clock?: Clock) {
-  const service = await IdentityService.open(createFileIdentityStore(dir, { warn: () => undefined }));
+  const service = await IdentityService.open(createFileIdentityStore(dir, { warn: () => undefined }), { policy: POLICY });
   return prodServer({ service, records: createFileRecordStore(dir), store: await settledLogStore(dir), ...(clock ? { clock } : {}) });
 }
 
@@ -216,86 +246,96 @@ async function settledLogStore(dir: string): Promise<LogStore> {
     CREATION
    ================================================================== */
 
-describe("LIVE-2E create", () => {
-  test("the name is cleaned; the recovery key is rk_<selector>.<secret>, shown once and stored only as a digest; no id on the wire", async () => {
+describe("LIVE-2E create (PHASE 3 FINAL: an account with its Authorization Wallet)", () => {
+  test("the name is cleaned; the account is stored with its Authorization Wallet and NO recovery key (a sealed digest); a FRESH cookie; no id on the wire", async () => {
     const { service, store } = memoryService();
     const { server, port } = await prodServer({ service });
     try {
       const cookie = await bootstrapCookie(port);
+      const wallet = keplrAccount("live2e/create/ann");
       // Refused names: nothing usable, or not a name at all -- and neither spends anything durable.
       for (const [name, error] of [["", "bad-name"], ["   \t  ", "bad-name"], ["\u0000\u0007", "bad-name"]] as const) {
-        const refused = await createProfile(port, cookie, name);
+        const refused = await createAccount(port, cookie, { username: "ann.lee", name, wallet });
         assert.deepEqual([refused.status, refused.body], [400, { error }], JSON.stringify(name));
       }
-      for (const name of [42, null, "x".repeat(257)]) assert.deepEqual((await createProfile(port, cookie, name)).body, { error: "bad-request" });
+      for (const name of [42, null, "x".repeat(257)]) assert.deepEqual((await createAccount(port, cookie, { username: "ann.lee", name, wallet })).body, { error: "bad-request" });
       assert.equal(store.snapshot().profiles.length, 0);
 
-      const created = await createProfile(port, cookie, "  Ann\u0007   \t Lee  with a much too long surname  ");
-      assert.equal(created.status, 201);
+      const created = await createAccount(port, cookie, { username: "ann.lee", name: "  Ann\u0007   \t Lee  with a much too long surname  ", wallet });
+      assert.equal(created.status, 201, created.text);
       assert.equal(created.headers["cache-control"], "no-store");
-      assert.equal(created.headers["set-cookie"], undefined, "the browser keeps its cookie: its principal is now profiled");
-      const body = created.body as { ok: boolean; profile: { name: string; otherSessions: number }; recoveryKey: string };
+      /* PHASE 3 FINAL: the account is signed in on a FRESH session (session fixation); the temporary one is replaced. */
+      const fresh = cookieFromAnswer(created) as string;
+      assert.ok(fresh !== null && fresh !== cookie, "a fresh session cookie");
+      assert.deepEqual((await session(port, cookie)).body, { error: "session-ended", reason: "replaced" });
+      const body = created.body as { ok: boolean; profile: { name: string; otherSessions: number }; username: string };
       // Control characters dropped, whitespace collapsed, cut to 24 characters, trimmed again.
       assert.deepEqual(body.profile, { name: "Ann Lee with a much too", otherSessions: 0 });
-      assert.deepEqual(Object.keys(body).sort(), ["ok", "profile", "recoveryKey"]);
-      assert.match(body.recoveryKey, RECOVERY_KEY_PATTERN);
-      const [selector, secret] = body.recoveryKey.split(".");
-      assert.ok(!/pr_|pf_|se_/.test(created.text.replace(body.recoveryKey, "")), "no principal, profile or session id on the wire");
+      assert.deepEqual(Object.keys(body).sort(), ["ok", "profile", "username"], "no recovery key: none exists");
+      assert.ok(!/pr_|pf_|se_|rk_/.test(created.text), "no principal, profile or session id (and no key) on the wire");
 
-      // Stored: the selector and SHA-256 of the secret -- never the key, never the secret.
+      // Stored: the Authorization Wallet the CREATE text's signature proved, the scrypt hash, and the SEALED digest of
+      // the internal credential epoch -- no key can match it.
       const snapshot = store.snapshot();
       assert.equal(snapshot.profiles.length, 1);
       const [profile] = snapshot.profiles;
-      assert.equal(profile.recovery_selector, selector);
-      assert.equal(profile.recovery_hash, secretHash(secret));
+      assert.equal(profile.schema, 3);
+      assert.equal(profile.wallet_address, wallet.address, "its Authorization Wallet");
+      assert.equal(profile.recovery_hash, sealedRecoveryDigest(profile.recovery_selector), "no recovery key: the sealed digest");
       assert.equal(profile.display_name, body.profile.name);
       assert.match(profile.profile_id, /^pf_/);
-      const text = JSON.stringify(snapshot);
-      assert.ok(!text.includes(secret) && !text.includes(body.recoveryKey), "no plaintext recovery key in the store");
-      assert.ok(!JSON.stringify(service.peekProfileOf(profile.principal_id)).includes(secret));
+      assert.ok(!JSON.stringify(snapshot).includes(PASSWORD), "no plaintext password in the store");
       // Bound both ways, in the same commit: the principal is durable and names the profile.
       const principal = snapshot.principals.find((record) => record.principal_id === profile.principal_id);
       assert.deepEqual([principal?.kind, principal?.account_link], ["profile", profile.profile_id]);
-      assert.equal(principal?.principal_id, principalOf(server, cookie));
+      assert.equal(principal?.principal_id, principalOf(server, fresh));
 
-      // The bootstrap now names the profile -- by name only.
-      const again = await session(port, cookie);
-      assert.deepEqual(again.body, { ok: true, expiresAt: (again.body as { expiresAt: number }).expiresAt, profile: { name: body.profile.name, otherSessions: 0 } });
+      // The bootstrap now names the profile -- by name and username only.
+      const again = await session(port, fresh);
+      assert.deepEqual(again.body, { ok: true, expiresAt: (again.body as { expiresAt: number }).expiresAt, profile: { name: body.profile.name, otherSessions: 0, username: "ann.lee" } });
       assert.ok(!/pr_|pf_|se_|rk_/.test(again.text));
-      // Created once: a second attempt is told so, and makes nothing.
-      const twice = await createProfile(port, cookie, "Somebody Else");
-      assert.deepEqual([twice.status, twice.body], [409, { error: "already-profiled", profile: { name: body.profile.name } }]);
-      assert.ok(!twice.text.includes("rk_"), "the recovery key is never shown again");
+      // Created once: a second attempt is told so (the CREATE text is not even minted), and makes nothing.
+      const twice = await post(port, "/gs/api/account/authorization", fresh, { purpose: "create", username: "somebody.else", wallet: keplrAccount("live2e/create/other").address });
+      assert.deepEqual([twice.status, twice.body], [409, { error: "already-profiled" }], "a signed-in browser is refused the CREATE text");
+      const forced = await post(port, "/gs/api/account/create", fresh, { username: "somebody.else", password: PASSWORD, name: "Somebody Else", operation: "0".repeat(32), pubKey: "", signature: "" });
+      assert.deepEqual([forced.status, forced.body], [409, { error: "already-profiled", profile: { name: body.profile.name } }]);
       assert.equal(store.snapshot().profiles.length, 1);
-      // No cookie is not a profile request at all.
-      assert.deepEqual((await createProfile(port, undefined, "Nobody")).body, { error: "not-authenticated" });
+      // No cookie is not an account request at all.
+      assert.deepEqual((await post(port, "/gs/api/account/create", undefined, { username: "nobody", password: PASSWORD, name: "Nobody" })).body, { error: "not-authenticated" });
     } finally {
       await stopServer(server);
     }
   });
 
-  test("retry and race: five concurrent creates on one cookie make exactly one profile (one 201, four 409); a second browser makes its own", async () => {
+  test("retry and race: five concurrent creates on one cookie make exactly one profile (one 201; the rest refused, none signed in); a second browser makes its own", async () => {
     const { service, store } = memoryService();
     const { server, port } = await prodServer({ service });
     try {
       const cookie = await bootstrapCookie(port);
-      const answers = await Promise.all(["One", "Two", "Three", "Four", "Five"].map((name) => createProfile(port, cookie, name)));
-      const statuses = answers.map((answer) => answer.status).sort();
-      assert.deepEqual(statuses, [201, 409, 409, 409, 409]);
-      const winner = answers.find((answer) => answer.status === 201) as ApiAnswer;
-      const name = (winner.body as { profile: { name: string } }).profile.name;
-      for (const loser of answers.filter((answer) => answer.status === 409)) {
-        assert.deepEqual(loser.body, { error: "already-profiled", profile: { name } }, "every loser is told the winner's name, and no key");
+      const wallet = keplrAccount("live2e/race/one");
+      const proof = await createAuthorization(port, cookie, "race.one", wallet);
+      const answers = await Promise.all(["One", "Two", "Three", "Four", "Five"].map((name) => post(port, "/gs/api/account/create", cookie, { username: "race.one", password: PASSWORD, name, ...proof })));
+      const winners = answers.filter((answer) => answer.status === 201);
+      assert.equal(winners.length, 1, answers.map((answer) => `${answer.status} ${answer.text}`).join(" | "));
+      for (const loser of answers.filter((answer) => answer.status !== 201)) {
+        /* The single-use CREATE operation is in use (or spent) -- or, once the winner has replaced this browser's
+           temporary session, the cookie authenticates nothing. Never a second account, never a cookie. */
+        assert.ok(
+          (loser.status === 409 && (loser.body as { error: string }).error === "authorization-used") || (loser.status === 401 && (loser.body as { error: string }).error === "not-authenticated"),
+          `${loser.status} ${loser.text}`,
+        );
+        assert.equal(loser.headers["set-cookie"], undefined);
       }
       assert.equal(store.snapshot().profiles.length, 1, "exactly one profile stored");
       assert.equal(service.stats.profilesCreated, 1);
+      const winner = cookieFromAnswer(winners[0]) as string;
 
       const other = await profiledBrowser(port, "Bea");
       const snapshot = store.snapshot();
       assert.equal(snapshot.profiles.length, 2);
       assert.notEqual(snapshot.profiles[0].principal_id, snapshot.profiles[1].principal_id, "a different principal");
-      assert.notEqual(other.recoveryKey, (winner.body as { recoveryKey: string }).recoveryKey);
-      assert.notEqual(principalOf(server, other.cookie), principalOf(server, cookie));
+      assert.notEqual(other.wallet.address, wallet.address, "its own Authorization Wallet");
+      assert.notEqual(principalOf(server, other.cookie), principalOf(server, winner));
     } finally {
       await stopServer(server);
     }
@@ -317,12 +357,24 @@ describe("LIVE-2E the profile gate", () => {
       for (let n = 0; n < 4; n += 1) assert.equal(await upgradeStatus(port, guest), 101, "P3-ACCT: a signed-out visitor opens a public, read-only socket");
       assert.equal(server.upgrades.refused["profile:403"], undefined);
       assert.equal(server.upgrades.accepted, 4);
-      for (const action of [linkCode, rotateKey, signOutOthers]) {
-        const refused = await action(port, guest);
-        assert.deepEqual([refused.status, refused.body], [403, { error: "profile-required" }]);
+      const actions: Array<[string, object]> = [
+        ["/gs/api/profile/sign-out-others", {}],
+        ["/gs/api/profile/reauth", { password: PASSWORD }],
+        ["/gs/api/account/password", { currentPassword: PASSWORD, newPassword: NEW_PASSWORD }],
+        ["/gs/api/account/me", {}],
+        ["/gs/api/account/authorization-wallet/challenge", { newWallet: keplrAccount("live2e/gate").address }],
+      ];
+      for (const [pathname, body] of actions) {
+        const refused = await post(port, pathname, guest, body);
+        assert.deepEqual([refused.status, refused.body], [403, { error: "profile-required" }], pathname);
       }
       // Without any session they are not-authenticated (the client bootstraps first).
-      for (const action of [linkCode, rotateKey, signOutOthers]) assert.deepEqual((await action(port, "")).body, { error: "not-authenticated" });
+      for (const [pathname, body] of actions) assert.deepEqual((await post(port, pathname, "", body)).body, { error: "not-authenticated" }, pathname);
+      // PHASE 3 FINAL: the LIVE-2E recovery-key and link-code actions are retired for everybody.
+      for (const pathname of ["/gs/api/profile/link-code", "/gs/api/profile/recovery-key"]) {
+        const retired = await post(port, pathname, guest);
+        assert.deepEqual([retired.status, retired.body], [410, { error: "retired" }], pathname);
+      }
       // Nothing was charged to the address's failed-upgrade budget (capacity 4): a signed-in player there still opens.
       const player = await profiledBrowser(port, "Ann");
       assert.equal(await upgradeStatus(port, player.cookie), 101);
@@ -458,27 +510,29 @@ describe("LIVE-2E the profile gate", () => {
 });
 
 /* ==================================================================
-    RECOVERY
+    RECOVERY ("Forgot password?" by the Authorization Wallet; PHASE 3 FINAL -- the LIVE-2E recovery key is retired)
    ================================================================== */
 
-describe("LIVE-2E recovery", () => {
-  test("the right key: 200 + a cookie for the SAME principal, whose sockets see the same seat; the replaced cookie ends; other devices stay", async () => {
+describe("LIVE-2E recovery (PHASE 3 FINAL: by the Authorization Wallet)", () => {
+  test("the right wallet: 200 + a cookie for the SAME principal, whose sockets see the same seat; the browser's temporary cookie ends; EVERY earlier session of the account ends", async () => {
     const { server, port } = await prodServer();
     try {
       const ann = await profiledBrowser(port, "Ann");
+      const annPrincipal = principalOf(server, ann.cookie);
       const table = await tableOf(port, ann.cookie, "ann-table");
       const annSocket = await Client.openWithCookie(port, ann.cookie, "ann");
       const before = await bootstrapCookie(port);
       assert.equal(((await session(port, before)).body as { profile: unknown }).profile, null, "unprofiled before (P3-ACCT: its socket would be a public one)");
-      const answer = await recover(port, before, `  ${ann.recoveryKey}\n`);
+      // The username as typed: surrounding spaces and another case are forgiven (its canonical key decides).
+      const answer = await recover(port, before, { username: `  ${ann.username.toUpperCase()}\n`, wallet: ann.wallet });
       assert.equal(answer.status, 200, answer.text);
-      assert.deepEqual(answer.body, { ok: true, profile: { name: "Ann" } });
-      assert.ok(!/pr_|pf_|se_|rk_/.test(answer.text), "no id and no key in the answer");
+      assert.deepEqual(answer.body, { ok: true, profile: { name: "Ann" }, signedOut: 1 });
+      assert.ok(!/pr_|pf_|se_|rk_/.test(answer.text), "no id in the answer");
       assert.equal(answer.headers["cache-control"], "no-store");
       const recovered = cookieFromAnswer(answer) as string;
       assert.match((answer.headers["set-cookie"] ?? [])[0], /; Path=\/; Secure; HttpOnly; SameSite=Strict; Max-Age=15552000$/);
       assert.notEqual(recovered, before);
-      assert.equal(principalOf(server, recovered), principalOf(server, ann.cookie), "the SAME principal");
+      assert.equal(principalOf(server, recovered), annPrincipal, "the SAME principal");
       // The same seat: the table the profile created, seen from the recovered browser.
       const view = await viewWith(port, recovered, table.gameId, "recovered");
       assert.deepEqual([view.you.role, view.you.playerId], ["host", table.playerId]);
@@ -487,70 +541,71 @@ describe("LIVE-2E recovery", () => {
       assert.deepEqual([replaced.status, replaced.body], [401, { error: "session-ended", reason: "replaced" }]);
       assert.equal(await upgradeStatus(port, before), 401);
       assert.equal(server.identity.peekSession(sessionIdOfCookie(before))?.revoke_reason, "replaced");
-      // The first device is untouched: its socket stays open, its cookie bootstraps and sees one other device.
-      await sleep(30);
-      assert.ok(annSocket.open, "another device's socket is not closed by a recovery");
-      const first = await session(port, ann.cookie);
-      assert.deepEqual((first.body as { profile: unknown }).profile, { name: "Ann", otherSessions: 1 });
-      assert.equal(await upgradeStatus(port, ann.cookie), 101);
-      // Already-profiled browsers cannot recover (either device), and nothing about them changes.
-      for (const cookie of [ann.cookie, recovered]) {
-        const again = await recover(port, cookie, ann.recoveryKey);
-        assert.deepEqual([again.status, again.body], [409, { error: "already-profiled" }]);
-      }
+      /* PHASE 3 FINAL (owner ruling): "Forgot password?" revokes EVERY session of the account -- a cookie stolen with the
+         password does not outlive the recovery (LIVE-2E's key recovery left other devices signed in). */
+      assert.equal(await annSocket.closed, 4401, "the other device's socket is closed");
+      assert.deepEqual((await session(port, ann.cookie)).body, { error: "session-ended", reason: "signed-out-remotely" });
+      assert.equal(await upgradeStatus(port, ann.cookie), 401);
+      assert.deepEqual(((await session(port, recovered)).body as { profile: unknown }).profile, profileOf(ann, 0));
+      // The new password signs in; the old one no longer does.
+      assert.equal((await loginOnFreshBrowser(port, ann.username, NEW_PASSWORD)).answer.status, 200);
+      assert.equal((await loginOnFreshBrowser(port, ann.username, ann.password)).answer.status, 403);
+      // Already-profiled browsers cannot recover (the RECOVER text is not minted), and nothing about them changes.
+      const again = await recover(port, recovered, { username: ann.username, wallet: ann.wallet });
+      assert.deepEqual([again.status, again.body], [409, { error: "already-profiled" }]);
       const bea = await profiledBrowser(port, "Bea");
-      assert.equal((await recover(port, bea.cookie, ann.recoveryKey)).status, 409, "a signed-in browser of another profile is refused too");
-      assert.notEqual(principalOf(server, bea.cookie), principalOf(server, ann.cookie));
+      const beaPrincipal = principalOf(server, bea.cookie);
+      assert.equal((await recover(port, bea.cookie, { username: ann.username, wallet: ann.wallet })).status, 409, "a signed-in browser of another profile is refused too");
+      assert.equal(principalOf(server, bea.cookie), beaPrincipal);
       assert.equal(((await session(port, bea.cookie)).body as { profile: { name: string } }).profile.name, "Bea", "Bea's browser is still Bea's");
-      assert.equal(server.identity.stats.recoveries, 1);
-      await annSocket.close();
+      assert.equal(server.identity.stats.accountRecoveries, 1);
     } finally {
       await stopServer(server);
     }
   });
 
-  test("one answer for every wrong key: wrong selector, wrong secret, malformed, rotated away -- and none of them replaces the browser's session", async () => {
+  test("one answer for every wrong proof: another wallet, another key's signature, an unknown or another account's username, a malformed signature, an unknown operation, a REPLACED wallet -- none replaces the browser's session", async () => {
     const { server, port } = await prodServer();
     try {
       const ann = await profiledBrowser(port, "Ann");
-      const [selector, secret] = ann.recoveryKey.split(".");
-      const wrong = [
-        `${mintRecoverySelector()}.${secret}`, // wrong selector, right secret
-        `${selector}.${mintSecret()}`, // right selector, wrong secret
-        `${mintRecoverySelector()}.${mintSecret()}`,
-        "not a key",
-        `${selector}.`,
-        `${ann.recoveryKey}x`,
-        ann.recoveryKey.toUpperCase(),
-        "",
+      const annPrincipal = principalOf(server, ann.cookie);
+      const bea = await profiledBrowser(port, "Bea");
+      const mallory = keplrAccount("live2e/recover/mallory");
+      const wrong: Array<[string, (cookie: string) => Promise<ApiAnswer>]> = [
+        ["a wallet that is not the account's (its own valid signature)", (cookie) => recover(port, cookie, { username: ann.username, wallet: mallory })],
+        ["the account's wallet named, another key signing", (cookie) => recover(port, cookie, { username: ann.username, wallet: ann.wallet, signer: mallory })],
+        ["an unknown username", (cookie) => recover(port, cookie, { username: "nobody-at-all", wallet: ann.wallet })],
+        ["another account's username", (cookie) => recover(port, cookie, { username: bea.username, wallet: ann.wallet })],
+        ["a malformed signature", (cookie) => recover(port, cookie, { username: ann.username, wallet: ann.wallet, forge: () => ({ pubKey: "not a key", signature: "not a signature" }) })],
+        ["an empty signature", (cookie) => recover(port, cookie, { username: ann.username, wallet: ann.wallet, forge: () => ({ pubKey: "", signature: "" }) })],
+        ["an unknown operation", (cookie) => post(port, "/gs/api/account/recover", cookie, { operation: "0".repeat(32), ...ann.wallet.sign("anything at all"), newPassword: NEW_PASSWORD })],
       ];
       const observed = new Set<string>();
-      for (const key of wrong) {
-        const { answer, before } = await recoverOnFreshBrowser(port, key);
-        assert.deepEqual([answer.status, answer.body], [403, { error: "invalid-credential" }], key);
-        assert.equal(answer.headers["set-cookie"], undefined);
+      for (const [what, attempt] of wrong) {
+        const before = await bootstrapCookie(port);
+        const answer = await attempt(before);
+        assert.deepEqual([answer.status, answer.body], [403, { error: "invalid-credential" }], what);
+        assert.equal(answer.headers["set-cookie"], undefined, what);
         observed.add(observable(answer));
         const still = await session(port, before);
-        assert.deepEqual([still.status, (still.body as { profile: unknown }).profile], [200, null], "the browser keeps its own session");
+        assert.deepEqual([still.status, (still.body as { profile: unknown }).profile], [200, null], `${what}: the browser keeps its own session`);
       }
-      assert.equal(observed.size, 1, "status, headers and body are identical for every wrong key");
+      assert.equal(observed.size, 1, "status, headers and body are identical for every wrong proof");
 
-      // Rotation (after re-authenticating -- ESCROW-3A): the old key stops at once and answers exactly like any wrong
-      // one; the new one works.
-      const rotated = await rotateKey(port, ann.cookie, ann.recoveryKey);
-      assert.equal(rotated.status, 200);
-      const fresh = (rotated.body as { recoveryKey: string }).recoveryKey;
-      assert.match(fresh, RECOVERY_KEY_PATTERN);
-      assert.notEqual(fresh, ann.recoveryKey);
-      assert.deepEqual(Object.keys(rotated.body as object).sort(), ["ok", "recoveryKey"]);
-      const old = await recoverOnFreshBrowser(port, ann.recoveryKey);
+      // The Authorization Wallet replaced ("Confirm it's you", then BOTH wallets sign): the old wallet stops at once and
+      // answers exactly like any wrong proof; the new one recovers.
+      const next = keplrAccount("live2e/recover/ann-next");
+      const replaced = await replaceAuthorizationWallet(port, ann, ann.wallet, next);
+      assert.equal(replaced.status, 200, replaced.text);
+      assert.equal((replaced.body as { authorizationWallet: { address: string } }).authorizationWallet.address, next.address);
+      const old = await recoverOnFreshBrowser(port, { username: ann.username, wallet: ann.wallet });
       assert.equal(old.answer.status, 403);
       observed.add(observable(old.answer));
-      assert.equal(observed.size, 1, "a rotated-away key is indistinguishable from a wrong one");
-      const works = await recoverOnFreshBrowser(port, fresh);
-      assert.equal(works.answer.status, 200);
-      assert.equal(principalOf(server, works.cookie as string), principalOf(server, ann.cookie));
-      assert.equal(server.identity.stats.credentialFailures, wrong.length + 1);
+      assert.equal(observed.size, 1, "a replaced wallet is indistinguishable from a wrong one");
+      const works = await recoverOnFreshBrowser(port, { username: ann.username, wallet: next });
+      assert.equal(works.answer.status, 200, works.answer.text);
+      assert.equal(principalOf(server, works.cookie as string), annPrincipal);
+      assert.equal(server.identity.stats.accountRecoveries, 1);
     } finally {
       await stopServer(server);
     }
@@ -558,93 +613,43 @@ describe("LIVE-2E recovery", () => {
 });
 
 /* ==================================================================
-    LINK CODES
+    LINK CODES -- RETIRED (PHASE 3 FINAL: a second device signs in with the username and password)
    ================================================================== */
 
-describe("LIVE-2E link codes", () => {
-  test("a code signs a fresh browser in to the SAME principal, once; a replay is the wrong-code answer; case, spaces and hyphens are forgiven", async () => {
-    const clock = { now: Date.now() };
-    const { server, port } = await prodServer({ clock });
+describe("LIVE-2E link codes and the recovery key (retired)", () => {
+  /* The three LIVE-2E link-code tests (single use, expiry, one outstanding code) and the recovery-key routes are gone with
+     the product: "Link another device" and the recovery key are retired; a second device LOGS IN (P3-ACCT). */
+  test("every LIVE-2E credential route answers 410 retired -- nothing issued, read or signed in; a second device logs in instead: the SAME principal", async () => {
+    const { server, port } = await prodServer();
     try {
       const ann = await profiledBrowser(port, "Ann");
-      const issued = await linkCode(port, ann.cookie);
-      assert.equal(issued.status, 201);
-      assert.equal(issued.headers["cache-control"], "no-store");
-      const { code, expiresAt } = issued.body as { code: string; expiresAt: number };
-      assert.match(code, LINK_CODE_DISPLAY);
-      assert.equal(expiresAt, clock.now + 10 * 60 * 1000, "ten minutes");
-      assert.deepEqual(Object.keys(issued.body as object).sort(), ["code", "expiresAt", "ok"]);
-      assert.equal(server.identity.sizes().links, 1);
-
-      const typed = ` ${code.toLowerCase().replace(/-/g, "").replace(/(.{5})/g, "$1 ")} `.replace(/0/g, "o").replace(/1/g, "l");
-      const linked = await linkOnFreshBrowser(port, typed);
-      assert.equal(linked.answer.status, 200, linked.answer.text);
-      assert.deepEqual(linked.answer.body, { ok: true, profile: { name: "Ann" } });
-      assert.equal(principalOf(server, linked.cookie as string), principalOf(server, ann.cookie), "the profile's own principal");
-      assert.deepEqual((await session(port, linked.before)).body, { error: "session-ended", reason: "replaced" });
-
-      const wrongCode = await linkOnFreshBrowser(port, "ABCD-EFGH-JKMN-PQRS-TVWX");
-      const replay = await linkOnFreshBrowser(port, code);
-      const malformed = await linkOnFreshBrowser(port, "not-a-code");
-      for (const refused of [wrongCode, replay, malformed]) {
-        assert.deepEqual([refused.answer.status, refused.answer.body], [403, { error: "invalid-credential" }]);
-        assert.deepEqual((await session(port, refused.before)).status, 200, "a refused redemption replaces nothing");
+      const fresh = await bootstrapCookie(port);
+      const routes: Array<[string, object]> = [
+        ["/gs/api/profile", { name: "Somebody" }],
+        ["/gs/api/profile/recover", { recoveryKey: `${mintRecoverySelector()}.${mintSecret()}` }],
+        ["/gs/api/profile/link", { code: "ABCD-EFGH-JKMN-PQRS-TVWX" }],
+        ["/gs/api/profile/link-code", {}],
+        ["/gs/api/profile/recovery-key", {}],
+        ["/gs/api/profile/key-received", {}],
+      ];
+      for (const [pathname, body] of routes) {
+        for (const cookie of [ann.cookie, fresh, undefined]) {
+          const answer = await post(port, pathname, cookie, body);
+          assert.deepEqual([answer.status, answer.body], [410, { error: "retired" }], `${pathname} (${cookie === undefined ? "no cookie" : cookie === fresh ? "visitor" : "signed in"})`);
+          assert.equal(answer.headers["set-cookie"], undefined);
+          assert.equal(answer.headers["cache-control"], "no-store");
+        }
       }
-      assert.equal(observable(replay.answer), observable(wrongCode.answer), "a used code is indistinguishable from a wrong one");
-      assert.equal(observable(malformed.answer), observable(wrongCode.answer));
-      assert.equal(server.identity.stats.links, 1);
-    } finally {
-      await stopServer(server);
-    }
-  });
-
-  test("expiry: a code works until its expiresAt and never at it (the identity clock)", async () => {
-    const clock = { now: 1_760_000_000_000 };
-    const { server, port } = await prodServer({ clock });
-    try {
-      const ann = await profiledBrowser(port, "Ann");
-      const first = (await linkCode(port, ann.cookie)).body as { code: string; expiresAt: number };
-      clock.now = first.expiresAt - 1;
-      assert.equal((await linkOnFreshBrowser(port, first.code)).answer.status, 200, "a millisecond before");
-      const second = (await linkCode(port, ann.cookie)).body as { code: string; expiresAt: number };
-      clock.now = second.expiresAt;
-      const late = await linkOnFreshBrowser(port, second.code);
-      assert.deepEqual([late.answer.status, late.answer.body], [403, { error: "invalid-credential" }], "at expiry");
-    } finally {
-      await stopServer(server);
-    }
-  });
-
-  test("a signed-in browser cannot redeem (409, the code survives); A's code gives A's principal, never B's; ONE code is outstanding", async () => {
-    const { server, port, clock } = await prodServer();
-    try {
-      const ann = await profiledBrowser(port, "Ann");
-      const bea = await profiledBrowser(port, "Bea");
-      const beaPrincipal = principalOf(server, bea.cookie);
-      const { code } = (await linkCode(port, ann.cookie)).body as { code: string };
-      const refused = await redeem(port, bea.cookie, code);
-      assert.deepEqual([refused.status, refused.body], [409, { error: "already-profiled" }]);
-      assert.equal(refused.headers["set-cookie"], undefined);
-      assert.equal(principalOf(server, bea.cookie), beaPrincipal, "Bea is still Bea");
-      assert.equal((await redeem(port, ann.cookie, code)).status, 409, "nor the issuing browser itself");
-      const linked = await linkOnFreshBrowser(port, code);
-      assert.equal(linked.answer.status, 200, "the code was not spent by the refusals");
-      assert.equal(principalOf(server, linked.cookie as string), principalOf(server, ann.cookie));
-      assert.notEqual(principalOf(server, linked.cookie as string), principalOf(server, bea.cookie));
-
-      // LIVE-2E review H1: a new code retires every earlier unused one -- in the same millisecond too -- so no device
-      // can stockpile codes. Four issued; only the last works.
-      const codes: string[] = [];
-      for (let n = 0; n < 4; n += 1) {
-        if (n === 2) clock.now += 1;
-        codes.push(((await linkCode(port, ann.cookie)).body as { code: string }).code);
-      }
-      assert.equal(new Set(codes).size, 4);
-      assert.equal(server.identity.sizes().links, 1, "one code held for a profile (the used one is dropped too)");
-      for (const retired of codes.slice(0, 3)) assert.equal((await linkOnFreshBrowser(port, retired)).answer.status, 403, "retired");
-      const outcome = await linkOnFreshBrowser(port, codes[3]);
-      assert.equal(outcome.answer.status, 200);
-      assert.equal(principalOf(server, outcome.cookie as string), principalOf(server, ann.cookie));
+      assert.equal(server.identity.sizes().links, 0, "no code is ever issued");
+      assert.equal(server.identity.sizes().profiles, 1, "nothing created");
+      assert.equal(((await session(port, fresh)).body as { profile: unknown }).profile, null, "the visitor is not signed in");
+      assert.deepEqual(((await session(port, ann.cookie)).body as { profile: unknown }).profile, profileOf(ann, 0));
+      // A second device: the username and password.
+      const phone = await loginOnFreshBrowser(port, ann.username, ann.password);
+      assert.equal(phone.answer.status, 200, phone.answer.text);
+      assert.deepEqual(phone.answer.body, { ok: true, profile: { name: "Ann" } });
+      assert.equal(principalOf(server, phone.cookie as string), principalOf(server, ann.cookie), "the profile's own principal");
+      assert.deepEqual((await session(port, phone.before)).body, { error: "session-ended", reason: "replaced" });
     } finally {
       await stopServer(server);
     }
@@ -662,8 +667,7 @@ describe("LIVE-2E sign out", () => {
       let { server, port } = await fileServer(dir);
       const ann = await profiledBrowser(port, "Ann");
       const table = await tableOf(port, ann.cookie, "ann-table");
-      const { code } = (await linkCode(port, ann.cookie)).body as { code: string };
-      const phone = (await linkOnFreshBrowser(port, code)).cookie as string;
+      const phone = (await loginOnFreshBrowser(port, ann.username, ann.password)).cookie as string;
       const laptopSockets = [await Client.openWithCookie(port, ann.cookie, "laptop-1"), await Client.openWithCookie(port, ann.cookie, "laptop-2")];
       const phoneSocket = await Client.openWithCookie(port, phone, "phone");
       const out = await signOut(port, ann.cookie);
@@ -674,8 +678,8 @@ describe("LIVE-2E sign out", () => {
       assert.ok(phoneSocket.open, "the other device's socket stays open");
       assert.deepEqual((await session(port, ann.cookie)).body, { error: "session-ended", reason: "logout" });
       assert.equal(await upgradeStatus(port, ann.cookie), 401);
-      assert.deepEqual((await linkCode(port, ann.cookie)).body, { error: "not-authenticated" });
-      assert.deepEqual(((await session(port, phone)).body as { profile: unknown }).profile, { name: "Ann", otherSessions: 0 });
+      assert.deepEqual((await post(port, "/gs/api/account/me", ann.cookie)).body, { error: "not-authenticated" });
+      assert.deepEqual(((await session(port, phone)).body as { profile: unknown }).profile, profileOf(ann, 0));
       assert.deepEqual((await viewWith(port, phone, table.gameId, "phone")).you.playerId, table.playerId, "the seat stays the profile's");
       await phoneSocket.close();
       await stopServer(server);
@@ -696,23 +700,25 @@ describe("LIVE-2E sign out", () => {
 
   test("sign out other devices: every other session ends signed-out-remotely and its sockets close 4401; this one stays, with the seats", async () => {
     const dir = tmpDir("others");
+    const clock = { now: Date.now() };
     try {
-      let { server, port } = await fileServer(dir);
+      let { server, port } = await fileServer(dir, clock);
       const ann = await profiledBrowser(port, "Ann");
       const table = await tableOf(port, ann.cookie, "ann-table");
-      const { code } = (await linkCode(port, ann.cookie)).body as { code: string };
-      const phone = (await linkOnFreshBrowser(port, code)).cookie as string;
-      const tablet = (await recoverOnFreshBrowser(port, ann.recoveryKey)).cookie as string;
+      const phone = (await loginOnFreshBrowser(port, ann.username, ann.password)).cookie as string;
+      const tablet = (await loginOnFreshBrowser(port, ann.username, ann.password)).cookie as string;
       const sockets = {
         laptop: await Client.openWithCookie(port, ann.cookie, "laptop"),
         phone: await Client.openWithCookie(port, phone, "phone"),
         tablet: await Client.openWithCookie(port, tablet, "tablet"),
       };
-      assert.deepEqual(((await session(port, tablet)).body as { profile: unknown }).profile, { name: "Ann", otherSessions: 2 });
-      /* ESCROW-3A: the tablet's live session alone is not enough -- 403 reauth-required, nobody signed out. */
+      assert.deepEqual(((await session(port, tablet)).body as { profile: unknown }).profile, profileOf(ann, 2));
+      /* ESCROW-3A: once the sign-in's own few minutes are over, the tablet's live session alone is not enough -- 403
+         reauth-required, nobody signed out. */
+      clock.now += 6 * 60_000;
       assert.deepEqual((await signOutOthers(port, tablet)).body, { error: "reauth-required" });
-      assert.deepEqual(((await session(port, tablet)).body as { profile: unknown }).profile, { name: "Ann", otherSessions: 2 });
-      const done = await signOutOthers(port, tablet, ann.recoveryKey);
+      assert.deepEqual(((await session(port, tablet)).body as { profile: unknown }).profile, profileOf(ann, 2));
+      const done = await signOutOthers(port, tablet, ann.password);
       assert.deepEqual([done.status, done.body], [200, { ok: true, signedOut: 2 }]);
       assert.equal(await sockets.laptop.closed, 4401);
       assert.equal(await sockets.phone.closed, 4401);
@@ -722,13 +728,13 @@ describe("LIVE-2E sign out", () => {
         assert.deepEqual((await session(port, ended)).body, { error: "session-ended", reason: "signed-out-remotely" });
         assert.equal(await upgradeStatus(port, ended), 401);
       }
-      assert.deepEqual(((await session(port, tablet)).body as { profile: unknown }).profile, { name: "Ann", otherSessions: 0 });
+      assert.deepEqual(((await session(port, tablet)).body as { profile: unknown }).profile, profileOf(ann, 0));
       assert.equal((await viewWith(port, tablet, table.gameId, "tablet")).you.playerId, table.playerId, "nothing about the seats changed");
       assert.deepEqual((await signOutOthers(port, tablet)).body, { ok: true, signedOut: 0 }, "idempotent");
       await sockets.tablet.close();
       await stopServer(server);
 
-      ({ server, port } = await fileServer(dir));
+      ({ server, port } = await fileServer(dir, clock));
       try {
         for (const ended of [ann.cookie, phone]) assert.deepEqual((await session(port, ended)).body, { error: "session-ended", reason: "signed-out-remotely" });
         assert.equal((await session(port, tablet)).status, 200);
@@ -746,46 +752,49 @@ describe("LIVE-2E sign out", () => {
    ================================================================== */
 
 describe("LIVE-2E persistence", () => {
-  test("a restart over the file store keeps profiles, a rotated key's invalidity, link-code consumption and revocations -- and no plaintext", async () => {
+  test("a restart over the file store keeps the account (its Authorization Wallet; no recovery key), a replaced password's invalidity and the revocations -- and no plaintext", async () => {
     const dir = tmpDir("restart");
     try {
       let { server, port } = await fileServer(dir);
       const ann = await profiledBrowser(port, "Ann");
       const table = await tableOf(port, ann.cookie, "ann-table");
-      const used = ((await linkCode(port, ann.cookie)).body as { code: string }).code;
-      const linked = await linkOnFreshBrowser(port, used);
-      assert.equal(linked.answer.status, 200);
-      const rotated = ((await rotateKey(port, ann.cookie, ann.recoveryKey)).body as { recoveryKey: string }).recoveryKey;
-      assert.equal((await signOut(port, linked.cookie as string)).status, 204);
-      // Issued after the rotation and the sign-out (each of which retires outstanding codes -- review H1).
-      const unused = ((await linkCode(port, ann.cookie)).body as { code: string }).code;
-      const principal = principalOf(server, ann.cookie);
+      const phone = await loginOnFreshBrowser(port, ann.username, ann.password);
+      assert.equal(phone.answer.status, 200);
+      assert.equal((await signOut(port, phone.cookie as string)).status, 204);
+      const changed = await changePassword(port, ann.cookie, ann.password, NEW_PASSWORD);
+      assert.equal(changed.status, 200, changed.text);
+      const laptop = cookieFromAnswer(changed) as string;
+      const principal = principalOf(server, laptop);
       await stopServer(server);
 
       const file = readIdentityFile(dir);
       assert.equal(file.version, IDENTITY_FILE_VERSION);
-      assert.equal((file.profiles as unknown[]).length, 1);
+      const profiles = file.profiles as Profile[];
+      assert.equal(profiles.length, 1);
+      assert.equal(profiles[0].schema, 3);
+      assert.equal(profiles[0].wallet_address, ann.wallet.address, "its Authorization Wallet");
+      assert.equal(profiles[0].recovery_hash, sealedRecoveryDigest(profiles[0].recovery_selector), "no recovery key: the sealed digest");
+      assert.equal((file.links as unknown[]).length, 0, "no link code is ever issued");
       const text = JSON.stringify(file);
-      for (const secret of [ann.recoveryKey, ann.recoveryKey.split(".")[1], rotated, rotated.split(".")[1], used, unused, canonicalLinkCode(used) as string, canonicalLinkCode(unused) as string, ann.cookie.split(".")[2]]) {
-        assert.ok(!text.includes(secret), "no key, code or cookie secret in identity.json");
+      for (const secret of [ann.password, NEW_PASSWORD, ann.cookie.split(".")[2], laptop.split(".")[2], (phone.cookie as string).split(".")[2], phone.before.split(".")[2]]) {
+        assert.ok(!text.includes(secret), "no password or cookie secret in identity.json");
       }
-      assert.ok((file.links as Array<{ link_hash: string }>).some((link) => link.link_hash === linkCodeHash(canonicalLinkCode(unused) as string)), "a code is kept as its digest");
 
       ({ server, port } = await fileServer(dir));
       try {
-        assert.deepEqual(((await session(port, ann.cookie)).body as { profile: unknown }).profile, { name: "Ann", otherSessions: 0 });
-        assert.equal(principalOf(server, ann.cookie), principal);
-        assert.equal((await recoverOnFreshBrowser(port, ann.recoveryKey)).answer.status, 403, "the rotated-away key stays dead");
-        assert.equal((await linkOnFreshBrowser(port, used)).answer.status, 403, "the used code stays used");
-        assert.deepEqual((await session(port, linked.cookie as string)).body, { error: "session-ended", reason: "logout" });
-        const viaUnused = await linkOnFreshBrowser(port, unused);
-        assert.equal(viaUnused.answer.status, 200, "an unused, unexpired code survives the restart");
-        const viaKey = await recoverOnFreshBrowser(port, rotated);
-        assert.equal(viaKey.answer.status, 200);
-        for (const cookie of [viaUnused.cookie as string, viaKey.cookie as string]) {
-          assert.equal(principalOf(server, cookie), principal);
-          assert.equal((await viewWith(port, cookie, table.gameId, "after-restart")).you.playerId, table.playerId);
-        }
+        assert.deepEqual(((await session(port, laptop)).body as { profile: unknown }).profile, profileOf(ann, 0));
+        assert.equal(principalOf(server, laptop), principal);
+        assert.deepEqual((await session(port, ann.cookie)).body, { error: "session-ended", reason: "replaced" }, "the changer's old cookie stays replaced");
+        assert.deepEqual((await session(port, phone.cookie as string)).body, { error: "session-ended", reason: "logout" });
+        assert.equal((await loginOnFreshBrowser(port, ann.username, ann.password)).answer.status, 403, "the replaced password stays dead");
+        const viaPassword = await loginOnFreshBrowser(port, ann.username, NEW_PASSWORD);
+        assert.equal(viaPassword.answer.status, 200, "the new password survives the restart");
+        assert.equal(principalOf(server, viaPassword.cookie as string), principal);
+        assert.equal((await viewWith(port, viaPassword.cookie as string, table.gameId, "after-restart")).you.playerId, table.playerId);
+        const viaWallet = await recoverOnFreshBrowser(port, { username: ann.username, wallet: ann.wallet, newPassword: "a third passphrase" });
+        assert.equal(viaWallet.answer.status, 200, "the Authorization Wallet survives the restart");
+        assert.equal(principalOf(server, viaWallet.cookie as string), principal);
+        assert.equal((await viewWith(port, viaWallet.cookie as string, table.gameId, "recovered-after-restart")).you.playerId, table.playerId);
       } finally {
         await stopServer(server);
       }
@@ -794,7 +803,7 @@ describe("LIVE-2E persistence", () => {
     }
   });
 
-  test("a v1 identity.json migrates: its guest becomes unprofiled with its session and seats, and the next commit writes v2", async () => {
+  test("a v1 identity.json migrates: its guest becomes unprofiled with its session and seats, and its first account takes them along", async () => {
     const dir = tmpDir("v1");
     try {
       const now = Date.now();
@@ -827,7 +836,7 @@ describe("LIVE-2E persistence", () => {
       const record = { ...base, created_by_principal: principalId, seats: base.seats.map((seat, at) => (at === 0 ? { ...seat, principal_id: principalId } : seat)) };
       assert.equal((await records.put(record, null)).kind, "committed");
 
-      const service = await IdentityService.open(createFileIdentityStore(dir, { warn: () => undefined }));
+      const service = await IdentityService.open(createFileIdentityStore(dir, { warn: () => undefined }), { policy: POLICY });
       assert.equal(service.peekPrincipal(principalId)?.kind, "unprofiled");
       assert.equal(service.peekPrincipal(principalId)?.account_link, null);
       assert.equal(service.isProfiled(principalId), false);
@@ -838,23 +847,25 @@ describe("LIVE-2E persistence", () => {
         assert.deepEqual([boot.status, (boot.body as { profile: unknown }).profile], [200, null], "its session holds; it meets the profile gate");
         assert.equal(await upgradeStatus(port, cookie), 101, "P3-ACCT: a public, read-only socket until it signs in");
         /* LIVE-2E review M2: this browser played before profiles existed, so it may hold seats. Signing it in to
-           ANOTHER profile would orphan them: recover and link are refused `has-tables`, and nothing is spent. */
+           ANOTHER account would orphan them: login and recovery are refused `has-tables`, and nothing is spent. */
         const other = await profiledBrowser(port, "Other");
-        const otherCode = ((await linkCode(port, other.cookie)).body as { code: string }).code;
-        assert.deepEqual([(await recover(port, cookie, other.recoveryKey)).body, (await redeem(port, cookie, otherCode)).body], [
+        assert.deepEqual([(await login(port, cookie, other.username, other.password)).body, (await recover(port, cookie, { username: other.username, wallet: other.wallet })).body], [
           { error: "has-tables" },
           { error: "has-tables" },
         ]);
         assert.equal((await session(port, cookie)).status, 200, "its session was not replaced");
-        assert.equal((await linkOnFreshBrowser(port, otherCode)).answer.status, 200, "the code was not spent");
-        const created = await createProfile(port, cookie, "Old Guest");
-        assert.equal(created.status, 201);
+        assert.equal((await loginOnFreshBrowser(port, other.username, other.password)).answer.status, 200, "the other account is untouched");
+        // It creates ITS OWN account: the SAME principal is bound, so its seats come with it.
+        const created = await createAccount(port, cookie, { username: "old.guest", name: "Old Guest", wallet: keplrAccount("live2e/v1/old-guest") });
+        assert.equal(created.status, 201, created.text);
+        const signedIn = cookieFromAnswer(created) as string;
         const file = readIdentityFile(dir);
-        assert.equal(file.version, 2, "the next commit writes v2");
+        assert.equal(file.version, IDENTITY_FILE_VERSION, "a commit writes the current version");
         const stored = (file.principals as Array<{ principal_id: string; kind: string; account_link: string }>).find((p) => p.principal_id === principalId);
         assert.equal(stored?.kind, "profile", "the SAME principal is bound -- so its seats come with it");
         assert.ok((file.profiles as Array<{ principal_id: string }>).some((profile) => profile.principal_id === principalId));
-        const view = await viewWith(port, cookie, record.game_id, "old-guest");
+        assert.equal(principalOf(server, signedIn), principalId);
+        const view = await viewWith(port, signedIn, record.game_id, "old-guest");
         assert.deepEqual([view.you.role, view.you.playerId], ["host", ALICE], "the seat it held before profiles existed");
       } finally {
         await stopServer(server);
@@ -864,7 +875,7 @@ describe("LIVE-2E persistence", () => {
     }
   });
 
-  test("a half-bound profile refuses to load (either side), as does a link code naming no profile", async () => {
+  test("a half-bound profile refuses to load (either side), as does a link code naming no profile; a well-bound LEGACY profile loads retired, an Authorization Wallet account loads profiled", async () => {
     const dir = tmpDir("halfbound");
     try {
       const now = Date.now();
@@ -892,6 +903,20 @@ describe("LIVE-2E persistence", () => {
       const [p1, p2] = [mintPrincipalId(), mintPrincipalId()];
       const [f1, f2] = [mintProfileId(), mintProfileId()];
       const link = (profileId: string) => ({ link_hash: linkCodeHash("A".repeat(20)), profile_id: profileId, created_at: now, expires_at: now + 1, consumed_at: null });
+      /* PHASE 3 FINAL: the Authorization Wallet account (schema 3): a username login, its Authorization Wallet, and the
+         sealed digest of its own credential epoch. */
+      const legacy = profile(f1, p1);
+      const account = {
+        ...legacy,
+        schema: 3,
+        recovery_hash: sealedRecoveryDigest(legacy.recovery_selector),
+        login_key: "ann",
+        login_name: "Ann",
+        password_hash: await hashPassword(PASSWORD, TEST_PASSWORD_KDF),
+        password_set_at: now,
+        wallet_address: keplrAccount("live2e/halfbound").address,
+        wallet_verified_at: now,
+      };
       const cases: Array<[string, object]> = [
         ["a profile principal naming no stored profile", doc([principal(p1, "profile", f1)], [])],
         ["a profile whose principal is unprofiled", doc([principal(p1, "unprofiled", null)], [profile(f1, p1)])],
@@ -901,23 +926,31 @@ describe("LIVE-2E persistence", () => {
         ["a link code naming no profile", doc([principal(p1, "profile", f1)], [profile(f1, p1)], [link(f2)])],
         ["a v1 principal that is not a guest", { format: "gs-identity", version: 1, principals: [principal(p1, "profile", f1)], sessions: [] }],
         ["a v2 document without its profile collections", { format: "gs-identity", version: 2, principals: [], sessions: [] }],
+        ["an account (schema 3) without its Authorization Wallet", doc([principal(p1, "profile", f1)], [{ ...account, wallet_address: null, wallet_verified_at: null }])],
       ];
       for (const [what, bad] of cases) {
         fs.writeFileSync(path.join(dir, IDENTITY_FILE), JSON.stringify(bad));
         await assert.rejects(createFileIdentityStore(dir).load(), (error: Error) => error instanceof IdentityStoreCorruptError, what);
         await assert.rejects(IdentityService.open(createFileIdentityStore(dir)), IdentityStoreCorruptError, what);
       }
-      // The well-bound pair loads.
-      fs.writeFileSync(path.join(dir, IDENTITY_FILE), JSON.stringify(doc([principal(p1, "profile", f1)], [profile(f1, p1)], [link(f1)])));
+      // The well-bound LEGACY pair loads -- and, made before Authorization Wallets, is RETIRED: not profiled, no name.
+      fs.writeFileSync(path.join(dir, IDENTITY_FILE), JSON.stringify(doc([principal(p1, "profile", f1)], [legacy], [link(f1)])));
       const loaded = await IdentityService.open(createFileIdentityStore(dir));
-      assert.equal(loaded.isProfiled(p1), true);
-      assert.equal(loaded.profileName(p1), "Ann");
+      assert.ok(loaded.peekProfileOf(p1) !== undefined, "loaded");
+      assert.equal(loaded.isProfiled(p1), false, "a legacy profile is retired");
+      assert.equal(loaded.profileName(p1), null);
+      // The well-bound ACCOUNT loads, profiled.
+      fs.writeFileSync(path.join(dir, IDENTITY_FILE), JSON.stringify(doc([principal(p1, "profile", f1)], [account])));
+      const current = await IdentityService.open(createFileIdentityStore(dir));
+      assert.equal(current.isProfiled(p1), true);
+      assert.equal(current.profileName(p1), "Ann");
+      assert.deepEqual(current.authorizationWallet(p1), { address: account.wallet_address, since: now });
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  test("an injected store failure on create, recover, link, rotate, link-code and sign-out-others answers 503 and changes nothing", async () => {
+  test("an injected store failure on create, login, change password, sign-out-others and recover answers 503 and changes nothing -- each retried works", async () => {
     const { service, store } = memoryService();
     const { server, port } = await prodServer({ service });
     const fail = () => store.failNext.push("definite");
@@ -926,62 +959,62 @@ describe("LIVE-2E persistence", () => {
       const ann = await profiledBrowser(port, "Ann");
       // Create.
       const bea = await bootstrapCookie(port);
+      const proof = await createAuthorization(port, bea, "bea.fails", keplrAccount("live2e/fail/bea"));
+      const createBody = { username: "bea.fails", password: PASSWORD, name: "Bea", ...proof };
       let before = durable();
       fail();
-      const refusedCreate = await createProfile(port, bea, "Bea");
+      const refusedCreate = await post(port, "/gs/api/account/create", bea, createBody);
       assert.deepEqual([refusedCreate.status, refusedCreate.body], [503, { error: "unavailable" }]);
       assert.ok(refusedCreate.headers["retry-after"]);
+      assert.equal(refusedCreate.headers["set-cookie"], undefined);
       assert.equal(durable(), before);
       assert.equal(((await session(port, bea)).body as { profile: unknown }).profile, null, "no profile half-created");
       assert.equal(await upgradeStatus(port, bea), 101, "P3-ACCT: still only a public, read-only socket");
-      assert.equal((await createProfile(port, bea, "Bea")).status, 201, "the retry creates it (not already-profiled)");
+      assert.equal((await post(port, "/gs/api/account/create", bea, createBody)).status, 201, "the retry creates it -- the same signed CREATE (a transient failure released it)");
 
-      // Link-code issue.
+      // Log in.
+      const phoneBrowser = await bootstrapCookie(port);
       before = durable();
       fail();
-      assert.equal((await linkCode(port, ann.cookie)).status, 503);
+      const refusedLogin = await login(port, phoneBrowser, ann.username, ann.password);
+      assert.deepEqual([refusedLogin.status, refusedLogin.body], [503, { error: "unavailable" }]);
+      assert.equal(refusedLogin.headers["set-cookie"], undefined);
       assert.equal(durable(), before);
-      const { code } = (await linkCode(port, ann.cookie)).body as { code: string };
+      assert.equal(((await session(port, phoneBrowser)).body as { profile: unknown }).profile, null, "the browser's session was not replaced");
+      const loggedIn = await login(port, phoneBrowser, ann.username, ann.password);
+      assert.equal(loggedIn.status, 200, "the retry signs in");
+      const phone = cookieFromAnswer(loggedIn) as string;
+      assert.equal(principalOf(server, phone), principalOf(server, ann.cookie));
 
-      // Link.
-      const phone = await bootstrapCookie(port);
+      // Change password: the old one keeps working after a refused change.
       before = durable();
       fail();
-      const refusedLink = await redeem(port, phone, code);
-      assert.deepEqual([refusedLink.status, refusedLink.body], [503, { error: "unavailable" }]);
-      assert.equal(refusedLink.headers["set-cookie"], undefined);
-      assert.equal(durable(), before, "the code is not consumed");
-      assert.equal((await session(port, phone)).status, 200, "the browser's session was not replaced");
-      const linked = await redeem(port, phone, code);
-      assert.equal(linked.status, 200, "the code is still redeemable");
-      assert.equal(principalOf(server, cookieFromAnswer(linked) as string), principalOf(server, ann.cookie));
-
-      // Recover.
-      const tablet = await bootstrapCookie(port);
-      before = durable();
-      fail();
-      assert.equal((await recover(port, tablet, ann.recoveryKey)).status, 503);
+      assert.equal((await changePassword(port, ann.cookie, ann.password, NEW_PASSWORD)).status, 503);
       assert.equal(durable(), before);
-      assert.equal(((await session(port, tablet)).body as { profile: unknown }).profile, null);
-      const recovered = await recover(port, tablet, ann.recoveryKey);
-      assert.equal(recovered.status, 200);
-
-      // Rotate: the old key keeps working after a refused rotation.
-      before = durable();
-      fail();
-      assert.equal((await rotateKey(port, ann.cookie, ann.recoveryKey)).status, 503, "re-authenticated (no write), then the rotation's write fails");
-      assert.equal(durable(), before);
-      assert.equal((await recoverOnFreshBrowser(port, ann.recoveryKey)).answer.status, 200, "the old key still works");
+      for (const cookie of [ann.cookie, phone]) assert.equal((await session(port, cookie)).status, 200, "nobody was signed out");
 
       // Sign out other devices: nobody is signed out.
-      const phoneCookie = cookieFromAnswer(linked) as string;
       before = durable();
       fail();
-      assert.equal((await reauth(port, ann.cookie, ann.recoveryKey)).status, 200); // writes nothing: the fault stays armed
+      assert.equal((await reauth(port, ann.cookie, ann.password)).status, 200); // writes nothing: the fault stays armed
       assert.equal((await signOutOthers(port, ann.cookie)).status, 503);
       assert.equal(durable(), before);
-      assert.equal((await session(port, phoneCookie)).status, 200);
-      assert.equal(await upgradeStatus(port, phoneCookie), 101);
+      assert.equal((await session(port, phone)).status, 200);
+      assert.equal(await upgradeStatus(port, phone), 101);
+
+      // Recover: the same signed RECOVER is accepted on the retry.
+      const tablet = await bootstrapCookie(port);
+      const minted = await post(port, "/gs/api/account/authorization", tablet, { purpose: "recover", username: ann.username, wallet: ann.wallet.address });
+      assert.equal(minted.status, 200);
+      const recoverBody = { operation: minted.body?.operation, ...ann.wallet.sign((minted.body?.texts as Array<{ text: string }>)[0].text), newPassword: NEW_PASSWORD };
+      before = durable();
+      fail();
+      assert.equal((await post(port, "/gs/api/account/recover", tablet, recoverBody)).status, 503);
+      assert.equal(durable(), before);
+      assert.equal(((await session(port, tablet)).body as { profile: unknown }).profile, null);
+      assert.equal((await session(port, phone)).status, 200, "nobody was signed out");
+      const recovered = await post(port, "/gs/api/account/recover", tablet, recoverBody);
+      assert.deepEqual([recovered.status, recovered.body], [200, { ok: true, profile: { name: "Ann" }, signedOut: 2 }]);
     } finally {
       await stopServer(server);
     }
@@ -993,58 +1026,59 @@ describe("LIVE-2E persistence", () => {
    ================================================================== */
 
 describe("LIVE-2E rate limits", () => {
-  test("credential redemptions: the address budget counts FAILURES and never refuses the right credential (ESCROW-3A §10C); apart from every room limit", async () => {
+  test("recoveries: the address budget counts FAILURES and never refuses the right Authorization Wallet (ESCROW-3A §10C); apart from every room limit", async () => {
     const { server, port } = await prodServer({
       limits: { credentialRedeemsPerIp: { capacity: 3, refillPerSecond: 0.0001 } },
       rooms: { createsPerIp: { capacity: 1, refillPerSecond: 0.0001 } },
     });
     try {
       const ann = await profiledBrowser(port, "Ann");
-      // The room budget is spent first: it touches no redemption.
+      const mallory = keplrAccount("live2e/budget/mallory");
+      // The room budget is spent first: it touches no recovery.
       const socket = await Client.openWithCookie(port, ann.cookie, "ann");
       const table = await socket.op(CREATE());
       assert.equal(table.ok, true);
       const { gameId } = table.data as { gameId: string };
       assert.equal((await socket.op(CREATE())).code, "rate-limited");
-      const { code } = (await linkCode(port, ann.cookie)).body as { code: string };
-      // A neighbour on the same address spends the address's FAILURE budget (3) with wrong credentials ...
-      assert.equal((await recoverOnFreshBrowser(port, `${mintRecoverySelector()}.${mintSecret()}`)).answer.status, 403);
-      assert.equal((await linkOnFreshBrowser(port, "ABCD-EFGH-JKMN-PQRS-TVWX")).answer.status, 403);
-      assert.equal((await recoverOnFreshBrowser(port, `${ann.recoveryKey.split(".")[0]}.${mintSecret()}`)).answer.status, 403);
-      // ... after which every WRONG credential is 429 -- a real selector with a wrong secret and an unknown one alike ...
-      const limited = await recoverOnFreshBrowser(port, `${mintRecoverySelector()}.${mintSecret()}`);
+      // A neighbour on the same address spends the address's FAILURE budget (3) with wrong proofs ...
+      assert.equal((await recoverOnFreshBrowser(port, { username: ann.username, wallet: mallory })).answer.status, 403);
+      assert.equal((await recoverOnFreshBrowser(port, { username: "nobody-at-all", wallet: mallory })).answer.status, 403);
+      assert.equal((await recoverOnFreshBrowser(port, { username: ann.username, wallet: ann.wallet, signer: mallory })).answer.status, 403);
+      // ... after which every WRONG proof is 429 -- for a real username and an unknown one alike ...
+      const limited = await recoverOnFreshBrowser(port, { username: "nobody-at-all", wallet: mallory });
       assert.equal(limited.answer.status, 429);
       assert.equal((limited.answer.body as { error: string }).error, "rate-limited");
       assert.ok(Number(limited.answer.headers["retry-after"]) >= 1);
-      const realSelector = await recoverOnFreshBrowser(port, `${ann.recoveryKey.split(".")[0]}.${mintSecret()}`);
-      assert.deepEqual([realSelector.answer.status, realSelector.answer.body], [limited.answer.status, limited.answer.body], "no existence oracle");
+      const realUsername = await recoverOnFreshBrowser(port, { username: ann.username, wallet: mallory });
+      assert.deepEqual([realUsername.answer.status, realUsername.answer.body], [limited.answer.status, limited.answer.body], "no existence oracle");
       assert.equal(server.identityLimiter.denied["credential-ip"], 2);
-      assert.equal((await session(port, limited.before)).status, 200, "a refused redemption replaces nothing");
-      // ... and the RIGHT credentials still sign in: the right key, and a valid link code.
-      assert.equal((await recoverOnFreshBrowser(port, ann.recoveryKey)).answer.status, 200, "the right key is never refused on the address budget");
-      assert.equal((await linkOnFreshBrowser(port, code)).answer.status, 200, "nor a valid code");
-      // And the rooms are untouched by it: the same player's socket still acts.
+      assert.equal((await session(port, limited.before)).status, 200, "a refused recovery replaces nothing");
+      // ... and the rooms are untouched by it: the same player's socket still acts ...
       assert.equal((await socket.op({ type: "set-ready", ready: true }, gameId)).ok, true);
-      await socket.close();
+      // ... and the RIGHT wallet still recovers: it is never refused on the address budget.
+      assert.equal((await recoverOnFreshBrowser(port, { username: ann.username, wallet: ann.wallet })).answer.status, 200, "the right wallet is never refused on the address budget");
+      assert.equal(await socket.closed, 4401, "(and the recovery signed the old device out)");
     } finally {
       await stopServer(server);
     }
-    /* LIVE-2E review M1: there is NO server-wide redemption budget -- it would let a few addresses switch recovery off
-       for everybody. The second budget is the SESSION's: one browser cannot guess on past its own allowance. */
+    /* LIVE-2E review M1: there is NO server-wide recovery budget -- it would let a few addresses switch recovery off for
+       everybody. The second budget is the SESSION's: one browser cannot guess on past its own allowance. */
     const perSession = await prodServer({ limits: { credentialRedeemsPerSession: { capacity: 2, refillPerSecond: 0.0001 } } });
     try {
+      const mallory = keplrAccount("live2e/budget/mallory");
       const guesser = await bootstrapCookie(perSession.port);
-      for (let n = 0; n < 2; n += 1) assert.equal((await redeem(perSession.port, guesser, "ABCD-EFGH-JKMN-PQRS-TVWX")).status, 403);
-      assert.equal((await redeem(perSession.port, guesser, "ABCD-EFGH-JKMN-PQRS-TVWX")).status, 429);
+      for (let n = 0; n < 2; n += 1) assert.equal((await recover(perSession.port, guesser, { username: "someone", wallet: mallory })).status, 403);
+      const third = await recover(perSession.port, guesser, { username: "someone", wallet: mallory });
+      assert.equal(third.status, 429, "the session's budget is spent: not even a RECOVER text is minted");
       assert.equal(perSession.server.identityLimiter.denied["credential-session"], 1);
       // Another browser (same address) is not held back by that session's guessing.
-      assert.equal((await linkOnFreshBrowser(perSession.port, "ABCD-EFGH-JKMN-PQRS-TVWX")).answer.status, 403);
+      assert.equal((await recoverOnFreshBrowser(perSession.port, { username: "someone", wallet: mallory })).answer.status, 403);
     } finally {
       await stopServer(perSession.server);
     }
   });
 
-  test("profile creations are budgeted per address; a refused one creates nothing; profile actions per SESSION", async () => {
+  test("account creations are budgeted per address (the CREATE text is refused before Keplr signs); a refused one creates nothing; profile actions per SESSION", async () => {
     const { service, store } = memoryService();
     const { server, port } = await prodServer({
       service,
@@ -1054,55 +1088,33 @@ describe("LIVE-2E rate limits", () => {
       const ann = await profiledBrowser(port, "Ann");
       await profiledBrowser(port, "Bea");
       const third = await bootstrapCookie(port);
-      const limited = await createProfile(port, third, "Cy");
+      const limited = await post(port, "/gs/api/account/authorization", third, { purpose: "create", username: "cy.third", wallet: keplrAccount("live2e/budget/cy").address });
       assert.equal(limited.status, 429);
       assert.ok(limited.headers["retry-after"]);
       assert.equal(server.identityLimiter.denied["profile-create-ip"], 1);
       assert.equal(store.snapshot().profiles.length, 2);
       assert.equal(((await session(port, third)).body as { profile: unknown }).profile, null);
-      // Profile actions: three (a link code, a re-authentication, a rotation), then 429 for this SESSION (LIVE-2E review H1) ...
-      const { code } = (await linkCode(port, ann.cookie)).body as { code: string };
-      assert.equal((await rotateKey(port, ann.cookie, ann.recoveryKey)).status, 200);
+      // Profile actions: three (a "Confirm it's you", a sign-out of other devices, another confirmation), then 429 for
+      // this SESSION (LIVE-2E review H1) ...
+      assert.equal((await reauth(port, ann.cookie, ann.password)).status, 200);
+      assert.deepEqual((await signOutOthers(port, ann.cookie)).body, { ok: true, signedOut: 0 });
+      assert.equal((await reauth(port, ann.cookie, ann.password)).status, 200);
       assert.equal((await signOutOthers(port, ann.cookie)).status, 429);
       assert.equal(server.identityLimiter.denied["profile-actions"], 1);
-      // ... and another device of the same profile keeps its own: spending one device's budget cannot stop the
-      // owner's other device from signing it out. (The rotation retired the code, so this device comes by recovery.)
-      assert.equal((await linkOnFreshBrowser(port, code)).answer.status, 403, "the rotation retired the outstanding code");
-      assert.equal((await signOutOthers(port, ann.cookie)).status, 429);
+      // ... and another device of the same account keeps its own: spending one device's budget cannot stop the owner's
+      // other device from signing it out.
+      const phone = await loginOnFreshBrowser(port, ann.username, ann.password);
+      assert.equal(phone.answer.status, 200);
+      assert.deepEqual((await signOutOthers(port, phone.cookie as string)).body, { ok: true, signedOut: 1 });
+      assert.deepEqual((await session(port, ann.cookie)).body, { error: "session-ended", reason: "signed-out-remotely" });
     } finally {
       await stopServer(server);
     }
   });
 
-  test("LIVE-2E review H1: a leaked link code cannot outlive the owner securing the account", async () => {
-    const { server, port } = await prodServer();
-    try {
-      const ann = await profiledBrowser(port, "Ann");
-      // The intruder redeems a leaked code, then mints another to come back with.
-      const leaked = ((await linkCode(port, ann.cookie)).body as { code: string }).code;
-      const intruder = await linkOnFreshBrowser(port, leaked);
-      assert.equal(intruder.answer.status, 200);
-      const spare = ((await linkCode(port, intruder.cookie as string)).body as { code: string }).code;
-      // The owner signs out other devices: the intruder's session ends AND its spare code dies with it.
-      assert.deepEqual((await signOutOthers(port, intruder.cookie as string)).body, { error: "reauth-required" }, "ESCROW-3A: the intruder cannot sign the owner out");
-      assert.equal((await rotateKey(port, intruder.cookie as string)).status, 403, "nor rotate the key (a live session alone never does)");
-      assert.equal((await signOutOthers(port, ann.cookie, ann.recoveryKey)).status, 200);
-      assert.equal((await session(port, intruder.cookie as string)).status, 401);
-      assert.equal((await linkOnFreshBrowser(port, spare)).answer.status, 403, "the pre-minted code is gone");
-      // The same holds for a key rotation and for a sign-out of the issuing device.
-      const again = ((await linkCode(port, ann.cookie)).body as { code: string }).code;
-      assert.equal((await rotateKey(port, ann.cookie)).status, 200);
-      assert.equal((await linkOnFreshBrowser(port, again)).answer.status, 403, "a rotation retires outstanding codes");
-      const phone = await linkOnFreshBrowser(port, ((await linkCode(port, ann.cookie)).body as { code: string }).code);
-      assert.equal(phone.answer.status, 200);
-      const fromPhone = ((await linkCode(port, phone.cookie as string)).body as { code: string }).code;
-      assert.equal((await signOut(port, phone.cookie as string)).status, 204);
-      assert.equal((await linkOnFreshBrowser(port, fromPhone)).answer.status, 403, "a sign-out retires outstanding codes");
-      assert.equal(server.identity.sizes().links, 0);
-    } finally {
-      await stopServer(server);
-    }
-  });
+  /* "LIVE-2E review H1: a leaked link code cannot outlive the owner securing the account" is gone with link codes (no code
+     is issued any more: the retired routes answer 410, above); securing the account is now "Sign out other devices" (above)
+     and "Forgot password?" by the Authorization Wallet, which ends every session (RECOVERY). */
 });
 
 /* ==================================================================
@@ -1110,7 +1122,7 @@ describe("LIVE-2E rate limits", () => {
    ================================================================== */
 
 describe("LIVE-2E nothing secret reaches a log line", () => {
-  test("a whole profile lifecycle, with refusals and store failures, prints no recovery key, link code, cookie or digest", async () => {
+  test("a whole account lifecycle, with refusals and store failures, prints no password, signature, cookie, digest or credential epoch", async () => {
     const lines: string[] = [];
     const saved = { log: console.log, warn: console.warn, error: console.error };
     const capture = (...args: unknown[]) => lines.push(args.map((arg) => (arg instanceof Error ? `${arg.message} ${arg.stack}` : String(arg))).join(" "));
@@ -1118,42 +1130,53 @@ describe("LIVE-2E nothing secret reaches a log line", () => {
     console.warn = capture;
     console.error = capture;
     const { service, store } = memoryService();
-    const secrets: string[] = [];
+    const THIRD_PASSWORD = "the third passphrase";
+    const secrets: string[] = [PASSWORD, NEW_PASSWORD, THIRD_PASSWORD, "a wrong passphrase"];
     const keep = (cookie: string | null) => {
       if (cookie) secrets.push(cookie, cookie.split(".")[2]);
     };
     const { server, port } = await prodServer({ service });
     try {
-      const annCookie = await bootstrapCookie(port);
-      keep(annCookie);
+      const wallet = keplrAccount("live2e/secrets/ann");
+      const before = await bootstrapCookie(port);
+      keep(before);
+      const proof = await createAuthorization(port, before, "ann.secret", wallet);
+      secrets.push(proof.signature);
       store.failNext.push("definite");
-      await createProfile(port, annCookie, "Ann");
-      const created = await createProfile(port, annCookie, "Ann");
-      const key = (created.body as { recoveryKey: string }).recoveryKey;
-      secrets.push(key, key.split(".")[1]);
+      await post(port, "/gs/api/account/create", before, { username: "ann.secret", password: PASSWORD, name: "Ann", ...proof });
+      const created = await post(port, "/gs/api/account/create", before, { username: "ann.secret", password: PASSWORD, name: "Ann", ...proof });
+      assert.equal(created.status, 201, created.text);
+      const annCookie = cookieFromAnswer(created) as string;
+      keep(annCookie);
       const socket = await Client.openWithCookie(port, annCookie, "ann");
       await socket.op(CREATE());
-      const code = ((await linkCode(port, annCookie)).body as { code: string }).code;
-      secrets.push(code, canonicalLinkCode(code) as string, linkCodeHash(canonicalLinkCode(code) as string));
-      const phone = await linkOnFreshBrowser(port, code.toLowerCase());
+      const phone = await loginOnFreshBrowser(port, "ann.secret", PASSWORD);
       keep(phone.before);
       keep(phone.cookie);
-      await linkOnFreshBrowser(port, code); // a replay
-      await recoverOnFreshBrowser(port, `${key}x`); // a malformed key
-      await recoverOnFreshBrowser(port, `${key.split(".")[0]}.${mintSecret()}`); // a wrong secret
+      keep((await loginOnFreshBrowser(port, "ann.secret", "a wrong passphrase")).before); // a wrong password
+      keep((await loginOnFreshBrowser(port, "nobody.here", PASSWORD)).before); // an unknown username
+      const forged = await recoverOnFreshBrowser(port, { username: "ann.secret", wallet, signer: keplrAccount("live2e/secrets/mallory") }); // another key
+      keep(forged.before);
+      if (forged.signed) secrets.push(forged.signed.signature);
       store.failNext.push("definite");
-      await recoverOnFreshBrowser(port, key);
-      const tablet = await recoverOnFreshBrowser(port, key);
+      const failed = await recoverOnFreshBrowser(port, { username: "ann.secret", wallet, newPassword: NEW_PASSWORD });
+      assert.equal(failed.answer.status, 503);
+      keep(failed.before);
+      const tablet = await recoverOnFreshBrowser(port, { username: "ann.secret", wallet, newPassword: NEW_PASSWORD });
+      assert.equal(tablet.answer.status, 200, tablet.answer.text);
       keep(tablet.before);
       keep(tablet.cookie);
+      if (tablet.signed) secrets.push(tablet.signed.signature);
+      await socket.closed; // the recovery ended every earlier session
       store.failNext.push("definite");
-      await rotateKey(port, annCookie, key); // re-authenticated; this rotation's write fails
-      const rotated = ((await rotateKey(port, annCookie)).body as { recoveryKey: string }).recoveryKey; // the grant still stands
-      secrets.push(rotated, rotated.split(".")[1]);
-      await signOutOthers(port, annCookie, rotated);
-      await signOut(port, annCookie);
-      await socket.closed;
-      for (const profile of store.snapshot().profiles) secrets.push(profile.recovery_hash);
+      await changePassword(port, tablet.cookie as string, NEW_PASSWORD, THIRD_PASSWORD); // this change's write fails
+      const changed = await changePassword(port, tablet.cookie as string, NEW_PASSWORD, THIRD_PASSWORD);
+      assert.equal(changed.status, 200, changed.text);
+      const desk = cookieFromAnswer(changed) as string;
+      keep(desk);
+      await signOutOthers(port, desk, THIRD_PASSWORD);
+      await signOut(port, desk);
+      for (const profile of store.snapshot().profiles) secrets.push(profile.recovery_hash, profile.recovery_selector, profile.password_hash as string);
       for (const record of store.snapshot().sessions) secrets.push(record.secret_hash);
     } finally {
       console.log = saved.log;
@@ -1164,7 +1187,8 @@ describe("LIVE-2E nothing secret reaches a log line", () => {
     assert.ok(lines.length > 0, "the server did print (the store failures, at least)");
     const printed = lines.join("\n");
     for (const secret of secrets) assert.ok(!printed.includes(secret), "a secret reached the window");
-    assert.ok(!/rk_[0-9a-z]{26}/.test(printed), "no recovery selector either");
+    assert.ok(!/rk_[0-9a-z]{26}/.test(printed), "no credential epoch (selector) either");
+    assert.ok(!/scrypt\$/.test(printed), "no password hash either");
   });
 });
 
@@ -1173,10 +1197,10 @@ describe("LIVE-2E nothing secret reaches a log line", () => {
    ================================================================== */
 
 describe("LIVE-2E seat continuity across devices, a sign-out, a restart and a recovery", () => {
-  test("one seat, one principal: linked device, sign-out, restart, recovery -- the same player_id and log, and nothing copied or moved", async () => {
+  test("one seat, one principal: a second device signed in, sign-out, restart, recovery -- the same player_id and log, and nothing copied or moved", async () => {
     const dir = tmpDir("continuity");
     const boot = async () => {
-      const service = await IdentityService.open(createFileIdentityStore(dir, { warn: () => undefined }));
+      const service = await IdentityService.open(createFileIdentityStore(dir, { warn: () => undefined }), { policy: POLICY });
       return startServer({
         identity: { mode: "production", allowedOrigins: [PROD_ORIGIN], trustedProxyHops: 0, service },
         store: await settledLogStore(dir),
@@ -1229,9 +1253,8 @@ describe("LIVE-2E seat continuity across devices, a sign-out, a restart and a re
       await buy(laptop, 0, "ann-1");
       await buy(beaTab, 1, "bea-1");
 
-      // 4. A links a second device.
-      const { code: link } = (await linkCode(port, ann.cookie)).body as { code: string };
-      const phoneCookie = (await linkOnFreshBrowser(port, link)).cookie as string;
+      // 4. A signs in on a second device (the username and password -- PHASE 3 FINAL: no link code).
+      const phoneCookie = (await loginOnFreshBrowser(port, ann.username, ann.password)).cookie as string;
       assert.equal(principalOf(server, phoneCookie), annPrincipal);
 
       // 5. The second device sees the same seat, player_id and log.
@@ -1270,11 +1293,11 @@ describe("LIVE-2E seat continuity across devices, a sign-out, a restart and a re
       await Promise.all([phone.close(), beaTab.close()]);
       await stopServer(server);
 
-      // 9. Restart over the same directory; A recovers on a fresh browser with the recovery key.
+      // 9. Restart over the same directory; A recovers on a fresh browser with the Authorization Wallet.
       ({ server, port } = await boot());
       assert.deepEqual((await session(port, ann.cookie)).body, { error: "session-ended", reason: "logout" }, "the signed-out laptop stays out");
-      const recovered = await recoverOnFreshBrowser(port, ann.recoveryKey);
-      assert.equal(recovered.answer.status, 200);
+      const recovered = await recoverOnFreshBrowser(port, { username: ann.username, wallet: ann.wallet });
+      assert.equal(recovered.answer.status, 200, recovered.answer.text);
       const desktopCookie = recovered.cookie as string;
       assert.equal(principalOf(server, desktopCookie), annPrincipal, "the same principal after the restart");
 

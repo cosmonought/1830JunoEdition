@@ -414,7 +414,7 @@ export function AccountDialog({ mode, reason, port = sessionPort(), onModeChange
                   </button>
                 </div>
                 <p style={styles.label} data-testid="account-forgot-nowallet">
-                  There is no email reset and no recovery key: without your password and your Authorization Wallet, the account can't be recovered.
+                  Only your Authorization Wallet can reset your password — there is no email reset. Without your password and your Authorization Wallet, the account can't be recovered.
                 </p>
               </>
             ) : (

@@ -81,8 +81,8 @@ const NONCE = "fedcba9876543210fedcba9876543210";
 const PASSWORD = "a long enough secret";
 /** The signature the fake Keplr returns unless a case sets another. */
 const KEPLR_PUBKEY = "Ai1R5vzeZFvF73ROli+IbV7OuNG7bM6HeI0rthBGJzvf";
-/** The one sentence on these surfaces that names a recovery key -- to say there is none (see the "no recovery key" case). */
-const NO_RECOVERY_SENTENCE = "There is no email reset and no recovery key: without your password and your Authorization Wallet, the account can't be recovered.";
+/** The forgot view's sentence about what can (and can't) reset a password. It names no recovery key: none exists. */
+const NO_RECOVERY_SENTENCE = "Only your Authorization Wallet can reset your password — there is no email reset. Without your password and your Authorization Wallet, the account can't be recovered.";
 
 type Answer = { status: number; body?: unknown; then?: () => void };
 type Profile = { name: string; otherSessions: number; username?: string };
@@ -560,7 +560,7 @@ describe("Confirm it's you takes only a password", () => {
 });
 
 describe("no recovery key anywhere", () => {
-  it("the dialog's three views, the menu's views and Confirm it's you name no recovery key -- the forgot view's one sentence says there is none", async () => {
+  it("the dialog's three views, the menu's views and Confirm it's you never mention a recovery key", async () => {
     const seen: string[] = [];
     const look = (label: string) => {
       expect([label, all().querySelectorAll('[data-testid*="recovery"], [id*="recovery"], [name*="recovery"]').length]).toEqual([label, 0]);
@@ -597,8 +597,8 @@ describe("no recovery key anywhere", () => {
     look("sign out this device");
     expect(seen).toHaveLength(9);
     for (const page of seen) {
-      /* The one mention is the forgot view's sentence that there is none (owner: no recovery key exists). */
-      expect([page.split(":")[0], /recovery[\s-]?key/i.test(page.split(NO_RECOVERY_SENTENCE).join(""))]).toEqual([page.split(":")[0], false]);
+      /* Owner: the recovery-key product is gone -- no surface names one, not even to say there is none. */
+      expect([page.split(":")[0], /recovery[\s-]?key/i.test(page)]).toEqual([page.split(":")[0], false]);
     }
   });
 });

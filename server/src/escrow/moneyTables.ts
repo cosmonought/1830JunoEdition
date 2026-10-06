@@ -1555,7 +1555,7 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
     /* Unchanged by P3-ACCT: registering or moving a signing key outside a wallet link stays SENSITIVE. (The Ante registers
        this browser's key through a wallet link -- a fresh proof by the wallet itself -- whenever this browser holds none,
        so it never needs this route: `frontend/src/money/moneyActions.ts` anteNow.) */
-    if (!caller.sensitive) return refusal(403, "reauth-required", "Confirm it's you (your password, or a profile's recovery key) to set up signing on this device.");
+    if (!caller.sensitive) return refusal(403, "reauth-required", "Confirm it's you with your password to set up signing on this device.");
     const table = tableFor(caller, body.gameId);
     if (!isTable(table)) return table;
     const pubkey = typeof body.pubkey === "string" ? body.pubkey : "";

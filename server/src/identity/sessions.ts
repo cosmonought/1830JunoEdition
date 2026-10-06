@@ -939,6 +939,9 @@ export class IdentityService {
     if (session !== undefined && (isSecurityRevocation(session.revoke_reason) || this.familyRevoked(session))) return "revoked";
     const principal = this.principals.get(ctx.principalId);
     if (principal !== undefined && principal.status !== "active") return "revoked";
+    /* PHASE 3 FINAL: a retired (legacy) account's socket -- unreachable (the upgrade refuses it), kept equal to the
+       verifier's re-check. */
+    if (principal !== undefined && this.retired(principal)) return "revoked";
     return "ok";
   }
 

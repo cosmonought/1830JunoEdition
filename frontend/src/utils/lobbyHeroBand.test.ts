@@ -147,30 +147,31 @@ describe("the room is the page, and the text carries its own ground", () => {
     expect(fs.statSync(p).size).toBeLessThan(130 * 1024);
   });
 
-  it("anchors the title and the controls to the picture, not to the flow", () => {
+  it("aims the title and the controls at the picture's coordinates -- as flow, not as anchors (P3-N028)", () => {
     /* ==================================================================
-        DESIGN NOTE 1131: WHY ANCHORING IS POSSIBLE NOW AND WAS NOT BEFORE
+        DESIGN NOTE 1131: WHY ANCHORING WAS POSSIBLE -- AND P3-N028 (REOPENED): WHY IT IS FLOW NOW
        ==================================================================
-       I TURNED THIS DOWN LAST TURN and the objection was right about `cover` rather than about anchoring: a
-       background image is cropped differently at every viewport aspect, so 70% would have been the table on
-       one window and a lapel on the next. `.scene` reproduces `cover`'s arithmetic as an ELEMENT, so a child
-       at 70% is on the table on every screen -- checked at 1600x900, 1280x1024 and 430x900.
-       THE POSITIONS ARE THE ONES GIVEN: the title's BOTTOM at 40% ("at the lowest"), the controls centred at
-       70% in a 24% box, which puts them either side of x 0.40 and 0.60. */
-    expect(LOBBY).toContain('bottom: "60%"');
-    expect(LOBBY).toContain('top: "70%"');
-    expect(LOBBY).toContain('width: "60%"'); // #1423: widened for three buttons; same centre
+       `.scene` reproduces `cover`'s arithmetic as an ELEMENT, so 0.4 and 0.7 of it are the same features of the
+       photograph on every screen -- that part stands. What P3-N028 retired is hanging the CONTROLS in that box with
+       `position: absolute`: an absolute row owns no height, so the list below it needed a measured spacer, and a
+       measured boundary was late or wrong ("Your Tables" covering Host / Join, reported twice). The title and the
+       doors are flow content of the top region now, and the composition is their MARGINS, aimed at the same
+       coordinates: the title's foot at 0.4 of the scene, the doors' centre at 0.7, 20% of the scene wide. */
+    expect(LOBBY).toContain("const TITLE_FOOT_OF_SCENE = 0.4;");
+    expect(LOBBY).toContain("const DOORS_CENTRE_OF_SCENE = 0.7;");
+    expect(LOBBY).toContain("const WORDMARK_SHARE_OF_SCENE = 0.2;");
+    expect(LOBBY).toContain("const WORDMARK_MIN_PX = 230;");
+    expect(LOBBY).toContain("marginTop: TITLE_MARGIN_TOP,");
+    expect(LOBBY).toContain("marginTop: ACTIONS_MARGIN_TOP,");
     /* ==================================================================
-        DESIGN NOTE 1132: CENTRED BY ARITHMETIC, NOT BY TRANSFORM
+        DESIGN NOTE 1132: CENTRED WITHOUT A TRANSFORM -- BY FLOW NOW
        ==================================================================
-       `left: 50%` + `translateX(-50%)` is the usual idiom and it put a BLACK BOX ROUND THE TITLE: `transform`
-       creates a stacking context, and `mix-blend-mode` only blends with the backdrop inside its nearest one,
-       so the wordmark was cut off from the photograph it needed to key against.
-       `left: 40%` WITH `width: 20%` IS THE SAME POSITION and creates nothing. Asserted as the absence of the
-       horizontal transform, because that is the property that broke it. */
-    expect(LOBBY).toContain('left: "40%"');
-    expect(LOBBY).toContain('left: "20%"'); // #1423
+       `left: 50%` + `translateX(-50%)` put a BLACK BOX ROUND THE TITLE: `transform` creates a stacking context and
+       `mix-blend-mode` only blends inside its nearest one. #1132 centred it by arithmetic (`left: 40%`, `width: 20%`);
+       the stage centres it by flow (`alignItems: center`). Asserted as the absence of the transforms that broke it. */
+    expect(LOBBY).toContain('alignItems: "center",\n    paddingBottom');
     expect(LOBBY).not.toContain('transform: "translateX(-50%)"');
+    expect(LOBBY).not.toContain('transform: "translateY(-50%)"');
     expect(LOBBY).not.toContain('transform: "translate(-50%, -50%)",\n    pointerEvents');
   });
 
@@ -308,43 +309,38 @@ describe("the room is the page, and the text carries its own ground", () => {
     expect(FOOTER).toContain('animated={surface === "meta"}');
   });
 
-  it("bounds the picture to a hero and puts the list under it", () => {
+  it("bounds the picture to the top region and puts the list under it", () => {
     /* ==================================================================
-        DESIGN NOTE 1440 SUPERSEDES #1133's `bottom: 0`
+        DESIGN NOTE 1440, AND P3-N028 (REOPENED) ON TOP OF IT
        ==================================================================
-       #1133 REPORTED "the footer now scrims the entire lower fourth of the screen" and it was not the footer:
-       `sceneClip` was pinned to `height: 100vh` while the root is `min-height: 100vh` plus its flow children,
-       so the last stretch of the page had no photograph on it and the footer's strip ran into that bare ink
-       as one slab. Running the clip to the root's bottom was the right fix FOR A PAGE WITH NOTHING ON IT.
-       THE PUBLIC LIST IS WHAT FILLS THAT SPACE NOW, and it changes the sign of the argument: a clip that
-       grows with the page would stretch the window the photograph is seen through over several thousand
-       pixels of room rows, and -- the scene being centred in it -- would carry the title and the two anchored
-       buttons down to the middle of the scroll with it. There is no bare band left to defend against,
-       because emptiness is what the list replaced.
-       SO THE TWO EDGES BECOME TWO OTHER EDGES: the hero is a bounded window (`--lobby-hero`), and the scene
-       is anchored to its TOP rather than centred, which is what keeps the title and the buttons exactly where
-       #1131 put them while the picture stops above the fold instead of below it.
-       AND THE HERO TAKES ITS PLACE IN THE FLOW, which is the half a reader is most likely to delete as a
-       stray empty div: `sceneClip` is absolute and reserves no height, so without the spacer the first room
-       row would be laid out under the utility row and read through the photograph. */
-    expect(LOBBY).toContain('height: "var(--lobby-hero)"');
-    expect(LOBBY).toContain('"--lobby-hero": hero');
-    expect(LOBBY).toContain('<div style={styles.heroFlow} aria-hidden="true" />');
+       #1440 bounded the photograph to a hero WINDOW (`min(100vh, max(520px, 74vh))`) and anchored the scene to the
+       window's TOP rather than centring it, so the title and the doors stayed where #1131 put them while the picture
+       stopped above the fold. Both survive. What changed is where the window lives: it is the TOP REGION's floor
+       (`minHeight`) now, and the photograph is that region's background (`sceneClip`, `bottom: 0` of the region) --
+       not an absolute layer over the page with an empty spacer (`heroFlow`) reserving its height from a measurement.
+       The list is flow content after an explicit boundary; the region's height is its content's. */
+    expect(LOBBY).toContain('minHeight: "var(--lobby-hero-window)"');
+    expect(LOBBY).toContain('"--lobby-hero-window": `min(${100 / scale}vh, max(${HERO_MIN_PX}px, ${HERO_SHARE / scale}vh))`');
+    expect(LOBBY).toContain('<div style={styles.boundary} role="presentation" aria-hidden="true" data-testid="lobby-boundary" />');
+    expect(LOBBY).not.toContain("styles.heroFlow");
     expect(LOBBY).toMatch(/top: `calc\(max\(\$\{[^}]+\}vh, calc\(\$\{[^}]+\}vw \* 1072 \/ 1920\)\) \/ 2\)`/);
-    // The scene is no longer centred on the window, which is the value that would undo all of the above.
+    // The scene is not centred on the window, which is the value that would undo all of the above.
     expect(LOBBY).not.toContain('top: "50%"');
     expect(LOBBY).not.toContain('padding: "0 0 40px"');
   });
 
   it("puts the public list on the page, below the two doors", () => {
-    /* Design note #1440: the list is FLOW CONTENT in the width-capped column, after the hero spacer -- not a
-       second absolutely-placed layer over the photograph, and not inside the join dialog it came from. The
-       order is the assertion: hero, then list. */
-    const spacer = LOBBY.indexOf("<div style={styles.heroFlow}");
+    /* Design note #1440: the list is FLOW CONTENT in the width-capped column -- not a second absolutely-placed layer
+       over the photograph, and not inside the join dialog it came from. P3-N028: after the top region's boundary.
+       The order is the assertion: doors, boundary, tables region, list. */
+    const doors = LOBBY.indexOf('data-testid="lobby-actions"');
+    const boundary = LOBBY.indexOf('<div style={styles.boundary}');
+    const region = LOBBY.indexOf('<div style={styles.content} data-testid="lobby-tables">');
     const list = LOBBY.indexOf("<LobbyRoomList");
-    expect(spacer).toBeGreaterThan(-1);
-    expect(list).toBeGreaterThan(spacer);
-    expect(LOBBY.indexOf("<div style={styles.content}>")).toBeLessThan(list);
+    expect(doors).toBeGreaterThan(-1);
+    expect(boundary).toBeGreaterThan(doors);
+    expect(region).toBeGreaterThan(boundary);
+    expect(list).toBeGreaterThan(region);
     // The public list, read here rather than handed to a modal. LIVE-2D: the server's `rooms-watch`.
     expect(LOBBY).toContain("rooms={publicRooms.rooms}");
   });
@@ -364,9 +360,11 @@ describe("the room is the page, and the text carries its own ground", () => {
        uses it -- so this asserts the LAYOUT is gone, not the token. */
     expect(LOBBY).not.toContain("lobby-dashboard");
     expect(LOBBY).not.toContain("styles.dashboardColumn");
-    // Design note #1131: `styles.stage` went too -- the controls are anchored to the scene now, not stacked
-    // in a flow column, so there is no container left between the picture and the buttons.
+    // Design note #1131: `styles.stage` (the old card's column) went too. P3-N028 (reopened) puts the title and the
+    // controls back in a flow column -- `styles.heroStage`, inside the top region and with no panel -- because a
+    // control that owns no height is how the list came to cover it; the card does not come back with it.
     expect(LOBBY).not.toContain("styles.stage}");
+    expect(LOBBY).toContain("<div style={styles.heroStage}>");
     expect(LOBBY).toContain("styles.tableAnchor");
   });
 

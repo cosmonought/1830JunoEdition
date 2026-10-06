@@ -1,27 +1,27 @@
 /** @jest-environment jsdom */
 //
 // ==================================================================
-//  PHASE 3 (P3-ACCT): THE HOMEPAGE OVERLAP -- THE LIST IS LAID OUT BELOW THE DOORS, WHATEVER THE WINDOW
+//  PHASE 3 (P3-ACCT / P3-N028): THE HOMEPAGE OVERLAP -- THE MECHANISM
 // ==================================================================
 //
-// REPORTED: at a constrained width or zoom the tables list ran over Host / Join and the account buttons. The doors
-// hang at 70% of a `cover` scene that can be far taller than the window, while the list started where the hero
-// window ended -- two coordinate systems nobody compared (see `Lobby.tsx`, "THE HOMEPAGE OVERLAP").
+// REPORTED (P3-ACCT): at a constrained width or zoom the tables list ran over Host / Join and the account buttons.
+// FIRST FIX (W3-L): the doors stayed absolutely positioned in the photograph; their foot was MEASURED
+// (`getBoundingClientRect` / `ResizeObserver`) and replayed as the height of an empty spacer above the list.
+// REOPENED (2026-10-06, the owner, ~300% viewing scale): "Your Tables" covering Host / Join again. A measured boundary is
+// a copy that lands a render late -- in real Chromium the list was painted over the doors in the frames after a load, a
+// resize and a sign-in (`docs/phase3/evidence/p3acct/homepage_tables_boundary.md`) -- and is wrong wherever the
+// measurement is.
 //
-// What is pinned here (jsdom has no layout, so the real geometry is measured in Chromium against the production
-// bundle -- recorded in the slice report -- and THIS pins the mechanism that makes it hold):
-//   1. the doors' anchor is clamped INTO the hero window (`--lobby-hero-window`, the viewport-only hero) and never
-//      above the title's foot;
-//   2. the row is MEASURED and the hero's share of the flow is at least its foot plus a gap -- the list is REFLOWED
-//      below the doors, never moved by an absolute collision rule;
-//   3. the window the photograph is seen through grows with it (no door on bare ink); the authored composition
-//      (#1131's 70% / 20% / 60%) is unchanged.
+// What is pinned here is the mechanism that REPLACED it (`Lobby.tsx`, "THE TOP REGION OWNS ITS HEIGHT"): the corner, the
+// title and the doors are flow content of one top region that owns its height; the photograph is that region's
+// background; the composition is CSS arithmetic of the window, not a measurement. The DOM structure in every homepage
+// state is pinned by `p3HomepageTablesBoundary.test.tsx`; the geometry, in real Chromium, by the evidence script.
 
 import React from "react";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 
-import { Lobby, actionsTopFor, heroVars } from "./Lobby";
+import { ACTIONS_MARGIN_TOP, Lobby, TITLE_MARGIN_TOP, topRegionVars } from "./Lobby";
 import { ModalLayerHost } from "./ModalPortal";
 import { WalletProvider } from "../context/WalletContext";
 import { installSessionPort, readySessionPort } from "../utils/sessionBootstrap";
@@ -37,42 +37,47 @@ global.IS_REACT_ACT_ENVIRONMENT = true;
 
 const LOBBY = readStripped("components/Lobby.tsx");
 
-describe("P3-ACCT: the homepage overlap, the mechanism", () => {
-  it("clamps the doors into the window, under the title, without moving the authored composition", () => {
-    expect(LOBBY).toContain('"--lobby-hero-window": heroWindow,');
-    expect(LOBBY).toContain("top: `max(calc(${titleFoot} + ${half + 12}px), min(70%, calc(var(--lobby-hero-window) - ${half + 20}px)))`");
-    expect(LOBBY).toContain("const titleFoot = `max(40%, calc(${WORDMARK_HEIGHT_OF_SCENE} + ${utilityRowPx + 16}px))`;");
-    /* #1131's coordinates still read as written. */
-    expect(LOBBY).toContain('top: "70%"');
-    expect(LOBBY).toContain('left: "20%"');
-    expect(LOBBY).toContain('width: "60%"');
+describe("P3-N028: the homepage overlap, the mechanism", () => {
+  it("measures nothing: the first fix's observers, client rects and spacer are gone", () => {
+    expect(LOBBY).not.toContain("ResizeObserver");
+    expect(LOBBY).not.toContain("getBoundingClientRect");
+    expect(LOBBY).not.toContain("heroVars");
+    expect(LOBBY).not.toContain("actionsTopFor");
+    expect(LOBBY).not.toContain("--lobby-hero-flow");
+    expect(LOBBY).not.toContain('"--lobby-hero":');
+    expect(LOBBY).not.toContain("heroFlow");
   });
 
-  it("the hero arithmetic: no measurement yet -> the window alone; measured -> at least the doors' foot plus the gap", () => {
-    expect((heroVars(1, 56) as Record<string, string>)["--lobby-hero"]).toBe("min(100vh, max(520px, 74vh))");
-    expect((heroVars(1, 56, 700) as Record<string, string>)["--lobby-hero"]).toBe("max(min(100vh, max(520px, 74vh)), 724px)");
-    expect((heroVars(1, 56, 700) as Record<string, string>)["--lobby-hero-flow"]).toBe("max(0px, calc(max(min(100vh, max(520px, 74vh)), 724px) - 88px))");
-    expect((heroVars(0.63, 56, 700) as Record<string, string>)["--lobby-hero-window"]).toBe(`min(${100 / 0.63}vh, max(520px, ${74 / 0.63}vh))`);
+  it("the top region's lengths are the window's, in layout space (#1144/#1294), and nothing else", () => {
+    expect(topRegionVars(1)).toEqual({
+      "--lobby-hero-window": "min(100vh, max(520px, 74vh))",
+      "--lobby-window-h": "100vh",
+      "--lobby-scene-w": "max(100vw, calc(100vh * 1920 / 1072))",
+      "--lobby-scene-h": "max(100vh, calc(100vw * 1072 / 1920))",
+    });
+    const zoomed = topRegionVars(1.25) as Record<string, string>;
+    expect(zoomed["--lobby-hero-window"]).toBe("min(80vh, max(520px, 59.2vh))");
+    expect(zoomed["--lobby-scene-h"]).toBe("max(80vh, calc(80vw * 1072 / 1920))");
   });
 
-  it("reflows the list below the measured doors: the hero's flow share is at least the row's foot plus a gap", () => {
-    expect(LOBBY).toContain("const hero = actionsBottomPx > 0 ? `max(${heroWindow}, ${Math.ceil(actionsBottomPx) + ACTIONS_GAP_PX}px)` : heroWindow;");
-    expect(LOBBY).toContain('"--lobby-hero-flow": `max(0px, calc(${hero} - ${utilityRowPx + 32}px))`,');
-    expect(LOBBY).toContain("observer?.observe(row);");
-    expect(LOBBY).toContain("observer?.observe(page);");
-    expect(LOBBY).toContain('window.addEventListener("resize", measure);');
-    /* No absolute collision rule anywhere: nothing positions the list against the doors. */
-    expect(LOBBY).not.toMatch(/position: "absolute",\s*top: `?calc\(var\(--lobby-actions/);
+  it("keeps #1131's composition as flow margins: the title's foot at 0.4 of the scene, the doors' centre at 0.7, clamped into the window", () => {
+    /* The wordmark: 20% of the scene, at least 230px -- unless the window is so short (~300% zoom) that half its
+       height is less; then the corner, the title and the doors still stack inside it instead of overlapping. */
+    const width = "max(min(230px, calc(var(--lobby-window-h) * 0.5)), calc(var(--lobby-scene-w) * 0.2))";
+    const height = `${width} * 617 / 900`;
+    /* The title: its foot aimed at 0.4 of the scene below a one-line corner (44px), never nearer the corner than 16px. */
+    expect(TITLE_MARGIN_TOP).toBe(`max(16px, calc(var(--lobby-scene-h) * 0.4 - ${height} - 44px))`);
+    /* The doors: their centre aimed at 0.7 of the scene below the title's foot, clamped half a row plus 20px inside the
+       hero window (P3-ACCT), never nearer the title than 12px. A margin, so a taller title, corner or row moves them --
+       and the tables -- down. */
+    const foot = `max(calc(var(--lobby-scene-h) * 0.4), calc(60px + ${height}))`;
+    expect(ACTIONS_MARGIN_TOP).toBe(`max(12px, min(calc(var(--lobby-scene-h) * 0.7 - 23px - ${foot}), calc(var(--lobby-hero-window) - 66px - ${foot})))`);
+    expect(LOBBY).toContain("const TITLE_FOOT_OF_SCENE = 0.4;");
+    expect(LOBBY).toContain("const DOORS_CENTRE_OF_SCENE = 0.7;");
   });
 
-  it("rendered: a tall, low door row (a wrapped one on a short window) pushes the list's place down by its own foot", () => {
+  it("rendered: the doors and the title are flow content of the top region, which has a floor and no ceiling", () => {
     installSessionPort(readySessionPort());
-    const realRect = Element.prototype.getBoundingClientRect;
-    Element.prototype.getBoundingClientRect = function (this: Element) {
-      const testId = this.getAttribute("data-testid");
-      if (testId === "lobby-actions") return { top: 560, bottom: 780, height: 220, left: 0, right: 100, width: 100, x: 0, y: 560, toJSON: () => ({}) } as DOMRect;
-      return { top: 0, bottom: 0, height: 0, left: 0, right: 0, width: 0, x: 0, y: 0, toJSON: () => ({}) } as DOMRect;
-    };
     const container = document.createElement("div");
     document.body.appendChild(container);
     const root: Root = createRoot(container);
@@ -87,17 +92,20 @@ describe("P3-ACCT: the homepage overlap, the mechanism", () => {
           </>,
         ),
       );
-      const page = container.firstElementChild as HTMLElement;
-      /* The row's foot (780px) plus the 24px gap: the hero -- and with it the list's place -- is at least 804px. */
-      expect(page.style.getPropertyValue("--lobby-hero")).toContain("804px");
-      expect(page.style.getPropertyValue("--lobby-hero-flow")).toContain("804px");
-      /* And the anchor is clamped by half its measured height (110px) plus the margin (jsdom cannot hold a
-         `max()` length, so the value is read from the function that writes it). */
-      expect(actionsTopFor(56, 220).top).toBe("max(calc(max(40%, calc(24.6% + 72px)) + 122px), min(70%, calc(var(--lobby-hero-window) - 130px)))");
+      const top = container.querySelector('[data-testid="lobby-top"]') as HTMLElement;
+      const actions = container.querySelector('[data-testid="lobby-actions"]') as HTMLElement;
+      expect(top.style.minHeight).toBe("var(--lobby-hero-window)");
+      expect(top.style.height).toBe("");
+      expect(actions.style.position).toBe("");
+      expect(actions.style.top).toBe("");
+      expect(actions.style.transform).toBe("");
+      /* jsdom cannot hold a `max()` length, so the margin is read from the constant that writes it (above). */
+      const title = top.querySelector("h1")!.parentElement as HTMLElement;
+      expect(title.style.position).toBe("");
+      expect(title.style.bottom).toBe("");
     } finally {
       act(() => root.unmount());
       container.remove();
-      Element.prototype.getBoundingClientRect = realRect;
       installSessionPort(null);
     }
   });

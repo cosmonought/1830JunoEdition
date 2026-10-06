@@ -137,12 +137,15 @@ describe("the footer mark can still see the room it keys against", () => {
 });
 
 describe("the lobby wordmark keeps the clearance #1132 won for it", () => {
-  /* THE CHAIN IS SHORTER because the backdrop is INSIDE the group: `sceneClip` is a stacking context and the
-     photograph is its child, so the title keys against the room within it. Only what sits between the scene
-     and the wordmark has to stay clean. */
-  it("centres the title by arithmetic rather than by transform", () => {
+  /* P3-N028 (reopened) MOVED THE WORDMARK OUT OF `scene`: the title and the doors are flow content of the top region
+     now, and the photograph is that region's background. So the wordmark is in the footer's position -- the "chain of
+     clean intermediaries all the way to whatever paints behind it" the last case here always said it would need -- and
+     the chain is short and written down: `top` (the group: a positioned z-index box, i.e. a stacking context that
+     CONTAINS the painter) > `heroStage` > `titleAnchor` > the image. The two in between may not isolate. */
+  it("centres the title by flow rather than by transform", () => {
     expectTransparentToBlending("Lobby", "titleAnchor");
-    expect(styleBlock("Lobby", "titleAnchor")).toContain('left: "40%"');
+    expectTransparentToBlending("Lobby", "heroStage");
+    expect(styleBlock("Lobby", "heroStage")).toContain('alignItems: "center"');
   });
 
   it("lets the box that PAINTS the picture isolate, because it is the group", () => {
@@ -150,44 +153,44 @@ describe("the lobby wordmark keeps the clearance #1132 won for it", () => {
         DESIGN NOTE 1170a: THE RULE IS ABOUT INTERMEDIARIES, NOT ABOUT ANCESTORS
        ==================================================================
        MY FIRST VERSION OF THIS FILE FAILED HERE, and the code was right. `scene` carries
-       `transform: translate(-50%, -50%)` -- item one on the isolator list -- and the wordmark inside it
-       blends perfectly, because `scene` is also the element that PAINTS the photograph, as its own
-       `backgroundImage`. An ancestor's background is painted below its descendants IN THE SAME GROUP, so a
-       stacking context on the painter is not a barrier: it is the group the blend happens in.
-       SO #1132's RULE SHARPENS. Not "no ancestor may create a stacking context" but "nothing BETWEEN the
-       blended element and the box that paints its backdrop may". `scene` and `sceneClip` are on the far side
-       of that line; `titleAnchor` is on the near side, and is the one this pair actually constrains.
-       AND IT IS EXACTLY WHY THE FOOTER IS DIFFERENT. The footer paints nothing at all -- #1135 removed its
-       strip deliberately -- so it can only ever be an intermediary, and isolating it strands the mark over
-       transparency. A background on the footer would ALSO have fixed the report, by making it a painter; that
-       is the plate this project has now rejected twice, and naming the alternative is how this note stays
-       honest about there having been one. */
+       `transform: translate(-50%, -50%)` -- item one on the isolator list -- and the wordmark used to sit inside it
+       and blend perfectly, because `scene` is also the element that PAINTS the photograph, as its own
+       `backgroundImage`. A stacking context on the painter is not a barrier: it is painted into the group the blend
+       happens in. SO #1132's RULE SHARPENS: not "no ancestor may create a stacking context" but "nothing BETWEEN the
+       blended element and the box that paints its backdrop may". */
     const scene = styleBlock("Lobby", "scene");
     expect(scene).toContain("transform:");
     expect(scene).toContain("lobby-boardroom.jpg");
   });
 
-  it("constrains the one box that is genuinely in between", () => {
-    /* `titleAnchor` sits between `scene`'s background and the wordmark. It is the whole of the near side. */
+  it("constrains the boxes that are genuinely in between", () => {
+    /* `heroStage` and `titleAnchor` sit between the top region's group and the wordmark. They carry lengths only --
+       a width, a margin, `position: relative` for paint order -- never a transform, opacity, filter or z-index. */
+    expect(SOURCES.Lobby).toContain("<div style={styles.heroStage}>");
+    expect(SOURCES.Lobby).toContain("<div style={styles.titleAnchor}>");
     const anchor = styleBlock("Lobby", "titleAnchor");
     expect(anchor).not.toContain("transform:");
-    /* Design note #1354: the anchor's `bottom` is spread per render (the safe line under the utility row) --
-       a length only, never a transform, opacity or filter, so the blend chain is as clean as before. */
-    expect(SOURCES.Lobby).toContain("<div style={{ ...styles.titleAnchor, ...titleBottomFor(uiScale, utilityRowPx) }}>");
-    const bottomFor = sliceBetween(SOURCES.Lobby, "function titleBottomFor(", "}\n}");
-    expect(bottomFor).toContain("bottom:");
-    expect(bottomFor).not.toContain("transform");
-    expect(bottomFor).not.toContain("opacity");
+    expect(anchor).not.toContain("opacity:");
+    expect(styleBlock("Lobby", "heroStage")).not.toContain("zIndex:");
   });
 
   it("keeps the photograph inside the group the title blends in", () => {
-    /* If the wordmark ever moves out of `scene`, it is in the footer's position and needs the footer's
-       treatment -- a chain of clean intermediaries all the way to whatever paints behind it. */
+    /* The group is the top region (a positioned box with a z-index); the photograph (`sceneClip` > `scene`) and the
+       stage are both inside it, the photograph first, so the wordmark keys against the room. */
+    const top = styleBlock("Lobby", "top");
+    expect(top).toContain('position: "relative"');
+    expect(top).toContain("zIndex: 1");
     const clip = styleBlock("Lobby", "sceneClip");
     expect(clip).toContain('position: "absolute"');
     expect(clip).toContain("zIndex: 0");
     // Design note #1294: the scene's cover arithmetic is spread per render from the live scale.
-    expect(SOURCES.Lobby).toContain("<div style={{ ...styles.scene, ...sceneSizeFor(uiScale) }}>");
+    expect(SOURCES.Lobby).toContain("<div style={{ ...styles.scene, ...sceneSizeFor(uiScale) }} />");
+    const open = SOURCES.Lobby.indexOf('<div style={{ ...styles.top, ...topRegionVars(uiScale) }} data-testid="lobby-top">');
+    const painter = SOURCES.Lobby.indexOf("<div style={styles.sceneClip}");
+    const stage = SOURCES.Lobby.indexOf("<div style={styles.heroStage}>");
+    expect(open).toBeGreaterThan(-1);
+    expect(painter).toBeGreaterThan(open);
+    expect(stage).toBeGreaterThan(painter);
   });
 });
 

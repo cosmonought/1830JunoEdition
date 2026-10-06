@@ -186,6 +186,19 @@ pub enum ContractError {
     #[error("the resolver timeout has not elapsed; available at {at}")]
     ResolverTimeoutNotReached { at: Timestamp },
 
+    // ------------------------------------------------- escrow 2.1.0 policy
+    #[error("this game's escrow policy has no in-progress inactivity exit (escrow 2.1)")]
+    LivenessExitRemoved {},
+
+    #[error("a live game always has an action deadline: no_deadline needs mode async")]
+    NoDeadlineNeedsAsync {},
+
+    #[error("the exceptional review is only for an escrow 2.1 game with no action deadline")]
+    ReviewNotAvailable {},
+
+    #[error("no seated wallet has requested the review of game {chain_game_id}")]
+    ReviewNotRequested { chain_game_id: u64 },
+
     // ---------------------------------------------------------------- admin
     #[error("invalid parameter: {reason}")]
     InvalidParams { reason: String },

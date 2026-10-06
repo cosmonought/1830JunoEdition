@@ -174,6 +174,15 @@ pub struct Suite {
     pub signer: Key,
     /// Signs the admissions `join_msg` builds (the contract's current key).
     pub admission: Key,
+    /// Escrow 2.1.0: when set, every game `create` (and so every fixture
+    /// helper) makes is an Async No-deadline game (`no_deadline: true`), whatever
+    /// mode the caller names. Default: off (a `Timed` game in the named mode).
+    pub no_deadline: bool,
+    /// When set, every game `create` makes is immediately rewritten into the
+    /// shape escrow 2.0.0 code stored (`make_legacy`): the 2.0.0 semantics a
+    /// migrated 2.0.0 game keeps. The 2.0.0 suites (liveness, OD-ESC2-1/4, the
+    /// compromised-settlement recovery) run on such games.
+    pub legacy: bool,
 }
 
 pub struct SuiteBuilder {
@@ -277,6 +286,8 @@ impl SuiteBuilder {
             players,
             signer: Key::signer(1),
             admission: self.admission,
+            no_deadline: false,
+            legacy: false,
         }
     }
 }
@@ -284,6 +295,13 @@ impl SuiteBuilder {
 impl Suite {
     pub fn new() -> Suite {
         SuiteBuilder::default().build()
+    }
+
+    /// A suite whose games all have escrow 2.0.0 semantics (see `legacy`).
+    pub fn new_legacy() -> Suite {
+        let mut s = Suite::new();
+        s.legacy = true;
+        s
     }
 
     pub fn addr(&self, label: &str) -> Addr {
@@ -377,6 +395,16 @@ impl Suite {
 
     // ------------------------------------------------------------- funding
     pub fn create_msg(max_players: u8, mode: Mode, seat: usize) -> ExecuteMsg {
+        Self::create_msg_with(max_players, mode, seat, false)
+    }
+
+    /// `CreateGame` with an explicit escrow 2.1.0 `no_deadline` flag.
+    pub fn create_msg_with(
+        max_players: u8,
+        mode: Mode,
+        seat: usize,
+        no_deadline: bool,
+    ) -> ExecuteMsg {
         ExecuteMsg::CreateGame {
             max_players,
             mode,
@@ -384,6 +412,7 @@ impl Suite {
             variants_digest: variants_digest(),
             consent_pubkey: Key::seat(seat).pubkey,
             join_ticket: ticket(PLAYER_LABELS[seat]),
+            no_deadline,
         }
     }
 
@@ -450,13 +479,12 @@ impl Suite {
     /// Creates a game with `players[creator]` and returns its id.
     pub fn create(&mut self, creator: usize, max_players: u8, mode: Mode, ante: u128) -> u64 {
         let who = self.players[creator].clone();
-        let res = self
-            .exec(
-                &who,
-                &Self::create_msg(max_players, mode, creator),
-                &coins(ante, DENOM),
-            )
-            .unwrap();
+        let msg = if self.no_deadline {
+            Self::create_msg_with(max_players, Mode::Async, creator, true)
+        } else {
+            Self::create_msg(max_players, mode, creator)
+        };
+        let res = self.exec(&who, &msg, &coins(ante, DENOM)).unwrap();
         let id = res
             .events
             .iter()
@@ -466,6 +494,9 @@ impl Suite {
             .value
             .parse()
             .unwrap();
+        if self.legacy {
+            self.make_legacy(id);
+        }
         id
     }
 
@@ -627,6 +658,17 @@ impl Suite {
             payload,
             signature,
             consents: self.consents(id, p, consent_seats),
+        }
+    }
+
+    /// `Settle` signed by `key` (the payload names its key id), no consents.
+    pub fn settle_msg_by(&self, id: u64, p: &Payload, key: &Key) -> ExecuteMsg {
+        let (payload, signature) = self.signed_by(p, key);
+        ExecuteMsg::Settle {
+            chain_game_id: id,
+            payload,
+            signature,
+            consents: vec![],
         }
     }
 
@@ -819,6 +861,71 @@ impl Suite {
         )
         .unwrap();
         id
+    }
+
+    // ------------------------------------------------- escrow 2.0.0 fixtures
+    /// `inner` (a key inside the contract's own storage) as a raw key of the
+    /// multi-test app: the wasm prefix, then this contract's namespace.
+    fn raw_key(&self, inner: &[u8]) -> Vec<u8> {
+        fn prefixed(ns: &[u8]) -> Vec<u8> {
+            let mut out = (ns.len() as u16).to_be_bytes().to_vec();
+            out.extend_from_slice(ns);
+            out
+        }
+        let mut key = prefixed(b"wasm");
+        key.extend(prefixed(
+            format!("contract_data/{}", self.contract.as_str()).as_bytes(),
+        ));
+        key.extend_from_slice(inner);
+        key
+    }
+
+    /// The raw storage key of game `id`: `Map<u64, _>("games")`'s key.
+    fn raw_game_key(&self, id: u64) -> Vec<u8> {
+        let mut inner = 5u16.to_be_bytes().to_vec();
+        inner.extend_from_slice(b"games");
+        inner.extend_from_slice(&id.to_be_bytes());
+        self.raw_key(&inner)
+    }
+
+    /// Writes `value` under `inner` in this contract's own storage.
+    pub fn set_raw(&mut self, inner: &[u8], value: &[u8]) {
+        let key = self.raw_key(inner);
+        cosmwasm_std::Storage::set(self.app.storage_mut(), &key, value);
+    }
+
+    /// The game's stored JSON, exactly as the contract wrote it.
+    pub fn raw_game(&self, id: u64) -> serde_json::Value {
+        let bytes = cosmwasm_std::Storage::get(self.app.storage(), &self.raw_game_key(id))
+            .expect("game stored");
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    /// Replaces the game's stored JSON.
+    pub fn set_raw_game(&mut self, id: u64, json: &serde_json::Value) {
+        let key = self.raw_game_key(id);
+        let bytes = serde_json::to_vec(json).unwrap();
+        cosmwasm_std::Storage::set(self.app.storage_mut(), &key, &bytes);
+    }
+
+    /// Rewrites game `id` into exactly the shape escrow 2.0.0 code stored: the
+    /// same JSON without the two fields 2.1.0 added (`created.terms.policy`,
+    /// `progress.review_request`). This is the state a 2.0.0 game has after a
+    /// code migration to 2.1.0, so the game must keep every 2.0.0 path.
+    pub fn make_legacy(&mut self, id: u64) {
+        let mut json = self.raw_game(id);
+        json["created"]["terms"]
+            .as_object_mut()
+            .unwrap()
+            .remove("policy")
+            .expect("a 2.1.0 game stores its policy");
+        json["progress"]
+            .as_object_mut()
+            .unwrap()
+            .remove("review_request")
+            .expect("a 2.1.0 game stores its review request");
+        self.set_raw_game(id, &json);
+        assert_eq!(self.game(id).game.terms.policy, None);
     }
 
     /// Σ over every game of (pool + bond held while DISPUTED).

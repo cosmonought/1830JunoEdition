@@ -13,7 +13,7 @@
       }
     },
     "liveness_candidate_seq": {
-      "description": "Seq of the checkpoint `LivenessSettle` would promote now (the highest whose signer key is not compromised), if any.",
+      "description": "Seq of the highest checkpoint whose signer key is not compromised, if any: the checkpoint an escrow 2.0.0 game's `LivenessSettle` would promote now, and for every game the floor a resolver `Replace` must exceed. A 2.1.0 game never promotes a checkpoint.",
       "anyOf": [
         {
           "$ref": "#/definitions/Uint64"

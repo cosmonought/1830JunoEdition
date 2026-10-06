@@ -1,6 +1,6 @@
 {
   "contract_name": "eighteen-cosmos-escrow",
-  "contract_version": "2.0.0",
+  "contract_version": "2.1.0",
   "idl_version": "1.0.0",
   "instantiate": {
     "$schema": "http://json-schema.org/draft-07/schema#",
@@ -102,7 +102,7 @@
             "minimum": 0.0
           },
           "liveness_window_secs": {
-            "description": "IN_PROGRESS inactivity after which a seated wallet may `LivenessSettle`.",
+            "description": "After a SETTLEABLE game's `window_end`, the wait before a seated wallet may `LivenessSettle` it. (Escrow 2.0.0 games also used it as the IN_PROGRESS inactivity window; 2.1.0 games have no IN_PROGRESS exit.)",
             "type": "integer",
             "format": "uint64",
             "minimum": 0.0
@@ -185,6 +185,11 @@
               },
               "mode": {
                 "$ref": "#/definitions/Mode"
+              },
+              "no_deadline": {
+                "description": "Escrow 2.1.0: `true` for an Async table with no action deadline (`GamePolicy::NoDeadline`); omitted or `false` for a table with one (`GamePolicy::Timed`). A Live game is always timed: `true` with `mode: live` is refused. Frozen into the game's terms.",
+                "default": false,
+                "type": "boolean"
               },
               "rules_engine_version": {
                 "type": "integer",
@@ -577,7 +582,7 @@
         "additionalProperties": false
       },
       {
-        "description": "A seated wallet: the liveness exit. Works while paused. Available for IN_PROGRESS after the inactivity window, for SETTLEABLE from `window_end + liveness_window`, and for DISPUTED after the resolver timeout.",
+        "description": "A seated wallet: the liveness exit. Works while paused. Available for SETTLEABLE from `window_end + liveness_window` and for DISPUTED after the resolver timeout. IN_PROGRESS only for a game created by escrow 2.0.0 code (after its inactivity window); a 2.1.0 game refuses it while IN_PROGRESS (`LivenessExitRemoved`), at any time.",
         "type": "object",
         "required": [
           "liveness_settle"
@@ -595,7 +600,7 @@
                 "minimum": 0.0
               },
               "checkpoint": {
-                "description": "IN_PROGRESS only: a newer signed checkpoint, validated exactly like `Checkpoint` and promoted in the same transaction. Eligibility is decided before it is processed, and it does not restart the liveness clock. Omit it (or pass null) for the plain exit.",
+                "description": "IN_PROGRESS (2.0.0 games) only: a newer signed checkpoint, validated exactly like `Checkpoint` and promoted in the same transaction. Eligibility is decided before it is processed, and it does not restart the liveness clock. Omit it (or pass null) for the plain exit.",
                 "default": null,
                 "anyOf": [
                   {
@@ -605,6 +610,54 @@
                     "type": "null"
                   }
                 ]
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      {
+        "description": "Escrow 2.1.0, a seated wallet of an IN_PROGRESS No-deadline game: asks the game's resolver for the exceptional review. Records the first request (seat and time); a later request changes nothing. Moves no funds; works while paused.",
+        "type": "object",
+        "required": [
+          "request_review"
+        ],
+        "properties": {
+          "request_review": {
+            "type": "object",
+            "required": [
+              "chain_game_id"
+            ],
+            "properties": {
+              "chain_game_id": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0.0
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      {
+        "description": "Escrow 2.1.0, the game's resolver (the address it adopted at `Start`) only, on an IN_PROGRESS No-deadline game whose review was requested: refunds every seat's net deposit (ANNULLED). It carries no payload and no amounts: the only outcome it can produce is the neutral refund. Works while paused.",
+        "type": "object",
+        "required": [
+          "review_annul"
+        ],
+        "properties": {
+          "review_annul": {
+            "type": "object",
+            "required": [
+              "chain_game_id"
+            ],
+            "properties": {
+              "chain_game_id": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0.0
               }
             },
             "additionalProperties": false
@@ -846,7 +899,7 @@
             "minimum": 0.0
           },
           "liveness_window_secs": {
-            "description": "IN_PROGRESS inactivity after which a seated wallet may `LivenessSettle`.",
+            "description": "After a SETTLEABLE game's `window_end`, the wait before a seated wallet may `LivenessSettle` it. (Escrow 2.0.0 games also used it as the IN_PROGRESS inactivity window; 2.1.0 games have no IN_PROGRESS exit.)",
             "type": "integer",
             "format": "uint64",
             "minimum": 0.0
@@ -1340,7 +1393,7 @@
           }
         },
         "liveness_candidate_seq": {
-          "description": "Seq of the checkpoint `LivenessSettle` would promote now (the highest whose signer key is not compromised), if any.",
+          "description": "Seq of the highest checkpoint whose signer key is not compromised, if any: the checkpoint an escrow 2.0.0 game's `LivenessSettle` would promote now, and for every game the floor a resolver `Replace` must exceed. A 2.1.0 game never promotes a checkpoint.",
           "anyOf": [
             {
               "$ref": "#/definitions/Uint64"
@@ -1650,7 +1703,7 @@
               "minimum": 0.0
             },
             "liveness_window_secs": {
-              "description": "IN_PROGRESS inactivity after which a seated wallet may `LivenessSettle`.",
+              "description": "After a SETTLEABLE game's `window_end`, the wait before a seated wallet may `LivenessSettle` it. (Escrow 2.0.0 games also used it as the IN_PROGRESS inactivity window; 2.1.0 games have no IN_PROGRESS exit.)",
               "type": "integer",
               "format": "uint64",
               "minimum": 0.0
@@ -1968,6 +2021,18 @@
                 }
               ]
             },
+            "review_request": {
+              "description": "Escrow 2.1.0, No-deadline games only: the first seated request for the exceptional review. Absent on every 2.0.0 game.",
+              "default": null,
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ReviewRequest"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "roster_hash": {
               "anyOf": [
                 {
@@ -2052,7 +2117,7 @@
               ]
             },
             "liveness_available_at": {
-              "description": "IN_PROGRESS: `LivenessSettle` from this time (last Start/Checkpoint + liveness window). SETTLEABLE: from `challenge_window_end` + liveness window.",
+              "description": "IN_PROGRESS, escrow 2.0.0 games only: `LivenessSettle` from this time (last Start/Checkpoint + liveness window); always `None` for a 2.1.0 game, which has no IN_PROGRESS inactivity exit. SETTLEABLE: from `challenge_window_end` + liveness window.",
               "anyOf": [
                 {
                   "$ref": "#/definitions/Timestamp"
@@ -2076,6 +2141,25 @@
           },
           "additionalProperties": false
         },
+        "GamePolicy": {
+          "description": "The exit rules a game was funded under (escrow 2.1.0). Written once at `CreateGame` and never changed by any message, `SetParams` or a migration.\n\nA game stored without a policy (`GameTerms::policy == None`) was created by escrow 2.0.0 code and keeps every 2.0.0 path, including the IN_PROGRESS standings-based `LivenessSettle`. Every game created by 2.1.0 code carries one of these:\n\n* neither has an IN_PROGRESS inactivity exit: no time spent without chain activity ever moves money (`LivenessExitRemoved`); * neither ever pays from a round-boundary checkpoint's standings: where 2.0.0 would promote a checkpoint (a SETTLEABLE or DISPUTED settlement whose signer key was retired as compromised), the game refunds every net deposit.",
+          "oneOf": [
+            {
+              "description": "A table with an action deadline (every Live table; an Async table with a fixed pace). Ends by completion or unanimous annulment. The timed default / foreclosure remedies are NOT in this build: their trust bridge (how the contract learns an off-chain overdue fact) awaits an owner decision.",
+              "type": "string",
+              "enum": [
+                "timed"
+              ]
+            },
+            {
+              "description": "An Async table with no action deadline. Inactivity never moves money; it ends by completion, unanimous annulment, or the exceptional review: the game's resolver may refund every net deposit after a seated wallet asked for review (`RequestReview` / `ReviewAnnul`).",
+              "type": "string",
+              "enum": [
+                "no_deadline"
+              ]
+            }
+          ]
+        },
         "GameState": {
           "description": "The frozen game lifecycle (ESCROW-1.5 §9). SETTLED, CANCELLED and ANNULLED are terminal and accept no message.",
           "type": "string",
@@ -2091,7 +2175,7 @@
           ]
         },
         "GameTerms": {
-          "description": "Terms copied from the configuration when the game was created.",
+          "description": "Terms copied from the configuration when the game was created, plus the game's exit policy (escrow 2.1.0).",
           "type": "object",
           "required": [
             "bond_bps",
@@ -2118,9 +2202,22 @@
               "minimum": 0.0
             },
             "liveness_window_secs": {
+              "description": "Escrow 2.0.0 games: the IN_PROGRESS inactivity window. 2.1.0 games keep it only for the SETTLEABLE exit (`window_end + liveness_window`).",
               "type": "integer",
               "format": "uint64",
               "minimum": 0.0
+            },
+            "policy": {
+              "description": "`None` = created by escrow 2.0.0 code (2.0.0 semantics, see [`GamePolicy`]); every 2.1.0 game has `Some`. The per-game gate that keeps a code migration from changing the terms a game was funded under.",
+              "default": null,
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/GamePolicy"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "resolver_timeout_secs": {
               "type": "integer",
@@ -2295,6 +2392,26 @@
           },
           "additionalProperties": false
         },
+        "ReviewRequest": {
+          "description": "A seated wallet's request for the exceptional review of a No-deadline game (`RequestReview`). Only the first request is recorded.",
+          "type": "object",
+          "required": [
+            "requested_at",
+            "seat_index"
+          ],
+          "properties": {
+            "requested_at": {
+              "$ref": "#/definitions/Timestamp"
+            },
+            "seat_index": {
+              "description": "`chain_seat_index` of the requesting wallet.",
+              "type": "integer",
+              "format": "uint8",
+              "minimum": 0.0
+            }
+          },
+          "additionalProperties": false
+        },
         "Route": {
           "description": "Which path moved the money out of a game.",
           "oneOf": [
@@ -2353,10 +2470,17 @@
               ]
             },
             {
-              "description": "SETTLEABLE + `window_end` + liveness window, the stored settlement's key is compromised and no usable checkpoint exists: refund.",
+              "description": "SETTLEABLE + `window_end` + liveness window, the stored settlement's key is compromised and no usable checkpoint exists (or, for a 2.1.0 game, whatever checkpoints exist): refund.",
               "type": "string",
               "enum": [
                 "settleable_timeout_refund"
+              ]
+            },
+            {
+              "description": "Escrow 2.1.0, No-deadline game: the game's resolver approved a seated wallet's review request; every net deposit refunded.",
+              "type": "string",
+              "enum": [
+                "review_annul"
               ]
             }
           ]

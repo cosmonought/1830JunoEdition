@@ -583,6 +583,11 @@ impl World {
             join_ticket: HexBinary::from(
                 sha256(&[b"18JUNO/TEST/ticket/", &[seat as u8]]).as_slice(),
             ),
+            // Escrow 2.1.0: a Timed game. NOTE: the "in_progress" LivenessSettle
+            // rows below are escrow 2.0.0 paths; a 2.1.0 artifact refuses them
+            // (`LivenessExitRemoved`), so they must be reworked (and the 2.1.0
+            // review rows added) at the 2.1.0 canonical-artifact gate.
+            no_deadline: false,
         }
     }
 

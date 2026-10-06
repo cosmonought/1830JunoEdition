@@ -98,7 +98,7 @@
           "minimum": 0.0
         },
         "liveness_window_secs": {
-          "description": "IN_PROGRESS inactivity after which a seated wallet may `LivenessSettle`.",
+          "description": "After a SETTLEABLE game's `window_end`, the wait before a seated wallet may `LivenessSettle` it. (Escrow 2.0.0 games also used it as the IN_PROGRESS inactivity window; 2.1.0 games have no IN_PROGRESS exit.)",
           "type": "integer",
           "format": "uint64",
           "minimum": 0.0

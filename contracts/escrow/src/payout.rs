@@ -55,6 +55,54 @@ pub fn proportional_split(pool: Uint128, weights: &[Uint128]) -> Result<Split, C
     Ok(Split { amounts, dust })
 }
 
+/// Escrow 2.1.0 foreclosure arithmetic (owner policy H, 2026-10-05): no
+/// standings, no board appraisal, no checkpoint.
+///
+/// * the defaulting seat `defaulting` receives zero;
+/// * every other seat receives its own net deposit back, plus an equal share
+///   `floor(net_D / (N − 1))` of the defaulting seat's forfeited net deposit;
+/// * the remainder `net_D mod (N − 1)` (at most N − 2 base units) is `dust`,
+///   which goes where all payout dust goes, the game's treasury, so the N − 1
+///   shares stay exactly equal.
+///
+/// Subsidies and gas already spent are not part of any net deposit, so nothing
+/// is fabricated: `Σ amounts + dust = Σ net_deposits` exactly (the pool).
+/// Pure arithmetic: which seat defaulted, and whether the foreclosure is
+/// authorised at all, is decided elsewhere (no execute path calls this yet;
+/// the trust bridge that would is an open owner decision).
+pub fn foreclosure_split(
+    net_deposits: &[Uint128],
+    defaulting: usize,
+) -> Result<Split, ContractError> {
+    let seats = net_deposits.len();
+    if seats < 2 {
+        return Err(ContractError::Invariant {
+            reason: "a foreclosure needs at least two seats".to_string(),
+        });
+    }
+    let forfeited = *net_deposits
+        .get(defaulting)
+        .ok_or_else(|| ContractError::Invariant {
+            reason: "the defaulting seat is outside the roster".to_string(),
+        })?;
+    let others = seats
+        .checked_sub(1)
+        .and_then(|n| u128::try_from(n).ok())
+        .map(Uint128::new)
+        .ok_or(ContractError::Overflow {})?;
+    let share = forfeited.checked_div(others)?;
+    let dust = forfeited.checked_rem(others)?;
+    let mut amounts = Vec::with_capacity(seats);
+    for (index, net) in net_deposits.iter().enumerate() {
+        amounts.push(if index == defaulting {
+            Uint128::zero()
+        } else {
+            net.checked_add(share)?
+        });
+    }
+    Ok(Split { amounts, dust })
+}
+
 /// `true` iff the weights sum to more than zero (checked in `Uint256`).
 pub fn weights_have_positive_sum(weights: &[Uint128]) -> Result<bool, ContractError> {
     let mut sum = Uint256::zero();
@@ -136,6 +184,63 @@ mod tests {
         for a in &s.amounts {
             assert!(*a <= max);
         }
+    }
+
+    #[test]
+    fn foreclosure_pays_the_defaulter_nothing_and_splits_its_net_equally() {
+        // 4 seats of 1_950_000 net; seat 2 defaults: 1_950_000 / 3 = 650_000.
+        let net = [u(1_950_000); 4];
+        let s = foreclosure_split(&net, 2).unwrap();
+        assert_eq!(
+            s.amounts,
+            vec![u(2_600_000), u(2_600_000), u(0), u(2_600_000)]
+        );
+        assert_eq!(s.dust, u(0));
+        // 3 seats: 1_950_000 / 2 = 975_000 each, no dust.
+        let s = foreclosure_split(&[u(1_950_000); 3], 0).unwrap();
+        assert_eq!(s.amounts, vec![u(0), u(2_925_000), u(2_925_000)]);
+        assert_eq!(s.dust, u(0));
+        // 7 seats: 1_950_001 / 6 = 325_000 r 1 -> one base unit of dust.
+        let s = foreclosure_split(&[u(1_950_001); 7], 6).unwrap();
+        assert_eq!(s.amounts[6], u(0));
+        for a in &s.amounts[..6] {
+            assert_eq!(*a, u(1_950_001 + 325_000));
+        }
+        assert_eq!(s.dust, u(1));
+        // 2 seats: the other seat takes everything.
+        let s = foreclosure_split(&[u(5), u(5)], 1).unwrap();
+        assert_eq!(s.amounts, vec![u(10), u(0)]);
+        assert_eq!(s.dust, u(0));
+    }
+
+    #[test]
+    fn foreclosure_conserves_every_base_unit_and_never_overflows_a_valid_pool() {
+        for seats in 2..=7usize {
+            for defaulting in 0..seats {
+                for net in [0u128, 1, 5, 1_950_000, 1_950_001, 999_999_999_999] {
+                    let deposits = vec![u(net); seats];
+                    let s = foreclosure_split(&deposits, defaulting).unwrap();
+                    let paid: u128 = s.amounts.iter().map(|a| a.u128()).sum();
+                    assert_eq!(paid + s.dust.u128(), net * seats as u128);
+                    assert!(s.dust.u128() < (seats as u128) - 1 || s.dust.is_zero());
+                    assert_eq!(s.amounts[defaulting], u(0));
+                }
+            }
+        }
+        // The largest pool a u128 can hold, split 7 ways.
+        let net = u128::MAX / 7;
+        let s = foreclosure_split(&[u(net); 7], 3).unwrap();
+        let paid: u128 = s.amounts.iter().map(|a| a.u128()).sum();
+        assert_eq!(paid + s.dust.u128(), net * 7);
+        // A share that cannot be represented is refused, never wrapped.
+        assert!(foreclosure_split(&[u(u128::MAX), u(u128::MAX)], 0).is_err());
+    }
+
+    #[test]
+    fn foreclosure_refuses_a_bad_roster_or_seat() {
+        assert!(foreclosure_split(&[], 0).is_err());
+        assert!(foreclosure_split(&[u(1)], 0).is_err());
+        assert!(foreclosure_split(&[u(1), u(1)], 2).is_err());
     }
 
     #[test]

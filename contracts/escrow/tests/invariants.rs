@@ -16,10 +16,13 @@
 //!     compromised
 //! 10. no cross-game replay of payloads, consents or annul signatures
 //! 11. neither the admin nor the creator can take custody of pooled funds
-//! 12. pause never disables a refund or liveness route
-//! 13. a pause cannot permanently trap FUNDING, FUNDED, IN_PROGRESS,
-//!     SETTLEABLE or DISPUTED funds (the checker drains every live game under a
-//!     permanent pause at the end of each sequence)
+//! 12. pause never disables a refund, liveness or review route
+//! 13. a pause cannot permanently trap FUNDING, FUNDED, SETTLEABLE or DISPUTED
+//!     funds, nor an escrow 2.0.0 game's IN_PROGRESS funds (the checker drains
+//!     every live game under a permanent pause at the end of each sequence). An
+//!     escrow 2.1.0 IN_PROGRESS game has no inactivity exit: under a permanent
+//!     pause it leaves only by unanimous AnnulByConsent, or (No-deadline) by
+//!     the resolver's ReviewAnnul after a seated request; the drain uses those
 //! 14. a compromised signer's seq cannot permanently block trusted progress
 //! 15. a resolver change cannot affect an already-started game
 //! 16. consent keys are unique within a game
@@ -28,6 +31,18 @@
 //!     liveness timeouts); Finalize and Consent refuse it with
 //!     `CompromisedSettlement` (ESCROW-2.2). A resolver Uphold is an
 //!     adjudicated payout and outside this rule.
+//! 18. escrow 2.1.0 policy: a game's `terms.policy` never changes after
+//!     CreateGame; a 2.1.0 game never leaves IN_PROGRESS by LivenessSettle
+//!     (`LivenessExitRemoved`, whatever the time or pause) and never stores a
+//!     checkpoint as its settlement (it never pays round-boundary standings)
+//! 19. escrow 2.1.0 review: RequestReview succeeds only for a seated wallet of
+//!     an IN_PROGRESS No-deadline game and records only the first request;
+//!     ReviewAnnul succeeds only for that game's own resolver after a request,
+//!     and its only outcome is every seat's own net deposit back
+//!
+//! The checker mixes three kinds of game: escrow 2.1.0 `Timed` and
+//! `NoDeadline` games, and games rewritten into the shape escrow 2.0.0 stored
+//! (`Suite::make_legacy`), which keep every 2.0.0 path.
 
 mod common;
 
@@ -41,7 +56,7 @@ use eighteen_cosmos_escrow::msg::{
     ExecuteMsg, ResolveOutcome, SeatSignature, SettlementPayloadV1, SignedCheckpoint,
 };
 use eighteen_cosmos_escrow::payload::{Payload, KIND_CHECKPOINT, KIND_TERMINAL};
-use eighteen_cosmos_escrow::state::{Game, GameState, Mode, Route, SettlementSource};
+use eighteen_cosmos_escrow::state::{Game, GamePolicy, GameState, Mode, Route, SettlementSource};
 use eighteen_cosmos_escrow::ContractError;
 
 // ===================================================================== model
@@ -126,6 +141,10 @@ enum Act {
     /// AddSignerKey(new) → a fresh Checkpoint for every IN_PROGRESS game while
     /// paused (Settle stays refused) → Unpause.
     EmergencyRotation,
+    /// Escrow 2.1.0: a wallet asks for the exceptional review (19).
+    RequestReview,
+    /// Escrow 2.1.0: someone sends ReviewAnnul (19).
+    ReviewAnnul,
 }
 
 struct Done {
@@ -179,6 +198,12 @@ struct Fuzz {
     compromised_refusals: usize,
     /// Direct payouts checked against (17).
     direct_payouts: usize,
+    /// Each game's exit policy as created (18); `None` = a 2.0.0-shaped game.
+    policy: BTreeMap<u64, Option<GamePolicy>>,
+    /// IN_PROGRESS LivenessSettle refused on a 2.1.0 game (18).
+    liveness_removed: usize,
+    /// Live + no_deadline CreateGame refused (18).
+    live_no_deadline_refused: usize,
 }
 
 const MAX_GAMES: usize = 24;
@@ -215,7 +240,14 @@ impl Fuzz {
             compromised: BTreeSet::new(),
             compromised_refusals: 0,
             direct_payouts: 0,
+            policy: BTreeMap::new(),
+            liveness_removed: 0,
+            live_no_deadline_refused: 0,
         }
+    }
+
+    fn policy_of(&self, id: u64) -> Option<GamePolicy> {
+        self.policy.get(&id).copied().flatten()
     }
 
     fn known(&self) -> Vec<Addr> {
@@ -428,7 +460,7 @@ impl Fuzz {
         if self.paused && self.rng.chance(30) {
             return Act::PauseToggle;
         }
-        let table: [(Act, u64); 22] = [
+        let table: [(Act, u64); 24] = [
             (Act::Create, 6),
             (Act::Join, 16),
             (Act::Withdraw, 2),
@@ -451,6 +483,8 @@ impl Fuzz {
             (Act::ForgeHugeSeq, 1),
             (Act::RotateResolver, 1),
             (Act::EmergencyRotation, 1),
+            (Act::RequestReview, 2),
+            (Act::ReviewAnnul, 2),
         ];
         let total: u64 = table.iter().map(|(_, w)| w).sum();
         let mut r = self.rng.below(total);
@@ -485,6 +519,19 @@ impl Fuzz {
                 };
                 let ante = self.rng.pick(&[ANTE, 3_000_000, 5_000_001, 1_999_999]);
                 let key = self.fresh_key();
+                // (18) Escrow 2.1.0 Timed / No-deadline games and 2.0.0-shaped
+                // games side by side. A Live table asking for no deadline is
+                // refused.
+                let kind = self.rng.below(100);
+                let legacy = kind < 30;
+                let no_deadline = kind >= 65;
+                // A no-deadline request is an Async table, except now and then
+                // a Live one, which must be refused.
+                let mode = if no_deadline && !self.rng.chance(12) {
+                    Mode::Async
+                } else {
+                    mode
+                };
                 let msg = ExecuteMsg::CreateGame {
                     max_players,
                     mode,
@@ -492,11 +539,38 @@ impl Fuzz {
                     variants_digest: variants_digest(),
                     consent_pubkey: key.pubkey.clone(),
                     join_ticket: ticket("fuzz"),
+                    no_deadline,
                 };
                 let res = self.exec(&who, &msg, &coins(ante, DENOM));
+                if no_deadline && mode == Mode::Live {
+                    // Refused before any fund moves (pause is checked first).
+                    if self.paused {
+                        assert!(matches!(res, Err(ContractError::Paused {})), "{res:?}");
+                    } else {
+                        assert!(
+                            matches!(res, Err(ContractError::NoDeadlineNeedsAsync {})),
+                            "a live no-deadline game: {res:?}"
+                        );
+                        self.live_no_deadline_refused += 1;
+                    }
+                }
                 let mut game = None;
                 if let Ok(r) = &res {
                     let id: u64 = attr(r, "chain_game_id").parse().unwrap();
+                    let created = self.s.game(id).game.terms.policy;
+                    let expected = if no_deadline {
+                        GamePolicy::NoDeadline
+                    } else {
+                        GamePolicy::Timed
+                    };
+                    assert_eq!(created, Some(expected), "CreateGame policy");
+                    let policy = if legacy && !no_deadline {
+                        self.s.make_legacy(id);
+                        None
+                    } else {
+                        Some(expected)
+                    };
+                    self.policy.insert(id, policy);
                     self.games.push(id);
                     self.keys.insert((id, p), key);
                     game = Some(id);
@@ -812,7 +886,7 @@ impl Fuzz {
                     .view
                     .iter()
                     .filter(|(_, g)| match g.state {
-                        InProgress => {
+                        InProgress if g.terms.policy.is_none() => {
                             let from = g.last_activity.max(g.started_at).unwrap();
                             from.plus_seconds(g.terms.liveness_window_secs) <= now
                         }
@@ -864,6 +938,18 @@ impl Fuzz {
                     },
                     &[],
                 );
+                // (18) a 2.1.0 game has no IN_PROGRESS exit, whatever the time,
+                // the pause or a carried checkpoint (good or bad).
+                if g.state == InProgress && self.policy_of(id).is_some() {
+                    assert!(res.is_err(), "a 2.1.0 game left IN_PROGRESS by liveness");
+                    if g.seats.iter().any(|x| x.wallet == who) {
+                        assert_eq!(
+                            res.as_ref().unwrap_err(),
+                            &ContractError::LivenessExitRemoved {}
+                        );
+                        self.liveness_removed += 1;
+                    }
+                }
                 if let (Ok(_), Some(p)) = (&res, &carried) {
                     // The carried checkpoint is the one promoted.
                     let st = self.s.game(id).game.settlement.unwrap();
@@ -1084,6 +1170,13 @@ impl Fuzz {
                     self.check(&d, &before);
                 }
                 let g = self.game_of(id);
+                if g.state == InProgress && self.policy_of(id).is_some() {
+                    // (18) A 2.1.0 game never opens an inactivity exit, however
+                    // long it idles; it leaves by unanimity or the review.
+                    self.s.advance(DAY * (15 + self.rng.below(800)));
+                    self.stall_v21(id);
+                    return None;
+                }
                 let open_at = match g.state {
                     InProgress => g
                         .last_activity
@@ -1141,6 +1234,54 @@ impl Fuzz {
             Act::EmergencyRotation => {
                 self.emergency_rotation();
                 None
+            }
+            Act::RequestReview => {
+                // Prefer an IN_PROGRESS No-deadline game.
+                let open: Vec<u64> = self
+                    .view
+                    .iter()
+                    .filter(|(_, g)| {
+                        g.state == InProgress && g.terms.policy == Some(GamePolicy::NoDeadline)
+                    })
+                    .map(|(id, _)| *id)
+                    .collect();
+                let id = if !open.is_empty() && self.rng.chance(70) {
+                    self.rng.pick(&open)
+                } else {
+                    self.pick_game(&[InProgress])?
+                };
+                let g = self.game_of(id);
+                let who = self.seated_caller(&g);
+                let res = self.exec(&who, &ExecuteMsg::RequestReview { chain_game_id: id }, &[]);
+                self.expect_request_review(id, &g, &who, &res);
+                Some(Self::done(act, Some(id), who, res))
+            }
+            Act::ReviewAnnul => {
+                // Prefer a No-deadline game whose review was requested.
+                let requested: Vec<u64> = self
+                    .view
+                    .iter()
+                    .filter(|(_, g)| g.state == InProgress && g.review_request.is_some())
+                    .map(|(id, _)| *id)
+                    .collect();
+                let id = if !requested.is_empty() && self.rng.chance(70) {
+                    self.rng.pick(&requested)
+                } else {
+                    self.pick_game(&[InProgress])?
+                };
+                let g = self.game_of(id);
+                let who = match self.rng.below(10) {
+                    0..=6 => g
+                        .resolver
+                        .clone()
+                        .unwrap_or_else(|| self.s.resolver.clone()),
+                    7 => self.current_resolver.clone(),
+                    8 => self.s.admin.clone(),
+                    _ => self.any_caller(),
+                };
+                let res = self.exec(&who, &ExecuteMsg::ReviewAnnul { chain_game_id: id }, &[]);
+                self.expect_review_annul(id, &g, &who, &res);
+                Some(Self::done(act, Some(id), who, res))
             }
             Act::Replay => {
                 if self.accepted.is_empty() || self.games.len() < 2 {
@@ -1260,7 +1401,12 @@ impl Fuzz {
                 }
             }
         } else if b.state == GameState::Disputed && a.state == GameState::Settleable {
-            // Resolver timeout on a compromised settlement: fallback checkpoint.
+            // Resolver timeout on a compromised settlement: fallback checkpoint
+            // (a 2.0.0-shaped game only; a 2.1.0 game refunds instead).
+            assert_eq!(
+                a.terms.policy, None,
+                "a 2.1.0 game fell back to a checkpoint"
+            );
             assert_eq!(
                 a.settlement.as_ref().unwrap().source,
                 SettlementSource::LivenessCheckpoint
@@ -1302,6 +1448,8 @@ impl Fuzz {
                         | Act::Challenge
                         | Act::Resolve
                         | Act::SetKey
+                        | Act::RequestReview
+                        | Act::ReviewAnnul
                 ) {
                     assert_ne!(*e, ContractError::Paused {}, "{:?} blocked by pause", d.act);
                 }
@@ -1463,6 +1611,53 @@ impl Fuzz {
                     (Some(r0), r1) => assert_eq!(Some(r0), r1.as_ref(), "resolver of {id} moved"),
                     (None, Some(r1)) => assert_eq!(r1, &self.current_resolver),
                     (None, None) => {}
+                }
+            }
+            // (18) the policy a game was created with never changes, and a
+            // 2.1.0 game never stores a checkpoint as its settlement.
+            if let Some(policy) = self.policy.get(id) {
+                assert_eq!(&g.terms.policy, policy, "policy of {id} changed");
+            }
+            if g.terms.policy.is_some() {
+                if let Some(st) = &g.settlement {
+                    assert_ne!(
+                        st.source,
+                        SettlementSource::LivenessCheckpoint,
+                        "2.1.0 game {id} promoted a checkpoint"
+                    );
+                }
+            }
+            // (19) only a No-deadline game is ever asked to review, and the
+            // first request is never overwritten.
+            if g.review_request.is_some() {
+                assert_eq!(g.terms.policy, Some(GamePolicy::NoDeadline));
+            }
+            if let Some(b) = before.games.get(id) {
+                if b.review_request.is_some() {
+                    assert_eq!(b.review_request, g.review_request, "review request of {id}");
+                }
+                if b.state == GameState::InProgress
+                    && g.state != GameState::InProgress
+                    && g.terms.policy.is_some()
+                {
+                    // A 2.1.0 game leaves IN_PROGRESS only by Settle, unanimity
+                    // or the review.
+                    let route = g.outcome.as_ref().map(|o| o.route);
+                    assert!(
+                        g.state == GameState::Settleable
+                            && g.settlement.as_ref().unwrap().source
+                                == SettlementSource::TerminalPayload
+                            || matches!(
+                                route,
+                                Some(
+                                    Route::AllConsentsAtSettle
+                                        | Route::AnnulByConsent
+                                        | Route::ReviewAnnul
+                                )
+                            ),
+                        "2.1.0 game {id} left IN_PROGRESS by {route:?} ({:?})",
+                        g.state
+                    );
                 }
             }
             // (16) consent keys are unique within the game.
@@ -1785,6 +1980,12 @@ impl Fuzz {
                 self.view = before.games.clone();
                 self.view_trusted = before.trusted.clone();
                 let g = self.game_of(id);
+                if g.state == GameState::InProgress && g.terms.policy.is_some() {
+                    // (13)/(18) No inactivity exit: unanimity or the review,
+                    // both of which work while paused.
+                    self.stall_v21_exit(id, true);
+                    continue;
+                }
                 if g.state == GameState::InProgress && round == 0 && self.rng.chance(50) {
                     // An ordinary checkpoint is accepted under pause and
                     // restarts the clock: the liveness exit is not open yet.
@@ -1866,6 +2067,160 @@ impl Fuzz {
         assert_eq!(self.s.contract_balance(), 0, "funds trapped under pause");
         assert!(self.s.config().config.paused);
     }
+
+    /// (19) The oracle for RequestReview, from the state before it.
+    fn expect_request_review(
+        &mut self,
+        id: u64,
+        g: &Game,
+        who: &Addr,
+        res: &Result<AppResponse, ContractError>,
+    ) {
+        let seat = g.seats.iter().position(|x| x.wallet == *who);
+        let expected = if g.state != GameState::InProgress {
+            Err("wrong state")
+        } else if seat.is_none() {
+            Err("not seated")
+        } else if g.terms.policy != Some(GamePolicy::NoDeadline) {
+            Err("not available")
+        } else {
+            Ok(())
+        };
+        match (res, expected) {
+            (Ok(_), Ok(())) => {
+                let after = self.s.game(id).game;
+                match &g.review_request {
+                    Some(first) => assert_eq!(after.review_request.as_ref(), Some(first)),
+                    None => {
+                        let r = after.review_request.unwrap();
+                        assert_eq!(usize::from(r.seat_index), seat.unwrap());
+                        assert_eq!(r.requested_at, self.s.now());
+                    }
+                }
+                assert_eq!(after.state, GameState::InProgress);
+            }
+            (Err(ContractError::WrongState { .. }), Err("wrong state")) => {}
+            (Err(ContractError::NotSeated { .. }), Err("not seated")) => {}
+            (Err(ContractError::ReviewNotAvailable {}), Err("not available")) => {}
+            (got, want) => panic!("RequestReview on {id}: got {got:?}, expected {want:?}"),
+        }
+    }
+
+    /// (19) The oracle for ReviewAnnul, from the state before it.
+    fn expect_review_annul(
+        &mut self,
+        id: u64,
+        g: &Game,
+        who: &Addr,
+        res: &Result<AppResponse, ContractError>,
+    ) {
+        let expected = if g.state != GameState::InProgress {
+            Err("wrong state")
+        } else if g.resolver.as_ref() != Some(who) {
+            Err("unauthorized")
+        } else if g.terms.policy != Some(GamePolicy::NoDeadline) {
+            Err("not available")
+        } else if g.review_request.is_none() {
+            Err("not requested")
+        } else {
+            Ok(())
+        };
+        match (res, expected) {
+            (Ok(_), Ok(())) => {
+                let after = self.s.game(id).game;
+                assert_eq!(after.state, GameState::Annulled);
+                let o = after.outcome.unwrap();
+                assert_eq!(o.route, Route::ReviewAnnul);
+                let nets: Vec<Uint128> = g.seats.iter().map(|x| x.net_deposit).collect();
+                assert_eq!(o.amounts, nets);
+                assert!(o.dust.is_zero());
+            }
+            (Err(ContractError::WrongState { .. }), Err("wrong state")) => {}
+            (Err(ContractError::Unauthorized { role }), Err("unauthorized")) => {
+                assert_eq!(role, "resolver")
+            }
+            (Err(ContractError::ReviewNotAvailable {}), Err("not available")) => {}
+            (Err(ContractError::ReviewNotRequested { .. }), Err("not requested")) => {}
+            (got, want) => panic!("ReviewAnnul on {id}: got {got:?}, expected {want:?}"),
+        }
+    }
+
+    /// (18) A 2.1.0 IN_PROGRESS game that has idled: the liveness exit stays
+    /// refused; then it sometimes leaves by unanimity or the review.
+    fn stall_v21(&mut self, id: u64) {
+        let before = self.begin();
+        let g = self.game_of(id);
+        let who = g.seats[0].wallet.clone();
+        let res = self.exec(&who, &Suite::liveness_msg(id), &[]);
+        assert_eq!(
+            res.as_ref().unwrap_err(),
+            &ContractError::LivenessExitRemoved {},
+            "a 2.1.0 game must never open an inactivity exit"
+        );
+        self.liveness_removed += 1;
+        let d = Self::done(Act::Liveness, Some(id), who, res);
+        self.check(&d, &before);
+        if self.rng.chance(60) {
+            self.stall_v21_exit(id, false);
+        }
+    }
+
+    /// Takes a 2.1.0 IN_PROGRESS game out by unanimous AnnulByConsent, or, for
+    /// a No-deadline game, a seated RequestReview followed by the game
+    /// resolver's ReviewAnnul. Every sub-step is checked on its own; with
+    /// `must` the game must end terminal.
+    fn stall_v21_exit(&mut self, id: u64, must: bool) {
+        self.begin();
+        let g = self.game_of(id);
+        if g.terms.policy == Some(GamePolicy::NoDeadline) && self.rng.chance(60) {
+            if g.review_request.is_none() {
+                let before = self.begin();
+                let who = g.seats[self.rng.below(g.seats.len() as u64) as usize]
+                    .wallet
+                    .clone();
+                let res = self.exec(&who, &ExecuteMsg::RequestReview { chain_game_id: id }, &[]);
+                assert!(res.is_ok(), "review request refused: {res:?}");
+                self.expect_request_review(id, &g, &who, &res);
+                let d = Self::done(Act::RequestReview, Some(id), who, res);
+                self.check(&d, &before);
+            }
+            let before = self.begin();
+            let g = self.game_of(id);
+            let resolver = g.resolver.clone().unwrap();
+            let res = self.exec(
+                &resolver,
+                &ExecuteMsg::ReviewAnnul { chain_game_id: id },
+                &[],
+            );
+            assert!(res.is_ok(), "review annulment refused: {res:?}");
+            self.expect_review_annul(id, &g, &resolver, &res);
+            let d = Self::done(Act::ReviewAnnul, Some(id), resolver, res);
+            self.check(&d, &before);
+        } else {
+            let before = self.begin();
+            let g = self.game_of(id);
+            let trusted = self.view_trusted.get(&id).copied().unwrap_or(0);
+            let digest = crypto::annul_digest(&Self::domain_of(&g), trusted);
+            let consents = (0..g.seats.len())
+                .map(|seat| SeatSignature {
+                    seat_index: seat as u8,
+                    signature: self.current_key(id, &g, seat).sign(&digest),
+                })
+                .collect();
+            let who = self.any_caller();
+            let msg = ExecuteMsg::AnnulByConsent {
+                chain_game_id: id,
+                consents,
+            };
+            let res = self.exec(&who, &msg, &[]);
+            assert!(res.is_ok(), "unanimous annulment refused: {res:?}");
+            let d = Self::done(Act::Annul, Some(id), who, res);
+            self.check(&d, &before);
+        }
+        if must {
+            assert!(self.s.state(id).is_terminal());
+        }
+    }
 }
 
 fn retarget(msg: ExecuteMsg, to: u64) -> ExecuteMsg {
@@ -1916,14 +2271,24 @@ fn seeded_random_sequences_preserve_every_invariant() {
     let mut paused_checkpoints = 0;
     let mut compromised_refusals = 0;
     let mut direct_payouts = 0;
-    for seed in 0..10u64 {
+    let mut liveness_removed = 0;
+    let mut live_no_deadline_refused = 0;
+    let mut policies: BTreeMap<String, usize> = BTreeMap::new();
+    // Escrow 2.1.0: two more seeds and longer sequences than ESCROW-2.x, so
+    // the three policy kinds share the depth the old suite reached alone.
+    for seed in 0..12u64 {
         let mut f = Fuzz::new(0x18_c0_5e_5e_ed ^ seed.wrapping_mul(0x1000_0001));
-        f.run(500);
+        f.run(600);
         games += f.games.len();
         carried += f.carried_ok;
         paused_checkpoints += f.paused_checkpoints;
         compromised_refusals += f.compromised_refusals;
         direct_payouts += f.direct_payouts;
+        liveness_removed += f.liveness_removed;
+        live_no_deadline_refused += f.live_no_deadline_refused;
+        for p in f.policy.values() {
+            *policies.entry(format!("{p:?}")).or_default() += 1;
+        }
         for (act, n) in &f.ok {
             *ok.entry(*act).or_default() += n;
         }
@@ -1950,6 +2315,23 @@ fn seeded_random_sequences_preserve_every_invariant() {
          {compromised_refusals} Finalize/Consent refused as compromised"
     );
     assert!(direct_payouts > 0, "no direct payout was ever checked");
+    eprintln!(
+        "fuzz (18/19): games by policy {policies:?}; {liveness_removed} IN_PROGRESS \
+         liveness refusals on 2.1.0 games; {live_no_deadline_refused} live no-deadline creates refused"
+    );
+    assert_eq!(
+        policies.len(),
+        3,
+        "every policy kind was created: {policies:?}"
+    );
+    assert!(
+        liveness_removed > 0,
+        "no 2.1.0 IN_PROGRESS liveness refusal"
+    );
+    assert!(
+        live_no_deadline_refused > 0,
+        "no live no-deadline create was refused"
+    );
     assert!(
         compromised_refusals > 0,
         "no Finalize/Consent ever met a compromised settlement"
@@ -1980,6 +2362,7 @@ fn seeded_random_sequences_preserve_every_invariant() {
         "LivenessRefund",
         "SettleableTimeoutPayout",
         "ResolverTimeoutPayout",
+        "ReviewAnnul",
     ] {
         assert!(
             routes.contains(r),
@@ -2005,6 +2388,8 @@ fn seeded_random_sequences_preserve_every_invariant() {
         Act::RotateResolver,
         Act::Stall,
         Act::EmergencyRotation,
+        Act::RequestReview,
+        Act::ReviewAnnul,
     ] {
         assert!(
             ok.get(&act).copied().unwrap_or(0) > 0,
@@ -2264,9 +2649,31 @@ fn inv07_every_refund_equals_the_net_deposit() {
             }),
         ),
         (
+            Route::ReviewAnnul,
+            Box::new(|s: &mut Suite| {
+                s.no_deadline = true;
+                let id = s.started(3);
+                s.no_deadline = false;
+                let seat = s.players[1].clone();
+                s.exec(&seat, &ExecuteMsg::RequestReview { chain_game_id: id }, &[])
+                    .unwrap();
+                s.advance(400 * DAY);
+                let resolver = s.resolver.clone();
+                s.exec(
+                    &resolver,
+                    &ExecuteMsg::ReviewAnnul { chain_game_id: id },
+                    &[],
+                )
+                .unwrap();
+                id
+            }),
+        ),
+        (
             Route::LivenessRefund,
             Box::new(|s: &mut Suite| {
+                // An escrow 2.0.0 game's IN_PROGRESS exit.
                 let id = s.started(3);
+                s.make_legacy(id);
                 s.advance(14 * DAY);
                 let who = s.players[0].clone();
                 s.exec(
@@ -2618,8 +3025,16 @@ fn inv12_pause_never_disables_a_refund_or_liveness_route() {
     let annul = s.started(3);
     let (challenge, _) = s.settleable(3);
     let (resolve, _) = s.disputed(3);
+    // The IN_PROGRESS liveness exit of an escrow 2.0.0 game.
     let liveness = s.started(3);
+    s.make_legacy(liveness);
     let (timeout, _) = s.disputed(3);
+    // Escrow 2.1.0: the exceptional review, and the removed exit, which
+    // answers LivenessExitRemoved, never Paused.
+    s.no_deadline = true;
+    let review = s.started(3);
+    s.no_deadline = false;
+    let timed = s.started(3);
     s.pause();
     let p0 = s.players[0].clone();
     let p1 = s.players[1].clone();
@@ -2680,8 +3095,31 @@ fn inv12_pause_never_disables_a_refund_or_liveness_route() {
         &[],
     )
     .unwrap();
+    s.exec(
+        &p1,
+        &ExecuteMsg::RequestReview {
+            chain_game_id: review,
+        },
+        &[],
+    )
+    .unwrap();
+    let resolver = s.resolver.clone();
+    s.exec(
+        &resolver,
+        &ExecuteMsg::ReviewAnnul {
+            chain_game_id: review,
+        },
+        &[],
+    )
+    .unwrap();
+    assert_eq!(
+        s.exec(&p1, &Suite::liveness_msg(timed), &[]).unwrap_err(),
+        ContractError::LivenessExitRemoved {}
+    );
     assert!(s.config().config.paused);
     for (id, state) in [
+        (review, GameState::Annulled),
+        (timed, GameState::InProgress),
         (creator_cancel, GameState::Cancelled),
         (deadline_cancel, GameState::Cancelled),
         (annul, GameState::Annulled),
@@ -2698,7 +3136,9 @@ fn inv12_pause_never_disables_a_refund_or_liveness_route() {
 
 #[test]
 fn inv13_a_pause_cannot_permanently_trap_any_live_state() {
-    let mut s = Suite::new();
+    // Escrow 2.0.0 games (the IN_PROGRESS liveness exit and the checkpoint
+    // fallback are 2.0.0 semantics; `inv13b` covers escrow 2.1.0 games).
+    let mut s = Suite::new_legacy();
     let k2 = Key::signer(2);
     let k2_id = s.add_key(&k2);
     let funding = s.create(0, 3, Mode::Live, ANTE);
@@ -2803,6 +3243,116 @@ fn inv13_a_pause_cannot_permanently_trap_any_live_state() {
     s.assert_custody();
 }
 
+/// (13) for escrow 2.1.0 games: a permanent pause cannot trap FUNDING, FUNDED,
+/// SETTLEABLE or DISPUTED funds, and an IN_PROGRESS game, which has no
+/// inactivity exit, still leaves by unanimous annulment or (No-deadline) the
+/// review, both of which work while paused. A compromised settlement falls
+/// back to a refund, never to a trusted checkpoint's standings.
+#[test]
+fn inv13b_a_pause_traps_no_settled_result_and_v21_in_progress_needs_unanimity_or_review() {
+    let mut s = Suite::new();
+    let k2 = Key::signer(2);
+    let k2_id = s.add_key(&k2);
+    let funded = s.funded(3);
+    let timed = s.started(3);
+    s.post_checkpoint(timed, 10, &[1, 2, 3]);
+    s.no_deadline = true;
+    let no_deadline = s.started(3);
+    s.no_deadline = false;
+    let (settleable, _) = s.settleable(3);
+    let (disputed, _) = s.disputed(3);
+    // A settlement under key 2, compromised during the pause, on a game that
+    // also holds a trusted checkpoint: 2.0.0 would promote that checkpoint.
+    let fallback = s.started(3);
+    s.post_checkpoint(fallback, 10, &[3, 2, 1]);
+    let mut p = s.terminal_payload(fallback, 1, 20, &[1, 0, 0]);
+    p.signer_key_id = k2_id;
+    let (payload, signature) = s.signed_by(&p, &k2);
+    let op = s.operator.clone();
+    s.exec(
+        &op,
+        &ExecuteMsg::Settle {
+            chain_game_id: fallback,
+            payload,
+            signature,
+            consents: vec![],
+        },
+        &[],
+    )
+    .unwrap();
+
+    s.pause();
+    s.retire_key(k2_id, true);
+    let seat0 = s.players[0].clone();
+    let outsider = s.outsider.clone();
+    s.advance(10 * 365 * DAY);
+    s.exec(
+        &outsider,
+        &ExecuteMsg::Cancel {
+            chain_game_id: funded,
+        },
+        &[],
+    )
+    .unwrap();
+    for id in [settleable, disputed, fallback] {
+        s.exec(&seat0, &Suite::liveness_msg(id), &[]).unwrap();
+    }
+    // Ten years idle: still no inactivity exit for either IN_PROGRESS game.
+    for id in [timed, no_deadline] {
+        assert_eq!(
+            s.exec(&seat0, &Suite::liveness_msg(id), &[]).unwrap_err(),
+            ContractError::LivenessExitRemoved {}
+        );
+        assert_eq!(s.state(id), GameState::InProgress);
+    }
+    // Unanimity (works while paused) ...
+    let trusted = s.trusted_seq(timed);
+    let consents = s.annul_sigs(timed, &[0, 1, 2], trusted);
+    s.exec(
+        &outsider,
+        &ExecuteMsg::AnnulByConsent {
+            chain_game_id: timed,
+            consents,
+        },
+        &[],
+    )
+    .unwrap();
+    // ... or the review of a No-deadline game (works while paused).
+    let seat1 = s.players[1].clone();
+    s.exec(
+        &seat1,
+        &ExecuteMsg::RequestReview {
+            chain_game_id: no_deadline,
+        },
+        &[],
+    )
+    .unwrap();
+    let resolver = s.resolver.clone();
+    s.exec(
+        &resolver,
+        &ExecuteMsg::ReviewAnnul {
+            chain_game_id: no_deadline,
+        },
+        &[],
+    )
+    .unwrap();
+    let route = |s: &Suite, id: u64| s.game(id).game.outcome.map(|o| o.route);
+    assert_eq!(route(&s, funded), Some(Route::DeadlineCancel));
+    assert_eq!(route(&s, settleable), Some(Route::SettleableTimeoutPayout));
+    assert_eq!(route(&s, disputed), Some(Route::ResolverTimeoutPayout));
+    assert_eq!(route(&s, fallback), Some(Route::SettleableTimeoutRefund));
+    assert_eq!(
+        s.game(fallback).game.outcome.unwrap().amounts,
+        vec![Uint128::new(NET); 3],
+        "a refund, not the checkpoint's [3, 2, 1]"
+    );
+    assert_eq!(route(&s, timed), Some(Route::AnnulByConsent));
+    assert_eq!(route(&s, no_deadline), Some(Route::ReviewAnnul));
+    assert!(s.config().config.paused);
+    assert_eq!(s.contract_balance(), 0, "nothing stays trapped");
+    s.assert_custody();
+}
+
 #[test]
 fn inv14_a_compromised_seq_cannot_permanently_block_trusted_progress() {
     let mut s = Suite::new();
@@ -2813,6 +3363,8 @@ fn inv14_a_compromised_seq_cannot_permanently_block_trusted_progress() {
     // Every gate: Checkpoint, Settle, the ANNUL digest, LivenessSettle's
     // choice, and a resolver Replace after a forged terminal.
     let [a, b, c, d, e] = [0; 5].map(|_| s.started(2));
+    // LivenessSettle's choice is a 2.0.0 path: `d` is a 2.0.0-shaped game.
+    s.make_legacy(d);
     for id in [a, b, c, d, e] {
         s.post_checkpoint(id, 10, &[1, 1]);
     }
@@ -3103,6 +3655,9 @@ fn inv17_a_compromised_settlement_is_never_the_source_of_a_direct_payout() {
     let k2 = s.add_key(&key2);
     let who = s.outsider.clone();
     let settleable = s.started(3);
+    // The fallback to a trusted checkpoint is a 2.0.0 path (a 2.1.0 game
+    // refunds instead: `inv13b`, `tests/escrow21.rs`).
+    s.make_legacy(settleable);
     let (_, cp) = s.signed_checkpoint(settleable, k2, &key2, 10, &[1, 1, 1]);
     s.exec(
         &who,

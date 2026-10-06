@@ -8,6 +8,12 @@
 //! settlement), the SETTLEABLE and DISPUTED liveness timeouts (which already
 //! paid only a trusted settlement), and a resolver `Uphold` (an adjudicated
 //! payout; unchanged, pinned below).
+//!
+//! Escrow 2.1.0: a game created by 2.1.0 code never falls back to a checkpoint
+//! (it refunds instead), and has no IN_PROGRESS liveness promotion. The two
+//! tests that rely on either run on games stored by 2.0.0 code
+//! (`Suite::new_legacy`); `tests/escrow21.rs` runs the same emergency rotation
+//! on 2.1.0 games.
 
 mod common;
 
@@ -104,7 +110,7 @@ fn amounts(s: &Suite, id: u64) -> Vec<u128> {
 /// posted before its Settle, `orphan` holds none.
 #[test]
 fn emergency_rotation_end_to_end() {
-    let mut s = Suite::new();
+    let mut s = Suite::new_legacy();
     let key2 = Key::signer(2);
     s.add_key(&key2);
     let fallback = s.started(3);
@@ -346,7 +352,7 @@ fn finalize_refuses_a_compromised_settlement_inside_and_after_the_window() {
 /// the next trusted checkpoint.
 #[test]
 fn a_liveness_promoted_settlement_loses_payout_authority_too() {
-    let mut s = Suite::new();
+    let mut s = Suite::new_legacy();
     let key2 = Key::signer(2);
     s.add_key(&key2);
     let id = s.started(2);

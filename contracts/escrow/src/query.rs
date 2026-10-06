@@ -74,7 +74,8 @@ fn config(deps: Deps) -> StdResult<ConfigResponse> {
 
 fn deadlines(game: &Game) -> GameDeadlines {
     let liveness_available_at = match (game.state, game.started_at, &game.settlement) {
-        (GameState::InProgress, Some(started), _) => {
+        // Escrow 2.1.0 games have no IN_PROGRESS inactivity exit.
+        (GameState::InProgress, Some(started), _) if game.terms.policy.is_none() => {
             let active = game.last_activity.unwrap_or(started);
             let reference: Timestamp = if active > started { active } else { started };
             add_secs(reference, game.terms.liveness_window_secs).ok()

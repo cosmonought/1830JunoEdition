@@ -15,6 +15,15 @@
 //! ESCROW-2.2 rows: Finalize and Consent after the stored settlement's signer
 //! key was marked compromised. No cell of these rows can succeed; the key
 //! check comes after state and pause.
+//!
+//! Escrow 2.1.0 rows and rules: every fixture is created by 2.1.0 code (a
+//! `Timed` game unless the row says No-deadline), so the IN_PROGRESS
+//! LivenessSettle cells answer `LivenessExitRemoved` (after state and role).
+//! The `…Legacy` rows rerun LivenessSettle on fixtures rewritten into the
+//! shape escrow 2.0.0 stored, which keep the 2.0.0 exit. RequestReview and
+//! ReviewAnnul run on No-deadline fixtures (and, refused, on Timed ones):
+//! state → role → policy → request, in that order; neither is blocked by
+//! pause.
 
 mod common;
 
@@ -22,7 +31,7 @@ use common::*;
 use cosmwasm_std::{coins, Addr, Coin, HexBinary, Uint128};
 use eighteen_cosmos_escrow::msg::{ExecuteMsg, ResolveOutcome, SeatSignature, SignedCheckpoint};
 use eighteen_cosmos_escrow::payload::{Payload, KIND_CHECKPOINT, KIND_TERMINAL};
-use eighteen_cosmos_escrow::state::{GameParams, GameState, Mode};
+use eighteen_cosmos_escrow::state::{GameParams, GamePolicy, GameState, Mode, Route};
 use eighteen_cosmos_escrow::ContractError;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -82,6 +91,58 @@ enum Msg {
     FinalizeCompromised,
     /// Consent once key 1 was marked compromised.
     ConsentCompromised,
+    /// LivenessSettle on a fixture stored in the escrow 2.0.0 shape.
+    LivenessSettleLegacy,
+    /// LivenessSettle carrying a checkpoint, on a 2.0.0-shaped fixture.
+    LivenessSettleWithCheckpointLegacy,
+    /// RequestReview on a No-deadline fixture.
+    RequestReview,
+    /// RequestReview on a Timed fixture (never available).
+    RequestReviewTimed,
+    /// ReviewAnnul on a No-deadline fixture whose review seat 1 requested
+    /// (IN_PROGRESS is the only state a request can be made in).
+    ReviewAnnul,
+    /// ReviewAnnul as above, after the admin moved the global resolver to the
+    /// outsider: only the resolver the game adopted at Start may act.
+    ReviewAnnulAfterResolverChange,
+    /// ReviewAnnul on a No-deadline fixture nobody asked to review.
+    ReviewAnnulWithoutRequest,
+    /// ReviewAnnul on a Timed fixture (never available).
+    ReviewAnnulTimed,
+}
+
+impl Msg {
+    /// The row's fixtures are No-deadline games.
+    fn no_deadline(self) -> bool {
+        matches!(
+            self,
+            Msg::RequestReview
+                | Msg::ReviewAnnul
+                | Msg::ReviewAnnulAfterResolverChange
+                | Msg::ReviewAnnulWithoutRequest
+        )
+    }
+
+    /// The row's fixture is rewritten into the escrow 2.0.0 stored shape.
+    fn legacy(self) -> bool {
+        matches!(
+            self,
+            Msg::LivenessSettleLegacy | Msg::LivenessSettleWithCheckpointLegacy
+        )
+    }
+
+    /// No cell of the row can succeed.
+    fn never_accepted(self) -> bool {
+        matches!(
+            self,
+            Msg::FinalizeCompromised
+                | Msg::ConsentCompromised
+                | Msg::LivenessSettleWithCheckpoint
+                | Msg::RequestReviewTimed
+                | Msg::ReviewAnnulWithoutRequest
+                | Msg::ReviewAnnulTimed
+        )
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -93,6 +154,9 @@ enum Expect {
     Unauthorized(&'static str),
     Paused,
     CompromisedSettlement,
+    LivenessExitRemoved,
+    ReviewNotAvailable,
+    ReviewNotRequested,
 }
 
 fn addr(s: &Suite, role: Role) -> Addr {
@@ -228,6 +292,19 @@ fn oracle(msg: Msg, state: GameState, role: Role, paused: bool) -> Expect {
             } else if !seated {
                 Expect::NotSeated
             } else if state == InProgress {
+                Expect::LivenessExitRemoved // escrow 2.1.0, works paused or not
+            } else {
+                // SETTLEABLE past window_end + liveness, DISPUTED past the
+                // resolver timeout: the (uncompromised) stored vector is paid.
+                Expect::Ok(Settled)
+            }
+        }
+        Msg::LivenessSettleLegacy => {
+            if !within(&[InProgress, Settleable, Disputed]) {
+                Expect::WrongState
+            } else if !seated {
+                Expect::NotSeated
+            } else if state == InProgress {
                 Expect::Ok(Cancelled) // no checkpoint was posted
             } else {
                 // SETTLEABLE past window_end + liveness, DISPUTED past the
@@ -253,7 +330,45 @@ fn oracle(msg: Msg, state: GameState, role: Role, paused: bool) -> Expect {
             } else if state != InProgress {
                 Expect::WrongState // a checkpoint is only carried from IN_PROGRESS
             } else {
+                Expect::LivenessExitRemoved // and nothing is stored
+            }
+        }
+        Msg::LivenessSettleWithCheckpointLegacy => {
+            if !within(&[InProgress, Settleable, Disputed]) {
+                Expect::WrongState
+            } else if !seated {
+                Expect::NotSeated
+            } else if state != InProgress {
+                Expect::WrongState // a checkpoint is only carried from IN_PROGRESS
+            } else {
                 Expect::Ok(Settleable) // the carried checkpoint is promoted
+            }
+        }
+        Msg::RequestReview | Msg::RequestReviewTimed => {
+            if !within(&[InProgress]) {
+                Expect::WrongState
+            } else if !seated {
+                Expect::NotSeated
+            } else if matches!(msg, Msg::RequestReviewTimed) {
+                Expect::ReviewNotAvailable
+            } else {
+                Expect::Ok(InProgress) // moves nothing; works while paused
+            }
+        }
+        Msg::ReviewAnnul
+        | Msg::ReviewAnnulAfterResolverChange
+        | Msg::ReviewAnnulWithoutRequest
+        | Msg::ReviewAnnulTimed => {
+            if !within(&[InProgress]) {
+                Expect::WrongState
+            } else if role != Role::Resolver {
+                Expect::Unauthorized("resolver")
+            } else if matches!(msg, Msg::ReviewAnnulTimed) {
+                Expect::ReviewNotAvailable
+            } else if matches!(msg, Msg::ReviewAnnulWithoutRequest) {
+                Expect::ReviewNotRequested
+            } else {
+                Expect::Ok(Annulled) // the neutral refund; works while paused
             }
         }
     }
@@ -421,8 +536,15 @@ fn build(
                 vec![],
             )
         }
-        Msg::LivenessSettle => (Suite::liveness_msg(id), vec![]),
-        Msg::LivenessSettleWithCheckpoint => {
+        Msg::LivenessSettle | Msg::LivenessSettleLegacy => (Suite::liveness_msg(id), vec![]),
+        Msg::RequestReview | Msg::RequestReviewTimed => {
+            (ExecuteMsg::RequestReview { chain_game_id: id }, vec![])
+        }
+        Msg::ReviewAnnul
+        | Msg::ReviewAnnulAfterResolverChange
+        | Msg::ReviewAnnulWithoutRequest
+        | Msg::ReviewAnnulTimed => (ExecuteMsg::ReviewAnnul { chain_game_id: id }, vec![]),
+        Msg::LivenessSettleWithCheckpoint | Msg::LivenessSettleWithCheckpointLegacy => {
             let p = fresh_payload(s, id, KIND_CHECKPOINT, 0);
             let (payload, signature) = s.signed(&p);
             (
@@ -465,7 +587,19 @@ impl Unchecked for Suite {
 /// Runs one cell; returns whether the message succeeded.
 fn run_cell(msg: Msg, state: GameState, role: Role, paused: bool) -> bool {
     let mut s = Suite::new();
+    s.no_deadline = msg.no_deadline();
+    s.legacy = msg.legacy();
     let (id, stored) = fixture(&mut s, state);
+    s.no_deadline = false;
+    s.legacy = false;
+    let policy = s.game(id).game.terms.policy;
+    if msg.legacy() {
+        assert_eq!(policy, None);
+    } else if msg.no_deadline() {
+        assert_eq!(policy, Some(GamePolicy::NoDeadline));
+    } else {
+        assert_eq!(policy, Some(GamePolicy::Timed));
+    }
     match msg {
         Msg::CancelAfterDeadline | Msg::Finalize => s.advance(DAY),
         Msg::FinalizeCompromised | Msg::ConsentCompromised => {
@@ -474,12 +608,37 @@ fn run_cell(msg: Msg, state: GameState, role: Role, paused: bool) -> bool {
             }
             s.retire_key(1, true);
         }
-        Msg::LivenessSettle | Msg::LivenessSettleWithCheckpoint => s.advance(30 * DAY),
+        Msg::LivenessSettle
+        | Msg::LivenessSettleWithCheckpoint
+        | Msg::LivenessSettleLegacy
+        | Msg::LivenessSettleWithCheckpointLegacy => s.advance(30 * DAY),
         Msg::ResolveAfterResolverChange => {
             let admin = s.admin.clone();
             let next = s.outsider.to_string();
             s.exec(&admin, &ExecuteMsg::SetResolver { resolver: next }, &[])
                 .unwrap();
+        }
+        Msg::ReviewAnnul | Msg::ReviewAnnulAfterResolverChange => {
+            if state == GameState::InProgress {
+                let seat1 = s.players[1].clone();
+                s.exec(
+                    &seat1,
+                    &ExecuteMsg::RequestReview { chain_game_id: id },
+                    &[],
+                )
+                .unwrap();
+            }
+            if matches!(msg, Msg::ReviewAnnulAfterResolverChange) {
+                let admin = s.admin.clone();
+                let next = s.outsider.to_string();
+                s.exec(&admin, &ExecuteMsg::SetResolver { resolver: next }, &[])
+                    .unwrap();
+            }
+            // Years of inactivity change nothing for a No-deadline game.
+            s.advance(3_650 * DAY);
+        }
+        Msg::ReviewAnnulWithoutRequest | Msg::ReviewAnnulTimed | Msg::RequestReviewTimed => {
+            s.advance(3_650 * DAY);
         }
         _ => {}
     }
@@ -518,6 +677,11 @@ fn run_cell(msg: Msg, state: GameState, role: Role, paused: bool) -> bool {
         (Err(ContractError::CompromisedSettlement { key_id }), Expect::CompromisedSettlement) => {
             assert_eq!(*key_id, 1, "{cell}");
         }
+        (Err(ContractError::LivenessExitRemoved {}), Expect::LivenessExitRemoved) => {}
+        (Err(ContractError::ReviewNotAvailable {}), Expect::ReviewNotAvailable) => {}
+        (Err(ContractError::ReviewNotRequested { chain_game_id }), Expect::ReviewNotRequested) => {
+            assert_eq!(*chain_game_id, id, "{cell}");
+        }
         _ => panic!("{cell}: got {got:?}, oracle says {expected:?}"),
     }
     if got.is_err() {
@@ -528,6 +692,18 @@ fn run_cell(msg: Msg, state: GameState, role: Role, paused: bool) -> bool {
         );
         assert_eq!(s.contract_balance(), balance, "{cell}");
         assert_eq!(s.balance(&who), caller_balance, "{cell}");
+    } else if matches!(msg, Msg::ReviewAnnul | Msg::ReviewAnnulAfterResolverChange) {
+        // The only outcome: every seat's own net deposit, nothing else.
+        let outcome = s.game(id).game.outcome.unwrap();
+        assert_eq!(outcome.route, Route::ReviewAnnul, "{cell}");
+        assert_eq!(outcome.amounts, vec![Uint128::new(NET); 3], "{cell}");
+        assert_eq!(outcome.dust, Uint128::zero(), "{cell}");
+        assert_eq!(
+            s.balance(&who),
+            caller_balance,
+            "{cell}: the resolver got nothing"
+        );
+        assert_eq!(s.contract_balance(), balance - 3 * NET, "{cell}");
     }
     s.assert_custody();
     got.is_ok()
@@ -554,6 +730,12 @@ fn run_row(msg: Msg) {
         // unpaused SETTLEABLE cells (one per role) answer CompromisedSettlement.
         assert_eq!(accepted, 0, "{msg:?}");
         assert_eq!(compromised, 6, "{msg:?}");
+    } else if msg.never_accepted() {
+        // Escrow 2.1.0: a 2.1.0 game never takes a carried checkpoint into
+        // the (removed) IN_PROGRESS exit, and the review of a Timed game, or
+        // of a game nobody asked to review, never succeeds, whoever sends it.
+        assert_eq!(accepted, 0, "{msg:?}");
+        assert_eq!(compromised, 0);
     } else {
         // Every other row exercises both sides of the oracle.
         assert!(
@@ -594,6 +776,14 @@ row! {
     matrix_liveness_settle_with_checkpoint => Msg::LivenessSettleWithCheckpoint,
     matrix_finalize_compromised => Msg::FinalizeCompromised,
     matrix_consent_compromised => Msg::ConsentCompromised,
+    matrix_liveness_settle_legacy => Msg::LivenessSettleLegacy,
+    matrix_liveness_settle_with_checkpoint_legacy => Msg::LivenessSettleWithCheckpointLegacy,
+    matrix_request_review => Msg::RequestReview,
+    matrix_request_review_timed => Msg::RequestReviewTimed,
+    matrix_review_annul => Msg::ReviewAnnul,
+    matrix_review_annul_after_resolver_change => Msg::ReviewAnnulAfterResolverChange,
+    matrix_review_annul_without_request => Msg::ReviewAnnulWithoutRequest,
+    matrix_review_annul_timed => Msg::ReviewAnnulTimed,
 }
 
 // ------------------------------------------------------------ global messages
@@ -601,6 +791,8 @@ row! {
 #[derive(Clone, Copy, Debug)]
 enum Global {
     CreateGame,
+    /// Escrow 2.1.0: an Async No-deadline game.
+    CreateGameNoDeadline,
     Pause,
     Unpause,
     AddSignerKey,
@@ -611,8 +803,9 @@ enum Global {
     SetParams,
 }
 
-const GLOBALS: [Global; 9] = [
+const GLOBALS: [Global; 10] = [
     Global::CreateGame,
+    Global::CreateGameNoDeadline,
     Global::Pause,
     Global::Unpause,
     Global::AddSignerKey,
@@ -625,7 +818,7 @@ const GLOBALS: [Global; 9] = [
 
 fn global_msg(s: &Suite, g: Global, role: Role) -> (ExecuteMsg, Vec<Coin>) {
     match g {
-        Global::CreateGame => (
+        Global::CreateGame | Global::CreateGameNoDeadline => (
             ExecuteMsg::CreateGame {
                 max_players: 2,
                 mode: Mode::Async,
@@ -633,6 +826,7 @@ fn global_msg(s: &Suite, g: Global, role: Role) -> (ExecuteMsg, Vec<Coin>) {
                 variants_digest: variants_digest(),
                 consent_pubkey: Key::from_label(&format!("18JUNO/TEST/matrix/{role:?}")).pubkey,
                 join_ticket: ticket("matrix-create"),
+                no_deadline: matches!(g, Global::CreateGameNoDeadline),
             },
             coins(ANTE, DENOM),
         ),
@@ -700,7 +894,7 @@ fn matrix_global_messages() {
                 let got = s.exec(&who, &msg, &funds);
                 let cell = format!("{g:?} × {role:?} × paused={paused}");
                 match g {
-                    Global::CreateGame => {
+                    Global::CreateGame | Global::CreateGameNoDeadline => {
                         if paused {
                             assert_eq!(got.unwrap_err(), ContractError::Paused {}, "{cell}");
                         } else {
@@ -731,7 +925,7 @@ fn matrix_global_messages() {
             }
         }
     }
-    assert_eq!(cells, 9 * 2 * 6);
+    assert_eq!(cells, 10 * 2 * 6);
 }
 
 #[test]
@@ -747,6 +941,8 @@ fn matrix_unknown_game() {
         Msg::Resolve,
         Msg::LivenessSettle,
         Msg::LivenessSettleWithCheckpoint,
+        Msg::RequestReview,
+        Msg::ReviewAnnul,
     ] {
         for role in ROLES {
             let mut s = Suite::new();
@@ -809,6 +1005,8 @@ fn retarget(msg: ExecuteMsg, to: u64) -> ExecuteMsg {
             chain_game_id: to,
             checkpoint,
         },
+        ExecuteMsg::RequestReview { .. } => ExecuteMsg::RequestReview { chain_game_id: to },
+        ExecuteMsg::ReviewAnnul { .. } => ExecuteMsg::ReviewAnnul { chain_game_id: to },
         other => panic!("not retargeted: {other:?}"),
     }
 }

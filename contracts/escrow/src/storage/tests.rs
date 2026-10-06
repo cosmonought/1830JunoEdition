@@ -8,14 +8,15 @@
 use std::collections::BTreeSet;
 
 use cosmwasm_std::testing::{mock_dependencies, mock_env, MockStorage};
-use cosmwasm_std::{from_json, to_json_vec, Addr, HexBinary, Timestamp, Uint128, Uint64};
+use cosmwasm_std::{from_json, to_json_vec, Addr, HexBinary, Storage, Timestamp, Uint128, Uint64};
 
 use super::{StoredGame, StoredGameView, GAMES};
 use crate::helpers::{load_game, save_game};
 use crate::msg::{GameResponse, GamesResponse, QueryMsg, SeatsResponse};
 use crate::state::{
-    Config, DisputeRecord, DisputeResolution, Game, GameParams, GameState, GameTerms, Mode,
-    Outcome, PayloadRecord, Route, Seat, SettlementRecord, SettlementSource, CONFIG,
+    Config, DisputeRecord, DisputeResolution, Game, GameParams, GamePolicy, GameState, GameTerms,
+    Mode, Outcome, PayloadRecord, ReviewRequest, Route, Seat, SettlementRecord, SettlementSource,
+    CONFIG,
 };
 
 // ------------------------------------------------------------------ variants
@@ -63,6 +64,7 @@ fn all_routes() -> Vec<Route> {
         Route::LivenessRefund,
         Route::SettleableTimeoutPayout,
         Route::SettleableTimeoutRefund,
+        Route::ReviewAnnul,
     ];
     for r in &all {
         match r {
@@ -79,7 +81,8 @@ fn all_routes() -> Vec<Route> {
             | Route::DeadlineCancel
             | Route::LivenessRefund
             | Route::SettleableTimeoutPayout
-            | Route::SettleableTimeoutRefund => {}
+            | Route::SettleableTimeoutRefund
+            | Route::ReviewAnnul => {}
         }
     }
     all
@@ -270,6 +273,14 @@ fn terms(rng: &mut Rng) -> GameTerms {
         liveness_window_secs: rng.u64(),
         resolver_timeout_secs: rng.u64(),
         treasury: rng.addr(),
+        policy: rng.pick(&[None, Some(GamePolicy::Timed), Some(GamePolicy::NoDeadline)]),
+    }
+}
+
+fn review(rng: &mut Rng) -> ReviewRequest {
+    ReviewRequest {
+        seat_index: rng.next() as u8,
+        requested_at: rng.time(),
     }
 }
 
@@ -310,6 +321,7 @@ fn arbitrary_game(rng: &mut Rng) -> Game {
         consent_bitmap: rng.next() as u8,
         dispute: rng.opt(dispute),
         outcome: rng.opt(|r| outcome(r, n)),
+        review_request: rng.opt(review),
     }
 }
 
@@ -409,6 +421,7 @@ fn shaped_game(state: GameState, n: usize, addr_len: usize, variant: usize) -> G
             liveness_window_secs: 14 * 86_400,
             resolver_timeout_secs: 30 * 86_400,
             treasury: wallet(9),
+            policy: [None, Some(GamePolicy::Timed), Some(GamePolicy::NoDeadline)][variant % 3],
         },
         created_at: Timestamp::from_seconds(1_790_000_000),
         funding_deadline: Timestamp::from_seconds(1_790_086_400),
@@ -433,6 +446,10 @@ fn shaped_game(state: GameState, n: usize, addr_len: usize, variant: usize) -> G
         },
         dispute,
         outcome,
+        review_request: (started && variant % 3 == 2 && variant % 2 == 0).then(|| ReviewRequest {
+            seat_index: (variant % n.max(1)) as u8,
+            requested_at: Timestamp::from_seconds(1_790_070_000),
+        }),
     }
 }
 
@@ -482,7 +499,8 @@ fn view_serializes_exactly_like_stored_game() {
 }
 
 /// StoredGame's JSON is exactly Game's JSON regrouped: the four groups
-/// partition Game's 27 keys, and every value is the byte-identical encoding.
+/// partition Game's 28 keys (27 in 2.0.0, plus 2.1.0's `review_request`), and
+/// every value is the byte-identical encoding.
 #[test]
 fn stored_shape_is_exactly_the_public_game_regrouped() {
     let groups = ["created", "money", "roster", "progress"];
@@ -492,7 +510,7 @@ fn stored_shape_is_exactly_the_public_game_regrouped() {
             serde_json::from_slice(&to_json_vec(&StoredGameView::from(&game)).unwrap()).unwrap();
         let flat = flat.as_object().unwrap();
         let stored = stored.as_object().unwrap();
-        assert_eq!(flat.len(), 27, "the public Game has 27 fields");
+        assert_eq!(flat.len(), 28, "the public Game has 28 fields");
         assert_eq!(
             stored.keys().cloned().collect::<BTreeSet<_>>(),
             groups
@@ -547,6 +565,10 @@ fn fixtures_cover_every_variant_and_every_option() {
     assert!(both(&|g| g.settlement.is_some()));
     assert!(both(&|g| g.dispute.is_some()));
     assert!(both(&|g| g.outcome.is_some()));
+    assert!(both(&|g| g.review_request.is_some()));
+    for policy in [None, Some(GamePolicy::Timed), Some(GamePolicy::NoDeadline)] {
+        assert!(games.iter().any(|g| g.terms.policy == policy));
+    }
     assert!(both(&|g| g
         .seats
         .iter()
@@ -559,6 +581,34 @@ fn fixtures_cover_every_variant_and_every_option() {
     assert!(games.iter().any(|g| g.pool == Uint128::MAX));
     assert!(games.iter().any(|g| g.last_seq == Uint64::new(u64::MAX)));
     assert!(games.iter().any(|g| g.creator.as_str().len() == 90));
+}
+
+/// Escrow 2.1.0 reads a game stored by 2.0.0 code: exactly the stored JSON
+/// without `created.terms.policy` and `progress.review_request` (the only two
+/// fields 2.1.0 added). It decodes with `policy == None`, which keeps the
+/// 2.0.0 exits, and no review request; every other field is unchanged. A
+/// migrated 2.0.0 game can therefore never acquire 2.1.0 terms.
+#[test]
+fn a_game_stored_by_escrow_2_0_0_reads_with_no_policy() {
+    for mut game in fixtures().into_iter().step_by(5) {
+        game.terms.policy = None;
+        game.review_request = None;
+        let mut json: serde_json::Value =
+            serde_json::from_slice(&to_json_vec(&StoredGame::from(game.clone())).unwrap()).unwrap();
+        let terms = json["created"]["terms"].as_object_mut().unwrap();
+        assert!(terms.remove("policy").is_some());
+        let progress = json["progress"].as_object_mut().unwrap();
+        assert!(progress.remove("review_request").is_some());
+        let legacy = serde_json::to_vec(&json).unwrap();
+        let text = String::from_utf8(legacy.clone()).unwrap();
+        assert!(!text.contains("policy") && !text.contains("review_request"));
+        let mut storage = MockStorage::new();
+        storage.set(&GAMES.key(game.chain_game_id), &legacy);
+        let loaded = load_game(&storage, game.chain_game_id).unwrap();
+        assert_eq!(loaded, game);
+        assert_eq!(loaded.terms.policy, None);
+        assert_eq!(loaded.review_request, None);
+    }
 }
 
 /// The canonical helpers write the stored shape under the game's key, and

@@ -17,6 +17,15 @@
 //! * OD-ESC2-5 — each game freezes its resolver at Start.
 //!
 //! Plus the required hardening: consent keys are unique within a game.
+//!
+//! Escrow 2.1.0: the IN_PROGRESS halves of OD-ESC2-1 and OD-ESC2-4 (the
+//! in-progress liveness exit, and a checkpoint carried into it) are 2.0.0
+//! semantics, kept only by a game stored by 2.0.0 code; those tests run on
+//! such games (`Suite::new_legacy`). A 2.1.0 game refuses the IN_PROGRESS exit
+//! (`tests/escrow21.rs`), so for it OD-ESC2-1 holds for SETTLEABLE and
+//! DISPUTED only: an indefinite admin pause blocks `Settle`, and an
+//! IN_PROGRESS 2.1.0 game then exits only by unanimous `AnnulByConsent` (or, if
+//! No-deadline, the resolver's `ReviewAnnul`).
 
 mod common;
 
@@ -98,7 +107,7 @@ fn od1_a_paused_settleable_game_exits_by_liveness() {
 /// Now the whole path completes without an unpause.
 #[test]
 fn od1_the_whole_liveness_path_completes_under_a_permanent_pause() {
-    let mut s = Suite::new();
+    let mut s = Suite::new_legacy();
     let id = s.started(2);
     s.post_checkpoint(id, 10, &[1, 3]);
     s.pause();
@@ -120,7 +129,7 @@ fn od1_the_whole_liveness_path_completes_under_a_permanent_pause() {
 /// be posted during the pause and restarts the clock.
 #[test]
 fn od1_checkpoints_keep_flowing_during_a_pause() {
-    let mut s = Suite::new();
+    let mut s = Suite::new_legacy();
     let id = s.started(2);
     s.post_checkpoint(id, 10, &[5, 1]);
     s.pause();
@@ -383,7 +392,7 @@ fn od3_a_same_log_position_correction_is_legal() {
 /// transaction with LivenessSettle. Now LivenessSettle carries it.
 #[test]
 fn od4_checkpoint_and_liveness_share_one_transaction() {
-    let mut s = Suite::new();
+    let mut s = Suite::new_legacy();
     let id = s.started(2);
     s.post_checkpoint(id, 10, &[1, 1]);
     s.advance(LIVENESS);
@@ -419,7 +428,7 @@ fn od4_the_escrow_2_liveness_json_still_executes() {
             }
         );
     }
-    let mut s = Suite::new();
+    let mut s = Suite::new_legacy();
     let id = s.started(2);
     s.advance(LIVENESS);
     let who = s.players[0].clone();

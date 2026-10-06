@@ -801,7 +801,7 @@ fn config_query_reports_the_contract_and_counters() {
     let c = s.config();
     assert_eq!(c.contract_name, CONTRACT_NAME);
     assert_eq!(c.contract_version, CONTRACT_VERSION);
-    assert_eq!(c.contract_version, "2.0.0");
+    assert_eq!(c.contract_version, "2.1.0");
     assert_eq!(c.config.admission_pubkey, Key::admission(1).pubkey);
     assert_eq!(c.next_chain_game_id, 1);
     assert_eq!(c.next_signer_key_id, 2);
@@ -824,12 +824,12 @@ fn migrate_to_the_same_version_is_a_no_op_that_keeps_state() {
         .app
         .migrate_contract(admin, contract.clone(), &MigrateMsg {}, code_id)
         .unwrap();
-    assert_eq!(attr(&res, "from_version"), "2.0.0");
-    assert_eq!(attr(&res, "to_version"), "2.0.0");
+    assert_eq!(attr(&res, "from_version"), "2.1.0");
+    assert_eq!(attr(&res, "to_version"), "2.1.0");
     assert_eq!(s.game(id).game, before);
     let info = cw2::query_contract_info(&s.app.wrap(), contract.to_string()).unwrap();
     assert_eq!(info.contract, CONTRACT_NAME);
-    assert_eq!(info.version, "2.0.0");
+    assert_eq!(info.version, "2.1.0");
     // Only the chain-level contract admin may migrate at all.
     let outsider = s.outsider.clone();
     assert!(s
@@ -858,10 +858,10 @@ fn migrate_refuses_foreign_contracts_downgrades_and_bad_versions() {
         migrate(deps.as_mut(), mock_env(), MigrateMsg {}).unwrap_err(),
         ContractError::MigrateDowngrade {
             from: "9.0.0".to_string(),
-            to: "2.0.0".to_string()
+            to: "2.1.0".to_string()
         }
     );
-    cw2::set_contract_version(deps.as_mut().storage, CONTRACT_NAME, "2.0.1").unwrap();
+    cw2::set_contract_version(deps.as_mut().storage, CONTRACT_NAME, "2.1.1").unwrap();
     assert!(matches!(
         migrate(deps.as_mut(), mock_env(), MigrateMsg {}).unwrap_err(),
         ContractError::MigrateDowngrade { .. }
@@ -887,12 +887,18 @@ fn migrate_refuses_foreign_contracts_downgrades_and_bad_versions() {
         let v = cw2::get_contract_version(deps.as_ref().storage).unwrap();
         assert_eq!(v.version, old, "a refused migration re-stamps nothing");
     }
-    // The same 2.0.0 state is accepted (a no-op).
+    // 2.0.0 state is accepted and re-stamped 2.1.0: it needs no state
+    // migration (games stored by 2.0.0 code keep 2.0.0 semantics through the
+    // per-game policy gate; `tests/escrow21.rs` migrates a live one).
     cw2::set_contract_version(deps.as_mut().storage, CONTRACT_NAME, "2.0.0").unwrap();
     migrate(deps.as_mut(), mock_env(), MigrateMsg {}).unwrap();
     let v = cw2::get_contract_version(deps.as_ref().storage).unwrap();
-    assert_eq!(v.version, "2.0.0");
+    assert_eq!(v.version, "2.1.0");
     assert_eq!(v.contract, CONTRACT_NAME);
+    // The same 2.1.0 state is accepted (a no-op).
+    migrate(deps.as_mut(), mock_env(), MigrateMsg {}).unwrap();
+    let v = cw2::get_contract_version(deps.as_ref().storage).unwrap();
+    assert_eq!(v.version, "2.1.0");
 }
 
 #[test]

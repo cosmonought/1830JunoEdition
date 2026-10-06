@@ -14,7 +14,9 @@ use crate::helpers::{
 use crate::msg::{CreateGameResponse, JoinAdmission};
 use crate::payload::fixed_bytes;
 use crate::payout::{bond_amount, subsidy_cut};
-use crate::state::{Game, GameState, GameTerms, Mode, Route, Seat, CONFIG, NEXT_GAME_ID};
+use crate::state::{
+    Game, GamePolicy, GameState, GameTerms, Mode, Route, Seat, CONFIG, NEXT_GAME_ID,
+};
 
 #[allow(clippy::too_many_arguments)]
 pub fn create_game(
@@ -27,12 +29,20 @@ pub fn create_game(
     variants_digest: HexBinary,
     consent_pubkey: HexBinary,
     join_ticket: HexBinary,
+    no_deadline: bool,
 ) -> Result<Response, ContractError> {
     let config = CONFIG.load(deps.storage)?;
     require_not_paused(&config)?;
     if !(MIN_PLAYERS..=MAX_PLAYERS).contains(&max_players) {
         return Err(ContractError::BadMaxPlayers { got: max_players });
     }
+    // Escrow 2.1.0: every game this code creates carries an exit policy; a
+    // Live table always has an action deadline.
+    let policy = match (mode, no_deadline) {
+        (_, false) => GamePolicy::Timed,
+        (Mode::Async, true) => GamePolicy::NoDeadline,
+        (Mode::Live, true) => return Err(ContractError::NoDeadlineNeedsAsync {}),
+    };
     fixed_bytes::<32>("variants_digest", &variants_digest)?;
     parse_compressed_pubkey("consent_pubkey", consent_pubkey.as_slice())?;
     fixed_bytes::<32>("join_ticket", &join_ticket)?;
@@ -78,6 +88,7 @@ pub fn create_game(
         liveness_window_secs: params.liveness_window_secs,
         resolver_timeout_secs: params.resolver_timeout_secs,
         treasury: config.treasury.clone(),
+        policy: Some(policy),
     };
     let game = Game {
         chain_game_id,
@@ -116,6 +127,7 @@ pub fn create_game(
         consent_bitmap: 0,
         dispute: None,
         outcome: None,
+        review_request: None,
     };
     save_game(deps.storage, &game)?;
 
@@ -128,6 +140,7 @@ pub fn create_game(
         .add_attribute("ante_gross", gross)
         .add_attribute("subsidy", subsidy)
         .add_attribute("ante_net", net)
+        .add_attribute("policy", policy.as_str())
         .add_attribute("state", game.state.as_str())
         .set_data(to_json_binary(&CreateGameResponse { chain_game_id })?);
     if let Some(msg) = send(&game.terms.treasury, subsidy, &game.denom) {

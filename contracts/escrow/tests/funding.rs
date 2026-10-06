@@ -386,6 +386,7 @@ fn key_ticket_and_digest_lengths_are_enforced() {
         variants_digest: variants_digest(),
         consent_pubkey: HexBinary::from(bytes),
         join_ticket: ticket("x"),
+        no_deadline: false,
     };
     let uncompressed = {
         let k = Key::seat(0);
@@ -416,6 +417,7 @@ fn key_ticket_and_digest_lengths_are_enforced() {
         variants_digest: variants_digest(),
         consent_pubkey: Key::seat(0).pubkey,
         join_ticket: HexBinary::from(vec![7u8; 31]),
+        no_deadline: false,
     };
     assert_eq!(
         s.exec(&who, &bad_ticket, &coins(ANTE, DENOM)).unwrap_err(),
@@ -432,6 +434,7 @@ fn key_ticket_and_digest_lengths_are_enforced() {
         variants_digest: HexBinary::from(vec![7u8; 33]),
         consent_pubkey: Key::seat(0).pubkey,
         join_ticket: ticket("x"),
+        no_deadline: false,
     };
     assert_eq!(
         s.exec(&who, &bad_variants, &coins(ANTE, DENOM))

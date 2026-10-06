@@ -85,6 +85,7 @@ pub fn execute(
             variants_digest,
             consent_pubkey,
             join_ticket,
+            no_deadline,
         } => funding::create_game(
             deps,
             env,
@@ -95,6 +96,7 @@ pub fn execute(
             variants_digest,
             consent_pubkey,
             join_ticket,
+            no_deadline,
         ),
         ExecuteMsg::Join {
             chain_game_id,
@@ -153,6 +155,12 @@ pub fn execute(
             chain_game_id,
             checkpoint,
         } => dispute::liveness_settle(deps, env, info, chain_game_id, checkpoint),
+        ExecuteMsg::RequestReview { chain_game_id } => {
+            dispute::request_review(deps, env, info, chain_game_id)
+        }
+        ExecuteMsg::ReviewAnnul { chain_game_id } => {
+            dispute::review_annul(deps, env, info, chain_game_id)
+        }
         ExecuteMsg::Pause {} => admin::pause(deps, info),
         ExecuteMsg::Unpause {} => admin::unpause(deps, info),
         ExecuteMsg::AddSignerKey { pubkey } => admin::add_signer_key(deps, env, info, pubkey),
@@ -204,6 +212,13 @@ pub const FIRST_ADMISSION_VERSION: (u64, u64, u64) = (2, 0, 0);
 /// contract (including the legacy gameplay contract), any downgrade, and any
 /// state older than `FIRST_ADMISSION_VERSION`. There are no state migrations
 /// for 2.x; a same-version migrate is a no-op.
+///
+/// 2.0.0 → 2.1.0 needs none either: `Config` is unchanged, and a game stored
+/// by 2.0.0 code reads with `terms.policy == None` and no review request, so
+/// it keeps exactly the 2.0.0 exits it was funded under (the per-game gate,
+/// `state::GamePolicy`). Only games created after the migration get the 2.1.0
+/// policy. (The JX-1 2.0.0 testnet instance has no wasm admin and can never be
+/// migrated; 2.1.0 is deployed as a new instance.)
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn migrate(deps: DepsMut, _env: Env, _msg: MigrateMsg) -> Result<Response, ContractError> {
     let stored = get_contract_version(deps.storage)?;
@@ -296,10 +311,7 @@ mod tests {
         assert!(parse_version("1.0.0.0").is_err());
         assert!(parse_version("1.0.0-rc1").is_err());
         assert!(parse_version("").is_err());
-        assert_eq!(parse_version(CONTRACT_VERSION).unwrap(), (2, 0, 0));
-        assert_eq!(
-            parse_version(CONTRACT_VERSION).unwrap(),
-            FIRST_ADMISSION_VERSION
-        );
+        assert_eq!(parse_version(CONTRACT_VERSION).unwrap(), (2, 1, 0));
+        assert!(parse_version(CONTRACT_VERSION).unwrap() > FIRST_ADMISSION_VERSION);
     }
 }

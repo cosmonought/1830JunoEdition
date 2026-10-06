@@ -1,5 +1,11 @@
 //! LivenessSettle: the exit nobody can switch off. IN_PROGRESS inactivity
 //! (ESCROW-1.5 §7.5, cases 1–5) and DISPUTED past the resolver timeout (§8.3).
+//!
+//! Escrow 2.1.0: these are the ESCROW-2 semantics of a game stored by escrow
+//! 2.0.0 code, which a migrated 2.0.0 game keeps (`terms.policy == None`).
+//! Every game here is rewritten into that stored shape right after CreateGame
+//! (`Suite::new_legacy`). A game created by 2.1.0 code has no IN_PROGRESS exit
+//! and never promotes a checkpoint; `tests/escrow21.rs` covers it.
 
 mod common;
 
@@ -85,7 +91,7 @@ fn finalize(s: &mut Suite, id: u64) {
 
 #[test]
 fn not_before_the_liveness_window_and_exactly_at_it() {
-    let mut s = Suite::new();
+    let mut s = Suite::new_legacy();
     let id = s.started(3);
     let at = s.now().plus_seconds(LIVENESS);
     assert_eq!(s.game(id).deadlines.liveness_available_at, Some(at));
@@ -103,7 +109,7 @@ fn not_before_the_liveness_window_and_exactly_at_it() {
 
 #[test]
 fn case_1_no_checkpoint_refunds_every_net_ante() {
-    let mut s = Suite::new();
+    let mut s = Suite::new_legacy();
     let id = s.started(3);
     s.advance(LIVENESS);
     let (d, t, res) = deltas(&mut s, 3, |s| liveness(s, id, 1).unwrap());
@@ -127,7 +133,7 @@ fn case_1_no_checkpoint_refunds_every_net_ante() {
 
 #[test]
 fn case_2_a_checkpoint_becomes_the_settlement_with_a_fresh_window() {
-    let mut s = Suite::new();
+    let mut s = Suite::new_legacy();
     let id = s.started(3);
     let weights = [4u128, 1, 2];
     let p = s.post_checkpoint(id, 50, &weights);
@@ -165,7 +171,7 @@ fn case_2_a_checkpoint_becomes_the_settlement_with_a_fresh_window() {
 
 #[test]
 fn async_games_get_the_async_window_after_liveness() {
-    let mut s = Suite::new();
+    let mut s = Suite::new_legacy();
     let id = s.started_with(2, Mode::Async, ANTE);
     s.post_checkpoint(id, 5, &[1, 1]);
     s.advance(LIVENESS);
@@ -179,7 +185,7 @@ fn async_games_get_the_async_window_after_liveness() {
 
 #[test]
 fn every_checkpoint_refreshes_the_liveness_clock() {
-    let mut s = Suite::new();
+    let mut s = Suite::new_legacy();
     let id = s.started(2);
     s.advance(10 * DAY);
     s.post_checkpoint(id, 10, &[1, 1]);
@@ -206,7 +212,7 @@ fn every_checkpoint_refreshes_the_liveness_clock() {
 
 #[test]
 fn works_while_paused_and_only_for_seated_wallets() {
-    let mut s = Suite::new();
+    let mut s = Suite::new_legacy();
     let id = s.started(2);
     s.advance(LIVENESS);
     s.pause();
@@ -250,7 +256,7 @@ fn works_while_paused_and_only_for_seated_wallets() {
 
 #[test]
 fn case_5_compromised_key_falls_back_to_the_previous_usable_checkpoint() {
-    let mut s = Suite::new();
+    let mut s = Suite::new_legacy();
     let id = s.started(3);
     let key1 = Key::signer(1);
     let key2 = Key::signer(2);
@@ -284,7 +290,7 @@ fn case_5_compromised_key_falls_back_to_the_previous_usable_checkpoint() {
 
 #[test]
 fn every_checkpoint_compromised_means_refund() {
-    let mut s = Suite::new();
+    let mut s = Suite::new_legacy();
     let id = s.started(2);
     s.post_checkpoint(id, 100, &[0, 1]);
     s.retire_key(1, true);
@@ -297,7 +303,7 @@ fn every_checkpoint_compromised_means_refund() {
 
 #[test]
 fn a_planned_retirement_keeps_its_checkpoints_usable() {
-    let mut s = Suite::new();
+    let mut s = Suite::new_legacy();
     let id = s.started(2);
     let p = s.post_checkpoint(id, 100, &[3, 1]);
     s.add_key(&Key::signer(2));
@@ -314,7 +320,7 @@ fn a_planned_retirement_keeps_its_checkpoints_usable() {
 #[test]
 fn a_forged_huge_seq_checkpoint_loses_authority_once_its_key_is_compromised() {
     // OD-ESC2-3: compromised signer evidence loses sequence authority.
-    let mut s = Suite::new();
+    let mut s = Suite::new_legacy();
     let id = s.started(2);
     let key1 = Key::signer(1);
     let key2 = Key::signer(2);
@@ -390,7 +396,7 @@ fn a_forged_huge_seq_checkpoint_loses_authority_once_its_key_is_compromised() {
 
 #[test]
 fn consents_can_complete_a_liveness_settlement_early() {
-    let mut s = Suite::new();
+    let mut s = Suite::new_legacy();
     let id = s.started(3);
     let p = s.post_checkpoint(id, 70, &[1, 2, 3]);
     s.advance(LIVENESS);
@@ -417,7 +423,7 @@ fn consents_can_complete_a_liveness_settlement_early() {
 
 #[test]
 fn a_liveness_settlement_can_be_challenged_resolved_or_annulled() {
-    let mut s = Suite::new();
+    let mut s = Suite::new_legacy();
     // Challenged, then replaced by the resolver.
     let a = s.started(2);
     s.post_checkpoint(a, 70, &[1, 0]);
@@ -458,7 +464,7 @@ fn a_liveness_settlement_can_be_challenged_resolved_or_annulled() {
 
 #[test]
 fn liveness_needs_in_progress_settleable_or_disputed() {
-    let mut s = Suite::new();
+    let mut s = Suite::new_legacy();
     let funding = s.create(0, 3, Mode::Live, ANTE);
     let funded = s.funded(2);
     let settled = s.settled(2);
@@ -487,7 +493,7 @@ fn liveness_needs_in_progress_settleable_or_disputed() {
 
 #[test]
 fn resolver_timeout_not_before_thirty_days() {
-    let mut s = Suite::new();
+    let mut s = Suite::new_legacy();
     let (id, _) = s.disputed(2);
     let at = s.now().plus_seconds(RESOLVER_TIMEOUT);
     assert_eq!(s.game(id).deadlines.resolver_timeout_at, Some(at));
@@ -503,7 +509,7 @@ fn resolver_timeout_not_before_thirty_days() {
 
 #[test]
 fn resolver_timeout_pays_the_stored_settlement_and_returns_the_bond() {
-    let mut s = Suite::new();
+    let mut s = Suite::new_legacy();
     let (id, p) = s.disputed(3);
     let bond = s.bond(id);
     s.advance(RESOLVER_TIMEOUT);
@@ -530,7 +536,7 @@ fn resolver_timeout_pays_the_stored_settlement_and_returns_the_bond() {
 
 #[test]
 fn resolver_timeout_works_while_paused_for_any_seat() {
-    let mut s = Suite::new();
+    let mut s = Suite::new_legacy();
     let (id, _) = s.disputed(3);
     s.pause();
     s.advance(RESOLVER_TIMEOUT);
@@ -554,7 +560,7 @@ fn resolver_timeout_works_while_paused_for_any_seat() {
 
 #[test]
 fn resolver_timeout_on_a_compromised_settlement_falls_back_to_a_checkpoint() {
-    let mut s = Suite::new();
+    let mut s = Suite::new_legacy();
     let id = s.started(3);
     let key2 = Key::signer(2);
     s.add_key(&key2);
@@ -595,7 +601,7 @@ fn resolver_timeout_on_a_compromised_settlement_falls_back_to_a_checkpoint() {
 
 #[test]
 fn resolver_timeout_on_a_compromised_settlement_without_checkpoints_refunds() {
-    let mut s = Suite::new();
+    let mut s = Suite::new_legacy();
     let (id, _) = s.disputed(3);
     let bond = s.bond(id);
     s.retire_key(1, true);
@@ -615,7 +621,7 @@ fn resolver_timeout_on_a_compromised_settlement_without_checkpoints_refunds() {
 
 #[test]
 fn a_fallback_settlement_can_be_challenged_again() {
-    let mut s = Suite::new();
+    let mut s = Suite::new_legacy();
     let id = s.started(2);
     let key2 = Key::signer(2);
     s.add_key(&key2);
@@ -646,6 +652,7 @@ fn a_zero_bond_resolver_timeout_sends_no_bond_message() {
         ..default_params()
     };
     let mut s = SuiteBuilder::default().params(params).build();
+    s.legacy = true;
     let id = s.started(2);
     s.settle(id, 1, 100, &[1, 3], &[]);
     let alice = s.players[1].clone();
@@ -669,7 +676,7 @@ fn a_zero_bond_resolver_timeout_sends_no_bond_message() {
 fn liveness_with_every_registry_slot_holding_a_checkpoint() {
     // The worst case the bounded registry allows: 64 keys, each with its own
     // stored checkpoint for the same game; the newest usable one wins.
-    let mut s = Suite::new();
+    let mut s = Suite::new_legacy();
     let id = s.started(2);
     let mut keys = vec![(1u16, Key::signer(1))];
     for n in 2..=64usize {
@@ -733,7 +740,7 @@ fn settleable_liveness_deadline_for_every_signer_case_paused_and_unpaused() {
     ] {
         for paused in [false, true] {
             let case = format!("{signer:?} paused={paused}");
-            let mut s = Suite::new();
+            let mut s = Suite::new_legacy();
             let with_cp = matches!(signer, Signer::CompromisedWithCheckpoint);
             let (id, cp) = settleable_game(&mut s, with_cp);
             let window_end = s.game(id).game.settlement.unwrap().window_end;
@@ -808,7 +815,7 @@ fn settleable_liveness_deadline_for_every_signer_case_paused_and_unpaused() {
 fn a_permanent_pause_cannot_trap_a_settleable_game() {
     // The ESCROW-2 open decision: Finalize and Consent are paused, the window
     // is closed, and the admin never unpauses.
-    let mut s = Suite::new();
+    let mut s = Suite::new_legacy();
     let (id, _) = s.settleable(3);
     s.pause();
     s.advance(DAY);
@@ -827,7 +834,7 @@ fn a_permanent_pause_cannot_trap_a_settleable_game() {
 
 #[test]
 fn settleable_liveness_is_for_seated_wallets_and_takes_no_funds() {
-    let mut s = Suite::new();
+    let mut s = Suite::new_legacy();
     let (id, _) = s.settleable(2);
     s.advance(DAY + LIVENESS);
     for who in [
@@ -853,7 +860,7 @@ fn settleable_liveness_is_for_seated_wallets_and_takes_no_funds() {
 
 #[test]
 fn a_liveness_checkpoint_settlement_has_the_settleable_exit_too() {
-    let mut s = Suite::new();
+    let mut s = Suite::new_legacy();
     let id = s.started(2);
     s.post_checkpoint(id, 10, &[1, 3]);
     s.advance(LIVENESS);
@@ -879,7 +886,7 @@ fn a_liveness_checkpoint_settlement_has_the_settleable_exit_too() {
 
 #[test]
 fn a_carried_checkpoint_is_promoted_without_restarting_the_clock() {
-    let mut s = Suite::new();
+    let mut s = Suite::new_legacy();
     let id = s.started(3);
     s.post_checkpoint(id, 10, &[1, 1, 1]);
     let activity = s.game(id).game.last_activity;
@@ -918,7 +925,7 @@ fn an_ordinary_checkpoint_restarts_the_clock_where_a_carried_one_does_not() {
     // Same evidence, two routes: posted on its own it refreshes last_activity
     // and liveness moves 14 days away; carried by an eligible LivenessSettle it
     // is promoted at once.
-    let mut s = Suite::new();
+    let mut s = Suite::new_legacy();
     let a = s.started(2);
     let b = s.started(2);
     s.advance(LIVENESS);
@@ -948,7 +955,7 @@ fn an_ordinary_checkpoint_restarts_the_clock_where_a_carried_one_does_not() {
 
 #[test]
 fn eligibility_is_decided_before_a_carried_checkpoint_and_nothing_is_written() {
-    let mut s = Suite::new();
+    let mut s = Suite::new_legacy();
     let id = s.started(2);
     let at = s.now().plus_seconds(LIVENESS);
     s.advance(LIVENESS - 1);
@@ -969,7 +976,7 @@ fn eligibility_is_decided_before_a_carried_checkpoint_and_nothing_is_written() {
 
 #[test]
 fn a_bad_carried_checkpoint_fails_the_whole_transaction() {
-    let mut s = Suite::new();
+    let mut s = Suite::new_legacy();
     let id = s.started(2);
     let other = s.started(2);
     s.post_checkpoint(id, 10, &[1, 1]);
@@ -1031,7 +1038,7 @@ fn a_bad_carried_checkpoint_fails_the_whole_transaction() {
 
 #[test]
 fn a_carried_checkpoint_works_while_paused() {
-    let mut s = Suite::new();
+    let mut s = Suite::new_legacy();
     let id = s.started(2);
     s.pause();
     s.advance(LIVENESS);
@@ -1046,7 +1053,7 @@ fn a_carried_checkpoint_works_while_paused() {
 
 #[test]
 fn a_carried_checkpoint_is_refused_outside_in_progress() {
-    let mut s = Suite::new();
+    let mut s = Suite::new_legacy();
     let (settleable, _) = s.settleable(2);
     let (disputed, _) = s.disputed(2);
     s.advance(40 * DAY);

@@ -87,15 +87,24 @@ fn a_valid_checkpoint_is_stored_and_refreshes_activity() {
     assert_eq!(rec.signer_key_id, 1);
     assert_eq!(rec.issued_at.u64(), p.issued_at);
     assert_eq!(rec.payload_digest.to_vec(), digest.to_vec());
-    // Liveness is now measured from the checkpoint.
+    // Escrow 2.1.0: the checkpoint refreshes `last_activity`, but a 2.1.0 game
+    // has no IN_PROGRESS inactivity exit, so no liveness deadline exists.
+    assert_eq!(gr.deadlines.liveness_available_at, None);
+    // A game stored by 2.0.0 code still measures liveness from the checkpoint.
+    let legacy = s.started(3);
+    s.make_legacy(legacy);
+    s.advance(HOUR);
+    let t2 = s.now();
+    let p2 = s.checkpoint_payload(legacy, 120, &[1, 2, 3]);
+    sign_and_submit(&mut s, legacy, &p2).unwrap();
     assert_eq!(
-        gr.deadlines.liveness_available_at,
-        Some(t.plus_seconds(14 * DAY))
+        s.game(legacy).deadlines.liveness_available_at,
+        Some(t2.plus_seconds(14 * DAY))
     );
     let cps = s.checkpoints(id);
     assert_eq!(cps.checkpoints.len(), 1);
     assert_eq!(cps.liveness_candidate_seq, Some(Uint64::new(240)));
-    assert_eq!(s.contract_balance(), before);
+    assert_eq!(s.contract_balance(), before + 3 * NET);
     s.assert_custody();
 }
 

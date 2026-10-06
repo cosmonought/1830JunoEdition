@@ -1,4 +1,14 @@
-# eighteen-cosmos-escrow 2.0.0 (ESCROW-2, corrected by ESCROW-2.1 and ESCROW-2.2; storage reshaped by ESCROW-2.3; `Join` admission-gated by ESCROW-JOIN)
+# eighteen-cosmos-escrow 2.1.0 (ESCROW-2, corrected by ESCROW-2.1 and ESCROW-2.2; storage reshaped by ESCROW-2.3; `Join` admission-gated by ESCROW-JOIN; per-game exit policy by the Phase-3 escrow 2.1.0 pass)
+
+> **Escrow 2.1.0 is source-level work in progress, not a deployable money
+> contract.** It removes the IN_PROGRESS standings exit and adds the No-deadline
+> review, but the timed default / foreclosure remedies are **not** in it: how an
+> off-chain overdue fact becomes trustworthy to the contract is an open owner
+> decision (Project report `claude/PHASE3_ESCROW21_TIMEOUT_REMEDIES_BLOCKED_2026-10-06.md`).
+> A Timed 2.1.0 game therefore has no non-unanimous exit at all in this build.
+> The server still certifies only `2.0.0` (`JUNO_ESCROW_CONTRACT_VERSIONS`), so it
+> refuses a 2.1.0 instance. The canonical money artifact remains escrow 2.0.0
+> (`5ecc3022…09e8`).
 
 A CosmWasm 1.5 settlement escrow for Juno money rooms. It is a vault, a deposit
 holder, a roster record, a secp256k1 signature verifier, a settlement/challenge
@@ -11,6 +21,57 @@ contract at the repository root and cannot be migrated from it.
 Design sources: `ESCROW_LIVE_RECONCILIATION_2026-09-25` (as amended, A1–A3),
 `SET0A_NET_WORTH_VALUATION_AUDIT_2026-09-25` rev 2 §21, and the ESCROW-2.1 owner
 decisions OD-ESC2-1…5 (all closed; see below).
+
+## Escrow 2.1.0: the per-game exit policy
+
+Owner policy of 2026-10-05 (Live per-action clock, unanimous Live pause, timed
+and No-deadline Async, foreclosure formula). The chain never sees gameplay
+actions: `last_activity` moves only on `Start` and posted checkpoints, so it is
+not an action clock and nothing in 2.1.0 treats it as one.
+
+* **`GameTerms.policy`** (`state::GamePolicy`), written once by `CreateGame`
+  and changed by nothing afterwards (no message, `SetParams` or migration):
+  * `None`: the game was stored by 2.0.0 code (a migrated 2.0.0 game). It keeps
+    every 2.0.0 path, including the IN_PROGRESS standings `LivenessSettle`.
+  * `Timed`: every Live table, and an Async table with a fixed pace.
+  * `NoDeadline`: an Async table with no action deadline.
+* **`CreateGame.no_deadline`** (optional, default `false`): `true` creates a
+  `NoDeadline` game; with `mode: live` it is refused (`NoDeadlineNeedsAsync`)
+  before any fund moves. Escrow 2.0.0 JSON (no field) creates a `Timed` game.
+* **No IN_PROGRESS inactivity exit.** A 2.1.0 game refuses `LivenessSettle`
+  while IN_PROGRESS (`LivenessExitRemoved`), whatever the time, the pause, the
+  caller or a carried checkpoint; nothing is stored. `GameDeadlines.liveness_available_at`
+  is `None` for it while IN_PROGRESS.
+* **No standings payout, ever.** The SETTLEABLE (`window_end + liveness_window`)
+  and DISPUTED (resolver timeout) exits still pay a trusted stored result,
+  paused or not. Where 2.0.0 would promote the best trusted checkpoint (the
+  stored settlement's signer key was retired as compromised), a 2.1.0 game
+  refunds every net deposit instead (`SettleableTimeoutRefund` /
+  `ResolverTimeoutRefund`, CANCELLED, bond back).
+* **The exceptional review (No-deadline only).** `RequestReview` (a seated
+  wallet, IN_PROGRESS; the first request is recorded in `Game.review_request`,
+  later ones change nothing) and `ReviewAnnul` (only the resolver the game
+  adopted at `Start`, after a request; refunds every seat's own net deposit,
+  route `ReviewAnnul`, ANNULLED). It carries no payload or amounts, so the
+  neutral refund is its only outcome. A finished game (SETTLEABLE onward) is
+  never reviewable. Both work while paused. Denying a review is not acting.
+* **Unchanged:** `AnnulByConsent` (N-of-N), the settlement codec and every
+  digest, `Checkpoint`, `Settle`, `Consent`, `Finalize`, `Challenge`, `Resolve`,
+  the resolver snapshot (OD-ESC2-5), every admin message.
+* **Foreclosure arithmetic only:** `payout::foreclosure_split(net_deposits, d)`
+  pays seat `d` zero and every other seat its own net deposit plus
+  `⌊net_d / (N − 1)⌋`; the remainder (≤ N − 2 base units) is dust to the
+  game's treasury. No execute path calls it: which seat defaulted, and whether
+  a foreclosure is authorised, needs the trust bridge.
+* **OD-ESC2-1 narrowed.** A pause still never traps a settled result
+  (SETTLEABLE / DISPUTED exits) or FUNDING / FUNDED funds. But an indefinite
+  admin pause blocks `Settle`, and with the standings exit gone an IN_PROGRESS
+  2.1.0 game then leaves only by unanimous `AnnulByConsent` or (No-deadline)
+  `ReviewAnnul`.
+* **Migration.** 2.0.0 → 2.1.0 needs no state migration (`Config` unchanged;
+  the two new game fields read as absent). The JX-1 2.0.0 instance has no wasm
+  admin and can never be migrated: 2.1.0 is a new instance, after draining the
+  2.0.0 money games.
 
 ## Build and test
 
@@ -49,9 +110,10 @@ profile, and the library denies `clippy::arithmetic_side_effects` outside tests.
 | `vectors` | byte layout, digests and RFC 6979 signatures reproduced from the Python generator, replayed on chain |
 | `golden` | SET-0A P1–P13, Q16 and the 13 case previews, off chain and on chain |
 | `set0c_vectors` | SET-0C: the TypeScript builder's vectors (`frontend/src/utils/__fixtures__/settlement/settlementPayloadVectorsV1.json`) re-derived by the crate — domains, roster hashes, payload bytes, SETTLE/CONSENT digests, shape per message, payouts and dust, JSON form — plus the 71 TypeScript mutation outcomes and single-byte decoder classification |
-| `funding`, `start`, `consent_key`, `checkpoint`, `settlement`, `challenge`, `resolver`, `liveness`, `annul`, `admin`, `terminal` | each message's rules, refusals and boundaries |
-| `matrix` | every execute message × every state × paused/unpaused × six caller roles, against an oracle written from §9.1 as amended by the closed decisions |
-| `invariants` | the seventeen escrow invariants: targeted tests plus a seeded random-sequence checker with an independent payout/refund model, which also runs the emergency rotation and finally drains every live game under a permanent pause |
+| `funding`, `start`, `consent_key`, `checkpoint`, `settlement`, `challenge`, `resolver`, `liveness`, `annul`, `admin`, `terminal` | each message's rules, refusals and boundaries (`liveness`: the 2.0.0 IN_PROGRESS exit, on games stored in the 2.0.0 shape) |
+| `matrix` | every execute message × every state × paused/unpaused × six caller roles, against an oracle written from §9.1 as amended by the closed decisions and the 2.1.0 policy (Timed, No-deadline and 2.0.0-shaped fixtures; RequestReview / ReviewAnnul rows) |
+| `invariants` | the nineteen escrow invariants (18–19: the 2.1.0 policy and review): targeted tests plus a seeded random-sequence checker with an independent payout/refund model over a mix of Timed, No-deadline and 2.0.0-shaped games, which also runs the emergency rotation and finally drains every live game under a permanent pause |
+| `escrow21` | escrow 2.1.0: the policy at CreateGame and its freeze; the IN_PROGRESS exit refused at any time, paused or not, with or without a carried checkpoint; No-deadline never inactivity-settled; trusted results still paid; compromised settlements refunded, never a checkpoint; the review (only the game's resolver, only after a seated request, only No-deadline, only IN_PROGRESS, only the neutral refund, no payout fields); N-of-N annulment unchanged; a migrated 2.0.0 game keeps its 2.0.0 exit; the foreclosure formula against an independent model |
 | `closed_decisions` | regressions for OD-ESC2-1…5 and consent-key uniqueness (see below) |
 | `compromised_settlement` | ESCROW-2.2: a stored settlement under a compromised signer key is never paid by Finalize or Consent; recovery by LivenessSettle |
 | `join_admission` | ESCROW-JOIN: a Join without the admission for its own sender is refused and moves nothing (random wallet, copied ticket, copied admission, other game, changed ticket or expiry, malformed/high-s/foreign signatures, expiry boundary, rotation, key separation); every other Join rule unchanged |

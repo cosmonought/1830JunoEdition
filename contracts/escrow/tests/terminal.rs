@@ -85,7 +85,10 @@ fn terminal_games(s: &mut Suite) -> Vec<(Route, u64)> {
         .unwrap();
     out.push((Route::DeadlineCancel, id));
 
+    // The IN_PROGRESS liveness refund exists only for a game stored by escrow
+    // 2.0.0 code (2.1.0 games refuse it).
     let id = s.started(3);
+    s.make_legacy(id);
     s.advance(14 * DAY);
     s.exec(
         &alice,
@@ -97,6 +100,25 @@ fn terminal_games(s: &mut Suite) -> Vec<(Route, u64)> {
     )
     .unwrap();
     out.push((Route::LivenessRefund, id));
+
+    // Escrow 2.1.0: the exceptional review of a No-deadline game.
+    s.no_deadline = true;
+    let id = s.started(3);
+    s.no_deadline = false;
+    s.exec(
+        &alice,
+        &ExecuteMsg::RequestReview { chain_game_id: id },
+        &[],
+    )
+    .unwrap();
+    let resolver = s.resolver.clone();
+    s.exec(
+        &resolver,
+        &ExecuteMsg::ReviewAnnul { chain_game_id: id },
+        &[],
+    )
+    .unwrap();
+    out.push((Route::ReviewAnnul, id));
 
     let (id, _) = s.settleable(3);
     s.advance(DAY + 14 * DAY);
@@ -247,6 +269,8 @@ fn battery(s: &Suite, id: u64) -> Vec<(ExecuteMsg, Vec<Coin>)> {
             },
             vec![],
         ),
+        (ExecuteMsg::RequestReview { chain_game_id: id }, vec![]),
+        (ExecuteMsg::ReviewAnnul { chain_game_id: id }, vec![]),
         (
             ExecuteMsg::LivenessSettle {
                 chain_game_id: id,
@@ -302,9 +326,9 @@ fn assert_all_refused(s: &mut Suite, games: &[(Route, u64)]) -> usize {
 fn every_terminal_route_refuses_every_game_message() {
     let mut s = Suite::new();
     let games = terminal_games(&mut s);
-    assert_eq!(games.len(), 14, "every route into a terminal state");
+    assert_eq!(games.len(), 15, "every route into a terminal state");
     let checked = assert_all_refused(&mut s, &games);
-    assert_eq!(checked, 14 * 15 * 6);
+    assert_eq!(checked, 15 * 17 * 6);
     s.pause();
     assert_all_refused(&mut s, &games);
     s.assert_custody();
@@ -323,7 +347,9 @@ fn terminal_states_by_route() {
             | Route::ResolverReplace
             | Route::ResolverTimeoutPayout
             | Route::SettleableTimeoutPayout => GameState::Settled,
-            Route::ResolverAnnul | Route::AnnulByConsent => GameState::Annulled,
+            Route::ResolverAnnul | Route::AnnulByConsent | Route::ReviewAnnul => {
+                GameState::Annulled
+            }
             Route::CreatorCancel
             | Route::DeadlineCancel
             | Route::LivenessRefund

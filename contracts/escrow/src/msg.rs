@@ -113,6 +113,12 @@ pub enum ExecuteMsg {
         consent_pubkey: HexBinary,
         /// 32 bytes, stored verbatim.
         join_ticket: HexBinary,
+        /// Escrow 2.1.0: `true` for an Async table with no action deadline
+        /// (`GamePolicy::NoDeadline`); omitted or `false` for a table with one
+        /// (`GamePolicy::Timed`). A Live game is always timed: `true` with
+        /// `mode: live` is refused. Frozen into the game's terms.
+        #[serde(default)]
+        no_deadline: bool,
     },
     /// Takes the next seat with exactly the creator's gross ante. The consent
     /// key must not be another seat's current key. The admission must be the
@@ -190,17 +196,34 @@ pub enum ExecuteMsg {
         consents: Vec<SeatSignature>,
     },
     /// A seated wallet: the liveness exit. Works while paused. Available for
-    /// IN_PROGRESS after the inactivity window, for SETTLEABLE from
-    /// `window_end + liveness_window`, and for DISPUTED after the resolver
-    /// timeout.
+    /// SETTLEABLE from `window_end + liveness_window` and for DISPUTED after
+    /// the resolver timeout. IN_PROGRESS only for a game created by escrow
+    /// 2.0.0 code (after its inactivity window); a 2.1.0 game refuses it while
+    /// IN_PROGRESS (`LivenessExitRemoved`), at any time.
     LivenessSettle {
         chain_game_id: u64,
-        /// IN_PROGRESS only: a newer signed checkpoint, validated exactly like
-        /// `Checkpoint` and promoted in the same transaction. Eligibility is
-        /// decided before it is processed, and it does not restart the
-        /// liveness clock. Omit it (or pass null) for the plain exit.
+        /// IN_PROGRESS (2.0.0 games) only: a newer signed checkpoint, validated
+        /// exactly like `Checkpoint` and promoted in the same transaction.
+        /// Eligibility is decided before it is processed, and it does not
+        /// restart the liveness clock. Omit it (or pass null) for the plain
+        /// exit.
         #[serde(default)]
         checkpoint: Option<SignedCheckpoint>,
+    },
+    /// Escrow 2.1.0, a seated wallet of an IN_PROGRESS No-deadline game: asks
+    /// the game's resolver for the exceptional review. Records the first
+    /// request (seat and time); a later request changes nothing. Moves no
+    /// funds; works while paused.
+    RequestReview {
+        chain_game_id: u64,
+    },
+    /// Escrow 2.1.0, the game's resolver (the address it adopted at `Start`)
+    /// only, on an IN_PROGRESS No-deadline game whose review was requested:
+    /// refunds every seat's net deposit (ANNULLED). It carries no payload and
+    /// no amounts: the only outcome it can produce is the neutral refund.
+    /// Works while paused.
+    ReviewAnnul {
+        chain_game_id: u64,
     },
     // ------------------------------------------------------------- admin
     Pause {},
@@ -293,9 +316,10 @@ pub struct ConfigResponse {
 pub struct GameDeadlines {
     /// `Join` needs block time before this; anyone may `Cancel` from it on.
     pub funding_deadline: Timestamp,
-    /// IN_PROGRESS: `LivenessSettle` from this time (last Start/Checkpoint +
-    /// liveness window). SETTLEABLE: from `challenge_window_end` + liveness
-    /// window.
+    /// IN_PROGRESS, escrow 2.0.0 games only: `LivenessSettle` from this time
+    /// (last Start/Checkpoint + liveness window); always `None` for a 2.1.0
+    /// game, which has no IN_PROGRESS inactivity exit. SETTLEABLE: from
+    /// `challenge_window_end` + liveness window.
     pub liveness_available_at: Option<Timestamp>,
     /// SETTLEABLE: `Challenge` before, `Finalize` from this time.
     pub challenge_window_end: Option<Timestamp>,
@@ -360,8 +384,10 @@ pub struct CheckpointView {
 #[cw_serde]
 pub struct CheckpointsResponse {
     pub checkpoints: Vec<CheckpointView>,
-    /// Seq of the checkpoint `LivenessSettle` would promote now (the highest
-    /// whose signer key is not compromised), if any.
+    /// Seq of the highest checkpoint whose signer key is not compromised, if
+    /// any: the checkpoint an escrow 2.0.0 game's `LivenessSettle` would
+    /// promote now, and for every game the floor a resolver `Replace` must
+    /// exceed. A 2.1.0 game never promotes a checkpoint.
     pub liveness_candidate_seq: Option<Uint64>,
 }
 

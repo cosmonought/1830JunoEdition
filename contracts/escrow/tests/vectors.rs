@@ -322,6 +322,7 @@ fn onchain_game(
         variants_digest: HexBinary::from(sha256(&[b"18JUNO/TEST/variants"]).as_slice()),
         consent_pubkey: Key::seat(0).pubkey,
         join_ticket: ticket("vector-0"),
+        no_deadline: false,
     };
     suite
         .exec(&wallets[0], &create, &coins(ante, DENOM))

@@ -1,4 +1,5 @@
-//! Disputes and exits: Challenge, Resolve, AnnulByConsent, LivenessSettle.
+//! Disputes and exits: Challenge, Resolve, AnnulByConsent, LivenessSettle, and
+//! the escrow 2.1.0 exceptional review (RequestReview, ReviewAnnul).
 
 use cosmwasm_std::{
     BankMsg, DepsMut, Env, HexBinary, MessageInfo, Response, Storage, Timestamp, Uint128, Uint64,
@@ -15,7 +16,8 @@ use crate::helpers::{
 use crate::msg::{ResolveOutcome, SeatSignature, SignedCheckpoint};
 use crate::payload::{fixed_bytes, Payload, PayloadUse};
 use crate::state::{
-    DisputeRecord, DisputeResolution, Game, GameState, Route, SettlementRecord, SettlementSource,
+    DisputeRecord, DisputeResolution, Game, GamePolicy, GameState, ReviewRequest, Route,
+    SettlementRecord, SettlementSource,
 };
 
 /// A seated wallet challenges the stored settlement before the window closes,
@@ -255,6 +257,10 @@ pub fn annul_by_consent(
 /// Moves the game to SETTLEABLE on the best usable checkpoint, or refunds
 /// everyone (CANCELLED) when there is none. `bond_returned` is recorded in the
 /// outcome when the refund happens.
+///
+/// Escrow 2.1.0: a game with a policy never pays from a round-boundary
+/// checkpoint's standings, so it always takes the refund, whatever checkpoints
+/// it holds. Only a 2.0.0 game (`terms.policy == None`) promotes one.
 fn settle_on_checkpoint_or_refund(
     storage: &dyn Storage,
     game: &mut Game,
@@ -262,7 +268,12 @@ fn settle_on_checkpoint_or_refund(
     refund_route: Route,
     bond_returned: Uint128,
 ) -> Result<(Vec<BankMsg>, &'static str), ContractError> {
-    match best_checkpoint(storage, game.chain_game_id, true)? {
+    let candidate = if game.terms.policy.is_some() {
+        None
+    } else {
+        best_checkpoint(storage, game.chain_game_id, true)?
+    };
+    match candidate {
         Some(checkpoint) => {
             game.settlement = Some(SettlementRecord {
                 source: SettlementSource::LivenessCheckpoint,
@@ -282,15 +293,19 @@ fn settle_on_checkpoint_or_refund(
 }
 
 /// The liveness exit, for any seated wallet. It works while paused: a pause may
-/// delay normal operation but never trap funds (OD-ESC2-1).
+/// delay normal operation but never trap a settled result (OD-ESC2-1).
 ///
-/// * IN_PROGRESS, once `max(started_at, last_activity) + liveness_window` has
-///   passed: SETTLEABLE on the highest-seq checkpoint whose signer key is not
-///   compromised (a fresh challenge window applies), or CANCELLED with every
-///   net ante refunded when there is none. An optional newer `checkpoint` is
-///   validated exactly like `Checkpoint` and promoted in the same transaction
-///   (OD-ESC2-4); eligibility is decided before it is processed, and it does
-///   not restart the liveness clock.
+/// * IN_PROGRESS, escrow 2.0.0 games only (`terms.policy == None`), once
+///   `max(started_at, last_activity) + liveness_window` has passed: SETTLEABLE
+///   on the highest-seq checkpoint whose signer key is not compromised (a fresh
+///   challenge window applies), or CANCELLED with every net ante refunded when
+///   there is none. An optional newer `checkpoint` is validated exactly like
+///   `Checkpoint` and promoted in the same transaction (OD-ESC2-4); eligibility
+///   is decided before it is processed, and it does not restart the liveness
+///   clock. A 2.1.0 game refuses the whole message while IN_PROGRESS
+///   (`LivenessExitRemoved`), whatever the time, the pause or a carried
+///   checkpoint: on chain, inactivity is not an action clock, and a stalled
+///   game is never paid by standings.
 /// * SETTLEABLE, once `window_end + liveness_window` has passed: the stored
 ///   settlement is paid, unless its signer key is compromised, in which case the
 ///   game falls back to the best usable checkpoint (SETTLEABLE again, consents
@@ -299,6 +314,9 @@ fn settle_on_checkpoint_or_refund(
 ///   adjudicated, so the challenger's bond is returned and the stored settlement
 ///   is paid as if upheld, unless its signer key was retired as compromised, in
 ///   which case the game falls back as above (checkpoint or refund).
+///
+/// In both fallbacks a 2.1.0 game refunds every net deposit instead of
+/// promoting a checkpoint (`settle_on_checkpoint_or_refund`).
 pub fn liveness_settle(
     deps: DepsMut,
     env: Env,
@@ -326,6 +344,12 @@ pub fn liveness_settle(
     let mut supplied_seq: Option<u64> = None;
     let path: &'static str = match game.state {
         GameState::InProgress => {
+            // Escrow 2.1.0: no in-progress inactivity exit. Checked before the
+            // clock and before any carried checkpoint, so the refusal moves
+            // nothing and stores nothing.
+            if game.terms.policy.is_some() {
+                return Err(ContractError::LivenessExitRemoved {});
+            }
             // Eligibility is decided on the game as it stood before any
             // supplied checkpoint is processed.
             let started = game.started_at.ok_or_else(|| ContractError::Invariant {
@@ -463,4 +487,96 @@ pub fn liveness_settle(
         response = response.add_attribute("supplied_checkpoint_seq", seq.to_string());
     }
     Ok(response.add_attribute("state", game.state.as_str()))
+}
+
+/// The game is an escrow 2.1.0 No-deadline game: the only kind the exceptional
+/// review applies to.
+fn require_no_deadline(game: &Game) -> Result<(), ContractError> {
+    if game.terms.policy == Some(GamePolicy::NoDeadline) {
+        Ok(())
+    } else {
+        Err(ContractError::ReviewNotAvailable {})
+    }
+}
+
+/// Escrow 2.1.0: a seated wallet of an IN_PROGRESS No-deadline game asks the
+/// game's resolver for the exceptional review. Records the first request only;
+/// a later request (by any seat) is accepted and changes nothing. Moves no
+/// funds and works while paused. The evidence itself (death, explicit
+/// permanent abandonment, lost access) is off chain; the request only proves
+/// that a seated player asked, so the resolver cannot annul a game nobody
+/// asked about.
+pub fn request_review(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    chain_game_id: u64,
+) -> Result<Response, ContractError> {
+    nonpayable(&info)?;
+    let mut game = load_game(deps.storage, chain_game_id)?;
+    require_state(&game, &[GameState::InProgress])?;
+    let seat = require_seated(&game, &info.sender)?;
+    require_no_deadline(&game)?;
+    let already = game.review_request.is_some();
+    if !already {
+        game.review_request = Some(ReviewRequest {
+            seat_index: u8::try_from(seat).map_err(|_| ContractError::Overflow {})?,
+            requested_at: env.block.time,
+        });
+        save_game(deps.storage, &game)?;
+    }
+    Ok(Response::new()
+        .add_attribute("action", "request_review")
+        .add_attribute("chain_game_id", chain_game_id.to_string())
+        .add_attribute("chain_seat_index", seat.to_string())
+        .add_attribute("already_requested", already.to_string())
+        .add_attribute("state", game.state.as_str()))
+}
+
+/// Escrow 2.1.0: the game's resolver (the address it adopted at `Start`,
+/// whatever `SetResolver` did since, OD-ESC2-5) approves the review of an
+/// IN_PROGRESS No-deadline game that a seated wallet asked for. The only
+/// outcome is the neutral refund: every seat's own net deposit back to its own
+/// deposit wallet, nothing to the resolver, the treasury or a "winner" (the
+/// message carries no payload and no amounts). Works while paused. A finished
+/// game (SETTLEABLE and later) is never reviewable: its result stands or is
+/// disputed through `Challenge` / `Resolve`. Denying a review is simply not
+/// sending this message: the funds stay escrowed.
+pub fn review_annul(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    chain_game_id: u64,
+) -> Result<Response, ContractError> {
+    nonpayable(&info)?;
+    let mut game = load_game(deps.storage, chain_game_id)?;
+    require_state(&game, &[GameState::InProgress])?;
+    let resolver = game
+        .resolver
+        .as_ref()
+        .ok_or_else(|| ContractError::Invariant {
+            reason: "a started game has no resolver".to_string(),
+        })?;
+    if info.sender != *resolver {
+        return Err(ContractError::Unauthorized {
+            role: "resolver".to_string(),
+        });
+    }
+    require_no_deadline(&game)?;
+    if game.review_request.is_none() {
+        return Err(ContractError::ReviewNotRequested { chain_game_id });
+    }
+    let msgs = refund_all(
+        &mut game,
+        GameState::Annulled,
+        Route::ReviewAnnul,
+        env.block.time,
+        Uint128::zero(),
+    )?;
+    save_game(deps.storage, &game)?;
+    Ok(Response::new()
+        .add_messages(msgs)
+        .add_attribute("action", "review_annul")
+        .add_attribute("chain_game_id", chain_game_id.to_string())
+        .add_attribute("state", game.state.as_str()))
 }

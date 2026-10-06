@@ -286,6 +286,7 @@ fn review(rng: &mut Rng) -> ReviewRequest {
     ReviewRequest {
         seat_index: rng.next() as u8,
         requested_at: rng.time(),
+        trusted_seq: Uint64::new(rng.u64()),
     }
 }
 
@@ -459,6 +460,7 @@ fn shaped_game(state: GameState, n: usize, addr_len: usize, variant: usize) -> G
         review_request: (started && variant % 3 == 2 && variant % 2 == 0).then(|| ReviewRequest {
             seat_index: (variant % n.max(1)) as u8,
             requested_at: Timestamp::from_seconds(1_790_070_000),
+            trusted_seq: Uint64::new(40),
         }),
     }
 }

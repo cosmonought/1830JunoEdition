@@ -228,6 +228,10 @@ pub enum ExecuteMsg {
     /// outcome it can produce is the neutral refund. Works while paused.
     ReviewAnnul {
         chain_game_id: u64,
+        /// The `requested_at` of the request being decided
+        /// (`Game::review_request`). A decision taken for an earlier, since
+        /// withdrawn request is refused (`ReviewRequestMismatch`).
+        requested_at: Timestamp,
     },
     // ------------------------------------------------------------- admin
     Pause {},

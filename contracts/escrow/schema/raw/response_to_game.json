@@ -669,21 +669,35 @@
       "additionalProperties": false
     },
     "ReviewRequest": {
-      "description": "A seated wallet's request for the exceptional review of a No-deadline game (`RequestReview`). Only the first request is recorded; an accepted `Checkpoint` (proof the table kept playing) withdraws it.",
+      "description": "A seated wallet's request for the exceptional review of a No-deadline game (`RequestReview`). Only the first request is recorded; an accepted `Checkpoint` above `trusted_seq` (proof the table kept playing after the request) withdraws it.",
       "type": "object",
       "required": [
         "requested_at",
-        "seat_index"
+        "seat_index",
+        "trusted_seq"
       ],
       "properties": {
         "requested_at": {
-          "$ref": "#/definitions/Timestamp"
+          "description": "Identifies the request: `ReviewAnnul` must name it.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Timestamp"
+            }
+          ]
         },
         "seat_index": {
           "description": "`chain_seat_index` of the requesting wallet.",
           "type": "integer",
           "format": "uint8",
           "minimum": 0.0
+        },
+        "trusted_seq": {
+          "description": "The game's trusted sequence when the request was made. A checkpoint at or below it (an emergency re-post of a boundary already reached) does not withdraw the request.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Uint64"
+            }
+          ]
         }
       },
       "additionalProperties": false

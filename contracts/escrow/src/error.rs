@@ -205,6 +205,9 @@ pub enum ContractError {
     #[error("the game's resolver holds a seat in it and cannot review it")]
     ResolverIsSeated {},
 
+    #[error("the pending review request is the one made at {requested_at}, not the one decided")]
+    ReviewRequestMismatch { requested_at: Timestamp },
+
     // ---------------------------------------------------------------- admin
     #[error("invalid parameter: {reason}")]
     InvalidParams { reason: String },

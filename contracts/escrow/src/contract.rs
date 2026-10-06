@@ -158,9 +158,10 @@ pub fn execute(
         ExecuteMsg::RequestReview { chain_game_id } => {
             dispute::request_review(deps, env, info, chain_game_id)
         }
-        ExecuteMsg::ReviewAnnul { chain_game_id } => {
-            dispute::review_annul(deps, env, info, chain_game_id)
-        }
+        ExecuteMsg::ReviewAnnul {
+            chain_game_id,
+            requested_at,
+        } => dispute::review_annul(deps, env, info, chain_game_id, requested_at),
         ExecuteMsg::Pause {} => admin::pause(deps, info),
         ExecuteMsg::Unpause {} => admin::unpause(deps, info),
         ExecuteMsg::AddSignerKey { pubkey } => admin::add_signer_key(deps, env, info, pubkey),

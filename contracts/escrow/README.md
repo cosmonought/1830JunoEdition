@@ -60,14 +60,20 @@ not an action clock and nothing in 2.1.0 treats it as one.
   terminal weights, behind the challenge window.)
 * **The exceptional review (No-deadline only).**
   * `RequestReview`: a seated wallet, IN_PROGRESS. The first request is recorded
-    in `Game.review_request`; later ones change nothing. An accepted
-    `Checkpoint` (a new round boundary: the table kept playing) withdraws it.
+    in `Game.review_request` (seat, time, the trusted sequence then); later
+    ones change nothing. An accepted `Checkpoint` beyond that trusted sequence
+    (a new round boundary: the table kept playing) withdraws it; re-posting a
+    boundary already reached (the emergency rotation) does not. Refused while
+    the game's resolver holds a seat (`ResolverIsSeated`: no review could
+    follow).
   * `ReviewAnnul`: only the resolver the game adopted at `Start`, never one of
     the game's own seats (`ResolverIsSeated`), after a request and once
     `terms.review_delay_secs` has passed since it (`ReviewDelayNotElapsed`;
-    `GameDeadlines.review_annul_available_at`). Refunds every seat's own net
-    deposit, route `ReviewAnnul`, ANNULLED. It carries no payload or amounts,
-    so the neutral refund is its only outcome.
+    `GameDeadlines.review_annul_available_at`). It names the request it
+    decides (`requested_at`), so a decision taken for a since-withdrawn request
+    cannot execute against a later one (`ReviewRequestMismatch`). Refunds every
+    seat's own net deposit, route `ReviewAnnul`, ANNULLED. It carries no
+    payload or amounts, so the neutral refund is its only outcome.
   * A finished game (SETTLEABLE onward) is never reviewable. Both work while
     paused. Denying a review is not acting.
   * `GameParams.review_delay_secs` (1 s … 10 y like every duration; the value is
@@ -285,7 +291,7 @@ Rust and Cargo 1.81.
 an approximation of the optimizer route (`cargo +1.81.0 build --release --lib
 --target wasm32-unknown-unknown` with `-C link-arg=-s`, then binaryen
 `wasm-opt -Os --signext-lowering`, version 116) gives max 70 locals and
-559,755 B for 2.1.0; the same route gives 68 locals for the 2.0.0 source,
+561,836 B for 2.1.0; the same route gives 68 locals for the 2.0.0 source,
 matching the canonical record, and `cosmwasm-check` 2.2.9 passes both. The
 official optimizer build, all four checkers and `gasbench` must be redone at
 the 2.1.0 artifact gate. `gasbench`'s two IN_PROGRESS `LivenessSettle` rows
@@ -343,8 +349,9 @@ VM gas plus modelled KV/event gas for every path.
   a No-deadline game a seat asked to review, once the review delay has passed;
   it cannot pay itself or anyone else, touch a Timed or 2.0.0 game, or replace
   a finished result. A settlement signer (honest or leaked) withdraws a pending
-  request with any accepted checkpoint, so a malicious server can delay a review
-  indefinitely (the requester asks again); it moves no money that way.
+  request with any accepted checkpoint beyond the boundary trusted at the
+  request, so a malicious server can delay a review indefinitely (the requester
+  asks again); it moves no money that way.
 * Emergency rotation: submit `RetireSignerKey{compromised: true}` and the fresh
   checkpoints in one transaction. Otherwise a leaked key can still post between
   `Pause` and the retirement (Checkpoint works while paused), and ANNUL

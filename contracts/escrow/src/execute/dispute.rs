@@ -502,8 +502,10 @@ fn require_no_deadline(game: &Game) -> Result<(), ContractError> {
 /// Escrow 2.1.0: a seated wallet of an IN_PROGRESS No-deadline game asks the
 /// game's resolver for the exceptional review. Records the first request only;
 /// a later request (by any seat) is accepted and changes nothing. An accepted
-/// `Checkpoint` withdraws the request (the table kept playing), after which a
-/// new request starts a new delay. Moves no funds and works while paused. The evidence itself (death, explicit
+/// `Checkpoint` above the trusted sequence recorded with the request withdraws
+/// it (the table kept playing), after which a new request starts a new delay.
+/// Refused while the game's resolver holds a seat (no review could follow).
+/// Moves no funds and works while paused. The evidence itself (death, explicit
 /// permanent abandonment, lost access) is off chain; the request only proves
 /// that a seated player asked, so the resolver cannot annul a game nobody
 /// asked about.
@@ -518,11 +520,19 @@ pub fn request_review(
     require_state(&game, &[GameState::InProgress])?;
     let seat = require_seated(&game, &info.sender)?;
     require_no_deadline(&game)?;
+    // A resolver holding a seat can never review this game (`review_annul`),
+    // so a request could only advertise an impossible review.
+    if let Some(resolver) = &game.resolver {
+        if seat_index_of(&game, resolver).is_some() {
+            return Err(ContractError::ResolverIsSeated {});
+        }
+    }
     let already = game.review_request.is_some();
     if !already {
         game.review_request = Some(ReviewRequest {
             seat_index: u8::try_from(seat).map_err(|_| ContractError::Overflow {})?,
             requested_at: env.block.time,
+            trusted_seq: Uint64::new(trusted_seq(deps.storage, &game)?),
         });
         save_game(deps.storage, &game)?;
     }
@@ -546,12 +556,18 @@ pub fn request_review(
 /// its result stands or is disputed through `Challenge` / `Resolve`. Denying a
 /// review is simply not sending this message: the funds stay escrowed.
 ///
-/// Check order: state → role → resolver not seated → policy → request → delay.
+/// The message names the request it decides (`requested_at`), so a decision
+/// taken for a request that was since withdrawn cannot execute against a
+/// later one nobody reviewed.
+///
+/// Check order: state → role → resolver not seated → policy → request → the
+/// named request → delay.
 pub fn review_annul(
     deps: DepsMut,
     env: Env,
     info: MessageInfo,
     chain_game_id: u64,
+    decided: Timestamp,
 ) -> Result<Response, ContractError> {
     nonpayable(&info)?;
     let mut game = load_game(deps.storage, chain_game_id)?;
@@ -576,6 +592,9 @@ pub fn review_annul(
         .as_ref()
         .map(|r| r.requested_at)
         .ok_or(ContractError::ReviewNotRequested { chain_game_id })?;
+    if requested_at != decided {
+        return Err(ContractError::ReviewRequestMismatch { requested_at });
+    }
     let available = add_secs(requested_at, game.terms.review_delay_secs)?;
     if env.block.time < available {
         return Err(ContractError::ReviewDelayNotElapsed { at: available });

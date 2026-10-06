@@ -203,12 +203,18 @@ pub struct GameTerms {
 
 /// A seated wallet's request for the exceptional review of a No-deadline game
 /// (`RequestReview`). Only the first request is recorded; an accepted
-/// `Checkpoint` (proof the table kept playing) withdraws it.
+/// `Checkpoint` above `trusted_seq` (proof the table kept playing after the
+/// request) withdraws it.
 #[cw_serde]
 pub struct ReviewRequest {
     /// `chain_seat_index` of the requesting wallet.
     pub seat_index: u8,
+    /// Identifies the request: `ReviewAnnul` must name it.
     pub requested_at: Timestamp,
+    /// The game's trusted sequence when the request was made. A checkpoint at
+    /// or below it (an emergency re-post of a boundary already reached) does
+    /// not withdraw the request.
+    pub trusted_seq: Uint64,
 }
 
 /// One seat, in deposit order. `seats[i]` is `chain_seat_index` i.

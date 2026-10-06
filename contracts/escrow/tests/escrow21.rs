@@ -47,7 +47,8 @@ fn review(
     id: u64,
     who: &cosmwasm_std::Addr,
 ) -> Result<cw_multi_test::AppResponse, ContractError> {
-    s.exec(who, &ExecuteMsg::ReviewAnnul { chain_game_id: id }, &[])
+    let msg = s.review_annul_msg(id);
+    s.exec(who, &msg, &[])
 }
 
 // ===================================================================== policy
@@ -574,12 +575,8 @@ fn a_review_needs_a_seated_request_first() {
     );
     request(&mut s, id, 0).unwrap();
     assert_eq!(
-        s.exec(
-            &resolver,
-            &ExecuteMsg::ReviewAnnul { chain_game_id: id },
-            &coins(1, DENOM)
-        )
-        .unwrap_err(),
+        s.exec(&resolver, &s.review_annul_msg(id), &coins(1, DENOM))
+            .unwrap_err(),
         ContractError::NonPayable {}
     );
     s.advance(7 * DAY);
@@ -638,8 +635,12 @@ fn a_finished_result_cannot_be_replaced_by_a_review() {
     let resolver = s.resolver.clone();
     let id = no_deadline_game(&mut s, 3);
     request(&mut s, id, 0).unwrap();
+    assert!(s.game(id).deadlines.review_annul_available_at.is_some());
     s.settle(id, 1, 50, &[3, 2, 1], &[]);
     assert_eq!(s.state(id), GameState::Settleable);
+    // The record stays as history, but no review deadline is shown any more.
+    assert!(s.game(id).game.review_request.is_some());
+    assert_eq!(s.game(id).deadlines.review_annul_available_at, None);
     let expect_wrong = |s: &mut Suite, id: u64, actual: &str| {
         let err = review(s, id, &resolver).unwrap_err();
         assert!(
@@ -829,13 +830,113 @@ fn a_seated_resolver_cannot_review_its_own_game() {
     .unwrap();
     let id = no_deadline_game(&mut s, 3);
     assert_eq!(s.game(id).game.resolver, Some(seat1.clone()));
-    request(&mut s, id, 1).unwrap();
+    // No seat can even ask (no review could follow), so no deadline is shown.
+    for seat in 0..3 {
+        assert_eq!(
+            request(&mut s, id, seat).unwrap_err(),
+            ContractError::ResolverIsSeated {}
+        );
+    }
+    assert_eq!(s.game(id).game.review_request, None);
+    assert_eq!(s.game(id).deadlines.review_annul_available_at, None);
     s.advance(30 * DAY);
     assert_eq!(
         review(&mut s, id, &seat1).unwrap_err(),
         ContractError::ResolverIsSeated {}
     );
     assert_eq!(s.state(id), GameState::InProgress);
+}
+
+/// `ReviewAnnul` names the request it decides (review N-2): a decision taken
+/// for a request that play has since withdrawn cannot execute against a later
+/// request nobody reviewed.
+#[test]
+fn a_review_decision_is_bound_to_the_request_it_decided() {
+    let mut s = Suite::new();
+    let id = no_deadline_game(&mut s, 3);
+    request(&mut s, id, 0).unwrap();
+    let first = s.game(id).game.review_request.unwrap().requested_at;
+    // The decision for the first request, prepared but not yet executed.
+    let decision = ExecuteMsg::ReviewAnnul {
+        chain_game_id: id,
+        requested_at: first,
+    };
+    // Play continues (withdrawing it); later someone asks again.
+    s.advance(DAY);
+    s.post_checkpoint(id, 30, &[1, 1, 1]);
+    assert_eq!(s.game(id).game.review_request, None);
+    s.advance(DAY);
+    request(&mut s, id, 2).unwrap();
+    let second = s.game(id).game.review_request.unwrap().requested_at;
+    s.advance(7 * DAY);
+    let resolver = s.resolver.clone();
+    assert_eq!(
+        s.exec(&resolver, &decision, &[]).unwrap_err(),
+        ContractError::ReviewRequestMismatch {
+            requested_at: second
+        }
+    );
+    assert_eq!(s.state(id), GameState::InProgress);
+    review(&mut s, id, &resolver).unwrap();
+}
+
+/// Re-posting a round boundary already reached when the review was requested
+/// (the emergency key rotation re-posts it under the new key) does not
+/// withdraw the request (review N-1); a later boundary does.
+#[test]
+fn an_emergency_repost_of_a_reached_boundary_keeps_the_request() {
+    let mut s = Suite::new();
+    let id = no_deadline_game(&mut s, 3);
+    s.post_checkpoint(id, 20, &[1, 1, 1]);
+    request(&mut s, id, 0).unwrap();
+    let recorded = s.game(id).game.review_request.unwrap();
+    assert_eq!(recorded.trusted_seq.u64(), 40);
+    // Emergency rotation: key 1 compromised, the same boundary re-posted by
+    // key 2 (accepted because key 1's evidence lost its authority).
+    let key2 = Key::signer(2);
+    let k2 = s.add_key(&key2);
+    s.pause();
+    s.retire_key(1, true);
+    let mut p = s.checkpoint_payload(id, 20, &[1, 1, 1]);
+    p.signer_key_id = k2;
+    let (payload, signature) = s.signed_by(&p, &key2);
+    let who = s.outsider.clone();
+    let res = s
+        .exec(
+            &who,
+            &ExecuteMsg::Checkpoint {
+                chain_game_id: id,
+                payload,
+                signature,
+            },
+            &[],
+        )
+        .unwrap();
+    assert!(res
+        .events
+        .iter()
+        .flat_map(|e| e.attributes.iter())
+        .all(|a| a.key != "review_request_cleared"));
+    assert_eq!(s.game(id).game.review_request, Some(recorded));
+    s.unpause();
+    // A boundary beyond it withdraws the request.
+    let mut p = s.checkpoint_payload(id, 21, &[1, 1, 1]);
+    p.signer_key_id = k2;
+    let (payload, signature) = s.signed_by(&p, &key2);
+    let res = s
+        .exec(
+            &who,
+            &ExecuteMsg::Checkpoint {
+                chain_game_id: id,
+                payload,
+                signature,
+            },
+            &[],
+        )
+        .unwrap();
+    assert_eq!(attr(&res, "review_request_cleared"), "true");
+    assert_eq!(attr(&res, "action"), "checkpoint");
+    assert_eq!(s.game(id).game.review_request, None);
 }
 
 /// A configuration carried over from 2.0.0 has no review delay: no

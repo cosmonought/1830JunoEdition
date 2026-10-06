@@ -113,12 +113,7 @@ fn terminal_games(s: &mut Suite) -> Vec<(Route, u64)> {
     .unwrap();
     s.advance(7 * DAY);
     let resolver = s.resolver.clone();
-    s.exec(
-        &resolver,
-        &ExecuteMsg::ReviewAnnul { chain_game_id: id },
-        &[],
-    )
-    .unwrap();
+    s.exec(&resolver, &s.review_annul_msg(id), &[]).unwrap();
     out.push((Route::ReviewAnnul, id));
 
     let (id, _) = s.settleable(3);
@@ -271,7 +266,7 @@ fn battery(s: &Suite, id: u64) -> Vec<(ExecuteMsg, Vec<Coin>)> {
             vec![],
         ),
         (ExecuteMsg::RequestReview { chain_game_id: id }, vec![]),
-        (ExecuteMsg::ReviewAnnul { chain_game_id: id }, vec![]),
+        (s.review_annul_msg(id), vec![]),
         (
             ExecuteMsg::LivenessSettle {
                 chain_game_id: id,

@@ -543,7 +543,7 @@ fn build(
         Msg::ReviewAnnul
         | Msg::ReviewAnnulAfterResolverChange
         | Msg::ReviewAnnulWithoutRequest
-        | Msg::ReviewAnnulTimed => (ExecuteMsg::ReviewAnnul { chain_game_id: id }, vec![]),
+        | Msg::ReviewAnnulTimed => (s.review_annul_msg(id), vec![]),
         Msg::LivenessSettleWithCheckpoint | Msg::LivenessSettleWithCheckpointLegacy => {
             let p = fresh_payload(s, id, KIND_CHECKPOINT, 0);
             let (payload, signature) = s.signed(&p);
@@ -1006,7 +1006,10 @@ fn retarget(msg: ExecuteMsg, to: u64) -> ExecuteMsg {
             checkpoint,
         },
         ExecuteMsg::RequestReview { .. } => ExecuteMsg::RequestReview { chain_game_id: to },
-        ExecuteMsg::ReviewAnnul { .. } => ExecuteMsg::ReviewAnnul { chain_game_id: to },
+        ExecuteMsg::ReviewAnnul { requested_at, .. } => ExecuteMsg::ReviewAnnul {
+            chain_game_id: to,
+            requested_at,
+        },
         other => panic!("not retargeted: {other:?}"),
     }
 }

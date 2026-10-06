@@ -864,6 +864,20 @@ impl Suite {
         id
     }
 
+    /// `ReviewAnnul` naming the game's pending review request (the epoch
+    /// when there is none: the refusal then comes from the missing request).
+    pub fn review_annul_msg(&self, id: u64) -> ExecuteMsg {
+        ExecuteMsg::ReviewAnnul {
+            chain_game_id: id,
+            requested_at: self
+                .game(id)
+                .game
+                .review_request
+                .map(|r| r.requested_at)
+                .unwrap_or(Timestamp::from_nanos(0)),
+        }
+    }
+
     // ------------------------------------------------- escrow 2.0.0 fixtures
     /// `inner` (a key inside the contract's own storage) as a raw key of the
     /// multi-test app: the wasm prefix, then this contract's namespace.

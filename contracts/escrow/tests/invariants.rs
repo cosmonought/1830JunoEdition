@@ -1282,8 +1282,18 @@ impl Fuzz {
                     8 => self.s.admin.clone(),
                     _ => self.any_caller(),
                 };
-                let res = self.exec(&who, &ExecuteMsg::ReviewAnnul { chain_game_id: id }, &[]);
-                self.expect_review_annul(id, &g, &who, &res);
+                // Name the pending request, now and then a wrong one (19).
+                let named = match (&g.review_request, self.rng.chance(15)) {
+                    (Some(r), false) => r.requested_at,
+                    (Some(r), true) => r.requested_at.plus_seconds(1),
+                    (None, _) => self.s.now(),
+                };
+                let msg = ExecuteMsg::ReviewAnnul {
+                    chain_game_id: id,
+                    requested_at: named,
+                };
+                let res = self.exec(&who, &msg, &[]);
+                self.expect_review_annul(id, &g, &who, named, &res);
                 Some(Self::done(act, Some(id), who, res))
             }
             Act::Replay => {
@@ -2089,12 +2099,18 @@ impl Fuzz {
         res: &Result<AppResponse, ContractError>,
     ) {
         let seat = g.seats.iter().position(|x| x.wallet == *who);
+        let seated_resolver = g
+            .resolver
+            .as_ref()
+            .is_some_and(|r| g.seats.iter().any(|x| x.wallet == *r));
         let expected = if g.state != GameState::InProgress {
             Err("wrong state")
         } else if seat.is_none() {
             Err("not seated")
         } else if g.terms.policy != Some(GamePolicy::NoDeadline) {
             Err("not available")
+        } else if seated_resolver {
+            Err("seated")
         } else {
             Ok(())
         };
@@ -2114,6 +2130,7 @@ impl Fuzz {
             (Err(ContractError::WrongState { .. }), Err("wrong state")) => {}
             (Err(ContractError::NotSeated { .. }), Err("not seated")) => {}
             (Err(ContractError::ReviewNotAvailable {}), Err("not available")) => {}
+            (Err(ContractError::ResolverIsSeated {}), Err("seated")) => {}
             (got, want) => panic!("RequestReview on {id}: got {got:?}, expected {want:?}"),
         }
     }
@@ -2124,6 +2141,7 @@ impl Fuzz {
         id: u64,
         g: &Game,
         who: &Addr,
+        named: cosmwasm_std::Timestamp,
         res: &Result<AppResponse, ContractError>,
     ) {
         let seated_resolver = g
@@ -2140,6 +2158,8 @@ impl Fuzz {
             Err("not available")
         } else if g.review_request.is_none() {
             Err("not requested")
+        } else if g.review_request.as_ref().unwrap().requested_at != named {
+            Err("mismatch")
         } else if self.s.now()
             < g.review_request
                 .as_ref()
@@ -2168,6 +2188,12 @@ impl Fuzz {
             (Err(ContractError::ReviewNotAvailable {}), Err("not available")) => {}
             (Err(ContractError::ReviewNotRequested { .. }), Err("not requested")) => {}
             (Err(ContractError::ResolverIsSeated {}), Err("seated")) => {}
+            (Err(ContractError::ReviewRequestMismatch { requested_at }), Err("mismatch")) => {
+                assert_eq!(
+                    Some(*requested_at),
+                    g.review_request.as_ref().map(|r| r.requested_at)
+                );
+            }
             (Err(ContractError::ReviewDelayNotElapsed { at }), Err("delay")) => {
                 let r = g.review_request.as_ref().unwrap();
                 assert_eq!(*at, r.requested_at.plus_seconds(g.terms.review_delay_secs));
@@ -2225,13 +2251,14 @@ impl Fuzz {
             let before = self.begin();
             let g = self.game_of(id);
             let resolver = g.resolver.clone().unwrap();
-            let res = self.exec(
-                &resolver,
-                &ExecuteMsg::ReviewAnnul { chain_game_id: id },
-                &[],
-            );
+            let named = g.review_request.as_ref().unwrap().requested_at;
+            let msg = ExecuteMsg::ReviewAnnul {
+                chain_game_id: id,
+                requested_at: named,
+            };
+            let res = self.exec(&resolver, &msg, &[]);
             assert!(res.is_ok(), "review annulment refused: {res:?}");
-            self.expect_review_annul(id, &g, &resolver, &res);
+            self.expect_review_annul(id, &g, &resolver, named, &res);
             let d = Self::done(Act::ReviewAnnul, Some(id), resolver, res);
             self.check(&d, &before);
         } else {
@@ -2697,12 +2724,7 @@ fn inv07_every_refund_equals_the_net_deposit() {
                     .unwrap();
                 s.advance(400 * DAY);
                 let resolver = s.resolver.clone();
-                s.exec(
-                    &resolver,
-                    &ExecuteMsg::ReviewAnnul { chain_game_id: id },
-                    &[],
-                )
-                .unwrap();
+                s.exec(&resolver, &s.review_annul_msg(id), &[]).unwrap();
                 id
             }),
         ),
@@ -3143,14 +3165,7 @@ fn inv12_pause_never_disables_a_refund_or_liveness_route() {
     .unwrap();
     s.advance(7 * DAY);
     let resolver = s.resolver.clone();
-    s.exec(
-        &resolver,
-        &ExecuteMsg::ReviewAnnul {
-            chain_game_id: review,
-        },
-        &[],
-    )
-    .unwrap();
+    s.exec(&resolver, &s.review_annul_msg(review), &[]).unwrap();
     assert_eq!(
         s.exec(&p1, &Suite::liveness_msg(timed), &[]).unwrap_err(),
         ContractError::LivenessExitRemoved {}
@@ -3368,14 +3383,8 @@ fn inv13b_a_pause_traps_no_settled_result_and_v21_in_progress_needs_unanimity_or
     .unwrap();
     s.advance(7 * DAY);
     let resolver = s.resolver.clone();
-    s.exec(
-        &resolver,
-        &ExecuteMsg::ReviewAnnul {
-            chain_game_id: no_deadline,
-        },
-        &[],
-    )
-    .unwrap();
+    s.exec(&resolver, &s.review_annul_msg(no_deadline), &[])
+        .unwrap();
     let route = |s: &Suite, id: u64| s.game(id).game.outcome.map(|o| o.route);
     assert_eq!(route(&s, funded), Some(Route::DeadlineCancel));
     assert_eq!(route(&s, settleable), Some(Route::SettleableTimeoutPayout));

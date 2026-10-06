@@ -153,17 +153,19 @@ pub fn checkpoint(
     let now = env.block.time;
     store_checkpoint(deps.storage, &mut game, &payload, &digest, now)?;
     game.last_activity = Some(now);
-    // Escrow 2.1.0: a new round boundary proves the table kept playing, so a
-    // pending review request (No-deadline games only) is withdrawn.
-    let review_request_cleared = game.review_request.take().is_some();
+    // Escrow 2.1.0: a round boundary beyond the one trusted when a review was
+    // requested proves the table kept playing, so the pending request
+    // (No-deadline games only) is withdrawn. Re-posting a boundary already
+    // reached (the emergency rotation) does not withdraw it.
+    let review_request_cleared = game
+        .review_request
+        .as_ref()
+        .is_some_and(|request| payload.seq > request.trusted_seq.u64());
+    if review_request_cleared {
+        game.review_request = None;
+    }
     save_game(deps.storage, &game)?;
-    let response = Response::new();
-    let response = if review_request_cleared {
-        response.add_attribute("review_request_cleared", "true")
-    } else {
-        response
-    };
-    Ok(response
+    let response = Response::new()
         .add_attribute("action", "checkpoint")
         .add_attribute("chain_game_id", chain_game_id.to_string())
         .add_attribute("seq", payload.seq.to_string())
@@ -172,7 +174,12 @@ pub fn checkpoint(
         .add_attribute(
             "payload_digest",
             HexBinary::from(digest.as_slice()).to_hex(),
-        ))
+        );
+    Ok(if review_request_cleared {
+        response.add_attribute("review_request_cleared", "true")
+    } else {
+        response
+    })
 }
 
 /// Anyone may post a validly signed Terminal payload while IN_PROGRESS and not

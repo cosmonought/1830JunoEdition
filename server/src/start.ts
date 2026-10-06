@@ -575,8 +575,8 @@ function identityBanner(): string {
         "  rooms: the server-owned protocol (room-op, GameRecords in games/) -- the same one production runs\n" +
         "  remote playtests: run GS_MODE=production behind the tunnel (see PLAYTEST_TRANSPORT.md), never this mode\n"
       : `  PRODUCTION IDENTITY: the ${SESSION_COOKIE_NAME} cookie (Secure; HttpOnly; SameSite=Strict), bootstrapped at POST /gs/api/session; trusted proxy hops ${config.trustedProxyHops}\n` +
-        "  profiles: REQUIRED to play (LIVE-2E) -- create, recover (recovery key) or link a device at /gs/api/profile/*; an unprofiled browser opens no game socket\n" +
-        "  rooms: the server-owned protocol (room-op, GameRecords in games/)\n";
+        "  accounts: REQUIRED to play -- username + password + an Authorization Wallet (create, log in, Forgot password? by the wallet) at /gs/api/account/*; a visitor watches and reads only\n" +
+        "  rooms: the server-owned protocol (room-op, GameRecords in games/); every player game is anted (no free tables)\n";
   return (
     posture +
     `  allowed origins: ${config.allowedOrigins.join(", ")}${config.notes.length > 0 ? ` (${config.notes.join("; ")})` : ""}\n` +

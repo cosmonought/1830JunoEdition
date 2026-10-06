@@ -383,7 +383,7 @@ describe("Forgot password? -- username, then the Authorization Wallet, then a ne
     await submit(byTestId("account-form"));
     expect(server.actions()).toEqual(["/gs/api/account/authorization", "/gs/api/account/recover"]);
     expect(server.bodiesOf("/gs/api/account/authorization")).toEqual([{ purpose: "recover", username: "Ann", wallet: TEST_WALLET }]);
-    expect(wallet.calls).toEqual(["connect", "account", `signLink:${TEST_WALLET}:1830JUNO/PROFILE-AUTHORIZATION/v1`]);
+    expect(wallet.calls).toEqual(["connect", "account", `signLink:${TEST_WALLET}:18COSMOS/PROFILE-AUTHORIZATION/v1`]);
     expect(signed).toEqual([{ signer: TEST_WALLET, text: authorizationText("RECOVER") }]);
     expect(server.bodiesOf("/gs/api/account/recover")).toEqual([{ operation: OPERATION, pubKey: KEPLR_PUBKEY, signature: "c2ln", newPassword: "my brand new passphrase" }]);
     expect(server.port.state).toBe("ready");

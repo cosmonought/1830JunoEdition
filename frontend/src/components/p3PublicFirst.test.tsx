@@ -316,7 +316,7 @@ describe("P3-ACCT: a visitor gets the homepage, and an account only where one is
     expect(server.calls.filter((call) => call.path === "/gs/api/account/create").map((call) => JSON.parse(call.body))).toEqual([
       { username: "Ann", password: "a long enough secret", name: "Ann", operation: OPERATION, pubKey: "Ai1R5vzeZFvF73ROli+IbV7OuNG7bM6HeI0rthBGJzvf", signature: "c2ln" },
     ]);
-    expect(services.wallet.calls.filter((call) => call.startsWith("signLink"))).toEqual([`signLink:${TEST_WALLET}:1830JUNO/PROFILE-AUTHORIZATION/v1`]);
+    expect(services.wallet.calls.filter((call) => call.startsWith("signLink"))).toEqual([`signLink:${TEST_WALLET}:18COSMOS/PROFILE-AUTHORIZATION/v1`]);
     expect(byTestId("recovery-key-value")).toBeNull();
     expect(byTestId("account-dialog")).toBeNull();
     expect(byTestId("host-body")).toBeTruthy();

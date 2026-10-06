@@ -218,7 +218,7 @@ describe("account policy (PHASE 3 FINAL): creating an account designates its Aut
     await submit(byTestId("account-form"));
     /* The CREATE text was the one Keplr signed, with the wallet shown, after the mint and before the create. */
     expect(signedTexts).toEqual([authorizationText("CREATE")]);
-    expect(signLinks()).toEqual([`signLink:${TEST_WALLET}:1830JUNO/PROFILE-AUTHORIZATION/v1`]);
+    expect(signLinks()).toEqual([`signLink:${TEST_WALLET}:18COSMOS/PROFILE-AUTHORIZATION/v1`]);
     expect(server.bodiesOf("/gs/api/account/authorization")).toEqual([{ purpose: "create", username: "Ann", wallet: TEST_WALLET }]);
     expect(server.bodiesOf("/gs/api/account/create")).toEqual([{ username: "Ann", password: PASSWORD, name: "Ann", operation: OPERATION, pubKey: "Ai1R5vzeZFvF73ROli+IbV7OuNG7bM6HeI0rthBGJzvf", signature: "c2ln" }]);
     /* Signed in at once (the sockets move to the new session), and the action that asked resumed -- no reveal between. */

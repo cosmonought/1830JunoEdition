@@ -61,7 +61,7 @@ export interface Principal {
  *  keys as schema 2, with stricter meaning -- every schema-3 record holds ALL of:
  *    the username login (all four login fields set: the ordinary sign-in is username + password);
  *    wallet_address / wallet_verified_at   the profile's ONE designated AUTHORIZATION WALLET (proven by an ADR-036
- *        signature over a domain-separated "1830JUNO/PROFILE-AUTHORIZATION" text the server minted -- at creation, or by
+ *        signature over a domain-separated "18COSMOS/PROFILE-AUTHORIZATION" text the server minted -- at creation, or by
  *        a replacement both the old and the new wallet signed) and when that designation was made. Never null: no
  *        schema-3 profile exists without its Authorization Wallet (the store refuses one).
  *    recovery_selector / recovery_hash / recovery_rotated_at   NO RECOVERY KEY. The selector is now the profile's

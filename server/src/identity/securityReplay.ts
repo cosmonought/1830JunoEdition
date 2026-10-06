@@ -355,6 +355,10 @@ export function planSecurityReplay(input: ReplayInput): ReplayPlan {
     let keyAdvanced = false;
     if (rotations.length > 0) {
       if (profile === undefined) throw new SecurityReplayError(`key rotation ${rotations[0].event_id} names a profile this principal does not have`);
+      /* PHASE 3 FINAL: an Authorization Wallet account (schema 3) never had a recovery key -- its epoch is sealed and no
+         build that made one rotates it. A rotation naming one is a damaged or forged journal: refused here, up front,
+         rather than late by the store. */
+      if (profile.schema === 3) throw new SecurityReplayError(`key rotation ${rotations[0].event_id} names an Authorization Wallet account, which has no recovery key`);
       const profileId = profile.profile_id;
       for (const rotation of rotations) if (rotation.profile_id !== profileId) throw new SecurityReplayError(`key rotation ${rotation.event_id} names another profile than this principal's`);
       const toCount = new Map<string, number>();

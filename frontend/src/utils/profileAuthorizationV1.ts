@@ -9,7 +9,7 @@
 // account's long-term authority and its recovery -- never its ordinary login (that is the username and password), never
 // a gameplay identity, and never the wallet a game is funded from unless the player chooses so.
 //
-//   1830JUNO/PROFILE-AUTHORIZATION/v1
+//   18COSMOS/PROFILE-AUTHORIZATION/v1
 //   Project 18XX: make this wallet the Authorization Wallet of a new account.
 //   This is not a transaction: it moves no funds and grants no permission to spend.
 //   Purpose: CREATE
@@ -39,7 +39,7 @@
 // is acting for, the purpose it asked for and the wallet Keplr is on as the signer (a compromised server cannot get a
 // different account action signed through this page).
 
-export const PROFILE_AUTHORIZATION_TAG_V1 = "1830JUNO/PROFILE-AUTHORIZATION/v1";
+export const PROFILE_AUTHORIZATION_TAG_V1 = "18COSMOS/PROFILE-AUTHORIZATION/v1";
 /** How long a minted authorization text may be answered. */
 export const PROFILE_AUTHORIZATION_TTL_MS = 5 * 60 * 1000;
 

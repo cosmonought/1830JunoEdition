@@ -369,7 +369,7 @@ describe("PHASE 3 FINAL (§9, re-review NEW-1): the account changes THIS page ma
     expect(session.localAccount).toEqual({ changes: 3, key: "visitor" });
     answers.push({ status: 200, body: { ok: true, operation: "0".repeat(32), texts: [], expiresAt: 1 } });
     await session.api("account/authorization", { purpose: "recover", username: "Ann.Player", wallet: "juno1x" });
-    expect(session.localAccount.changes).toBe(3);
+    expect(session.localAccount?.changes).toBe(3);
     answers.push({ status: 200, body: { ok: true, profile: { name: "Ann" }, signedOut: 0 } });
     await session.api("account/recover", { operation: "0".repeat(32), pubKey: "k", signature: "s", newPassword: "a brand new password" });
     expect(session.localAccount).toEqual({ changes: 4, key: "account:ann.player" });

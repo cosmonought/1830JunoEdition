@@ -113,7 +113,8 @@ describe("RED R1 (AUD-25.16, OD-19): the send gate refuses a move from a board t
   });
 
   it("the answer it reads is the shell's synchronous one (refs, read at the click), assigned outside the RED region", () => {
-    expect(shell).toContain("boardSendRefusalRef.current = () => boardSendRefusal({ watchOnly, currency: syncBoardCurrency() });");
+    /* PHASE 3 FINAL (§9): the same synchronous answer, behind the open table's account question. */
+    expect(shell).toContain("boardSendRefusalRef.current = () => (tableAccountChangeRef.current !== null ? ACCOUNT_CHANGED_NO_SEND : boardSendRefusal({ watchOnly, currency: syncBoardCurrency() }));");
     expect(shell).toContain("drainFailed: drainFailedRoomRef.current !== null && drainFailedRoomRef.current === sandboxRoomRef.current,");
     expect(shell).toContain("divergedAt: divergenceReportedAtRef.current,");
   });

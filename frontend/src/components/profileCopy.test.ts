@@ -149,7 +149,16 @@ describe("no player-visible guest or seat-PIN vocabulary (LIVE-2E)", () => {
         .replace(/\/\*[\s\S]*?\*\//g, "")
         .replace(/(^|[^:])\/\/.*$/gm, "$1");
       for (const banned of ["document.cookie", "localStorage", "sessionStorage", "console.", "history.pushState", "history.replaceState", "location.hash", "location.search"]) {
+        /* PHASE 3 FINAL: the ONE exception -- the open table's account guard keeps, per table in this tab's sessionStorage,
+           a FINGERPRINT of the account it was opened as and the display name shown there (no username, no credential),
+           so a reload still asks; pinned below. */
+        if (name === "utils/tableAccountGuard.ts" && banned === "sessionStorage") continue;
         expect([name, banned, code.includes(banned)]).toEqual([name, banned, false]);
+      }
+      if (name === "utils/tableAccountGuard.ts") {
+        expect(code).toContain("[gameId, { key: baseline.key, name: baseline.name }]");
+        expect(code).toContain("{ key: tag, name, local: changes }");
+        expect(code).toContain("const tag = key === null ? null : fingerprintOf(key);");
       }
     }
   });

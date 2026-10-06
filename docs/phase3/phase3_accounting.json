@@ -1835,7 +1835,7 @@
    "od": "OD-9(b)",
    "p4": "—",
    "notes": "—",
-   "status": "OPEN — ASSET PENDING (OD-9(b) policy RULED: the official Keplr asset only, never fabricated/redrawn; not an owner-policy decision awaiting the owner): W2-K `e223f64` adds the empty `components/money/KeplrMark.tsx` slot (`KEPLR_OFFICIAL_LOGO = null`, renders nothing; textual \"Keplr\" kept); no logo drawn, approximated or scraped. Integrated `fb4eee5`. Closes when the official file is supplied"
+   "status": "OPEN — ASSET PENDING (OD-9(b) policy RULED: the official Keplr asset only, never fabricated/redrawn; not an owner-policy decision awaiting the owner): W2-K `e223f64` adds the empty `components/money/KeplrMark.tsx` slot (`KEPLR_OFFICIAL_LOGO = null`, renders nothing; textual \"Keplr\" kept); no logo drawn, approximated or scraped. Integrated `fb4eee5`. Closes when the official file is supplied 2026-10-06 (Phase 3 final, `phase3/preplaytest-final-account-wallet-identity`): the owner has supplied the official standalone ICON and WORDMARK, but neither file is in the repository or reachable from the pass's environment -- both slots (`KEPLR_OFFICIAL_ICON`, `KEPLR_OFFICIAL_WORDMARK`) stay null with an explicit asset-placement note in `KeplrMark.tsx`; still nothing drawn or approximated."
   },
   {
    "key": "AUD-18.06",
@@ -4143,7 +4143,7 @@
    "od": "—",
    "p4": "—",
    "notes": "OWNER (2026-10-05, the W3-L brief): FIX IN THIS LANE -- a Phase-3 landing-page defect, not the Phase-5 responsive redesign; reflow, no absolute-position collision, CTAs readable and clickable.",
-   "status": "IMPLEMENTED — W3-L `9afc74a` on `phase3/preplaytest-profile-account-wallet` (NOT integrated): `components/Lobby.tsx` measures the account corner and the doors and clamps the doors' top between the title's foot / corner and the hero window's bottom (`heroVars`, `actionsTopFor`; ResizeObserver); the hero / tables region flows below the measured doors. After: 0 / 216 overlapping, signed in and signed out (same harness, evidence in `docs/phase3/evidence/p3acct/`). Tests: `components/p3HomepageOverlap.test.tsx`. Existing UiScale helpers reused; no new breakpoints."
+   "status": "IMPLEMENTED — W3-L `9afc74a` on `phase3/preplaytest-profile-account-wallet` (NOT integrated): `components/Lobby.tsx` measures the account corner and the doors and clamps the doors' top between the title's foot / corner and the hero window's bottom (`heroVars`, `actionsTopFor`; ResizeObserver); the hero / tables region flows below the measured doors. After: 0 / 216 overlapping, signed in and signed out (same harness, evidence in `docs/phase3/evidence/p3acct/`). Tests: `components/p3HomepageOverlap.test.tsx`. Existing UiScale helpers reused; no new breakpoints. REOPENED 2026-10-06 (the owner, ~300% scale: \"Your Tables\" still covered Host / Join) and FIXED STRUCTURALLY in the final account / wallet pass (`phase3/preplaytest-final-account-wallet-identity`, `101577a`): the top region (account corner, title, Host / Join) is one normal-flow block that owns its height and ends at an explicit `lobby-boundary`; every table section starts below it (no measured-height clamp, no negative offset, no underlay). Regression test `components/p3HomepageTablesBoundary.test.tsx` fails if the first Your Tables box crosses the action region's bottom; real-browser evidence `docs/phase3/evidence/p3acct/homepage_tables_boundary*`."
   },
   {
    "key": "P3-N029",
@@ -4185,7 +4185,49 @@
    "od": "—",
    "p4": "—",
    "notes": "OWNER RULINGS 2026-10-05 (the account-policy follow-up brief). Email recovery is intentionally OUT OF SCOPE for this release (a possible later product enhancement, not required for Phase 4) -- not an unfinished item. The recovery key is an approved account-recovery feature, never the normal login mechanism.",
-   "status": "IMPLEMENTED — the account-policy follow-up on `phase3/preplaytest-profile-account-policy` (`c7841ee`, review fixes `cc241e7`, `3de06c2`; from `343fac2`; NOT integrated): 12-character floor; one recovery key per new account, revealed once by the account dialog; `POST /gs/api/account/password` (current password OR the key in the request; other devices signed out; this browser on a fresh session in its own family; wallet kept) and `POST /gs/api/account/reset` (\"Forgot password?\": key + new password, no username, one non-enumerating refusal; every earlier session ends; key kept; wallet forgotten); key rotation only under an explicit \"Confirm it's you\"; a password account's key never signs in or confirms; the `profile-password` store fence and the journaled `password-replaced` event; established opponents counted. Record: `w3l_account_policy_followup`."
+   "status": "IMPLEMENTED — the account-policy follow-up on `phase3/preplaytest-profile-account-policy` (`c7841ee`, review fixes `cc241e7`, `3de06c2`; from `343fac2`; NOT integrated): 12-character floor; one recovery key per new account, revealed once by the account dialog; `POST /gs/api/account/password` (current password OR the key in the request; other devices signed out; this browser on a fresh session in its own family; wallet kept) and `POST /gs/api/account/reset` (\"Forgot password?\": key + new password, no username, one non-enumerating refusal; every earlier session ends; key kept; wallet forgotten); key rotation only under an explicit \"Confirm it's you\"; a password account's key never signs in or confirms; the `profile-password` store fence and the journaled `password-replaced` event; established opponents counted. Record: `w3l_account_policy_followup`. SUPERSEDED IN PART 2026-10-06 by P3-N032: the recovery key (issue, show, rotate, reset, re-authenticate) is REMOVED as a product; \"Forgot password?\" is the Authorization Wallet's. The 12-character policy, username policy, Change password, no-email ruling and the established count STAND."
+  },
+  {
+   "key": "P3-N032",
+   "ids": "owner rulings (final account / Authorization Wallet model)",
+   "ref": "Phase 3 final account / wallet identity (2026-10-06)",
+   "cls": "[D] identity / [UX] product",
+   "item": "The owner's final model: THE PROFILE / ACCOUNT IS THE PLAYER; a Keplr wallet is not. An account is a username, a password (12+, no composition rules) and exactly ONE designated Authorization Wallet proven at creation by an ADR-036 signature over a fresh, short-lived, single-use, domain-separated server text (no transaction, no funds, no spend permission). Normal login is the username and password only. \"Forgot password?\" is the Authorization Wallet's (a one-time RECOVER signature; every session and family revoked; seats, trust, payout bindings and escrow ownership untouched; no enumeration oracle; gameplay wallets cannot recover). Changing it needs a signed-in, explicitly confirmed session plus the CURRENT wallet's approval and the NEW wallet's acceptance. The recovery-key product is removed entirely; no email; no operator override (lost password + lost wallet = no automated recovery); legacy profiles are disposable (retired, no migration).",
+   "src": "CONFIRMED (`caad745`): accounts were username + password + a recovery key (`rk_`), with key reset / rotation / re-authentication and link codes; the profile held a \"verified payout wallet\" persisted from the last wallet linked at any seat; no Authorization Wallet existed.",
+   "slice": "W3-L",
+   "disp": "B",
+   "od": "—",
+   "p4": "—",
+   "notes": "OWNER RULINGS 2026-10-06 (the final account / wallet identity brief). The internal credential epoch (recovery_selector + the sealed digest) is kept as an internal value -- no financial protocol bump, no certified signed format changed. No mainnet exceptional account-recovery authority exists.",
+   "status": "IMPLEMENTED — `phase3/preplaytest-final-account-wallet-identity` (from `caad745`; NOT integrated): identity schema 3 (memory / file / journal / DynamoDB; conformance ID-23), `server/src/identity/authorizationWallet.ts` + `frontend/src/utils/profileAuthorizationV1.ts` (`18COSMOS/PROFILE-AUTHORIZATION/v1`: CREATE / RECOVER / REPLACE-APPROVE / REPLACE-ACCEPT), routes `/gs/api/account/{authorization,create,login,recover,password,authorization-wallet/challenge,authorization-wallet/replace}`, the retired LIVE-2E / recovery-key / link-code / reset routes answer 410, the journaled `authorization-wallet-replaced` event and its restore replay, the account dialog and profile menu rebuilt. Tests: `identity/p3FinalAccountWallet.test.ts`, `identity/p3FinalReviewFixes.test.ts`, the converted identity suites. Record: `p3_final_account_wallet_identity`."
+  },
+  {
+   "key": "P3-N033",
+   "ids": "owner-observed (a wallet switch changed the account's identity)",
+   "ref": "Phase 3 final account / wallet identity (2026-10-06)",
+   "cls": "[D] identity defect",
+   "item": "Switching Keplr to another wallet and using it at a table changed who the account appeared to be: the wallet the profile showed as its own followed whichever wallet was last linked at any seat, and an open table could silently show another account's seat after the browser's account changed in another tab.",
+   "src": "REPRODUCED RED at `caad745` (`server/src/identity/p3FinalWalletSwitch.test.ts`: the account's wallet went null -> Wallet A -> Wallet B as two tables were linked; evidence `docs/phase3/evidence/p3final/`). Cause: `moneyTables.ts` persisted every grant-authorized link to the profile (`associateWallet`).",
+   "slice": "W3-L",
+   "disp": "B",
+   "od": "—",
+   "p4": "—",
+   "notes": "OWNER (2026-10-06): identity = authenticated session -> profile -> the seat bound to that profile; the selected Keplr address is transient signer state only.",
+   "status": "IMPLEMENTED — `phase3/preplaytest-final-account-wallet-identity`: the profile stores no game wallet (associateWallet / profileWallet / forgetWallet removed); a seat link writes nothing to the account; the lobby / top-bar wallet chip removed; the viewer is structurally the session's seat; an open table asks (`utils/tableAccountGuard.ts`, `components/TableAccountNotice.tsx`) when the browser's account changes under it, adopting only an account this page itself signed in to; signing steps name the game's wallet (\"Switch Keplr to <wallet> to sign this action.\"). GREEN: the same test; frontend `utils/tableAccountGuard.test.tsx`, `components/p3FinalAccountWallet.test.tsx`."
+  },
+  {
+   "key": "P3-N034",
+   "ids": "owner rulings (all player games are anted; payout binding fixed once anted)",
+   "ref": "Phase 3 final account / wallet identity (2026-10-06)",
+   "cls": "[D] money / [UX] product",
+   "item": "Every player game is an anted game: no free player mode (no free create, join or start in the product; internal fixtures kept; no fake ante; escrow economics unchanged). Once a seat has anted, that game + seat's deposit / payout wallet is fixed: no relink to another wallet, account action or security event changes it; refunds and payouts are never redirected. Multi-game: Game 1 on Wallet A, Game 2 on Wallet B, Authorization Wallet C, ordinary play with no Keplr switching.",
+   "src": "CONFIRMED (`caad745`): free tables were the default product path; a host's unbound on-chain ante could be orphaned by linking another wallet after a security event (independent review MEDIUM 1 / 2, probes).",
+   "slice": "W3-L",
+   "disp": "B",
+   "od": "—",
+   "p4": "—",
+   "notes": "OWNER RULINGS 2026-10-06. Whether \"anted\" also forbids a NEW wallet after a pre-Start withdrawal (the seat no longer holds a deposit) is left as built (allowed: nothing is redirected) -- recorded for owner confirmation.",
+   "status": "IMPLEMENTED — `phase3/preplaytest-final-account-wallet-identity`: `RoomHostDeps.freeTables` (false in `start.ts` production and `awsRuntime.ts`) refuses a no-ante create, seat (join / take-seat) and start with `ante-required`; the host card requires the stake and the public list shows a no-ante table as Watch only; `moneyTables.hostAnteOnChain` finds a host's ante under ANY proven ticket (resumable, conclusive or 503) before any other wallet links or the room is cancelled; the restore gate covers money writes. Tests: `identity/p3FinalAccountWallet.test.ts` (§19, §20), `escrow/p3FinalHostAnteBinding.test.ts`."
   }
  ],
  "bullets": {
@@ -6206,5 +6248,35 @@
    "Substantive Terms copy (OD-16, Phase-7) and the official Keplr logo (AUD-18.05, ASSET PENDING) -- unchanged.",
    "Removal of the legacy (no-password) recovery-key sign-in and link codes once no active profile lacks credentials (343fac2's removal path)."
   ]
+ },
+ "p3_final_account_wallet_identity": {
+  "branch": "phase3/preplaytest-final-account-wallet-identity",
+  "base": "caad7451f9f6e358407ea2b38e58495f96304b8f (phase3/preplaytest-profile-account-policy), exactly",
+  "status": "COMPLETE on its branch; NOT integrated; not merged to main; nothing deployed; no AWS / JUNO / JUNOX mutation; no escrow-contract, rules-version, settlement-codec or financial-protocol change",
+  "rows": [
+   "P3-N032",
+   "P3-N033",
+   "P3-N034",
+   "P3-N028",
+   "P3-N031"
+  ],
+  "superseded": [
+   "The recovery key as a product (P3-N031's issue-once key, key reset, key rotation, key re-authentication) -- removed; no route issues, shows, accepts or stores one.",
+   "LIVE-2E \"Link another device\" codes and the /gs/api/profile create -- retired (410); a second device logs in.",
+   "The persisted \"verified payout wallet\" that followed the last wallet linked at a seat (343fac2 / caad745) -- removed; the profile stores no game wallet.",
+   "The legacy credential migration (a legacy profile establishing a username) -- legacy profiles are retired (sessions end `retired`; the right password answers 409 `legacy-account`).",
+   "Free (no-ante) player tables as a product path -- refused in production; kept for internal fixtures.",
+   "The lobby / top-bar wallet chip (connected address, balance, Connect / Disconnect) -- removed."
+  ],
+  "current": [
+   "THE PROFILE / ACCOUNT IS THE PLAYER; identity at a table = session -> profile -> seat. No wallet answers who a browser is.",
+   "Account = username + password + exactly one Authorization Wallet (ADR-036 CREATE at creation); login = username + password only.",
+   "Forgot password = the Authorization Wallet's RECOVER signature; all sessions and families revoked; seats, trust, payout bindings and escrow untouched.",
+   "Change Authorization Wallet = explicit Confirm it's you + the current wallet's approval + the new wallet's acceptance; outstanding recovery operations die.",
+   "No email, no recovery key, no operator override; lost password + lost wallet = no automated recovery. No mainnet exceptional account-recovery authority exists.",
+   "Every player game is anted; once anted, a seat's deposit / payout wallet is fixed.",
+   "The internal credential epoch is preserved; no protocol bump."
+  ],
+  "security_review": "Two independent reviews (identity; financial binding / multi-game / free-mode suppression) and two re-review rounds: no HIGH; every MEDIUM fixed and re-verified (CREATE-mint username oracle; host-ante search orphaning; observer duplicates; operation-book flood). Remaining LOWs recorded in the Project report."
  }
 }

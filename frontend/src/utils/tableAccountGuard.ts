@@ -52,6 +52,7 @@ export interface TableAccountGuard {
 }
 
 interface Baseline {
+  /** The account's FINGERPRINT (`fingerprintOf`), never the username itself. */
   readonly key: string;
   readonly name: string | null;
   /** The page's own account changes when this baseline was set (`SessionPort.localAccount.changes`). */
@@ -60,7 +61,9 @@ interface Baseline {
 
 /* Security review (L2): the baseline survives a reload of the table (a reload while the question is up, or after
    another tab switched account, must still ask) -- per game, in this tab's sessionStorage (`1830juno.` namespace: a
-   stored key, not a label). Only the account KEY and its display name are kept; failures just mean "not kept". */
+   stored key, not a label). Only a FINGERPRINT of the account key (never the username: no account identifier and no
+   credential is ever kept in storage) and the display name already shown at the table are kept; failures just mean
+   "not kept". */
 const BASELINE_STORAGE_KEY = "1830juno.table_account.v1";
 const MAX_STORED_TABLES = 20;
 /** This tab's sessionStorage, where the page may use it (never `localStorage`: a baseline is this tab's). */
@@ -94,6 +97,17 @@ function storeBaseline(gameId: string | null, baseline: { key: string; name: str
   }
 }
 
+/** A short, non-reversible-in-practice fingerprint of an account key (32-bit FNV-1a): enough to notice a change, and what
+ *  the stored baseline holds instead of the username. */
+export function fingerprintOf(key: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < key.length; i += 1) {
+    hash ^= key.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return `f1:${hash.toString(16).padStart(8, "0")}`;
+}
+
 /** This page's own latest account change (after `since`) is to the account the browser holds now. */
 function ownChange(changes: number, localKey: string | null, key: string | null, since: number): boolean {
   return changes > since && localKey !== null && key === localKey;
@@ -111,6 +125,8 @@ export function useTableAccountGuard(
   context: { readonly gameId?: string | null; readonly local?: { readonly changes: number; readonly key: string | null } } = {},
 ): TableAccountGuard {
   const key = tableAccountKey(view.state, view.account);
+  /* Baselines compare fingerprints (what a stored baseline holds); this page's own change compares the key itself. */
+  const tag = key === null ? null : fingerprintOf(key);
   const name = view.state === "ready" && view.account !== null ? view.account.name : null;
   const gameId = context.gameId ?? null;
   const changes = context.local?.changes ?? 0;
@@ -121,32 +137,32 @@ export function useTableAccountGuard(
       setBaseline(null);
       return;
     }
-    if (key === null) return;
+    if (tag === null) return;
     if (baseline === null) {
       /* The first answer while the table is open is the account it was opened as -- unless this tab already opened this
          table as someone (a reload, or back from the lobby): then that is the baseline, unless this page itself has since
          signed in to the account it holds now. */
       const stored = storedBaseline(gameId);
-      const next = stored !== null && !(stored.key !== key && ownChange(changes, localKey, key, 0)) ? { ...stored, local: changes } : { key, name, local: changes };
+      const next = stored !== null && !(stored.key !== tag && ownChange(changes, localKey, key, 0)) ? { ...stored, local: changes } : { key: tag, name, local: changes };
       setBaseline(next);
       if (stored === null || next.key !== stored.key) storeBaseline(gameId, next);
       return;
     }
     if (changes > baseline.local) {
-      if (key === baseline.key) setBaseline({ ...baseline, local: changes });
+      if (tag === baseline.key) setBaseline({ ...baseline, local: changes });
       else if (ownChange(changes, localKey, key, baseline.local)) {
-        const next = { key, name, local: changes };
+        const next = { key: tag, name, local: changes };
         setBaseline(next);
         storeBaseline(gameId, next);
       }
     }
-  }, [active, key, name, baseline, gameId, changes, localKey]);
+  }, [active, key, tag, name, baseline, gameId, changes, localKey]);
   const accept = useCallback(() => {
-    if (key === null) return;
-    const next = { key, name, local: changes };
+    if (tag === null) return;
+    const next = { key: tag, name, local: changes };
     setBaseline(next);
     storeBaseline(gameId, next);
-  }, [key, name, gameId, changes]);
-  const change = active && baseline !== null && key !== null && key !== baseline.key && !ownChange(changes, localKey, key, baseline.local) ? { from: baseline.name, to: name } : null;
+  }, [tag, name, gameId, changes]);
+  const change = active && baseline !== null && tag !== null && tag !== baseline.key && !ownChange(changes, localKey, key, baseline.local) ? { from: baseline.name, to: name } : null;
   return { change, accept };
 }

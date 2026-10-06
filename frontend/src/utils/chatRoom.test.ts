@@ -40,7 +40,8 @@ describe("a game's transcript rides the game's room socket (design note #1361a; 
 
   it("a spectator is not offered Send, and a refusal is said in words", () => {
     /* OD-L2-4: spectators may not chat. The seat (`you.playerId`) decides only whether Send is worth offering. */
-    expect(APP).toContain("sandbox ? (localId || null) : wallet.address,");
+    /* PHASE 3 FINAL (§12): the seat is the session's, never a wallet address. */
+    expect(APP).toContain("localId || null, // PHASE 3 FINAL (§12): the session's seat, never a wallet address");
     expect(CHAT).toContain('if (code === "forbidden" || code === "not-seated") setError("Only seated players can chat at this table.");');
   });
 

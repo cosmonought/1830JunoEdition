@@ -79,8 +79,19 @@ export interface ProfileAuthorizationFields {
 }
 
 const ASCII_LINE = /^[\x20-\x7e]{1,200}$/;
-/** An account name line: no control, line or format separators (a username is NFKC text of at most 64 code points). */
-const ACCOUNT_LINE = /^[^\u0000-\u001f\u007f-\u009f\u2028\u2029]{1,256}$/u;
+/** An account name line: no control, line or format separators (a username is NFKC text of at most 64 code points). A
+ *  code-point check rather than a control-character regex (the project's lint forbids the latter). */
+const isAccountLine = (value: string): boolean => {
+  const points = Array.from(value);
+  return (
+    points.length >= 1 &&
+    points.length <= 256 &&
+    points.every((point) => {
+      const code = point.codePointAt(0) as number;
+      return !(code <= 0x1f || (code >= 0x7f && code <= 0x9f) || code === 0x2028 || code === 0x2029);
+    })
+  );
+};
 const JUNO_ADDRESS = /^juno1[02-9ac-hj-np-z]{38}$/;
 const HEX_32 = /^[0-9a-f]{32}$/;
 
@@ -109,7 +120,7 @@ export function profileAuthorizationText(fields: ProfileAuthorizationFields): st
   if (!(PROFILE_AUTHORIZATION_PURPOSES as readonly string[]).includes(fields.purpose)) throw new Error("profileAuthorization: unknown purpose");
   if (!HEX_32.test(fields.nonce) || !HEX_32.test(fields.operation)) throw new Error("profileAuthorization: the nonce and operation are 32 lowercase hex characters");
   if (!Number.isSafeInteger(fields.expiresAt) || fields.expiresAt <= 0) throw new Error("profileAuthorization: expiresAt");
-  if (typeof fields.account !== "string" || !ACCOUNT_LINE.test(fields.account) || fields.account !== fields.account.trim() || Array.from(fields.account).length > 64) throw new Error("profileAuthorization: account");
+  if (typeof fields.account !== "string" || !isAccountLine(fields.account) || fields.account !== fields.account.trim() || Array.from(fields.account).length > 64) throw new Error("profileAuthorization: account");
   for (const wallet of [fields.authorizationWallet, fields.signer, ...(fields.replaces === null ? [] : [fields.replaces])]) {
     if (typeof wallet !== "string" || !JUNO_ADDRESS.test(wallet)) throw new Error("profileAuthorization: a wallet is not a Juno account address");
   }

@@ -185,7 +185,7 @@ function MenuPanel({ port, name, otherSessions, onClose }: { port: SessionPort; 
   };
 
   /** Step 1: the NEW wallet (Keplr is on it): mint the two texts, and the new wallet signs its acceptance at once. */
-  const useNewWallet = async () => {
+  const acceptNewWallet = async () => {
     if (details === null) return;
     setBusy(true);
     setError(null);
@@ -433,7 +433,7 @@ function MenuPanel({ port, name, otherSessions, onClose }: { port: SessionPort; 
                 1. In Keplr, switch to the wallet you want as your new Authorization Wallet, then press the button. It signs once to accept (free: not a transaction). Your current one, {shortWallet(details.authorizationWallet.address)}, approves next.
               </p>
               <div style={styles.row}>
-                <button type="button" style={disabledLook(styles.primary, busy)} disabled={busy} onClick={() => void useNewWallet()} data-testid="profile-replace-use-new">
+                <button type="button" style={disabledLook(styles.primary, busy)} disabled={busy} onClick={() => void acceptNewWallet()} data-testid="profile-replace-use-new">
                   <KeplrMark />
                   {busy ? "Waiting for Keplr…" : "Use the wallet Keplr is on now"}
                 </button>

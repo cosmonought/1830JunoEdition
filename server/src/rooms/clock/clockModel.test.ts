@@ -681,14 +681,20 @@ describe("System pause: entered with no vote on a continuity break; unanimous re
     assert.equal(t.record.ended?.kind, "live-timeout-annul", "the staled foreclosure approval no longer decides minute 30");
   });
 
-  test("a money remedy sealed before the break is a durable past decision: the break neither pauses nor re-decides it", () => {
+  test("a money remedy sealed before the break, not final on chain, stays sealed and frozen by the system pause until every player resumes", () => {
     const t = new Table("live", { money: true });
     t.advance(LIVE_ACTION_MS + LIVE_CURE_MS);
     assert.equal(t.record.remedy?.status, "sealed");
     const sealed = t.record.remedy;
     t.ok(continuityBreak(t.record, { now: t.t + HOUR, preservedAt: t.t, reason: "lost", authority: "auth-2" }));
-    assert.equal(t.record.system, null, "an ended game is not system-paused (a defaulter cannot hold its own remedy hostage by never resuming)");
-    assert.deepEqual(t.record.remedy, sealed, "the sealed decision is unchanged");
+    assert.notEqual(t.record.system, null, "nothing not yet final on chain is relayed while system-paused");
+    assert.deepEqual(t.record.remedy, sealed, "the sealed decision is unchanged (never re-decided)");
+    for (const seat of [A, B, C]) t.ok(systemResumeVote(t.record, seat, t.t));
+    assert.equal(t.record.system, null);
+    assert.equal(t.record.phase, "ended");
+    const done = t.record as GameClockRecord;
+    const confirmed = { ...done, remedy: { ...(done.remedy as NonNullable<GameClockRecord["remedy"]>), status: "confirmed" as const } };
+    assert.equal(continuityBreak(confirmed, { now: t.t + HOUR, preservedAt: t.t, reason: "lost", authority: "auth-3" }).record.system, null, "a result already final on chain stays final: no pause");
   });
 
   test("a break DURING the cure window freezes it; nothing is sealed until every player resumes and the preserved time runs out", () => {

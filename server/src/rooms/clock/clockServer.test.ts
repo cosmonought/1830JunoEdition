@@ -264,6 +264,75 @@ describe("Live action clock through the server", () => {
     }));
 });
 
+describe("Only an accepted required action refreshes the clock", () => {
+  test("a refused move, a duplicate retry, chat, a reconnect and a second tab never refresh or reset it", () =>
+    withDir("norefresh", async (dir) => {
+      const time = fakeTime(T0);
+      const { server, port } = await boot(dir, time, "auth-1");
+      try {
+        const { gameId, ids } = await openTable(port, THREE);
+        await time.advance(5 * MIN);
+        const offTurn = await submit(port, BOB, gameId, BUY, "b-off-turn");
+        assert.equal(offTurn.kind, "refused", "not Bob's decision");
+        const chatter = await tab(port, CAROL, gameId);
+        chatter.send({ kind: "chat-send", gameId, text: "hurry up" });
+        await time.advance(MIN);
+        let view = await clockWhere(chatter, (c) => c.responsible !== null, "the clock");
+        assert.equal(view.responsible?.seat, ids[ALICE]);
+        assert.equal((view.action?.remainingMs ?? 0) + (view.serverNow - T0), LIVE_ACTION_MS, "the clock that began at the deal was never refreshed");
+        /* Alice's move, then the SAME submission retried (a lost answer): one refresh, never two. */
+        const mover = await Client.open(port, ALICE);
+        mover.hello(gameId);
+        await mover.next((frame) => frame.kind === "catch-up", "the catch-up");
+        const base = lastIndex(mover);
+        mover.submit(BUY, { baseIndex: base, submissionId: "a-once" });
+        assert.equal((await mover.answerTo("a-once")).kind, "applied");
+        await time.advance(3 * MIN);
+        mover.submit(BUY, { baseIndex: base, submissionId: "a-once" });
+        const retry = await mover.answerTo("a-once");
+        assert.notEqual(retry.kind, "applied", `a retry is never a second action (${retry.kind})`);
+        await mover.close();
+        const fresh = await tab(port, BOB, gameId); // a reconnect / another tab
+        view = await clockWhere(fresh, (c) => c.responsible?.seat === ids[BOB], "Bob owes next");
+        assert.equal((view.action?.remainingMs ?? 0) + (view.serverNow - (T0 + 6 * MIN)), LIVE_ACTION_MS, "Bob's clock began at Alice's move; the retry and the new tab reset nothing");
+        assert.ok(view.serverNow >= T0 + 9 * MIN);
+        await Promise.all([chatter.close(), fresh.close()]);
+      } finally {
+        await stopServer(server);
+      }
+    }));
+
+  test("multi-tab votes: a duplicate YES is idempotent, a NO from another tab vetoes, a vote for a stale proposal is refused", () =>
+    withDir("multitab", async (dir) => {
+      const time = fakeTime(T0);
+      const { server, port } = await boot(dir, time, "auth-1");
+      try {
+        const { gameId } = await openTable(port, THREE);
+        const watcher = await tab(port, ALICE, gameId);
+        await time.advance(LIVE_ACTION_MS + MIN);
+        await clockWhere(watcher, (c) => c.state === "overdue", "overdue");
+        await opOk(port, BOB, gameId, { type: "clock-propose", kind: "foreclose" });
+        const first = await clockWhere(watcher, (c) => c.overdue?.proposal !== null && c.overdue?.proposal !== undefined, "proposal 1");
+        const id = first.overdue!.proposal!.id;
+        const [tabA, tabB] = await Promise.all([Client.open(port, CAROL), Client.open(port, CAROL)]);
+        const [yesA, yesB] = await Promise.all([tabA.op({ type: "clock-vote", proposalId: id, yes: true }, gameId), tabB.op({ type: "clock-vote", proposalId: id, yes: true }, gameId)]);
+        assert.deepEqual([yesA.ok, yesB.ok], [true, true], "the same YES twice changes nothing the second time");
+        let view = await clockWhere(watcher, (c) => c.overdue?.proposal?.complete === true, "complete");
+        assert.deepEqual(view.overdue?.proposal?.yes.length, 2);
+        assert.equal((await tabB.op({ type: "clock-vote", proposalId: id, yes: false }, gameId)).ok, true, "a seat may withdraw its YES before finality");
+        view = await clockWhere(watcher, (c) => c.overdue?.proposal === null, "vetoed");
+        const stale = await tabA.op({ type: "clock-vote", proposalId: id, yes: true }, gameId);
+        assert.equal(stale.ok, false);
+        assert.equal(stale.code, CLOCK_REFUSAL.stale, "a stale tab's vote for a closed proposal is refused");
+        const outsider = await op(port, "p-mallory", gameId, { type: "clock-vote", proposalId: id, yes: true });
+        assert.equal(outsider.ok, false, "a non-seated principal never votes");
+        await Promise.all([tabA.close(), tabB.close(), watcher.close()]);
+      } finally {
+        await stopServer(server);
+      }
+    }));
+});
+
 /* ==================================================================
     PAUSE AND CONTINUITY
    ================================================================== */

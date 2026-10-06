@@ -19,11 +19,13 @@ import { RoomSession, type ServerLogEntry } from "../../../../frontend/src/utils
 import type { MapGridResponse } from "../../../../frontend/src/components/hexContractTypes";
 import { CLOCK_REFUSAL, declinesReachedSentence } from "../../../../frontend/src/utils/clockProtocol";
 import { createMemoryOpsRecorder } from "../../persistence/opsRecorder";
+import type { RemedyPort } from "../../escrow/remedyPipeline";
+import type { ChainIntentRecord } from "../../escrow/chainIntents";
 import type { GameActor, Tx } from "../gameActor";
 import { createClockController, rescindExpiredOffer, type GateResult } from "./clockController";
 import { createMemoryClockStore } from "./clockStore";
 import { fakeTime } from "./clockTestSupport";
-import { LIVE_ACTION_MS, LIVE_TRADE_MS } from "./clockRecord";
+import { LIVE_ACTION_MS, LIVE_CURE_MS, LIVE_TRADE_MS } from "./clockRecord";
 
 const SEC = 1_000;
 const MIN = 60 * SEC;
@@ -36,7 +38,7 @@ const proposeTrain = (seller: number, model: string, price: string) => ({
 });
 const answerTrain = (seller: number, accept: boolean) => ({ AnswerTrainPurchase: { game_id: 1, seller_protocol_id: seller, accept } });
 
-function harness() {
+function harness(options: { money?: boolean; remedy?: RemedyPort } = {}) {
   const time = fakeTime(T0);
   let stamp: number | null = null;
   const stampAt = <T>(at: number, fn: () => T): T => {
@@ -59,7 +61,7 @@ function harness() {
   const game = {
     gameId: GAME,
     get view() {
-      return { entries: room.entries, record: { variants: { mode: "live" }, money: null } };
+      return { entries: room.entries, record: { variants: { mode: "live" }, money: options.money === true ? { mode: "live" } : null } };
     },
   } as unknown as GameActor;
   const tx = { session: room } as unknown as Tx;
@@ -82,6 +84,7 @@ function harness() {
     runOn: (_gameId, _label, task) => serial(() => task(game, tx)).then(() => true),
     onChange: () => undefined,
     serving: () => true,
+    ...(options.remedy !== undefined ? { remedy: () => options.remedy as RemedyPort } : {}),
     closeOffer: async (_game, _tx, input) => {
       const closed = rescindExpiredOffer(room, { proposer: input.proposer, at: input.at, build: "b", host: P1, hostUndo: "last-action" }, stampAt);
       if (!closed.ok) return closed;
@@ -104,6 +107,7 @@ function harness() {
 
   const deal = () =>
     serial(async () => {
+      if (options.money === true) assert.equal((await clock.createMoneyPolicy(GAME, "live", null)).ok, true);
       const batch: ServerLogEntry[] = [{ index: 0, id: "deal", actor: P1, payload: "{}", at: T0 } as ServerLogEntry];
       await clock.afterCommit(game, { gate: { ok: true, now: T0, before: null, cls: "deal", revertTarget: null }, actor: P1, batch, board: room.state });
     });
@@ -216,6 +220,50 @@ describe("Live train offers through the controller (real engine offers)", () => 
     assert.deepEqual([r.phase, r.strikes, r.system?.preserved_at], ["active", {}, proven]);
     assert.equal(r.obligation?.timer?.remaining_ms, LIVE_ACTION_MS - (proven - T0), "the time since the last proof is never charged");
     assert.ok(h.ops.lines.some((line) => line.event === "clock.continuity-break" && line.cause === "stall"));
+  });
+
+  test("an offer the engine refuses never freezes the proposer's clock", async () => {
+    const h = harness();
+    await h.deal();
+    await h.time.advance(3 * MIN);
+    const refused = await h.submit(P1, proposeTrain(NYC, "9", "50"));
+    assert.equal(refused.ok, false, "NYC owns no 9-train");
+    assert.deepEqual([h.record().obligation?.seat, h.record().obligation?.trade, h.remaining()], [P1, null, LIVE_ACTION_MS - 3 * MIN]);
+    assert.deepEqual(h.record().parked, []);
+  });
+
+  test("a stale authority stops deciding: another server's write is found at the next write; a money table's moves are then refused", async () => {
+    const h = harness({ money: true });
+    await h.deal();
+    const mine = h.record();
+    h.store.clocks.set(GAME, { ...mine, authority: "auth-other", revision: mine.revision + 7 });
+    const first = await h.submit(P1, proposeTrain(NYC, "2", "50"));
+    assert.equal(first.ok, true, "decided on the record in hand; its write is refused by the store's CAS");
+    const next = await h.submit(P2, answerTrain(NYC, false));
+    assert.equal(next.ok, false);
+    assert.equal((next as { code: string }).code, CLOCK_REFUSAL.unavailable, "this process no longer decides the table");
+    assert.ok(h.ops.lines.some((line) => line.event === "clock.lost"));
+    const stored = h.store.clocks.get(GAME) as { authority: string };
+    assert.equal(stored.authority, "auth-other", "the other authority's record is never overwritten");
+  });
+
+  test("the remedy gate: an open unanimous annulment supersedes a sealed remedy (nothing relayed); otherwise ok", async () => {
+    let annulOpen = true;
+    const port = { configured: true, annulOpen: async () => annulOpen, attest: async () => ({ status: "sealed", detail: null, attested: false }), progress: async () => "none", fence: () => undefined } as unknown as RemedyPort;
+    const h = harness({ money: true, remedy: port });
+    await h.deal();
+    await h.time.advance(LIVE_ACTION_MS + LIVE_CURE_MS);
+    await h.clock.idle();
+    const r = h.record();
+    assert.equal(r.remedy?.kind, 1);
+    const intent = { op: { kind: "remedy", remedy: 1, overdue_epoch: String(r.remedy?.epoch), log_len: String(r.remedy?.log_len), strike: r.remedy?.strike } } as unknown as ChainIntentRecord;
+    const waiting = await h.clock.remedyGate(GAME, intent);
+    assert.equal(waiting.kind, "wait");
+    assert.match((waiting as { why: string }).why, /annulment/);
+    annulOpen = false;
+    assert.equal((await h.clock.remedyGate(GAME, intent)).kind, "ok");
+    const other = { op: { ...intent.op, overdue_epoch: "99" } } as unknown as ChainIntentRecord;
+    assert.equal((await h.clock.remedyGate(GAME, other)).kind, "wait", "an intent that is not the sealed decision never passes");
   });
 
   test("the recipient's response timer is never an overdue: no strike, no interruption, no remedy", async () => {

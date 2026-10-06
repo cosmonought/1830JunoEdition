@@ -13,7 +13,7 @@
 //      seconds rounded up (integers only), the Live finality floor and the strike-3 rule applied;
 //   3. ONE intent per decision: a second attempt is idempotent (`exists`), a restart finds it, and the chain is
 //      confirmed once; the clock's sealed remedy is carried to a closed money game through the controller's own gate;
-//   4. the gate: only the clock's current authority relays; a sealed decision survives a restart without any vote;
+//   4. the gate: only the clock's current authority relays; after a break a sealed remedy waits for every player's resume;
 //   5. N-1 approvals: a seat's REMEDY-APPROVE verifies under its CURRENT consent key for exactly that overdue and
 //      horizon; a horizon too short (or a self-approval, or a wrong key) is refused; a Live foreclosure whose approvals
 //      lapsed falls back to the neutral timeout annulment;
@@ -351,7 +351,7 @@ describe("FP4 end to end: the table clock's decision reaches the chain, and only
     await world.drive(async () => (await world.financial.load(GAME_A))?.phase === "closed");
   });
 
-  test("the gate: only the clock's CURRENT authority relays (a takeover's record waits until this process adopts it); a restart releases a sealed decision without any vote", async () => {
+  test("the gate: only the clock's CURRENT authority relays; after a break a sealed (not yet final) remedy is frozen by the SYSTEM PAUSE until every player resumes", async () => {
     let gate: NonNullable<WorldOptions["remedyGate"]> = async () => ({ kind: "wait", why: "not bound yet" });
     const { world, chainGameId } = await liveWorld({ remedyGate: (g, i) => gate(g, i) });
     const table = moneyTable(world, chainGameId);
@@ -376,13 +376,26 @@ describe("FP4 end to end: the table clock's decision reaches the chain, and only
       world.chain.produceBlock();
     }
     assert.equal((world.chain.accounts.get(relayer) as { sequence: bigint }).sequence, sequence, "nothing relayed on another authority's word");
-    /* This process adopts the table (a load: a continuity break): the ENDED game is not paused -- its sealed decision is
-       released with no vote (a defaulter cannot hold its own remedy hostage), and never re-decided. */
+    /* This process adopts the table (a load: a continuity break). The sealed remedy is not final on chain, so the table
+       is SYSTEM-PAUSED: nothing is relayed until every player resumes; the decision itself is never re-decided. */
     await table.serial(() => table.clock.op(table.game, table.tx, { type: "clock-ack", seat: ALICE }).then(() => undefined));
     const adopted = table.record()!;
-    assert.equal(adopted.system, null);
+    assert.notEqual(adopted.system, null);
     assert.equal(adopted.authority, "auth-1");
     assert.deepEqual(adopted.remedy?.evidence_hash, remedy.evidence_hash);
+    const paused = await table.clock.remedyGate(GAME_A, intents[0]);
+    assert.equal(paused.kind, "wait");
+    assert.match((paused as { why: string }).why, /SYSTEM PAUSE/);
+    for (let round = 0; round < 2; round += 1) {
+      await world.relayer.pass();
+      world.chain.produceBlock();
+    }
+    assert.equal((world.chain.accounts.get(relayer) as { sequence: bigint }).sequence, sequence, "nothing relayed while system-paused");
+    for (const seat of [ALICE, BOB]) {
+      const answer = await table.serial(() => table.clock.op(table.game, table.tx, { type: "clock-sysresume", seat }));
+      assert.equal(answer.ok, true, JSON.stringify(answer));
+    }
+    assert.equal(table.record()?.system, null);
     assert.equal((await table.clock.remedyGate(GAME_A, intents[0])).kind, "ok");
     await world.drive(async () => (await table.port.progress(GAME_A, remedy)) === "confirmed");
     assert.equal(gameOf(world, chainGameId).state, "annulled");

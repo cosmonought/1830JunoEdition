@@ -99,6 +99,10 @@ export interface AuthorizationClient {
  *  an explicitly confirmed signed-in session, one operation each. */
 export const LIVE_OPERATIONS_PER_CLIENT = 16;
 export const LIVE_OPERATIONS_PER_GROUP = 128;
+/** A /48 (or IPv4 address) holding at most this many live operations is never evicted to make room (second re-review
+ *  LOW: a household's two open RECOVERs are not the "biggest holder" an attacker can make of it by spreading its own
+ *  operations thinly). Past the bound with no bigger holder, a newcomer is refused instead. */
+export const NEVER_EVICTED_AT_OR_BELOW = 4;
 
 export type TakeOutcome = { readonly kind: "open"; readonly op: AuthorizationOperation } | { readonly kind: "unknown" } | { readonly kind: "used" };
 
@@ -162,7 +166,7 @@ export function createAuthorizationBook(options: { readonly appName: string; rea
     while (size >= max) {
       let biggest: string | null = null;
       for (const [group, count] of liveByGroup) if (biggest === null || count > (liveByGroup.get(biggest) ?? 0)) biggest = group;
-      if (biggest === null || biggest === who.group || (liveByGroup.get(biggest) ?? 0) <= (liveByGroup.get(who.group) ?? 0)) return false;
+      if (biggest === null || biggest === who.group || (liveByGroup.get(biggest) ?? 0) <= (liveByGroup.get(who.group) ?? 0) || (liveByGroup.get(biggest) ?? 0) <= NEVER_EVICTED_AT_OR_BELOW) return false;
       let evicted = false;
       for (const [operation, entry] of byOperation) {
         if (bounded(entry) && entry.group === biggest && entry.state === "open") {

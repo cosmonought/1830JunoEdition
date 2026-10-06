@@ -678,7 +678,10 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
             quorum = true; // one endpoint's page skipped an id: read it again by quorum
             continue pages;
           }
-          const candidate = wallets.has(summary.creator) && (summary.state === "FUNDING" || summary.state === "FUNDED");
+          /* Every game a proven wallet created is a candidate WHATEVER state this endpoint's summary shows: the state is
+             judged only by the quorum read (`confirm`), so one endpoint misreporting it can't hide an ante (re-review
+             LOW). The creator is still this endpoint's word -- a residual the observer's discovery shares. */
+          const candidate = wallets.has(summary.creator);
           if (candidate && !antes.has(summary.chain_game_id)) await confirm(summary.chain_game_id);
           examined = BigInt(summary.chain_game_id);
         }

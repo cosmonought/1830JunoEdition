@@ -71,8 +71,8 @@ describe("PHASE 3 FINAL review L2: the operation book never evicts a live operat
     for (let k = 0; k < LIVE_OPERATIONS_PER_GROUP; k += 1) assert.ok(mintAt(grouped, `g-${k}`, at(`v6:2001:db8:1:${k.toString(16)}/64`, "v6:2001:db8:1/48")));
     assert.equal(mintAt(grouped, "g-over", at("v6:2001:db8:1:ffff/64", "v6:2001:db8:1/48")), null);
     /* Fair share when the book is full. */
-    const book = createAuthorizationBook({ appName: "Project 18XX", max: 4 });
-    const flood = [0, 1, 2].map((k) => mintAt(book, `flood-${k}`, at(`v6:2001:db8:2:${k}/64`, "v6:2001:db8:2/48")));
+    const book = createAuthorizationBook({ appName: "Project 18XX", max: 6 });
+    const flood = [0, 1, 2, 3, 4].map((k) => mintAt(book, `flood-${k}`, at(`v6:2001:db8:2:${k}/64`, "v6:2001:db8:2/48")));
     assert.ok(flood.every((op) => op !== null));
     const victim = mintAt(book, "victim", at("v4:192.0.2.1", null));
     assert.ok(victim);
@@ -83,10 +83,17 @@ describe("PHASE 3 FINAL review L2: the operation book never evicts a live operat
     const newcomer = mintAt(book, "newcomer", at("v4:192.0.2.2", null));
     assert.ok(newcomer);
     assert.equal(book.take((flood[0] as { operation: string }).operation, "recover", { sessionId: "flood-0", familyId: "sf_flood-0" }, now).kind, "unknown", "the flood's oldest went");
-    assert.equal(book.size(), 4);
+    assert.equal(book.size(), 6);
     /* The in-use victim operation was never a candidate. */
     book.spend(victim.operation);
     assert.equal(book.take(victim.operation, "recover", { sessionId: "victim", familyId: "sf_victim" }, now).kind, "used");
+    /* Second re-review LOW: a small holder (a household's two open RECOVERs) is never evicted, however thinly a flood
+       spreads itself -- past the bound the newcomer is refused instead. */
+    const thin = createAuthorizationBook({ appName: "Project 18XX", max: 4 });
+    const household = [mintAt(thin, "home-1", at("v4:192.0.2.50", null)), mintAt(thin, "home-2", at("v4:192.0.2.50", null))];
+    assert.ok(mintAt(thin, "thin-1", at("v4:198.51.100.1", null)) && mintAt(thin, "thin-2", at("v4:198.51.100.2", null)));
+    assert.equal(mintAt(thin, "thin-3", at("v4:198.51.100.3", null)), null, "refused, not evicting the household");
+    for (const op of household) assert.equal(thin.take((op as { operation: string }).operation, "recover", { sessionId: op === household[0] ? "home-1" : "home-2", familyId: op === household[0] ? "sf_home-1" : "sf_home-2" }, now).kind, "open");
     /* REPLACE is never refused by the bound (an explicitly confirmed signed-in session, one each). */
     const full = createAuthorizationBook({ appName: "Project 18XX", max: 1 });
     assert.ok(mintAt(full, "fill", at("v4:192.0.2.3", null)));

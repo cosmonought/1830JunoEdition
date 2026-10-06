@@ -12,11 +12,15 @@
 //   wallet         the payout wallet this account PROVED it controls (P3-ACCT: kept across games, so another game
 //                  asks Keplr to sign, never the password), with "Forget this wallet" (sensitive)
 //   facts          what other players see about this account (`TrustFacts.tsx`: facts, never a score)
+//   password &     P3-ACCT POLICY (owner rulings 2026-10-05): "Change password" -- the current password, or the
+//   recovery key   recovery key, in the request itself, and the new one (12+ characters); every other device is
+//                  signed out and this one stays signed in. "Make a new recovery key" -- for every account: it asks
+//                  "Confirm it's you" (the password; a legacy profile's key) even right after signing in, shows the
+//                  new key once, and the old key stops working at once.
 //   sign out       other devices (asked first, with how many), or this one (asked first; the account and its
 //                  seats are kept)
 //   older options  for a profile made before accounts only: set a username and password (sensitive: its recovery
-//                  key confirms it), link another device with a code, make a new recovery key -- collapsed, so the
-//                  old ceremony never leads
+//                  key confirms it), link another device with a code -- collapsed, so the old ceremony never leads
 //
 // SENSITIVE actions (ESCROW-3A §10B) answer 403 `reauth-required`; the menu shows the shared "Confirm it's you"
 // (`ConfirmItsYou`: the password, or a legacy profile's recovery key) and runs the chosen action again at once.
@@ -39,6 +43,7 @@ import {
   PASSWORD_MIN_LENGTH,
   USERNAME_MAX,
   accountDetails,
+  changePassword,
   createLinkCode,
   establishCredentials,
   forgetWallet,
@@ -49,6 +54,7 @@ import {
   type AccountDetails,
 } from "../utils/profileApi";
 import { openAccountDialog } from "../utils/accountPrompt";
+import { renewRoomLinks } from "../utils/roomLink";
 import { RecoveryKeyReveal } from "./RecoveryKeyReveal";
 import { ConfirmItsYou } from "./ConfirmItsYou";
 import { MyTrustFacts } from "./TrustFacts";
@@ -71,6 +77,9 @@ type View =
   | { kind: "credentials-done"; username: string }
   /** P3-ACCT: forget the verified wallet (asked first). */
   | { kind: "forget-wallet-confirm" }
+  /** P3-ACCT POLICY: change the password (the current password or the recovery key, and the new one). */
+  | { kind: "password" }
+  | { kind: "password-done"; signedOut: number }
   /** ESCROW-3A: the server asked this session to confirm it's you before `then` runs. */
   | { kind: "reauth"; then: Then };
 
@@ -162,6 +171,9 @@ function MenuPanel({ port, name, otherSessions, onClose }: { port: SessionPort; 
   /* P3-ACCT: a legacy profile's chosen username and password -- this view's state only, the password cleared on send. */
   const [newUsername, setNewUsername] = useState("");
   const [newPassword, setNewPassword] = useState("");
+  /* P3-ACCT POLICY "Change password": the current secret (password, or the recovery key) -- cleared on send. */
+  const [currentSecret, setCurrentSecret] = useState("");
+  const [usingKey, setUsingKey] = useState(false);
   /* ESCROW-4: how many real-money signing keys this browser holds, and whether signing out removes them (default). */
   const [signingKeys, setSigningKeys] = useState(0);
   const [removeKeys, setRemoveKeys] = useState(true);
@@ -253,6 +265,27 @@ function MenuPanel({ port, name, otherSessions, onClose }: { port: SessionPort; 
     refresh();
   };
 
+  /* P3-ACCT POLICY: change the password -- the credential travels in the request; this browser gets a fresh session
+     (the port re-bootstraps before the call resolves) and its sockets move to it. */
+  const savePassword = async () => {
+    const current = currentSecret;
+    const chosen = newPassword;
+    setCurrentSecret("");
+    setNewPassword("");
+    setBusy(true);
+    setError(null);
+    const result = await changePassword({ current: usingKey ? { recoveryKey: current } : { password: current }, newPassword: chosen }, port);
+    setBusy(false);
+    if (!result.ok) {
+      setError(profileErrorSentence(result, "change"));
+      return;
+    }
+    renewRoomLinks();
+    setUsingKey(false);
+    setView({ kind: "password-done", signedOut: result.signedOut });
+    refresh();
+  };
+
   const forget = async () => {
     setBusy(true);
     setError(null);
@@ -290,6 +323,7 @@ function MenuPanel({ port, name, otherSessions, onClose }: { port: SessionPort; 
             recoveryKey={reveal}
             heading="Your new recovery key"
             notice="Your old recovery key no longer works."
+            purpose={details !== null && details.username === null ? "legacy" : "account"}
             continueLabel="Done"
             onContinue={() => {
               setReveal(null);
@@ -307,7 +341,6 @@ function MenuPanel({ port, name, otherSessions, onClose }: { port: SessionPort; 
     </button>
   );
   const legacy = details !== null && details.username === null;
-  const hasKey = details === null || details.recoveryKey;
   const reauthPurpose: Record<Then, string> = {
     rotate: "To make a new recovery key",
     others: "To sign out your other devices",
@@ -350,6 +383,35 @@ function MenuPanel({ port, name, otherSessions, onClose }: { port: SessionPort; 
               Set a username and password
             </button>
           ) : null}
+          {details !== null && !legacy ? (
+            <button
+              type="button"
+              style={styles.secondary}
+              onClick={() => {
+                setCurrentSecret("");
+                setNewPassword("");
+                setUsingKey(false);
+                go({ kind: "password" });
+              }}
+              data-testid="profile-menu-password"
+            >
+              Change password
+            </button>
+          ) : null}
+          {details !== null ? (
+            <>
+              <button type="button" style={styles.secondary} onClick={() => go({ kind: "rotate-confirm" })} data-testid="profile-menu-rotate">
+                Make a new recovery key
+              </button>
+              <p style={styles.label} data-testid="profile-menu-key-note">
+                {legacy
+                  ? "Your recovery key signs this profile in on another device."
+                  : details.recoveryKey
+                    ? "Your recovery key lets you choose a new password if you forget yours. You never need it to log in or play."
+                    : "This account has no recovery key yet. Make one so a forgotten password can be reset."}
+              </p>
+            </>
+          ) : null}
           <button type="button" style={styles.secondary} onClick={confirmOthers} data-testid="profile-menu-others">
             Sign out other devices
           </button>
@@ -359,15 +421,12 @@ function MenuPanel({ port, name, otherSessions, onClose }: { port: SessionPort; 
           <button type="button" style={styles.secondary} onClick={() => go({ kind: "signout-confirm" })} data-testid="profile-menu-signout">
             Sign out this device
           </button>
-          {hasKey ? (
+          {legacy ? (
             <details style={menuStyles.older} data-testid="profile-menu-older">
               <summary style={menuStyles.summary}>Older sign-in options</summary>
               <div style={{ ...menuStyles.list, marginTop: "8px" }}>
                 <button type="button" style={disabledLook(styles.secondary, busy)} disabled={busy} onClick={() => void makeCode()} data-testid="profile-menu-link">
                   {busy ? "Making a code…" : "Link another device"}
-                </button>
-                <button type="button" style={styles.secondary} onClick={() => go({ kind: "rotate-confirm" })} data-testid="profile-menu-rotate">
-                  Rotate recovery key
                 </button>
               </div>
             </details>
@@ -383,7 +442,9 @@ function MenuPanel({ port, name, otherSessions, onClose }: { port: SessionPort; 
       ) : null}
       {view.kind === "rotate-confirm" ? (
         <>
-          <p style={styles.text}>Make a new recovery key? Your current recovery key stops working immediately.</p>
+          <p style={styles.text}>
+            Make a new recovery key? Your current recovery key stops working immediately, and the new one is shown once.{legacy ? "" : " You'll confirm with your password first."}
+          </p>
           <div style={styles.row}>
             <button type="button" style={disabledLook(styles.primary, busy)} disabled={busy} onClick={() => void rotate()} data-testid="profile-rotate-confirm">
               {busy ? "Making a key…" : "Make a new recovery key"}
@@ -451,6 +512,75 @@ function MenuPanel({ port, name, otherSessions, onClose }: { port: SessionPort; 
           <div style={styles.row}>{back}</div>
         </>
       ) : null}
+      {view.kind === "password" ? (
+        <form
+          method="post"
+          style={styles.form}
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!busy) void savePassword();
+          }}
+          data-testid="profile-password-form"
+        >
+          <p style={styles.text}>Every other device signed in to this account is signed out. This one stays signed in.</p>
+          <label style={styles.label} htmlFor="profile-current-secret">
+            {usingKey ? "Your recovery key" : "Current password"}
+          </label>
+          <input
+            id="profile-current-secret"
+            name={usingKey ? "recovery-key" : "current-password"}
+            type="password"
+            autoComplete={usingKey ? "off" : "current-password"}
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
+            style={usingKey ? styles.monoInput : styles.input}
+            value={currentSecret}
+            onChange={(event) => setCurrentSecret(event.target.value)}
+            data-testid="profile-current-secret"
+          />
+          <button
+            type="button"
+            style={disabledLook(menuStyles.link, busy)}
+            disabled={busy}
+            onClick={() => {
+              setCurrentSecret("");
+              setError(null);
+              setUsingKey(!usingKey);
+            }}
+            data-testid="profile-password-use-key"
+          >
+            {usingKey ? "Use your current password instead" : "Forgot it? Use your recovery key instead"}
+          </button>
+          <label style={styles.label} htmlFor="profile-changed-password">
+            New password (at least {PASSWORD_MIN_LENGTH} characters)
+          </label>
+          <input
+            id="profile-changed-password"
+            name="new-password"
+            type="password"
+            autoComplete="new-password"
+            style={styles.input}
+            value={newPassword}
+            onChange={(event) => setNewPassword(event.target.value)}
+            data-testid="profile-changed-password"
+          />
+          <div style={styles.row}>
+            <button type="submit" style={disabledLook(styles.primary, busy)} disabled={busy} data-testid="profile-password-save">
+              {busy ? "Changing…" : "Change password"}
+            </button>
+            {back}
+          </div>
+        </form>
+      ) : null}
+      {view.kind === "password-done" ? (
+        <>
+          <p style={styles.text} role="status" data-testid="profile-password-done">
+            Password changed. {view.signedOut === 0 ? "No other devices were signed in." : `Signed out ${devices(view.signedOut)}.`} This device stays signed in.
+          </p>
+          <div style={styles.row}>{back}</div>
+        </>
+      ) : null}
       {view.kind === "forget-wallet-confirm" ? (
         <>
           <p style={styles.text} data-testid="profile-forget-wallet-summary">
@@ -472,7 +602,7 @@ function MenuPanel({ port, name, otherSessions, onClose }: { port: SessionPort; 
           port={port}
           busy={busy}
           onBusyChange={setBusy}
-          {...(view.then === "credentials" || view.then === "rotate" ? { method: "recovery-key" as const } : {})}
+          {...(view.then === "credentials" || (view.then === "rotate" && legacy) ? { method: "recovery-key" as const } : view.then === "rotate" ? { method: "password" as const } : {})}
           onConfirmed={() => {
             switch (view.then) {
               case "rotate":
@@ -488,6 +618,7 @@ function MenuPanel({ port, name, otherSessions, onClose }: { port: SessionPort; 
           }}
           onCancel={() => {
             setNewPassword("");
+            setCurrentSecret("");
             go({ kind: "menu" });
           }}
         />
@@ -586,7 +717,7 @@ export function ProfileMenu({ port = sessionPort() }: { port?: SessionPort }): J
   );
 }
 
-const menuStyles: Record<"anchor" | "chip" | "create" | "panel" | "list" | "footer" | "facts" | "section" | "sectionLabel" | "older" | "summary", React.CSSProperties> = {
+const menuStyles: Record<"anchor" | "chip" | "create" | "panel" | "list" | "footer" | "facts" | "section" | "sectionLabel" | "older" | "summary" | "link", React.CSSProperties> = {
   anchor: { position: "relative", display: "inline-flex", flexWrap: "wrap", gap: "8px" },
   chip: {
     fontSize: FONT_SIZE.small,
@@ -639,4 +770,5 @@ const menuStyles: Record<"anchor" | "chip" | "create" | "panel" | "list" | "foot
   sectionLabel: { margin: 0, fontSize: FONT_SIZE.small, fontWeight: 700, color: SANDBOX_INK },
   older: { marginTop: "4px", fontSize: FONT_SIZE.small, color: SANDBOX_TEXT },
   summary: { cursor: "pointer" },
+  link: { alignSelf: "flex-start", background: "none", border: "none", padding: "2px 0", color: SANDBOX_TEXT, textDecoration: "underline", cursor: "pointer", fontSize: FONT_SIZE.small, fontFamily: FONT_FAMILY },
 };

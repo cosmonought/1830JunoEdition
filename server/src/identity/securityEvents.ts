@@ -49,10 +49,17 @@
 //     was never committed here (a username is unique, checked inside every write): such a phantom is not installed. A
 //     new account's credential travels inside its schema-2 `profile-created` and follows that rule, with the same
 //     username check.
+//   - `password-replaced` (P3-ACCT POLICY: "Change password", "Forgot password?"): the password's generations form a
+//     CHAIN by hash (`from_hash` -> `to_hash`; every hash carries a fresh salt). From the hash the restored table holds,
+//     the replay follows the chain: at each hash the CONFIRMED replacement from it when there is one (two: refused),
+//     otherwise its LAST one, confirmed or not -- as `credentials-established` (a replacement whose confirmation alone
+//     was lost is its player's way back in; a phantom's new password is one its own player chose). Never back: a hash
+//     some replacement retired is never re-installed. A wrong guess has its remedy in the account's recovery key (a
+//     reset), so no operator review is opened. Its `family_ids` are re-applied like `signed-out-others`.
 //   - the persisted WALLET (P3-ACCT) is NOT journaled: the restore CLEARS every profile's wallet (fail safe -- a wallet
 //     is re-proven, under a fresh sign-in, on its next money action; nothing the player removed can come back).
 //
-// WHAT IS RECORDED (and what is not): the six kinds of change below, each carrying exactly what a replay needs to
+// WHAT IS RECORDED (and what is not): the seven kinds of change below, each carrying exactly what a replay needs to
 // re-apply it idempotently and in any order -- a rotation names the selector it replaced and the one it installed (a
 // chain, not a clock), a revocation names its families -- and their confirmations. Plain session rotations and
 // single-session evictions are NOT recorded: the restore procedure signs every session out (preflight §17.3 step 3). No
@@ -86,8 +93,11 @@ interface SecurityEventCommon {
 
 /** The kinds of security CHANGE an event records (every kind but `confirmed`). P3-ACCT adds `credentials-established`:
  *  a LEGACY profile set its username and password (a new account's are inside its `profile-created`, schema 2). */
-export type SecurityChangeKind = "profile-created" | "recovery-key-rotated" | "family-revoked" | "signed-out-others" | "principal-disabled" | "credentials-established";
-export const SECURITY_CHANGE_KINDS: readonly SecurityChangeKind[] = Object.freeze(["profile-created", "recovery-key-rotated", "family-revoked", "signed-out-others", "principal-disabled", "credentials-established"]);
+export type SecurityChangeKind = "profile-created" | "recovery-key-rotated" | "family-revoked" | "signed-out-others" | "principal-disabled" | "credentials-established" | "password-replaced";
+export const SECURITY_CHANGE_KINDS: readonly SecurityChangeKind[] = Object.freeze(["profile-created", "recovery-key-rotated", "family-revoked", "signed-out-others", "principal-disabled", "credentials-established", "password-replaced"]);
+
+/** P3-ACCT POLICY: what authorized a password replacement (the current password, or the recovery key). */
+export const PASSWORD_REPLACED_VIA = Object.freeze(["password", "recovery-key"] as const);
 
 export type SecurityEvent =
   /** A profile was created: the principal as bound to it and the profile, exactly as committed (no secret). */
@@ -117,6 +127,19 @@ export type SecurityEvent =
       readonly password_hash: string;
       readonly set_at: number;
     })
+  /** P3-ACCT POLICY: the password was replaced -- "Change password" (`kept_family_id`: the changer's family, which stays
+   *  open) or "Forgot password?" (`kept_family_id` null: every family closed). `from_hash` is dead from this change on;
+   *  `family_ids` (sorted) are the families it closed. Hashes only -- never a password, never a key. */
+  | (SecurityEventCommon & {
+      readonly kind: "password-replaced";
+      readonly profile_id: string;
+      readonly from_hash: string;
+      readonly to_hash: string;
+      readonly set_at: number;
+      readonly via: (typeof PASSWORD_REPLACED_VIA)[number];
+      readonly kept_family_id: string | null;
+      readonly family_ids: readonly string[];
+    })
   /** Review F2: the change the event `confirms` (of kind `confirmed_kind`, same principal) WAS committed. */
   | (SecurityEventCommon & { readonly kind: "confirmed"; readonly confirms: string; readonly confirmed_kind: SecurityChangeKind });
 
@@ -131,6 +154,7 @@ const KIND_FIELDS: Readonly<Record<SecurityEventKind, readonly string[]>> = {
   "signed-out-others": ["kept_family_id", "family_ids"],
   "principal-disabled": ["family_ids"],
   "credentials-established": ["profile_id", "login_key", "login_name", "password_hash", "set_at"],
+  "password-replaced": ["profile_id", "from_hash", "to_hash", "set_at", "via", "kept_family_id", "family_ids"],
   confirmed: ["confirms", "confirmed_kind"],
 };
 const COMMON_FIELDS = ["format", "version", "event_id", "kind", "at", "principal_id"];
@@ -203,6 +227,20 @@ export function isSecurityEvent(value: unknown): value is SecurityEvent {
         value.login_key === loginKeyOf(value.login_name as string) &&
         isPasswordHash(value.password_hash) &&
         isEventTime(value.set_at)
+      );
+    case "password-replaced":
+      return (
+        typeof value.profile_id === "string" &&
+        PROFILE_ID_PATTERN.test(value.profile_id) &&
+        isPasswordHash(value.from_hash) &&
+        isPasswordHash(value.to_hash) &&
+        value.from_hash !== value.to_hash &&
+        isEventTime(value.set_at) &&
+        typeof value.via === "string" &&
+        (PASSWORD_REPLACED_VIA as readonly string[]).includes(value.via) &&
+        (value.kept_family_id === null || (typeof value.kept_family_id === "string" && FAMILY_ID_PATTERN.test(value.kept_family_id))) &&
+        isFamilyList(value.family_ids, 0) &&
+        (value.kept_family_id === null || !(value.family_ids as string[]).includes(value.kept_family_id as string))
       );
     case "confirmed":
       return (

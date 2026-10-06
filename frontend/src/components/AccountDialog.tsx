@@ -9,11 +9,16 @@
 // an account (`utils/accountPrompt.ts` `requireAccount`) or one of the homepage's own Log in / Create account buttons.
 //
 //   Log in           username + password -> the same account on this browser, every table and seat with it.
-//   Create account   username + password + the name other players see. Nothing else: no recovery key is made or
-//                    shown, and nothing has to be written down.
+//   Forgot password? (P3-ACCT POLICY) the account's recovery key + a new password -> signed in on this browser, every
+//                    other device signed out. No username, no email (the key names the account).
+//   Create account   username + password + the name other players see -> signed in; then ONE screen (P3-ACCT POLICY,
+//                    owner ruling 2026-10-05): the account's recovery key, shown once, with Copy and "I have saved my
+//                    recovery key somewhere safe" -- account recovery setup, not a gate: nothing asks for the key back,
+//                    and once acknowledged the action that asked for an account resumes.
 //   Other ways in    (collapsed) the two LIVE-2E ways for a profile made before accounts: its recovery key, or a code
 //                    from a device that is still signed in. Kept so no older profile is orphaned; it can set a
-//                    username and password from its profile menu.
+//                    username and password from its profile menu. (A key of an account WITH a password is sent to
+//                    "Forgot password?": it recovers, it never signs in.)
 //
 // A sign-in REPLACES this browser's session (session fixation: whatever cookie it had, it now has a fresh one). The
 // API call re-bootstraps the port before it resolves, so by the time `accountSignedIn` runs the port is "ready"; it then
@@ -44,14 +49,17 @@ import {
   logIn,
   profileErrorSentence,
   recoverProfile,
+  resetPassword,
   type ProfileFailure,
 } from "../utils/profileApi";
+import { RecoveryKeyReveal } from "./RecoveryKeyReveal";
 import { accountDialogClosed, accountSignedIn, closeAccountDialog, registerAccountPromptHost, setAccountMode, useAccountPrompt, type AccountMode } from "../utils/accountPrompt";
 import { renewRoomLinks } from "../utils/roomLink";
 import { sessionPort, type SessionPort } from "../utils/sessionBootstrap";
 import { SANDBOX_TEXT } from "../styles/palette";
 
-type Other = "none" | "recovery-key" | "link-code";
+/** `forgot` (P3-ACCT POLICY): "Forgot password?" -- the recovery key and a new password. */
+type Other = "none" | "recovery-key" | "link-code" | "forgot";
 
 /** Review L9: where the code comes from, in the profile menu's own words (it lives under "Older sign-in options"). */
 export const LINK_CODE_HOW = "On a device that is still signed in, open your name → “Older sign-in options” → “Link another device”, and enter the code it shows.";
@@ -78,6 +86,11 @@ export function AccountDialog({ mode, reason, port = sessionPort(), onModeChange
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<Pending | null>(null);
+  /* P3-ACCT POLICY: the new account's recovery key, for its one-time reveal -- this component's state only, dropped the
+     moment the player acknowledges it (never logged, stored or put in a URL). */
+  const [revealKey, setRevealKey] = useState<string | null>(null);
+  /* "Forgot password?": the new password (the key is `secret`). Cleared the moment it is sent. */
+  const [newPassword, setNewPassword] = useState("");
   const first = useRef<HTMLInputElement | null>(null);
   const continueRef = useRef<HTMLButtonElement | null>(null);
   /* Closed while a sign-in was on its way: its answer still moves this page's sockets to the new session, but resumes
@@ -91,8 +104,8 @@ export function AccountDialog({ mode, reason, port = sessionPort(), onModeChange
   );
 
   useEffect(() => {
-    if (pending === null) first.current?.focus();
-  }, [mode, other, pending]);
+    if (pending === null && revealKey === null) first.current?.focus();
+  }, [mode, other, pending, revealKey]);
   useEffect(() => {
     if (pending !== null) continueRef.current?.focus();
   }, [pending]);
@@ -100,6 +113,7 @@ export function AccountDialog({ mode, reason, port = sessionPort(), onModeChange
   const switchTo = (next: AccountMode) => {
     setError(null);
     setPassword("");
+    setNewPassword("");
     setOther("none");
     setSecret("");
     onModeChange(next);
@@ -107,7 +121,7 @@ export function AccountDialog({ mode, reason, port = sessionPort(), onModeChange
 
   /** Signed in: resume, but only on a session this page has confirmed ("ready"). This browser ALREADY signed in
    *  (another tab got there first, perhaps as another account): ask first, naming it -- never resume on its own. */
-  const finish = (result: { ok: true } | ProfileFailure, context: "login" | "account" | "credential"): void => {
+  const finish = (result: { ok: true } | ProfileFailure, context: "login" | "account" | "credential" | "reset"): void => {
     if (!live.current) {
       if (result.ok) renewRoomLinks();
       return;
@@ -159,36 +173,92 @@ export function AccountDialog({ mode, reason, port = sessionPort(), onModeChange
     setError(null);
     setBusy(true);
     try {
+      if (other === "forgot") {
+        const key = secret;
+        const chosen = newPassword;
+        setSecret("");
+        setNewPassword("");
+        finish(await resetPassword({ recoveryKey: key, newPassword: chosen }, port), "reset");
+        return;
+      }
       if (other !== "none") {
         const typed = secret;
         setSecret("");
-        finish(other === "recovery-key" ? await recoverProfile(typed, port) : await linkProfile(typed, port), "credential");
+        const result = other === "recovery-key" ? await recoverProfile(typed, port) : await linkProfile(typed, port);
+        /* P3-ACCT POLICY: the key of an account with a password recovers it -- "Forgot password?", the key kept typed. */
+        if (!result.ok && result.error === "use-password-reset") {
+          setOther("forgot");
+          setSecret(typed);
+          setError(profileErrorSentence(result));
+          return;
+        }
+        finish(result, "credential");
         return;
       }
       const typed = password;
       setPassword("");
-      if (mode === "login") finish(await logIn({ username, password: typed }, port), "login");
-      else finish(await createAccount({ username, password: typed, name }, port), "account");
+      if (mode === "login") {
+        finish(await logIn({ username, password: typed }, port), "login");
+        return;
+      }
+      const created = await createAccount({ username, password: typed, name }, port);
+      if (created.ok && created.recoveryKey !== "") {
+        /* Signed in now: this page's sockets move to the new session at once; the action that asked resumes only after
+           the player has acknowledged the key (`finish`, from the reveal's Continue). */
+        renewRoomLinks();
+        setRevealKey(created.recoveryKey);
+        return;
+      }
+      finish(created, "account");
     } finally {
       setBusy(false);
     }
   };
 
-  const title = pending !== null ? "Already signed in" : other !== "none" ? "Sign in another way" : mode === "login" ? "Log in" : "Create account";
+  const title =
+    revealKey !== null
+      ? "Save your recovery key"
+      : pending !== null
+        ? "Already signed in"
+        : other === "forgot"
+          ? "Forgot password"
+          : other !== "none"
+            ? "Sign in another way"
+            : mode === "login"
+              ? "Log in"
+              : "Create account";
+  /* P3-ACCT POLICY: the reveal is left only by acknowledging it (no Escape, no scrim, no close button meanwhile). */
+  const revealing = revealKey !== null;
   const pendingName = pending?.kind === "already" ? pending.name : pending?.kind === "unconfirmed" ? (port.account?.name ?? null) : null;
 
   return (
-    <NativeModal name={title} dismissible onDismiss={onClose} onScrimClick={busy ? undefined : onClose} restoreOpener scrimStyle={dialogStyles.scrim} testId="account-dialog">
+    <NativeModal name={title} dismissible={!revealing} onDismiss={revealing ? () => undefined : onClose} onScrimClick={busy || revealing ? undefined : onClose} restoreOpener scrimStyle={dialogStyles.scrim} testId="account-dialog">
       <div style={dialogStyles.card} onClick={(event) => event.stopPropagation()}>
-        <div style={dialogStyles.header}>
-          <h2 style={styles.heading}>{title}</h2>
-          {/* Review M3: always closable (Escape too) -- closing drops the action that asked; a sign-in still on its way
-              finishes on its own, bounded by the port's timeout. */}
-          <button type="button" style={dialogStyles.close} onClick={onClose} aria-label="Close">
-            ×
-          </button>
-        </div>
-        {pending !== null ? (
+        {revealKey !== null ? (
+          <RecoveryKeyReveal
+            recoveryKey={revealKey}
+            purpose="account"
+            embedded
+            heading="Save your recovery key"
+            continueLabel={reason !== null ? "Continue" : "Continue to the site"}
+            onContinue={() => {
+              setRevealKey(null);
+              finish({ ok: true }, "account");
+            }}
+          />
+        ) : null}
+        {!revealing ? (
+          <div style={dialogStyles.header}>
+            <h2 style={styles.heading}>{title}</h2>
+            {/* Review M3: always closable (Escape too) -- closing drops the action that asked; a sign-in still on its way
+                finishes on its own, bounded by the port's timeout. P3-ACCT POLICY: except the recovery-key reveal,
+                which is left only by acknowledging it (the account already exists and is signed in). */}
+            <button type="button" style={dialogStyles.close} onClick={onClose} aria-label="Close">
+              ×
+            </button>
+          </div>
+        ) : null}
+        {!revealing && pending !== null ? (
           <div data-testid="account-pending">
             <p style={styles.lead} data-testid="account-pending-sentence">
               {pending.kind === "already"
@@ -212,12 +282,12 @@ export function AccountDialog({ mode, reason, port = sessionPort(), onModeChange
             ) : null}
           </div>
         ) : null}
-        {pending === null && reason !== null ? (
+        {!revealing && pending === null && reason !== null ? (
           <p style={styles.lead} data-testid="account-reason">
             {reason}
           </p>
         ) : null}
-        {pending === null && other === "none" ? (
+        {!revealing && pending === null && other === "none" ? (
           <div role="group" aria-label="Log in or create an account" style={styles.choices}>
             {(
               [
@@ -231,9 +301,55 @@ export function AccountDialog({ mode, reason, port = sessionPort(), onModeChange
             ))}
           </div>
         ) : null}
-        {pending === null ? (
+        {!revealing && pending === null ? (
           <form method="post" style={styles.form} onSubmit={(event) => void submit(event)} data-testid="account-form">
-            {other === "none" ? (
+            {other === "forgot" ? (
+              <>
+                <p style={styles.text} data-testid="account-forgot-explain">
+                  Paste the recovery key you saved when you created your account, and choose a new password. Every other device signed in to the account is signed out.
+                </p>
+                <label style={styles.label} htmlFor="account-forgot-key">
+                  Recovery key
+                </label>
+                <input
+                  id="account-forgot-key"
+                  ref={first}
+                  type="password"
+                  autoComplete="off"
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  style={styles.monoInput}
+                  value={secret}
+                  onChange={(event) => setSecret(event.target.value)}
+                  data-testid="account-forgot-key"
+                />
+                <label style={styles.label} htmlFor="account-forgot-password">
+                  New password (at least {PASSWORD_MIN_LENGTH} characters)
+                </label>
+                <input
+                  id="account-forgot-password"
+                  name="new-password"
+                  type="password"
+                  autoComplete="new-password"
+                  style={styles.input}
+                  value={newPassword}
+                  onChange={(event) => setNewPassword(event.target.value)}
+                  data-testid="account-forgot-password"
+                />
+                <div style={styles.row}>
+                  <button type="submit" style={disabledLook(styles.primary, busy)} disabled={busy} data-testid="account-forgot-submit">
+                    {busy ? "Resetting…" : "Set the new password"}
+                  </button>
+                  <button type="button" style={disabledLook(styles.secondary, busy)} disabled={busy} onClick={() => switchTo("login")}>
+                    Back
+                  </button>
+                </div>
+                <p style={styles.label} data-testid="account-forgot-nokey">
+                  No recovery key? There is no email reset: without your password or your recovery key, the account can't be recovered.
+                </p>
+              </>
+            ) : other === "none" ? (
               <>
                 <label style={styles.label} htmlFor="account-username">
                   Username
@@ -276,6 +392,21 @@ export function AccountDialog({ mode, reason, port = sessionPort(), onModeChange
                 <button type="submit" style={disabledLook(styles.primary, busy)} disabled={busy} data-testid="account-submit">
                   {busy ? (mode === "login" ? "Logging in…" : "Creating…") : mode === "login" ? "Log in" : "Create account"}
                 </button>
+                {mode === "login" ? (
+                  <button
+                    type="button"
+                    style={disabledLook(dialogStyles.link, busy)}
+                    disabled={busy}
+                    onClick={() => {
+                      setError(null);
+                      setPassword("");
+                      setOther("forgot");
+                    }}
+                    data-testid="account-forgot"
+                  >
+                    Forgot password?
+                  </button>
+                ) : null}
               </>
             ) : (
               <>
@@ -312,7 +443,7 @@ export function AccountDialog({ mode, reason, port = sessionPort(), onModeChange
             ) : null}
           </form>
         ) : null}
-        {pending === null && other === "none" ? (
+        {!revealing && pending === null && other === "none" ? (
           <details style={dialogStyles.other} data-testid="account-other-ways">
             <summary style={dialogStyles.summary}>Made a profile before accounts? Other ways to sign in</summary>
             <div style={{ ...styles.row, marginTop: "8px" }}>
@@ -344,7 +475,7 @@ export function AccountPromptHost({ port }: { port?: SessionPort }): JSX.Element
 
 export default AccountDialog;
 
-const dialogStyles: Record<"scrim" | "card" | "header" | "close" | "other" | "summary", React.CSSProperties> = {
+const dialogStyles: Record<"scrim" | "card" | "header" | "close" | "other" | "summary" | "link", React.CSSProperties> = {
   scrim: {
     position: "fixed",
     inset: 0,
@@ -362,4 +493,6 @@ const dialogStyles: Record<"scrim" | "card" | "header" | "close" | "other" | "su
   close: { ...styles.secondary, padding: "2px 10px", lineHeight: 1.2 },
   other: { marginTop: "16px", fontSize: "13px", color: SANDBOX_TEXT },
   summary: { cursor: "pointer" },
+  /* "Forgot password?": a quiet text button under Log in. */
+  link: { alignSelf: "flex-start", background: "none", border: "none", padding: "2px 0", color: SANDBOX_TEXT, textDecoration: "underline", cursor: "pointer", fontSize: "13px", fontFamily: "inherit" },
 };

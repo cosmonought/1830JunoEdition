@@ -6,25 +6,30 @@
 //
 // The owner's account model (2026-10-05): a player signs in with a USERNAME and a PASSWORD. The username is a LOGIN
 // identifier only -- never an authority key: every seat, grant and ticket still names the opaque principal, and the
-// profile id stays private. A new account gets NO player-facing recovery key.
+// profile id stays private.
+//
+// P3-ACCT POLICY FOLLOW-UP (owner rulings, 2026-10-05): every NEW account also gets ONE recovery key -- an
+// ACCOUNT-RECOVERY credential (it resets a forgotten password, confirms a password change, and makes its own
+// replacement), never an ordinary sign-in or gameplay credential (`sessions.ts`). The key is the LIVE-2E key
+// (`ids.ts`: a 128-bit selector + a 256-bit secret, stored as the selector and the SHA-256 of the secret).
 //
 // WHAT THIS FILE OWNS (and nothing else):
 //   - the username's canonical form (the uniqueness / lookup key) and the technical bounds of what can be one;
-//   - the password's technical bounds and its one security floor;
+//   - the password's technical bounds and its one policy floor (the owner's 12 characters);
 //   - the password KDF: Node's own `crypto.scrypt` (no new dependency, no home-made cryptography), a random 16-byte salt
-//     per account, the parameters stored WITH the hash (so they can be raised later without a migration), and a
+//     per hash, the parameters stored WITH the hash (so they can be raised later without a migration), and a
 //     constant-time comparison of the derived bytes;
 //   - a bound on how many KDF computations run at once (each is deliberately expensive: a flood of logins must not
 //     take the server's thread pool, so beyond the bound a request is answered "busy", never queued without limit);
-//   - the SEALED recovery digest of an account that has no recovery key.
+//   - the SEALED recovery digest of an account that has no recovery key (343fac2's accounts, made before the owner's
+//     ruling; none is made any more -- such an account makes its key from its profile menu, with its password).
 //
-// POLICY THAT IS THE OWNER'S, NOT THIS FILE'S (reported as residual owner decisions; the values below are technical
-// bounds and one published security floor, not product choices):
-//   - the username's allowed characters / scripts, its minimum length, and any reserved names: today any printable
-//     text without whitespace, control or format characters, 1-64 characters after NFKC normalisation;
-//   - the password's minimum length: today 8 characters, the floor of NIST SP 800-63B §5.1.1.2 for a memorised secret
-//     the user chooses (raising it is a one-line change; lowering it below 8 is not recommended); any composition or
-//     breached-password rule (none today).
+// THE OWNER'S POLICY (2026-10-05, ruled):
+//   - USERNAMES: NFKC; case-insensitive uniqueness; 1-64 code points; no whitespace, control, format, unassigned,
+//     private-use or surrogate characters. NO reserved names and NO confusable / look-alike policing in this phase.
+//   - PASSWORDS: at least 12 characters (code points, after NFKC); NO composition rule (no required upper case, lower
+//     case, digit or symbol); long passphrases welcome up to the technical bound (1 KiB of UTF-8, a denial-of-service
+//     bound kept from 343fac2). The KDF cost is unchanged here (production-host benchmarking is a pre-real-money task).
 //
 // NEVER LOGGED, NEVER STORED IN THE CLEAR: a password reaches this file once, in a POST body, and leaves it only as the
 // scrypt hash. Nothing here prints, and no error message carries a username or a password.
@@ -76,8 +81,9 @@ export const isLoginKey = (value: unknown): value is string => isLoginName(value
     PASSWORDS
    ================================================================== */
 
-/** The one security floor (NIST SP 800-63B §5.1.1.2). Owner-adjustable; see the header. */
-export const PASSWORD_MIN_LENGTH = 8;
+/** The owner's floor (ruled 2026-10-05): 12 characters, no composition rule. A NEW password (create, change, reset,
+ *  a legacy profile's first) must meet it; a sign-in never re-judges a password an account already has. */
+export const PASSWORD_MIN_LENGTH = 12;
 /** Technical bound on the KDF's input (a denial-of-service bound, not a policy): 1 KiB of UTF-8. */
 export const PASSWORD_MAX_BYTES = 1024;
 
@@ -249,18 +255,19 @@ export class KdfGate {
 }
 
 /* ==================================================================
-    AN ACCOUNT WITH NO RECOVERY KEY
+    AN ACCOUNT WITH NO RECOVERY KEY (343fac2 only)
    ==================================================================
    The profile record keeps `recovery_selector` / `recovery_hash` (ESCROW-3A binds every sensitive grant and every wallet
-   ticket to the selector: it is the profile's CREDENTIAL EPOCH, and changing that would move a protocol line). A new
-   username/password account gets a fresh random selector -- never shown anywhere -- and a SEALED digest: SHA-256 of a
-   domain-tagged text far longer than a key's 32-byte secret, so no recovery key can ever match it (a second preimage),
-   and anyone can tell from the record alone that the profile has no recovery key. */
+   ticket to the selector: it is the profile's CREDENTIAL EPOCH for financial credentials, and changing that would move a
+   protocol line). 343fac2 gave a new username/password account a fresh random selector and a SEALED digest -- SHA-256 of
+   a domain-tagged text far longer than a key's 32-byte secret, so no recovery key can ever match it. The owner's ruling
+   gives every new account a real key instead; a sealed account (made by 343fac2's build) is read exactly as before and
+   makes its first key from its profile menu, confirmed with its password. */
 const SEALED_TAG = "18COSMOS/ACCOUNT/NO-RECOVERY-KEY/v1\n";
 
 export function sealedRecoveryDigest(selector: string): string {
   return createHash("sha256").update(SEALED_TAG).update(`${selector}\n`).digest("hex");
 }
 
-/** Whether a profile's recovery digest is a real recovery key's (a legacy profile) rather than the sealed one. */
+/** Whether a profile's recovery digest is a real recovery key's rather than the sealed one. */
 export const hasRecoveryKey = (profile: { readonly recovery_selector: string; readonly recovery_hash: string }): boolean => profile.recovery_hash !== sealedRecoveryDigest(profile.recovery_selector);

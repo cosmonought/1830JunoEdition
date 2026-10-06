@@ -232,6 +232,8 @@ export function anotherSession(set: IdentitySet, tag: string, over: Partial<Sess
 
 /** A well-formed stored password hash (fixed bytes; storage tests never verify it). */
 export const FIXTURE_PASSWORD_HASH = `scrypt$1$10$1$1$${Buffer.alloc(16, 7).toString("base64url")}$${Buffer.alloc(32, 9).toString("base64url")}`;
+/** P3-ACCT POLICY: a second, different hash (a replaced password's next generation). */
+export const FIXTURE_PASSWORD_HASH_2 = `scrypt$1$10$1$1$${Buffer.alloc(16, 8).toString("base64url")}$${Buffer.alloc(32, 10).toString("base64url")}`;
 /** A canonical Juno wallet address (20-byte data). */
 export const FIXTURE_WALLET = "juno1qyqszqgpqyqszqgpqyqszqgpqyqszqgpypz92q";
 export const FIXTURE_WALLET_2 = "juno1qgpqyqszqgpqyqszqgpqyqszqgpqyqsz49yqpk";

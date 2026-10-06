@@ -99,9 +99,9 @@ describe("P3-ACCT the credential: usernames, passwords, the scrypt hash", () => 
     assert.equal(loginKeyOf("BRAD.PLAYER"), loginKeyOf("brad.player"));
   });
 
-  test("a password is at least 8 characters (the NIST floor), at most 1 KiB, never trimmed", () => {
-    assert.deepEqual(cleanPassword("1234567"), { ok: false, problem: "too-short" });
-    assert.deepEqual(cleanPassword(" 1234567"), { ok: true, password: " 1234567" }, "whitespace counts and is kept");
+  test("a password is at least 12 characters (the owner's floor, 2026-10-05), at most 1 KiB, never trimmed", () => {
+    assert.deepEqual(cleanPassword("12345678901"), { ok: false, problem: "too-short" });
+    assert.deepEqual(cleanPassword(" 12345678901"), { ok: true, password: " 12345678901" }, "whitespace counts and is kept");
     assert.deepEqual(cleanPassword("x".repeat(1025)), { ok: false, problem: "too-long" });
   });
 
@@ -162,15 +162,16 @@ describe("P3-ACCT the credential: usernames, passwords, the scrypt hash", () => 
    ================================================================== */
 
 describe("P3-ACCT create account", () => {
-  test("201 with the username, NO recovery key, and a FRESH session cookie -- the temporary one is replaced (session fixation)", async () => {
+  test("201 with the username, ONE recovery key (P3-ACCT POLICY), and a FRESH session cookie -- the temporary one is replaced (session fixation)", async () => {
     const { server, port, clock, service } = await prodServer();
     try {
       const before = await bootstrapCookie(port);
       const answer = await create(port, before, { username: "Brad.Player", password: PASSWORD, name: "Brad" });
       assert.equal(answer.status, 201, answer.text);
-      assert.deepEqual(answer.body, { ok: true, profile: { name: "Brad", otherSessions: 0 }, username: "Brad.Player" });
-      assert.ok(!/recoveryKey|rk_/.test(answer.text), "no recovery key -- ever -- for a new account");
-      assert.ok(!ID_PATTERN.test(answer.text), "no id, hash or key in the answer");
+      const { recoveryKey, ...rest } = answer.body as { recoveryKey: string };
+      assert.deepEqual(rest, { ok: true, profile: { name: "Brad", otherSessions: 0 }, username: "Brad.Player" });
+      assert.match(recoveryKey, /^rk_[0-9a-z]{26}\.[A-Za-z0-9_-]{43}$/, "the account's one recovery key, in its one appearance");
+      assert.ok(!ID_PATTERN.test(answer.text.replace(recoveryKey, "")), "no id or hash in the answer (only the key itself)");
       const cookie = cookieFromAnswer(answer);
       assert.ok(cookie !== null && cookie !== before, "a fresh session");
       assert.deepEqual((await session(port, before)).body, { error: "session-ended", reason: "replaced" }, "the cookie the browser held before opens nothing");
@@ -180,12 +181,13 @@ describe("P3-ACCT create account", () => {
       const profile = service.peekProfileOf(principal) as Profile;
       assert.equal(profile.schema, 2);
       assert.equal(loginOf(profile)?.key, "brad.player");
-      assert.equal(hasRecoveryKey(profile), false, "a sealed credential epoch, no recovery key");
+      assert.equal(hasRecoveryKey(profile), true, "a real recovery key (P3-ACCT POLICY)");
       assert.ok(!JSON.stringify(profile).includes(PASSWORD), "never the password");
+      assert.ok(!JSON.stringify(profile).includes(recoveryKey.split(".")[1]), "never the key's secret (its digest only)");
       const mine = await me(port, cookie as string);
       assert.equal(mine.status, 200);
       const account = (mine.body as { account: Record<string, unknown> }).account;
-      assert.deepEqual([account.name, account.username, account.recoveryKey, account.wallet], ["Brad", "Brad.Player", false, null]);
+      assert.deepEqual([account.name, account.username, account.recoveryKey, account.wallet], ["Brad", "Brad.Player", true, null]);
       assert.ok(!ID_PATTERN.test(mine.text));
       void server;
     } finally {
@@ -324,14 +326,17 @@ describe("P3-ACCT log in", () => {
 });
 
 describe("P3-ACCT independent-review fixes", () => {
-  test("review H1: a username/password account has no recovery key and is never given one -- not even by the sign-in's grant", async () => {
+  test("review H1, as the owner re-ruled it (P3-ACCT POLICY): a sign-in's own grant NEVER makes a recovery key; an explicit 'Confirm it's you' with the password does", async () => {
     const { server, port } = await prodServer();
     try {
       const ann = await accountBrowser(port, "Ann", PASSWORD);
       const rotated = await post(port, "/gs/api/profile/recovery-key", ann.cookie);
-      assert.deepEqual([rotated.status, rotated.body], [409, { error: "no-recovery-key" }]);
+      assert.deepEqual([rotated.status, rotated.body], [403, { error: "reauth-required" }], "a cookie stolen in the sign-in's five minutes cannot mint a key");
       assert.ok(!rotated.text.includes("rk_"));
-      assert.equal(((await me(port, ann.cookie)).body as { account: { recoveryKey: boolean } }).account.recoveryKey, false);
+      assert.equal((await post(port, "/gs/api/profile/reauth", ann.cookie, { password: PASSWORD })).status, 200);
+      const made = await post(port, "/gs/api/profile/recovery-key", ann.cookie);
+      assert.equal(made.status, 200, made.text);
+      assert.match((made.body as { recoveryKey: string }).recoveryKey, /^rk_/);
     } finally {
       await stopServer(server);
     }
@@ -461,7 +466,7 @@ describe("P3-ACCT re-review fixes", () => {
 });
 
 describe("P3-ACCT the legacy migration (a recovery-key profile)", () => {
-  test("it keeps playing as before; it sets a username and password only under Confirm it's you; then logs in anywhere -- the SAME principal; its key still works; it is never orphaned", async () => {
+  test("it keeps playing as before; it sets a username and password only under Confirm it's you; then logs in anywhere -- the SAME principal; its key becomes ACCOUNT RECOVERY (P3-ACCT POLICY); it is never orphaned", async () => {
     const { server, port, clock, service } = await prodServer();
     try {
       const legacy = await profiledBrowser(port, "Old Timer");
@@ -481,11 +486,13 @@ describe("P3-ACCT the legacy migration (a recovery-key profile)", () => {
       const elsewhere = await loginOnFreshBrowser(port, "oldtimer", PASSWORD);
       assert.equal(elsewhere.answer.status, 200, elsewhere.answer.text);
       assert.equal(principalOf(service, elsewhere.cookie as string, clock.now), principal, "the same principal: its tables follow");
-      /* The legacy key stays a way in (temporary compatibility, reported). */
+      /* P3-ACCT POLICY: the legacy key is KEPT (owner ruling 7) as the account's recovery key -- it resets the password; it
+         no longer signs in (the account has a password now). */
       const keyed = await post(port, "/gs/api/profile/recover", await bootstrapCookie(port), { recoveryKey: legacy.recoveryKey });
-      assert.equal(keyed.status, 200);
+      assert.deepEqual([keyed.status, keyed.body], [409, { error: "use-password-reset" }]);
+      assert.equal(cookieFromAnswer(keyed), null, "no session");
       assert.equal(((await me(port, elsewhere.cookie as string)).body as { account: { recoveryKey: boolean } }).account.recoveryKey, true);
-      /* A new account's recovery-key path is closed: no key exists, and a forged one is the one wrong answer. */
+      /* A forged key is the one wrong answer. */
       const bea = await accountBrowser(port, "Bea", PASSWORD);
       clock.now += 6 * 60_000;
       const beaProfile = service.peekProfileOf(principalOf(service, bea.cookie, clock.now) as string) as Profile;
@@ -732,7 +739,7 @@ describe("P3-ACCT trust facts", () => {
       assert.deepEqual(Object.keys(seats[0].facts).sort(), ["accountAgeDays", "completedMoneyGames", "disputedGames", "establishedOpponents", "inactivityExits", "memberSince", "unresolvedDisputes", "walletVerified", "walletVerifiedSince"]);
       assert.match(String(seats[0].facts.memberSince), /^\d{4}-\d{2}$/, "the month, never the day");
       assert.equal(Number(seats[0].facts.accountAgeDays) % 7, 0, "whole weeks only (re-review N-4)");
-      assert.equal(seats[0].facts.establishedOpponents, null, "pending the owner's definition of an established profile");
+      assert.equal(seats[0].facts.establishedOpponents, 0, "P3-ACCT POLICY: the owner's definition -- a server-derived count (no completed game yet)");
       assert.equal(seats[0].facts.walletVerified, false);
       assert.ok(!ID_PATTERN.test(facts.text) && !facts.text.includes("Hana") && !facts.text.includes("juno1"), "no id, no username, no wallet");
       /* A free table: the facts are for staking money beside someone, not for following a player around. */

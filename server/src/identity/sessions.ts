@@ -39,7 +39,6 @@ import {
   KdfGate,
   loginKeyOf,
   PASSWORD_MAX_BYTES,
-  sealedRecoveryDigest,
   hasRecoveryKey,
   verifyPassword,
   warmPasswordKdf,
@@ -57,7 +56,6 @@ import {
   mintPrincipalId,
   mintProfileId,
   mintRecoveryKey,
-  mintRecoverySelector,
   mintSecret,
   mintSessionId,
   mintUnique,
@@ -188,6 +186,9 @@ export type CredentialOutcome =
   | { kind: "has-tables" }
   /** One answer for every wrong, expired, used, revoked or disabled credential: nothing says which. */
   | { kind: "invalid" }
+  /** P3-ACCT POLICY: a VALID recovery key of an account that has a password. The key is an account-recovery credential
+   *  there, never a sign-in: the browser is sent to "Forgot password?" (a reset). Said only to a holder of that key. */
+  | { kind: "password-account" }
   | { kind: "unavailable" };
 
 export type ProfileActionOutcome<T> =
@@ -236,7 +237,8 @@ export interface AccountDetails extends AccountView {
     P3-ACCT: THE ANSWERS OF THE USERNAME/PASSWORD OPERATIONS (none carries an id, a password or a hash)
    ================================================================== */
 export type CreateAccountOutcome =
-  | { kind: "ok"; name: string; username: string; setCookie: string; principalId: string; sessionId: string }
+  /** `recoveryKey`: the account's recovery key -- its ONE appearance (the caller answers it to this browser only). */
+  | { kind: "ok"; name: string; username: string; recoveryKey: string; setCookie: string; principalId: string; sessionId: string }
   | { kind: "not-authenticated" }
   | { kind: "already-profiled"; name: string }
   | { kind: "bad-name" }
@@ -261,6 +263,50 @@ export type EstablishCredentialsOutcome =
   | { kind: "username-taken" }
   | { kind: "busy" }
   | { kind: "unavailable" };
+
+/* ==================================================================
+    P3-ACCT POLICY FOLLOW-UP: CHANGE PASSWORD, FORGOT PASSWORD (none of these answers carries an id, a password, a key
+    or a hash)
+   ================================================================== */
+
+/** The credential that authorizes replacing the password: the CURRENT password, or the account's recovery key -- sent in
+ *  the request itself (never a standing grant: a cookie stolen inside a sign-in's five minutes must not replace a
+ *  credential). */
+export type CurrentCredential = { readonly password: unknown } | { readonly recoveryKey: unknown };
+
+export type ChangePasswordOutcome =
+  /** `setCookie`: THIS browser's fresh session (same family); `signedOut`: the other devices that were signed in. */
+  | { kind: "ok"; setCookie: string; principalId: string; sessionId: string; signedOut: number }
+  | { kind: "not-authenticated" }
+  | { kind: "profile-required" }
+  /** A profile made before accounts: it sets a username and password instead (`establishCredentials`). */
+  | { kind: "no-password" }
+  | { kind: "bad-password"; problem: PasswordProblem }
+  /** The current password or recovery key is wrong (one answer for both, and for a key of another profile). */
+  | { kind: "invalid" }
+  | { kind: "busy" }
+  | { kind: "unavailable" };
+
+export type ResetPasswordOutcome =
+  /** This browser is signed in to the recovered account on a fresh session; `signedOut`: devices that were signed in. */
+  | { kind: "ok"; name: string; setCookie: string; principalId: string; sessionId: string; signedOut: number }
+  | { kind: "not-authenticated" }
+  | { kind: "already-profiled" }
+  | { kind: "has-tables" }
+  | { kind: "bad-password"; problem: PasswordProblem }
+  /** One answer for every wrong, malformed, unknown, retired or disabled key: nothing says which (no enumeration). */
+  | { kind: "invalid" }
+  /** A VALID key of a profile made before accounts (no password to reset): it signs in with the key and sets one. */
+  | { kind: "no-password" }
+  | { kind: "busy" }
+  | { kind: "unavailable" };
+
+/** How a sensitive-auth grant was made. P3-ACCT POLICY: only an explicit "Confirm it's you" (`confirmed`) authorizes
+ *  REPLACING a credential (a recovery key, a legacy profile's first password); the automatic grant of a sign-in
+ *  (`sign-in`) still covers the other sensitive actions. Only a `confirmed` grant is written durably (OD-5-4 is about
+ *  re-authentications): a sign-in's grant lives in this process's memory only, so every grant a restart reloads is a
+ *  `confirmed` one -- honoured exactly as before, and the durable grant item's shape is unchanged. */
+type GrantHow = "sign-in" | "confirmed";
 
 export type WalletAssociation = "associated" | "unchanged" | "no-profile" | "stale" | "unavailable";
 
@@ -341,6 +387,9 @@ export interface IdentityStats {
   credentialsEstablished: number;
   walletsAssociated: number;
   kdfBusy: number;
+  /** P3-ACCT POLICY */
+  passwordChanges: number;
+  passwordResets: number;
 }
 
 /* ==================================================================
@@ -440,6 +489,8 @@ export class IdentityService {
     credentialsEstablished: 0,
     walletsAssociated: 0,
     kdfBusy: 0,
+    passwordChanges: 0,
+    passwordResets: 0,
   };
   /** ESCROW-3A (IR-03): the session families (durable ones mirror the store; a provisional principal's live here). */
   private readonly families = new Map<string, SessionFamily>();
@@ -447,7 +498,7 @@ export class IdentityService {
    *  grant names the family and the recovery selector it was made under, and lapses after `sensitiveAuthMs`. A restart
    *  forgets it (the player re-enters the key). LIVE-5: an item keyed by session with a TTL, checked in the same
    *  transaction as the action. */
-  private readonly grants = new Map<string, { family_id: string; selector: string; expires_at: number }>();
+  private readonly grants = new Map<string, { family_id: string; selector: string; expires_at: number; how: GrantHow }>();
   /** ESCROW-3A (owner review): the ONE-TIME creation rescue, by PROFILE -- open only while the profile's first key may
    *  not have reached the page that created it. MEMORY ONLY (a restart closes every one: fail closed), never a secret:
    *  it names the creating SESSION (not its family's successors), the family, the selector of the key that was issued,
@@ -481,7 +532,8 @@ export class IdentityService {
     if (grants !== undefined) {
       const at = (options.security?.clock ?? Date.now)();
       for (const grant of await grants.live(at)) {
-        if (service.sessions.has(grant.session_id)) service.grants.set(grant.session_id, { family_id: grant.family_id, selector: grant.selector, expires_at: grant.expires_at });
+        /* P3-ACCT POLICY: only "Confirm it's you" grants are ever stored (`recordGrant`), so a reloaded one is `confirmed`. */
+        if (service.sessions.has(grant.session_id)) service.grants.set(grant.session_id, { family_id: grant.family_id, selector: grant.selector, expires_at: grant.expires_at, how: "confirmed" });
       }
     }
     return service;
@@ -1248,6 +1300,9 @@ export class IdentityService {
         this.stats.credentialFailures += 1;
         return { kind: "invalid" as const };
       }
+      /* P3-ACCT POLICY: an account with a password signs in with its password; its recovery key only RECOVERS it
+         (`resetPassword`) -- it is never an ordinary sign-in. Only a holder of this valid key hears this answer. */
+      if (loginOf(profile) !== null) return { kind: "password-account" as const };
       const issued = await this.issueFor(profile, current, now, {}, "recovery");
       if (issued.kind === "ok") this.stats.recoveries += 1;
       return issued;
@@ -1425,13 +1480,15 @@ export class IdentityService {
     return this.serial(async () => {
       const who = this.profiledCurrent(read, now);
       if (typeof who === "string") return { kind: who };
-      /* P3-ACCT (review H1): an account made with a username and password has NO recovery key and is never given one --
-         a key would be a second credential, outside every password budget, that a short-lived grant could mint. */
-      if (!hasRecoveryKey(who.profile)) return { kind: "no-recovery-key" as const };
-      /* ESCROW-3A (brief §10B, owner review): a live session alone NEVER rotates the key. A recent re-authentication by
+      /* P3-ACCT POLICY (owner ruling 2026-10-05, superseding 343fac2's review H1): every account may hold ONE recovery key,
+         an ACCOUNT-RECOVERY credential -- so a username/password account makes (or replaces) its key here too; a sealed
+         343fac2 account makes its first one. H1's concern -- a key minted by a short-lived grant, outside the password
+         budgets -- is answered by WHICH grant counts: only an explicit "Confirm it's you" (the password, or a legacy
+         profile's key) made by THIS session; the automatic grant of a sign-in never replaces a credential.
+         ESCROW-3A (brief §10B, owner review): a live session alone NEVER rotates the key. A recent re-authentication by
          THIS session does -- or, once, the lost-create-response rescue: the creating session presenting the creating
-         page's receipt, before that page acknowledged the key. */
-      const granted = this.sensitiveAuthOf(who.session, who.profile, now);
+         page's receipt, before that page acknowledged the key (a LIVE-2E create only; retired in production). */
+      const granted = this.sensitiveAuthOf(who.session, who.profile, now, "confirmed");
       const rescue = !granted && this.creationRescueOf(who.session, who.profile, creationReceipt, now);
       if (!granted && !rescue) {
         this.stats.reauthRequired += 1;
@@ -1599,7 +1656,14 @@ export class IdentityService {
       if (principal.kind === "profile") return { kind: "already-profiled" as const, name: this.profiles.get(principal.account_link as string)?.display_name ?? "" };
       if (this.profileOfLogin.has(key)) return { kind: "username-taken" as const };
       const profileId = mintUnique(() => mintProfileId(this.random), (id) => this.profiles.has(id));
-      const selector = mintUnique(() => mintRecoverySelector(this.random), (id) => this.profileOfSelector.has(id));
+      /* P3-ACCT POLICY (owner ruling 2026-10-05): ONE recovery key, made here and answered ONCE (the account dialog's
+         one-time reveal); only its selector and the SHA-256 of its secret are kept. */
+      let recovery = mintRecoveryKey(this.random);
+      for (let attempt = 0; this.profileOfSelector.has(recovery.selector); attempt += 1) {
+        if (attempt >= 4) throw new Error("identity: 5 consecutive recovery-selector collisions -- the random source is not random");
+        recovery = mintRecoveryKey(this.random);
+      }
+      const selector = recovery.selector;
       const profile: Profile = {
         profile_id: profileId,
         principal_id: principal.principal_id,
@@ -1607,7 +1671,7 @@ export class IdentityService {
         created_at: now,
         status: "active",
         recovery_selector: selector,
-        recovery_hash: sealedRecoveryDigest(selector),
+        recovery_hash: secretHash(recovery.secret),
         recovery_rotated_at: now,
         schema: 2,
         login_key: key,
@@ -1673,8 +1737,8 @@ export class IdentityService {
         [...replaced, ...evicted].map((session) => session.session_id),
         principal.principal_id,
       );
-      await this.recordGrant(fresh, profile, now);
-      return { kind: "ok" as const, name: input.displayName, username: name, setCookie: sessionSetCookie(fresh.session_id, secret), principalId: bound.principal_id, sessionId: fresh.session_id };
+      await this.recordGrant(fresh, profile, now, "sign-in");
+      return { kind: "ok" as const, name: input.displayName, username: name, recoveryKey: recovery.key, setCookie: sessionSetCookie(fresh.session_id, secret), principalId: bound.principal_id, sessionId: fresh.session_id };
     });
   }
 
@@ -1711,7 +1775,7 @@ export class IdentityService {
       if (issued.kind === "ok") {
         this.stats.logins += 1;
         const session = this.sessions.get(issued.sessionId);
-        if (session !== undefined) await this.recordGrant(session, profile as Profile, now);
+        if (session !== undefined) await this.recordGrant(session, profile as Profile, now, "sign-in");
       }
       return issued;
     });
@@ -1721,7 +1785,7 @@ export class IdentityService {
     const before = this.profiledCurrent(read, now);
     if (typeof before === "string") return { kind: before };
     if (loginOf(before.profile) !== null) return { kind: "credentials-exist" };
-    if (!this.sensitiveAuthOf(before.session, before.profile, now)) {
+    if (!this.sensitiveAuthOf(before.session, before.profile, now, "confirmed")) {
       this.stats.reauthRequired += 1;
       return { kind: "reauth-required" };
     }
@@ -1740,7 +1804,7 @@ export class IdentityService {
       const who = this.profiledCurrent(read, now);
       if (typeof who === "string") return { kind: who };
       if (loginOf(who.profile) !== null) return { kind: "credentials-exist" as const };
-      if (!this.sensitiveAuthOf(who.session, who.profile, now)) {
+      if (!this.sensitiveAuthOf(who.session, who.profile, now, "confirmed")) {
         this.stats.reauthRequired += 1;
         return { kind: "reauth-required" as const };
       }
@@ -1758,6 +1822,279 @@ export class IdentityService {
       this.indexProfile(updated);
       this.stats.credentialsEstablished += 1;
       return { kind: "ok" as const, username: name };
+    });
+  }
+
+  /* ==================================================================
+      P3-ACCT POLICY FOLLOW-UP (owner rulings 2026-10-05): CHANGE PASSWORD AND FORGOT PASSWORD
+     ==================================================================
+     THE CREDENTIAL FENCES. A password's GENERATION is its stored hash (scrypt with a fresh random salt every time, so no
+     two generations share one); the recovery key's is its selector (ESCROW-3A's credential epoch, to which every wallet
+     ticket and sensitive grant is bound -- unchanged here: a password change is not a key rotation). Every write that
+     replaces the password carries `profile-password` (the generation it replaces) AND `profile-selector` (the key it was
+     decided under), so a change decided against a superseded credential -- a racing change, a reset, a key rotation, a
+     second writer -- is refused by the store itself, in the same step as the write. The KDF runs OUTSIDE the identity
+     queue (bounded by `KdfGate`); everything it was checked against is checked again inside the queue.
+     SESSIONS. Every session that predates the change and is not the changer's own ends -- security-revoked
+     `signed-out-remotely`, their families closed (their sockets close 4401; their wallet tickets stop standing:
+     ESCROW-3A F-2 reads the family) -- so a stolen session or a stolen old password cannot outlive it.
+       CHANGE (signed in): this browser keeps going on a FRESH session minted into ITS OWN family (the family stays
+         open -- the seats' pre-freeze wallet links made here keep standing), and every other member of that family (the
+         session it held, its rotated predecessors still in their grace) ends `replaced`: a copy of this browser's old
+         cookie opens nothing.
+       RESET (signed out, "Forgot password?"): EVERY session of the account ends, and this browser gets a fresh session
+         in a NEW family (exactly like a sign-in: its temporary session is `replaced`).
+     WHAT A CREDENTIAL CHANGE DOES NOT TOUCH: the profile and its principal (every seat), its username, its trust history
+     -- and its VERIFIED WALLET. Reviewed (the brief): the persisted wallet authorizes a link only for this account's own
+     sessions AND only with that wallet's own fresh ADR-036 signature (`escrow/moneyTables.ts` `linkAuthority`); every
+     session that predates the change other than the changer's is ended by it, so nothing an old credential set up can
+     be exercised afterwards without the new one. No invariant requires clearing it, so it is kept. (A key ROTATION and
+     "Sign out other devices" keep their 343fac2 behaviour -- they clear it.)
+     THE RECOVERY KEY IS KEPT BY A RESET (not rotated automatically): a reset made with a STOLEN key would otherwise hand
+     the thief the only key there is; kept, the owner's saved key resets the account back, and "Make a new recovery key"
+     (which needs a "Confirm it's you") then retires the stolen one. Both journaled first (`password-replaced`), so an
+     identity restore never brings an old password back (`securityReplay.ts`). */
+
+  /** "Change password" (signed in): the CURRENT password or the recovery key, in the request, and the new password. */
+  async changePassword(read: SessionCookieRead, input: { current: CurrentCredential; newPassword: unknown }, now: number, options: { client?: string } = {}): Promise<ChangePasswordOutcome> {
+    const before = this.profiledCurrent(read, now);
+    if (typeof before === "string") return { kind: before };
+    const held = loginOf(before.profile);
+    if (held === null) return { kind: "no-password" };
+    const next = cleanPassword(input.newPassword);
+    if (!next.ok) return { kind: "bad-password", problem: next.problem };
+    /* The current credential, checked before any new hash is made (a wrong one costs the attacker the KDF, not us). */
+    const byKey = "recoveryKey" in input.current;
+    if (byKey) {
+      const parsed = parseRecoveryKey((input.current as { recoveryKey: unknown }).recoveryKey);
+      const selectorMatches = parsed !== null && parsed.selector === before.profile.recovery_selector;
+      const secretOk = parsed !== null && secretMatches(parsed.secret, selectorMatches ? before.profile.recovery_hash : NO_PROFILE_HASH);
+      if (!selectorMatches || !secretOk || !hasRecoveryKey(before.profile)) {
+        this.stats.credentialFailures += 1;
+        return { kind: "invalid" };
+      }
+    } else {
+      const typed = loginPasswordOf((input.current as { password: unknown }).password);
+      const checked = await this.kdf.run(() => verifyPassword(typed ?? "", held.hash, this.policy.passwordKdf), { client: options.client, authenticated: true });
+      if (checked.kind === "busy") {
+        this.stats.kdfBusy += 1;
+        return { kind: "busy" };
+      }
+      if (!checked.value || typed === null) {
+        this.stats.credentialFailures += 1;
+        return { kind: "invalid" };
+      }
+    }
+    const hashed = await this.kdf.run(() => hashPassword(next.password, this.policy.passwordKdf, this.random), { client: options.client, authenticated: true });
+    if (hashed.kind === "busy") {
+      this.stats.kdfBusy += 1;
+      return { kind: "busy" };
+    }
+    return this.serial(async () => {
+      const who = this.profiledCurrent(read, now);
+      if (typeof who === "string") return { kind: who };
+      /* The very session, password generation and recovery key the credential was checked against (a change, reset or
+         rotation that landed meanwhile wins: the credential this request proved is no longer the account's). */
+      if (who.session.session_id !== before.session.session_id || loginOf(who.profile)?.hash !== held.hash || who.profile.recovery_selector !== before.profile.recovery_selector || who.profile.recovery_hash !== before.profile.recovery_hash) {
+        this.stats.credentialFailures += 1;
+        return { kind: "invalid" as const };
+      }
+      const principalId = who.session.principal_id;
+      const kept = who.session.family_id;
+      const { session: fresh, secret } = this.mintSession(principalId, now, kept);
+      const standing = [...(this.byPrincipal.get(principalId) ?? [])].map((id) => this.sessions.get(id) as Session).filter((session) => !isSecurityRevocation(session.revoke_reason));
+      const mine = standing.filter((session) => session.family_id === kept).map((session) => ({ ...session, revoked_at: now, revoke_reason: "replaced" as const }));
+      const others = standing.filter((session) => session.family_id !== kept);
+      const signedOut = others.filter((session) => session.revoked_at === null && now < session.expires_at).length;
+      const ended = others.map((session) => ({ ...session, revoked_at: now, revoke_reason: "signed-out-remotely" as const }));
+      const families = this.revokedFamilies(
+        this.familiesOfPrincipal(principalId)
+          .map((family) => family.family_id)
+          .filter((id) => id !== kept),
+        "signed-out-remotely",
+        now,
+      );
+      const dropLinks = this.linkHashesOf(who.profile.profile_id);
+      const updated: Profile = { ...who.profile, password_hash: hashed.value, password_set_at: now };
+      try {
+        await this.commit(
+          {
+            expect: [
+              { kind: "profile-password", profile_id: updated.profile_id, password_hash: held.hash },
+              { kind: "profile-selector", profile_id: updated.profile_id, recovery_selector: who.profile.recovery_selector },
+              { kind: "family-open", family_id: kept },
+              { kind: "session-absent", session_id: fresh.session_id },
+              ...[...mine, ...ended].map((session) => ({ kind: "session-open" as const, session_id: session.session_id })),
+              ...families.map((family) => ({ kind: "family-open" as const, family_id: family.family_id })),
+            ],
+            profiles: [updated],
+            sessions: [fresh, ...mine, ...ended],
+            families,
+            dropLinks,
+          },
+          "changing a password",
+          {
+            kind: "password-replaced",
+            at: now,
+            principal_id: principalId,
+            profile_id: updated.profile_id,
+            from_hash: held.hash,
+            to_hash: hashed.value,
+            set_at: now,
+            via: byKey ? "recovery-key" : "password",
+            kept_family_id: kept,
+            family_ids: familyList(families.map((family) => family.family_id)),
+          },
+        );
+      } catch {
+        return { kind: "unavailable" as const };
+      }
+      this.indexProfile(updated);
+      this.forgetLinks(dropLinks);
+      this.index(fresh);
+      for (const session of [...mine, ...ended]) {
+        this.index(session);
+        this.dirty.delete(session.session_id);
+        this.grants.delete(session.session_id);
+      }
+      this.applyFamilies(families);
+      this.creationDeliveries.delete(updated.profile_id);
+      this.stats.passwordChanges += 1;
+      this.stats.revocations += mine.length + ended.length;
+      /* Every session that ended -- this browser's old one too: its sockets close 4401 and reopen on the fresh cookie. */
+      this.hooks.onSessionsEnded?.(
+        [...mine, ...ended].map((session) => session.session_id),
+        principalId,
+      );
+      if (families.length > 0) this.hooks.onSecurityEvent?.({ kind: "family-revoked", principalId, familyIds: families.map((family) => family.family_id) });
+      await this.recordGrant(fresh, updated, now, "sign-in");
+      return { kind: "ok" as const, setCookie: sessionSetCookie(fresh.session_id, secret), principalId, sessionId: fresh.session_id, signedOut };
+    });
+  }
+
+  /** "Forgot password?" (signed out): the recovery key and a new password. No username: the key's selector names the
+   *  account, and no answer says whether any other account exists. */
+  async resetPassword(read: SessionCookieRead, input: { recoveryKey: unknown; newPassword: unknown }, now: number, options: { client?: string } = {}): Promise<ResetPasswordOutcome> {
+    /* About THIS browser only (never about the key): answered before any credential work. */
+    const early = this.currentOf(read, now);
+    if (early === null) return { kind: "not-authenticated" };
+    if ((this.principals.get(early.principal_id) as Principal).kind === "profile") return { kind: "already-profiled" };
+    if (this.isDurable(early.principal_id)) return { kind: "has-tables" };
+    const next = cleanPassword(input.newPassword);
+    if (!next.ok) return { kind: "bad-password", problem: next.problem };
+    const parsed = parseRecoveryKey(input.recoveryKey);
+    if (parsed === null) {
+      this.stats.credentialFailures += 1;
+      return { kind: "invalid" };
+    }
+    const profileId = this.profileOfSelector.get(parsed.selector);
+    const found = profileId === undefined ? undefined : this.profiles.get(profileId);
+    /* Constant time either way: an unknown selector is compared against a digest nothing matches. */
+    const matches = secretMatches(parsed.secret, found?.recovery_hash ?? NO_PROFILE_HASH);
+    if (!matches || found === undefined || this.activeProfileOf(found.principal_id) === null) {
+      this.stats.credentialFailures += 1;
+      return { kind: "invalid" };
+    }
+    const held = loginOf(found);
+    if (held === null) return { kind: "no-password" };
+    const hashed = await this.kdf.run(() => hashPassword(next.password, this.policy.passwordKdf, this.random), { client: options.client });
+    if (hashed.kind === "busy") {
+      this.stats.kdfBusy += 1;
+      return { kind: "busy" };
+    }
+    return this.serial(async () => {
+      const current = this.currentOf(read, now);
+      if (current === null) return { kind: "not-authenticated" as const };
+      if ((this.principals.get(current.principal_id) as Principal).kind === "profile") return { kind: "already-profiled" as const };
+      if (this.isDurable(current.principal_id)) return { kind: "has-tables" as const };
+      /* The key and the password generation exactly as checked (a rotation, change or reset that landed meanwhile wins). */
+      const profile = this.profiles.get(found.profile_id);
+      if (
+        profile === undefined ||
+        this.activeProfileOf(profile.principal_id) === null ||
+        profile.recovery_selector !== parsed.selector ||
+        !secretMatches(parsed.secret, profile.recovery_hash) ||
+        loginOf(profile)?.hash !== held.hash
+      ) {
+        this.stats.credentialFailures += 1;
+        return { kind: "invalid" as const };
+      }
+      const principalId = profile.principal_id;
+      /* The recovering browser founds a family: a new cookie jar, signed in to the account. */
+      const { session: fresh, secret, founded } = this.mintSession(principalId, now, null, "recovery");
+      const standing = [...(this.byPrincipal.get(principalId) ?? [])].map((id) => this.sessions.get(id) as Session).filter((session) => !isSecurityRevocation(session.revoke_reason));
+      const signedOut = standing.filter((session) => session.revoked_at === null && now < session.expires_at).length;
+      const ended = standing.map((session) => ({ ...session, revoked_at: now, revoke_reason: "signed-out-remotely" as const }));
+      const families = this.revokedFamilies(
+        this.familiesOfPrincipal(principalId).map((family) => family.family_id),
+        "signed-out-remotely",
+        now,
+      );
+      /* This browser's temporary session (and its rotated predecessors in their grace) is replaced -- memory only: a
+         provisional browser was never written. */
+      const replaced: Session[] = [current, ...this.graceSessionsOf(current.principal_id, current.session_id, now)].map((session) => ({ ...session, revoked_at: now, revoke_reason: "replaced" as const }));
+      const replacedFamilies = this.revokedFamilies([current.family_id], "replaced", now);
+      const newFamilies = founded === null ? [] : [founded];
+      const dropLinks = this.linkHashesOf(profile.profile_id);
+      const updated: Profile = { ...profile, password_hash: hashed.value, password_set_at: now };
+      try {
+        await this.commit(
+          {
+            expect: [
+              { kind: "profile-password", profile_id: updated.profile_id, password_hash: held.hash },
+              { kind: "profile-selector", profile_id: updated.profile_id, recovery_selector: parsed.selector },
+              { kind: "session-absent", session_id: fresh.session_id },
+              ...newFamilies.map((family) => ({ kind: "family-absent" as const, family_id: family.family_id })),
+              ...ended.map((session) => ({ kind: "session-open" as const, session_id: session.session_id })),
+              ...families.map((family) => ({ kind: "family-open" as const, family_id: family.family_id })),
+            ],
+            profiles: [updated],
+            sessions: [fresh, ...ended],
+            families: [...newFamilies, ...families],
+            dropLinks,
+          },
+          "resetting a password",
+          {
+            kind: "password-replaced",
+            at: now,
+            principal_id: principalId,
+            profile_id: updated.profile_id,
+            from_hash: held.hash,
+            to_hash: hashed.value,
+            set_at: now,
+            via: "recovery-key",
+            kept_family_id: null,
+            family_ids: familyList(families.map((family) => family.family_id)),
+          },
+        );
+      } catch {
+        return { kind: "unavailable" as const };
+      }
+      this.indexProfile(updated);
+      this.forgetLinks(dropLinks);
+      this.applyFamilies([...newFamilies, ...families, ...replacedFamilies]);
+      this.index(fresh);
+      for (const session of [...ended, ...replaced]) {
+        this.index(session);
+        this.dirty.delete(session.session_id);
+        this.grants.delete(session.session_id);
+      }
+      this.creationDeliveries.delete(updated.profile_id);
+      this.stats.passwordResets += 1;
+      this.stats.revocations += ended.length + replaced.length;
+      this.hooks.onSessionsEnded?.(
+        replaced.map((session) => session.session_id),
+        current.principal_id,
+      );
+      if (ended.length > 0) {
+        this.hooks.onSessionsEnded?.(
+          ended.map((session) => session.session_id),
+          principalId,
+        );
+      }
+      if (families.length > 0) this.hooks.onSecurityEvent?.({ kind: "family-revoked", principalId, familyIds: families.map((family) => family.family_id) });
+      await this.recordGrant(fresh, updated, now, "sign-in");
+      return { kind: "ok" as const, name: updated.display_name, setCookie: sessionSetCookie(fresh.session_id, secret), principalId, sessionId: fresh.session_id, signedOut };
     });
   }
 
@@ -1957,11 +2294,13 @@ export class IdentityService {
       /* Compared against this profile's digest when the selector is its own, and against a digest nothing matches
          otherwise: the same work either way, and another profile's (valid) key is `invalid` here. */
       const secretOk = parsed !== null && secretMatches(parsed.secret, selectorMatches ? who.profile.recovery_hash : NO_PROFILE_HASH);
-      if (!selectorMatches || !secretOk) {
+      /* P3-ACCT POLICY: an account with a password confirms with its PASSWORD. Its recovery key only replaces a
+         credential (a reset, a password change, its own replacement) -- it never makes a standing grant. */
+      if (!selectorMatches || !secretOk || loginOf(who.profile) !== null) {
         this.stats.reauthFailures += 1;
         return { kind: "invalid" as const };
       }
-      const expiresAt = await this.recordGrant(who.session, who.profile, now);
+      const expiresAt = await this.recordGrant(who.session, who.profile, now, "confirmed");
       /* Whoever presents the key has it: the initial delivery is resolved. */
       this.creationDeliveries.delete(who.profile.profile_id);
       this.stats.reauths += 1;
@@ -1972,10 +2311,11 @@ export class IdentityService {
   /** A sensitive-auth grant for THIS session (inside the queue): memory, and durable too when configured -- best effort
    *  (the grant is honoured here either way; see `IdentitySecuritySubstrate`). Bound to the session, its family and the
    *  profile's current credential epoch (the recovery selector). Returns when it lapses. */
-  private async recordGrant(session: Session, profile: Profile, now: number): Promise<number> {
+  private async recordGrant(session: Session, profile: Profile, now: number, how: GrantHow): Promise<number> {
     const expiresAt = now + this.policy.sensitiveAuthMs;
     const durable = this.security.grants;
-    if (durable !== undefined) {
+    /* P3-ACCT POLICY: a sign-in's automatic grant is memory only (a restart drops it: the player confirms when asked). */
+    if (durable !== undefined && how === "confirmed") {
       try {
         await durable.put({ session_id: session.session_id, family_id: session.family_id, selector: profile.recovery_selector, expires_at: expiresAt });
       } catch (error) {
@@ -1983,7 +2323,7 @@ export class IdentityService {
         this.hooks.onStoreFailure?.("recording a re-authentication", error);
       }
     }
-    this.grants.set(session.session_id, { family_id: session.family_id, selector: profile.recovery_selector, expires_at: expiresAt });
+    this.grants.set(session.session_id, { family_id: session.family_id, selector: profile.recovery_selector, expires_at: expiresAt, how });
     return expiresAt;
   }
 
@@ -2009,21 +2349,22 @@ export class IdentityService {
         this.stats.reauthFailures += 1;
         return { kind: "invalid" as const };
       }
-      const expiresAt = await this.recordGrant(who.session, who.profile, now);
+      const expiresAt = await this.recordGrant(who.session, who.profile, now, "confirmed");
       this.stats.reauths += 1;
       return { kind: "ok" as const, expiresAt };
     });
   }
 
-  /** Whether THIS session holds a live re-authentication under the profile's CURRENT key. */
-  private sensitiveAuthOf(session: Session, profile: Profile, now: number): boolean {
+  /** Whether THIS session holds a live re-authentication under the profile's CURRENT key. P3-ACCT POLICY: `need`
+   *  "confirmed" (replacing a credential) accepts only an explicit "Confirm it's you", never a sign-in's grant. */
+  private sensitiveAuthOf(session: Session, profile: Profile, now: number, need: GrantHow = "sign-in"): boolean {
     const grant = this.grants.get(session.session_id);
     if (grant === undefined) return false;
     if (now >= grant.expires_at || grant.family_id !== session.family_id || grant.selector !== profile.recovery_selector || this.familyRevoked(session)) {
       this.grants.delete(session.session_id);
       return false;
     }
-    return true;
+    return need === "sign-in" || grant.how === "confirmed";
   }
 
   /** ESCROW-3A (owner review): the lost-create-response rescue. Open only when ALL hold:

@@ -311,6 +311,9 @@ function preconditionTarget(condition: IdentityPrecondition): { key: ItemKey; cl
         cls: "profile",
         clause: cl.and(cl.exists(), condition.wallet_address === null ? cl.or(cl.attrAbsent("wallet_address"), cl.isNull("wallet_address")) : cl.eqS("wallet_address", condition.wallet_address)),
       };
+    case "profile-password":
+      /* P3-ACCT POLICY: the password generation's compare-and-swap (the hash carries a fresh salt every time). */
+      return { key: keys.profile(condition.profile_id), cls: "profile", clause: cl.and(cl.exists(), cl.eqS("password_hash", condition.password_hash)) };
     default:
       throw new Error("identity plan: an unknown precondition (the shape check refuses it first)");
   }

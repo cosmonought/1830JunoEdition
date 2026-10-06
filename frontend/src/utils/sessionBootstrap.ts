@@ -17,8 +17,8 @@
 // `components/AccountDialog.tsx`, then resumes the action). Nothing holds the app behind the bootstrap any more. The port answers by name only; no response
 // carries an id.
 //
-// P3-ACCT: A SIGN-IN REPLACES THE SESSION. Creating an account, logging in, recovering or linking a profile gives this
-// browser a FRESH session (the old one is revoked `replaced`, and its sockets close 4401). While such a request is in
+// P3-ACCT: A SIGN-IN REPLACES THE SESSION. Creating an account, logging in, recovering or linking a profile -- and
+// (P3-ACCT POLICY) changing the password or resetting a forgotten one -- gives this browser a FRESH session (the old one is revoked `replaced`, and its sockets close 4401). While such a request is in
 // flight, a bootstrap waits for it -- so a socket that closed under the old session reconnects with the NEW cookie, not
 // a bootstrap that raced the response. And a bootstrap told `replaced` asks once more after a moment: another tab of
 // this browser may have just signed in, and its new cookie may still be landing in the jar. The wait is bounded: a
@@ -71,6 +71,9 @@ export type SessionApiPath =
   | "account/credentials"
   | "account/me"
   | "account/forget-wallet"
+  /** P3-ACCT POLICY: "Change password" (signed in) and "Forgot password?" (signed out, with the recovery key). */
+  | "account/password"
+  | "account/reset"
   /** P3-ACCT: the factual trust indicators (`trustApi.ts`); no id, username or wallet in any answer. */
   | "trust/table"
   | "trust/me"
@@ -171,7 +174,7 @@ export const SIGN_IN_TIMEOUT_MS = 30_000;
 
 /** P3-ACCT: the routes that REPLACE this browser's session (a sign-in of any kind). While one is in flight, a bootstrap
  *  waits for it (see the header). */
-export const SESSION_REPLACING_PATHS: ReadonlySet<SessionApiPath> = new Set<SessionApiPath>(["account/create", "account/login", "profile/recover", "profile/link"]);
+export const SESSION_REPLACING_PATHS: ReadonlySet<SessionApiPath> = new Set<SessionApiPath>(["account/create", "account/login", "profile/recover", "profile/link", "account/password", "account/reset"]);
 
 /** LIVE-2E: the account a bootstrap body names -- a name and a count, nothing else -- or `null` (signed out: a visitor). */
 function accountOf(body: unknown): SessionAccount | null {

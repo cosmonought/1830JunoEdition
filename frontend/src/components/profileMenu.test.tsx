@@ -106,6 +106,9 @@ const type = (input: HTMLInputElement | null, value: string) => {
   });
 };
 
+/** A profile made before accounts (no username): the menu's legacy options (P3-ACCT POLICY: only for such a profile). */
+const LEGACY_ME = { ok: true, account: { name: "Brad", otherSessions: 2, username: null, recoveryKey: true, wallet: null, memberSince: Date.UTC(2026, 0, 2) } };
+
 async function profiled(otherSessions = 2): Promise<ReturnType<typeof fakeServer>> {
   const server = fakeServer({ name: "Brad", otherSessions });
   await server.port.ensure();
@@ -117,6 +120,7 @@ describe("the profile menu (LIVE-2E)", () => {
     jest.useFakeTimers();
     jest.setSystemTime(new Date("2026-09-26T12:00:00Z"));
     const server = await profiled();
+    server.queue("/gs/api/account/me", 200, LEGACY_ME);
     await render(<ProfileMenu port={server.port} />);
     expect(byTestId("profile-chip")?.textContent).toBe("Brad");
     await click(byTestId("profile-chip"));
@@ -144,12 +148,13 @@ describe("the profile menu (LIVE-2E)", () => {
     expect(container.innerHTML).not.toContain(CODE);
   });
 
-  it("'Rotate recovery key' asks first, then shows the new key once", async () => {
+  it("'Make a new recovery key' asks first, then shows the new key once", async () => {
     const server = await profiled();
+    server.queue("/gs/api/account/me", 200, LEGACY_ME);
     await render(<ProfileMenu port={server.port} />);
     await click(byTestId("profile-chip"));
-    await click(buttonNamed("Rotate recovery key"));
-    expect(container.textContent).toContain("Your current recovery key stops working immediately.");
+    await click(byTestId("profile-menu-rotate"));
+    expect(container.textContent).toContain("Your current recovery key stops working immediately");
     expect(server.calls.some((call) => call.path === "/gs/api/profile/recovery-key")).toBe(false);
     server.queue("/gs/api/profile/recovery-key", 200, { ok: true, recoveryKey: KEY });
     await click(buttonNamed("Make a new recovery key"));
@@ -195,9 +200,10 @@ describe("the profile menu (LIVE-2E)", () => {
   it("ESCROW-3A: a rotation the server holds for re-authentication asks 'Confirm it's you', then rotates at once", async () => {
     const server = await profiled();
     const OLD = "rk_0123456789abcdefghjkmnpqr0.BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
+    server.queue("/gs/api/account/me", 200, LEGACY_ME);
     await render(<ProfileMenu port={server.port} />);
     await click(byTestId("profile-chip"));
-    await click(buttonNamed("Rotate recovery key"));
+    await click(byTestId("profile-menu-rotate"));
     server.queue("/gs/api/profile/recovery-key", 403, { error: "reauth-required" });
     await click(buttonNamed("Make a new recovery key"));
     expect(container.textContent).toContain("Confirm it’s you");

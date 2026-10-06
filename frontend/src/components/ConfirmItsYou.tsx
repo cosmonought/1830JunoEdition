@@ -20,8 +20,10 @@
 //
 // P3-ACCT: an account with a username asks for its PASSWORD (`POST /gs/api/profile/reauth {password}`); a profile made
 // before accounts asks for its recovery key, as before. Which one is read from the account itself (`account/me`) when
-// the caller doesn't say; a legacy profile that has since set a password may use either. Signing in counts as
-// confirming for its first five minutes (the server's grant), so a player who just logged in is not asked at all.
+// the caller doesn't say. P3-ACCT POLICY: an account with a password confirms with the PASSWORD only -- its recovery key
+// is account recovery ("Forgot password?", "Change password"), never a confirmation (the server refuses it here).
+// Signing in counts as confirming for its first five minutes (the server's grant), so a player who just logged in is
+// not asked at all -- except to replace a credential (a new recovery key), which always asks.
 
 import React, { useEffect, useState } from "react";
 
@@ -56,17 +58,15 @@ export function ConfirmItsYou({ purpose, port = sessionPort(), onConfirmed, onCa
   const [key, setKey] = useState("");
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  /* P3-ACCT: password unless the account says it has none (a legacy profile); `both` lets a legacy profile that has
-     since set a password choose. */
+  /* P3-ACCT: password unless the account says it has none (a legacy profile). P3-ACCT POLICY: never a choice -- the
+     password when the account has one, the key only for a profile that has none. */
   const [using, setUsing] = useState<ConfirmMethod>(method ?? "password");
-  const [both, setBoth] = useState(method === undefined);
   useEffect(() => {
     if (method !== undefined) return undefined;
     let live = true;
     void accountDetails(port).then((answer) => {
       if (!live || !answer.ok) return;
       setUsing(answer.account.username === null ? "recovery-key" : "password");
-      setBoth(answer.account.username !== null && answer.account.recoveryKey);
     });
     return () => {
       live = false;
@@ -134,21 +134,6 @@ export function ConfirmItsYou({ purpose, port = sessionPort(), onConfirmed, onCa
         {onCancel ? (
           <button type="button" style={disabledLook(styles.secondary, blocked)} disabled={blocked} onClick={onCancel}>
             {cancelLabel}
-          </button>
-        ) : null}
-        {both ? (
-          <button
-            type="button"
-            style={disabledLook(styles.secondary, blocked)}
-            disabled={blocked}
-            onClick={() => {
-              setKey("");
-              setError(null);
-              setUsing(using === "password" ? "recovery-key" : "password");
-            }}
-            data-testid={`${testIdPrefix}-switch`}
-          >
-            {using === "password" ? "Use the recovery key instead" : "Use the password instead"}
           </button>
         ) : null}
       </div>

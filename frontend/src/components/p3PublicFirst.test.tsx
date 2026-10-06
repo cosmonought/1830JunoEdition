@@ -10,7 +10,8 @@
 //   a visitor gets the homepage at once -- no gate, no bootstrap in the way -- with Log in, Create account and Rules;
 //   Host and Join ask for an account first (saying why), and NOTHING runs underneath;
 //   logging in RESUMES the action (the host's setup card opens by itself), on a fresh session, the password sent once
-//   in a POST body and kept nowhere; a new account is signed in at once and never shown a recovery key;
+//   in a POST body and kept nowhere; a new account is signed in at once and (P3-ACCT POLICY) shown its recovery key
+//   once before the action resumes (`p3AccountPolicy.test.tsx` pins the reveal);
 //   a wrong password -- or an unknown username -- is one sentence that names neither;
 //   signed in, Host opens straight away (no password, no key);
 //   the Terms page is reachable by anyone, says the owner's copy is pending, and carries no invented legal prose;
@@ -278,7 +279,8 @@ describe("P3-ACCT: a visitor gets the homepage, and an account only where one is
     expect(dialogGoneWhenResumed).toBe(true);
   });
 
-  it("Create account: signed in at once, no recovery key anywhere, and the action resumes", async () => {
+  it("Create account (P3-ACCT POLICY): signed in at once, the recovery key shown ONCE, and the action resumes after the acknowledgement", async () => {
+    const KEY = "rk_0123456789abcdefghjkmnpqr0.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
     const server = fakeServer(null);
     await homepage(server.port);
     await click(buttonNamed("Host game"));
@@ -286,12 +288,15 @@ describe("P3-ACCT: a visitor gets the homepage, and an account only where one is
     type(byTestId("account-username") as HTMLInputElement, "Ann");
     type(byTestId("account-password") as HTMLInputElement, "a long enough secret");
     type(byTestId("account-name") as HTMLInputElement, "Ann");
-    server.queue("/gs/api/account/create", { status: 201, body: { ok: true, profile: { name: "Ann", otherSessions: 0 }, username: "Ann" }, then: () => server.signIn("Ann") });
+    server.queue("/gs/api/account/create", { status: 201, body: { ok: true, profile: { name: "Ann", otherSessions: 0 }, username: "Ann", recoveryKey: KEY }, then: () => server.signIn("Ann") });
     await submit(byTestId("account-form"));
     expect(server.calls.filter((call) => call.path === "/gs/api/account/create").map((call) => JSON.parse(call.body))).toEqual([{ username: "Ann", password: "a long enough secret", name: "Ann" }]);
+    expect(byTestId("recovery-key-value")?.textContent).toBe(KEY);
+    expect(byTestId("host-body")).toBeNull();
+    await click(byTestId("recovery-key-saved"));
+    await click(byTestId("recovery-key-continue"));
     expect(byTestId("host-body")).toBeTruthy();
-    expect(all().textContent).not.toMatch(/recovery key/i);
-    expect(byTestId("recovery-key-value")).toBeNull();
+    expect(all().innerHTML).not.toContain(KEY);
   });
 
   it("a wrong password and an unknown username are ONE sentence that names neither; a short password is refused before anything is sent", async () => {
@@ -311,7 +316,7 @@ describe("P3-ACCT: a visitor gets the homepage, and an account only where one is
     type(byTestId("account-password") as HTMLInputElement, "short");
     type(byTestId("account-name") as HTMLInputElement, "Cy");
     await submit(byTestId("account-form"));
-    expect(byTestId("account-error")?.textContent).toBe("A password is at least 8 characters.");
+    expect(byTestId("account-error")?.textContent).toBe("A password is at least 12 characters.");
     expect(server.calls.some((call) => call.path === "/gs/api/account/create")).toBe(false);
   });
 
@@ -380,12 +385,12 @@ describe("P3-ACCT: the Rules and the Terms (AUD-20.08), for everyone", () => {
 });
 
 describe("P3-ACCT: trust facts -- facts under three headings, never a score, never an id", () => {
-  it("each seat's facts, grouped; 'established' is not counted (the owner's definition is pending); a malformed answer shows nothing", async () => {
+  it("each seat's facts, grouped; 'established opponents' is the server's count (P3-ACCT POLICY); a malformed answer shows nothing", async () => {
     const port = scriptedPort();
     port.answer("trust/table", 200, {
       ok: true,
       seats: [
-        { playerId: "p-me", facts: { memberSince: "2026-09", accountAgeDays: 28, completedMoneyGames: 3, unresolvedDisputes: 0, disputedGames: 1, inactivityExits: 0, walletVerified: true, walletVerifiedSince: "2026-09", establishedOpponents: null } },
+        { playerId: "p-me", facts: { memberSince: "2026-09", accountAgeDays: 28, completedMoneyGames: 3, unresolvedDisputes: 0, disputedGames: 1, inactivityExits: 0, walletVerified: true, walletVerifiedSince: "2026-09", establishedOpponents: 2 } },
         { playerId: "p-other", facts: { memberSince: "2026-09-01", accountAgeDays: 1, completedMoneyGames: 0, unresolvedDisputes: 0, disputedGames: 0, inactivityExits: 0, walletVerified: false, walletVerifiedSince: null, establishedOpponents: null } },
       ],
     });
@@ -410,7 +415,7 @@ describe("P3-ACCT: trust facts -- facts under three headings, never a score, nev
     expect(mine?.textContent).toContain("3 completed real-money games");
     expect(mine?.textContent).toContain("Disputes: 0 unresolved now · 1 closed by the resolver");
     expect(mine?.textContent).toContain("Wallet verified since 2026-09");
-    expect(byTestId("trust-facts-p-me-relationships")?.textContent).toBe("Established opponents aren't counted in this build yet.");
+    expect(byTestId("trust-facts-p-me-relationships")?.textContent).toBe("2 established opponents (completed real-money games together)");
     expect(byTestId("trust-facts-p-other")).toBeNull(); // malformed (an exact day, review L4): dropped, never guessed
     expect(box?.textContent).not.toMatch(/score|rating:|trust level|\d+\s*\/\s*\d+/i);
     expect(ID_PATTERN.test(box?.innerHTML ?? "")).toBe(false);

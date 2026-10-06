@@ -9,9 +9,10 @@
 //
 //   Profile history       member since; completed real-money games; disputes (unresolved now / closed by the
 //                         resolver); inactivity exits (the escrow's own exit for a table that stopped).
-//   Prior relationships   distinct ESTABLISHED profiles played with -- not counted in this build: what makes a profile
-//                         "established" is the owner's definition, which does not exist yet (the server sends null;
-//                         nothing here invents a threshold).
+//   Prior relationships   distinct ESTABLISHED opponents: other profiles this one completed a real-money game with,
+//                         each counted once. P3-ACCT POLICY (owner ruling 2026-10-05): a profile is established once it
+//                         has completed at least one real-money game (cancelled, annulled and free games never count).
+//                         The server derives the number; a null (an older server) reads "not counted".
 //   Identity assurance    whether the account has PROVED control of a wallet, and since when (no address).
 //
 // None of these proves who controls an account, and the panel says so. No id, username, address, IP or device signal
@@ -45,7 +46,7 @@ export function TrustFactsList({ facts, testId = "trust-facts" }: { facts: Trust
       <dd style={trustStyles.fact}>Inactivity exits: {facts.inactivityExits === 0 ? "none" : facts.inactivityExits}</dd>
       <dt style={trustStyles.group}>Prior relationships</dt>
       <dd style={trustStyles.fact} data-testid={`${testId}-relationships`}>
-        {facts.establishedOpponents === null ? "Established opponents aren't counted in this build yet." : plural(facts.establishedOpponents, "established opponent")}
+        {facts.establishedOpponents === null ? "Established opponents aren't counted by this server." : `${plural(facts.establishedOpponents, "established opponent")} (completed real-money games together)`}
       </dd>
       <dt style={trustStyles.group}>Identity assurance</dt>
       <dd style={trustStyles.fact}>{facts.walletVerified ? `Wallet verified${facts.walletVerifiedSince === null ? "" : ` since ${facts.walletVerifiedSince}`}` : "No verified wallet"}</dd>

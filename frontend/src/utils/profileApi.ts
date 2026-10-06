@@ -21,7 +21,13 @@
 //
 // SENSITIVE ACTIONS (ESCROW-3A §10B): rotating the recovery key, signing out other devices, binding a NEW payout
 // wallet, forgetting the verified one -- need THIS session to have confirmed it's you within the last few minutes: with
-// the account's PASSWORD (P3-ACCT; a sign-in counts, for its first five minutes) or a legacy profile's recovery key.
+// the account's PASSWORD (P3-ACCT; a sign-in counts, for its first five minutes -- except for REPLACING a credential,
+// P3-ACCT POLICY: a new recovery key always asks) or a legacy profile's recovery key.
+//
+// P3-ACCT POLICY (owner rulings 2026-10-05): every new account gets ONE recovery key, answered once by the create (the
+// account dialog's one-time reveal). It is ACCOUNT RECOVERY: "Forgot password?" (`resetPassword`), "Change password"
+// (`changePassword`, which takes the current password OR the key) and its own replacement -- never a sign-in, never a
+// standing grant. There is no email anywhere.
 // The server answers 403 `reauth-required`; the surface asks, calls `reauthenticateWithPassword` / `reauthenticate`,
 // and retries the action. The grant lives on the server, bound to this one session: nothing here keeps the secret or
 // the grant (it is sent once in a POST body and dropped), and it is never a URL, a cookie or storage. Playing another
@@ -50,6 +56,11 @@ export type ProfileErrorCode =
   | "bad-password"
   /** P3-ACCT: this profile already has a username and password. */
   | "credentials-exist"
+  /** P3-ACCT POLICY: a profile made before accounts has no password to change or reset (it sets one instead). */
+  | "no-password"
+  /** P3-ACCT POLICY: that VALID recovery key belongs to an account with a password: it resets the password ("Forgot
+   *  password?"), it does not sign in. */
+  | "use-password-reset"
   /** P3-ACCT: the server is checking too many passwords at once; try again in a moment. */
   | "busy"
   | "already-profiled"
@@ -112,6 +123,8 @@ function failureOf(answer: SessionApiAnswer): ProfileFailure {
       if (code === "has-tables") return failure("has-tables");
       if (code === "username-taken") return failure("username-taken");
       if (code === "credentials-exist") return failure("credentials-exist");
+      if (code === "no-password") return failure("no-password");
+      if (code === "use-password-reset") return failure("use-password-reset");
       const profile = answer.body?.profile as { name?: unknown } | undefined;
       return failure("already-profiled", typeof profile?.name === "string" ? { name: profile.name } : {});
     }
@@ -249,20 +262,23 @@ export async function signOutOtherDevices(port: SessionPort = sessionPort()): Pr
    it), and dropped; nothing here keeps it, logs it, stores it or puts it in a URL. A wrong password, an unknown
    username and a malformed one are ONE answer (`invalid-credential`) -- the server never says which. */
 
-/** The password floor the server applies (NIST SP 800-63B: 8). Mirrored for the form's hint only -- an OWNER
- *  decision that the server holds (`server/src/identity/accountCredentials.ts`); the server has the last word. */
-export const PASSWORD_MIN_LENGTH = 8;
+/** The password floor the server applies -- the OWNER's ruling (2026-10-05): 12 characters, no composition rule.
+ *  Mirrored for the forms' hint only (`server/src/identity/accountCredentials.ts` has the last word). */
+export const PASSWORD_MIN_LENGTH = 12;
 /** The longest username the server takes, in characters (a technical bound, not a policy). */
 export const USERNAME_MAX = 64;
 
 export type AccountResult = { ok: true; name: string } | ProfileFailure;
+/** P3-ACCT POLICY: a created account and its ONE recovery key -- hand it to the one-time reveal and drop it. */
+export type CreateAccountResult = { ok: true; name: string; recoveryKey: string } | ProfileFailure;
 
 /** Characters (code points), as the server counts them. */
 const charCount = (text: string): number => Array.from(text).length;
 
 /** "Create account": a username, a password and the name other players see. Signs this browser in (a fresh session;
- *  the server sets the cookie) -- no recovery key is made or shown. */
-export async function createAccount(input: { username: string; password: string; name: string }, port: SessionPort = sessionPort()): Promise<AccountResult> {
+ *  the server sets the cookie). P3-ACCT POLICY: the answer carries the account's ONE recovery key -- its only
+ *  appearance; the caller shows it once (`RecoveryKeyReveal`) and keeps it nowhere. */
+export async function createAccount(input: { username: string; password: string; name: string }, port: SessionPort = sessionPort()): Promise<CreateAccountResult> {
   const name = input.name.trim();
   if (name === "" || name.length > PROFILE_NAME_MAX) return failure("bad-name");
   const username = input.username.trim();
@@ -271,7 +287,42 @@ export async function createAccount(input: { username: string; password: string;
   const { answer, ok } = await call(port, "account/create", { username, password: input.password, name }, [201], true);
   if (!ok || answer.kind !== "answered") return failureOf(answer);
   const profile = answer.body?.profile as { name?: unknown } | undefined;
-  return { ok: true, name: text(profile?.name) ?? name };
+  const recoveryKey = text(answer.body?.recoveryKey);
+  /* The account exists and this browser is signed in even if the key were missing: the player makes one from the
+     profile menu (with the password). Never a failure that would invite a second create. */
+  return { ok: true, name: text(profile?.name) ?? name, recoveryKey: recoveryKey ?? "" };
+}
+
+/** P3-ACCT POLICY "Change password" (signed in): the CURRENT password, or the recovery key, and the new password -- all
+ *  in the one request (a sign-in's standing grant never replaces a credential). Every other device is signed out; this
+ *  browser continues on a fresh session (the server sets it; the port re-bootstraps before this resolves). */
+export async function changePassword(
+  input: { current: { password: string } | { recoveryKey: string }; newPassword: string },
+  port: SessionPort = sessionPort(),
+): Promise<{ ok: true; signedOut: number } | ProfileFailure> {
+  if (charCount(input.newPassword) < PASSWORD_MIN_LENGTH) return failure("bad-password", { problem: "too-short" });
+  const current: Record<string, string> =
+    "password" in input.current ? { currentPassword: input.current.password } : { recoveryKey: cleanKey(input.current.recoveryKey) };
+  const supplied = "currentPassword" in current ? current.currentPassword : current.recoveryKey;
+  if (supplied === "" || supplied.length > 1024) return failure("invalid-credential");
+  const { answer, ok } = await call(port, "account/password", { ...current, newPassword: input.newPassword }, [200], true);
+  if (!ok || answer.kind !== "answered") return failureOf(answer);
+  const count = answer.body?.signedOut;
+  return { ok: true, signedOut: typeof count === "number" && Number.isInteger(count) && count >= 0 ? count : 0 };
+}
+
+/** P3-ACCT POLICY "Forgot password?" (signed out): the recovery key and a new password. No username and no email: the
+ *  key names the account. Signs this browser in on a fresh session; every earlier session of the account ends. A
+ *  wrong key is the one answer `invalid-credential`, whatever is wrong. */
+export async function resetPassword(input: { recoveryKey: string; newPassword: string }, port: SessionPort = sessionPort()): Promise<{ ok: true; name: string; signedOut: number } | ProfileFailure> {
+  const key = cleanKey(input.recoveryKey);
+  if (key === "" || key.length > 200) return failure("invalid-credential");
+  if (charCount(input.newPassword) < PASSWORD_MIN_LENGTH) return failure("bad-password", { problem: "too-short" });
+  const { answer, ok } = await call(port, "account/reset", { recoveryKey: key, newPassword: input.newPassword }, [200], true);
+  if (!ok || answer.kind !== "answered") return failureOf(answer);
+  const profile = answer.body?.profile as { name?: unknown } | undefined;
+  const count = answer.body?.signedOut;
+  return { ok: true, name: text(profile?.name) ?? port.account?.name ?? "", signedOut: typeof count === "number" && Number.isInteger(count) && count >= 0 ? count : 0 };
 }
 
 /** "Log in": the same principal, every seat and table with it, on a fresh session for this browser. */
@@ -289,7 +340,7 @@ export async function logIn(input: { username: string; password: string }, port:
 export interface AccountDetails {
   readonly name: string;
   readonly username: string | null;
-  /** A legacy profile that still has a recovery key. */
+  /** The profile holds a recovery key (P3-ACCT POLICY: every new account; a legacy profile keeps its own). */
   readonly recoveryKey: boolean;
   readonly wallet: { readonly address: string; readonly verifiedAt: number } | null;
   readonly memberSince: number;
@@ -348,12 +399,14 @@ export async function reauthenticateWithPassword(password: string, port: Session
 /** What a player reads for a failed profile action. `credential` is the recover/link screens, where a malformed
  *  entry is the same answer as a wrong one; `login` and `account` are the account dialog's two forms; `password` is
  *  "Confirm it's you" with the account's password. */
-export function profileErrorSentence(result: ProfileFailure, context: "create" | "credential" | "reauth" | "action" | "login" | "account" | "password" = "action"): string {
+export function profileErrorSentence(result: ProfileFailure, context: "create" | "credential" | "reauth" | "action" | "login" | "account" | "password" | "reset" | "change" = "action"): string {
   switch (result.error) {
     case "invalid-credential":
       if (context === "login") return "That username and password don't match an account. Check them and try again.";
       if (context === "password") return "That password doesn't match this account. Check it and try again.";
       if (context === "reauth") return "That recovery key doesn't work for this profile. Check it and try again.";
+      if (context === "reset") return "That recovery key doesn't work. Check it and try again — a key you replaced no longer works.";
+      if (context === "change") return "That current password or recovery key doesn't match this account. Check it and try again.";
       return "That key or code doesn't work. Check it and try again — a device-link code works once, for 10 minutes.";
     case "username-taken":
       return "That username is taken. Choose another.";
@@ -363,12 +416,16 @@ export function profileErrorSentence(result: ProfileFailure, context: "create" |
       return result.problem === "too-long" ? "That password is too long." : `A password is at least ${PASSWORD_MIN_LENGTH} characters.`;
     case "credentials-exist":
       return "This account already has a username and password.";
+    case "no-password":
+      return "This profile was made before accounts and has no password yet. Sign in with its recovery key (“Made a profile before accounts?”), then set a username and password from your name's menu.";
+    case "use-password-reset":
+      return "That recovery key belongs to an account with a password. Use “Forgot password?” to choose a new password with it.";
     case "busy":
       return "The game server is busy checking sign-ins. Try again in a moment.";
     case "bad-name":
       return `A profile name is 1 to ${PROFILE_NAME_MAX} characters.`;
     case "bad-request":
-      if (context === "credential" || context === "reauth" || context === "login" || context === "password") return profileErrorSentence(failure("invalid-credential"), context);
+      if (context === "credential" || context === "reauth" || context === "login" || context === "password" || context === "reset" || context === "change") return profileErrorSentence(failure("invalid-credential"), context);
       if (context === "create") return profileErrorSentence(failure("bad-name"));
       return "The game server did not accept that request. Try again.";
     case "rate-limited": {

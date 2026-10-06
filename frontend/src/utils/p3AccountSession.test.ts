@@ -46,8 +46,8 @@ const tick = async () => {
 };
 
 describe("P3-ACCT: the session under a sign-in", () => {
-  it("the routes that replace a session are exactly the sign-ins", () => {
-    expect(Array.from(SESSION_REPLACING_PATHS).sort()).toEqual(["account/create", "account/login", "profile/link", "profile/recover"]);
+  it("the routes that replace a session are exactly the sign-ins (P3-ACCT POLICY: and a password change or reset)", () => {
+    expect(Array.from(SESSION_REPLACING_PATHS).sort()).toEqual(["account/create", "account/login", "account/password", "account/reset", "profile/link", "profile/recover"]);
   });
 
   it("a bootstrap asked while a sign-in is on the wire waits for it, then asks -- with the new cookie in place", async () => {
@@ -186,13 +186,13 @@ describe("P3-ACCT: the account API -- one POST body per credential, a closed lis
     const port = httpSessionPort({ endpoint: ENDPOINT, fetch: http.fetch });
     const created = createAccount({ username: " Ann ", password: " spaces count ", name: "Ann" }, port);
     await flush();
-    await http.answer("/gs/api/account/create", 201, { ok: true, profile: { name: "Ann", otherSessions: 0 }, username: "Ann" });
+    await http.answer("/gs/api/account/create", 201, { ok: true, profile: { name: "Ann", otherSessions: 0 }, username: "Ann", recoveryKey: "rk_0123456789abcdefghjkmnpqr0.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" });
     await http.answer("/gs/api/session", 200, { ok: true, profile: { name: "Ann", otherSessions: 0 } });
-    expect(await created).toEqual({ ok: true, name: "Ann" });
+    expect(await created).toEqual({ ok: true, name: "Ann", recoveryKey: "rk_0123456789abcdefghjkmnpqr0.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" });
     /* The username is trimmed; the password never is (spaces are part of it). */
     expect(JSON.parse(http.calls[0].body)).toEqual({ username: "Ann", password: " spaces count ", name: "Ann" });
 
-    const taken = createAccount({ username: "Bea", password: "long enough", name: "Bea" }, port);
+    const taken = createAccount({ username: "Bea", password: "long enough now", name: "Bea" }, port);
     await flush();
     await http.answer("/gs/api/account/create", 409, { error: "username-taken" });
     await flush();

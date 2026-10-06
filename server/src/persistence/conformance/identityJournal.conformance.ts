@@ -6,10 +6,10 @@
 
 import assert from "node:assert/strict";
 
-import type { IdentityChange, IdentityPrecondition, IdentityStore } from "../../identity/store";
+import type { IdentityChange, IdentityPrecondition, IdentityStore, Profile } from "../../identity/store";
 import type { InspectableSigningJournal } from "../../escrow/signingJournal";
 import type { Gate } from "./faults";
-import { accountProfile, anotherSession, FIXTURE_WALLET, FIXTURE_WALLET_2, identitySet, type IdentitySet } from "./fixtures";
+import { accountProfile, anotherSession, FIXTURE_PASSWORD_HASH, FIXTURE_PASSWORD_HASH_2, FIXTURE_WALLET, FIXTURE_WALLET_2, identitySet, type IdentitySet } from "./fixtures";
 import { T0, hook, rejection, stalledAt, type CaseContext, type ConformanceCase, type SubjectBase } from "./harness";
 
 /* ================================================================== */
@@ -438,6 +438,32 @@ export const IDENTITY_CASES: readonly ConformanceCase<IdentitySubject>[] = [
       const reopened = await (await subject.open(ctx)).load();
       assert.deepEqual(reopened.profiles.find((profile) => profile.profile_id === b.profile.profile_id), replaced, "a restart loads the replaced wallet and the username");
       assert.deepEqual(reopened.profiles.find((profile) => profile.profile_id === a.profile.profile_id), accountA);
+    },
+  },
+  {
+    id: "ID-22",
+    title: "P3-ACCT POLICY: the password generation's compare-and-swap (profile-password) -- a replacement pinned to the password the profile holds lands; pinned to a superseded one, or to a profile with no password or none at all, it is refused DEFINITE and nothing is written",
+    needs: ["validates-shape"],
+    async run(subject, ctx) {
+      const store = await subject.open(ctx);
+      await store.load();
+      const a = identitySet(24);
+      const first = accountProfile(a, { login: "Ann.Fence" });
+      await store.commit({ ...profileCreation(a), expect: [...(profileCreation(a).expect ?? []), { kind: "login-unused", login_key: "ann.fence" }], profiles: [first] });
+      const next: Profile = { ...first, password_hash: FIXTURE_PASSWORD_HASH_2, password_set_at: T0 + 7 };
+      /* Pinned to a hash the profile does not hold: refused, nothing written. */
+      await refused(subject, ctx, store, { expect: [{ kind: "profile-password", profile_id: a.profile.profile_id, password_hash: FIXTURE_PASSWORD_HASH_2 }], profiles: [next] }, "profile-password (a superseded generation)");
+      /* Pinned to the one it holds: lands. */
+      await store.commit({ expect: [{ kind: "profile-password", profile_id: a.profile.profile_id, password_hash: FIXTURE_PASSWORD_HASH }], profiles: [next] });
+      /* The replaced generation can never be pinned again (a second, stale replacement): refused. */
+      await refused(subject, ctx, store, { expect: [{ kind: "profile-password", profile_id: a.profile.profile_id, password_hash: FIXTURE_PASSWORD_HASH }], profiles: [{ ...first, password_set_at: T0 + 8 }] }, "profile-password (the old generation, again)");
+      /* A legacy profile with no password, and no profile at all. */
+      const b = identitySet(25);
+      await store.commit(profileCreation(b));
+      await refused(subject, ctx, store, { expect: [{ kind: "profile-password", profile_id: b.profile.profile_id, password_hash: FIXTURE_PASSWORD_HASH }], profiles: [accountProfile(b, { login: "Bea.Fence" })] }, "profile-password (no password)");
+      await refused(subject, ctx, store, { expect: [{ kind: "profile-password", profile_id: identitySet(26).profile.profile_id, password_hash: FIXTURE_PASSWORD_HASH }], profiles: [next] }, "profile-password (no such profile)");
+      const reopened = await (await subject.open(ctx)).load();
+      assert.deepEqual(reopened.profiles.find((profile) => profile.profile_id === a.profile.profile_id), next, "the one replacement that held is what a restart loads");
     },
   },
   {

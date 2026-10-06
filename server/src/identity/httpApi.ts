@@ -39,10 +39,12 @@
 // re-authentication, the acknowledgement or ten minutes close it too. A stolen cookie alone never has the receipt.
 // P3-ACCT: THE ORDINARY ACCOUNT -- USERNAME + PASSWORD (`accountCredentials.ts`; the service's `createAccount`, `login`,
 // `establishCredentials`):
-//   POST /gs/api/account/create        {username, password, name}  this browser's account: 201 {profile, username} + a
-//                                                          FRESH session cookie (the temporary one is `replaced`). 400
+//   POST /gs/api/account/create        {username, password, name}  this browser's account: 201 {profile, username,
+//                                                          recoveryKey} + a FRESH session cookie (the temporary one is
+//                                                          `replaced`). P3-ACCT POLICY: `recoveryKey` is the account's ONE
+//                                                          recovery key, in its ONE appearance (the dialog's reveal). 400
 //                                                          bad-username / bad-password {problem} / bad-name; 409
-//                                                          username-taken / already-profiled. No recovery key, ever.
+//                                                          username-taken / already-profiled.
 //   POST /gs/api/account/login         {username, password}  200 {profile} + a fresh session cookie for the account's
 //                                                          principal (the temporary one is `replaced`). ONE answer for
 //                                                          every wrong or unknown username or password: 403
@@ -52,7 +54,24 @@
 //   POST /gs/api/account/me            {}             (profiled) the account's own details: its username, whether it
 //                                                          still has a recovery key, its verified wallet, when it was made.
 //   POST /gs/api/account/forget-wallet {}             (profiled, SENSITIVE) the profile keeps no verified wallet.
-//   POST /gs/api/profile/reauth        {password}     "Confirm it's you" with the password (or {recoveryKey}, as before).
+//   POST /gs/api/profile/reauth        {password}     "Confirm it's you" with the password (or {recoveryKey}: a profile
+//                                                          with no password only -- P3-ACCT POLICY).
+// P3-ACCT POLICY FOLLOW-UP (owner rulings 2026-10-05; `sessions.ts` changePassword / resetPassword):
+//   POST /gs/api/account/password      {currentPassword | recoveryKey, newPassword}  (profiled) "Change password": the
+//                                                          CURRENT password or the recovery key IN THE REQUEST (a sign-in's
+//                                                          standing grant never replaces a credential). 200 {signedOut} + a
+//                                                          FRESH cookie for this browser (same family); every other device
+//                                                          is signed out. 403 invalid-credential; 400 bad-password
+//                                                          {problem}; 409 no-password (a legacy profile: set one instead).
+//   POST /gs/api/account/reset         {recoveryKey, newPassword}  (signed out) "Forgot password?": 200 {profile,
+//                                                          signedOut} + a fresh cookie; every earlier session of the account
+//                                                          ends. No username: the key names the account. ONE answer for
+//                                                          every wrong, unknown, malformed or retired key (403
+//                                                          invalid-credential), budgeted as a recovery is. 409 no-password
+//                                                          (a valid key of a profile with no password).
+//   POST /gs/api/profile/recover       a VALID key of an account with a password: 409 use-password-reset (the key is
+//                                                          account recovery there, never a sign-in).
+// No email exists anywhere: there is no address to collect, verify or send to (owner ruling: out of scope).
 // Budgets: every sign-in attempt per SESSION; WRONG passwords per address and per username -- spent, every password
 // attempt there is refused 429 BEFORE any check (a password can be guessed; a recovery key cannot). A KDF the server is
 // already running too many of answers 503 `busy`. No password is ever logged, echoed, put in a URL or kept.
@@ -78,7 +97,7 @@ import type { GsMode } from "./mode";
 import { originAllowed } from "./origins";
 import { cleanLoginName, loginKeyOf } from "./accountCredentials";
 import { cleanProfileName } from "./profileName";
-import type { CredentialOutcome, IdentityService } from "./sessions";
+import type { CredentialOutcome, CurrentCredential, IdentityService } from "./sessions";
 
 export const SESSION_PATH = "/gs/api/session";
 export const REVOKE_PATH = "/gs/api/session/revoke";
@@ -97,6 +116,9 @@ export const ACCOUNT_LOGIN_PATH = "/gs/api/account/login";
 export const ACCOUNT_CREDENTIALS_PATH = "/gs/api/account/credentials";
 export const ACCOUNT_ME_PATH = "/gs/api/account/me";
 export const ACCOUNT_FORGET_WALLET_PATH = "/gs/api/account/forget-wallet";
+/* P3-ACCT POLICY */
+export const ACCOUNT_PASSWORD_PATH = "/gs/api/account/password";
+export const ACCOUNT_RESET_PATH = "/gs/api/account/reset";
 const API_PREFIX = "/gs/api/";
 const ROUTES = new Set([
   SESSION_PATH,
@@ -114,6 +136,8 @@ const ROUTES = new Set([
   ACCOUNT_CREDENTIALS_PATH,
   ACCOUNT_ME_PATH,
   ACCOUNT_FORGET_WALLET_PATH,
+  ACCOUNT_PASSWORD_PATH,
+  ACCOUNT_RESET_PATH,
 ]);
 
 export interface HttpApi {
@@ -411,7 +435,11 @@ async function serveProfile(
                 ? { username: { string: 256 }, password: { string: 1024 }, name: { string: 256 } }
                 : pathname === ACCOUNT_LOGIN_PATH || pathname === ACCOUNT_CREDENTIALS_PATH
                   ? { username: { string: 256 }, password: { string: 1024 } }
-                  : {};
+                  : pathname === ACCOUNT_PASSWORD_PATH
+                    ? /* exactly one of the two current credentials (checked below) */ { currentPassword: { string: 1024 }, recoveryKey: { string: 256 }, newPassword: { string: 1024 } }
+                    : pathname === ACCOUNT_RESET_PATH
+                      ? { recoveryKey: { string: 256 }, newPassword: { string: 1024 } }
+                      : {};
   const fields = parseBody(text, schema);
   if (fields === null) {
     json(response, 400, { error: "bad-request" });
@@ -514,8 +542,51 @@ async function serveProfile(
         /* About this browser's own principal only -- nothing about the credential or its profile is said. */
         json(response, 409, { error: "has-tables" });
         return;
+      case "password-account":
+        /* P3-ACCT POLICY: said only to the holder of this VALID key -- the key recovers the account ("Forgot
+           password?"); it never signs in. */
+        json(response, 409, { error: "use-password-reset" });
+        return;
       case "not-authenticated":
         json(response, 401, { error: "not-authenticated" });
+        return;
+      default:
+        json(response, 503, { error: "unavailable" }, retryAfter(5_000));
+        return;
+    }
+  }
+
+  /* P3-ACCT POLICY: "Forgot password?" -- budgeted exactly as a recovery is (the session's attempts; the address's
+     FAILURE budget, which never stands between the right key and its account). The new password's KDF runs only for a
+     key that matched (so wrong keys cost the server no KDF work). */
+  if (pathname === ACCOUNT_RESET_PATH) {
+    const sessionRedeemWait = api.limiter.credentialRedeemsPerSession.peek(sessionId);
+    if (sessionRedeemWait > 0) return tooMany(response, api, "credential-session", sessionRedeemWait);
+    api.limiter.credentialRedeemsPerSession.take(sessionId);
+    const addressExhausted = api.limiter.credentialRedeems.peek(ip);
+    const reset = await api.identity.resetPassword(read, { recoveryKey: fields.recoveryKey, newPassword: fields.newPassword }, now, { client: ip.key });
+    switch (reset.kind) {
+      case "ok":
+        json(response, 200, { ok: true, profile: { name: reset.name }, signedOut: reset.signedOut }, { "Set-Cookie": reset.setCookie });
+        return;
+      case "invalid":
+        api.limiter.credentialRedeems.take(ip);
+        if (addressExhausted > 0) return tooMany(response, api, "credential-ip", addressExhausted);
+        json(response, 403, { error: "invalid-credential" });
+        return;
+      case "bad-password":
+        json(response, 400, { error: "bad-password", problem: reset.problem });
+        return;
+      case "no-password":
+      case "already-profiled":
+      case "has-tables":
+        json(response, 409, { error: reset.kind });
+        return;
+      case "not-authenticated":
+        json(response, 401, { error: "not-authenticated" });
+        return;
+      case "busy":
+        json(response, 503, { error: "busy" }, retryAfter(2_000));
         return;
       default:
         json(response, 503, { error: "unavailable" }, retryAfter(5_000));
@@ -584,6 +655,62 @@ async function serveProfile(
         return;
       default:
         json(response, 401, { error: "not-authenticated" });
+        return;
+    }
+  }
+  if (pathname === ACCOUNT_PASSWORD_PATH) {
+    /* P3-ACCT POLICY "Change password": exactly one current credential, in the request. A wrong CURRENT PASSWORD is
+       charged exactly as "Confirm it's you" charges one (this device's family, and the account's own backstop; reserved
+       before the KDF, given back unless it was wrong); a recovery key cannot be guessed (the session's action budget). */
+    const byPassword = typeof fields.currentPassword === "string";
+    if (byPassword === (typeof fields.recoveryKey === "string") || typeof fields.newPassword !== "string") {
+      json(response, 400, { error: "bad-request" });
+      return;
+    }
+    const context = api.identity.securityContextOf(read, now);
+    const familyKey = context?.familyId ?? sessionId;
+    const accountKey = context?.principalId ?? null;
+    if (byPassword) {
+      const reauthWait = api.limiter.passwordReauthFailures.take(familyKey);
+      if (reauthWait > 0) return tooMany(response, api, "password-reauth", reauthWait);
+      if (accountKey !== null) {
+        const accountWait = api.limiter.passwordReauthFailuresPerAccount.take(accountKey);
+        if (accountWait > 0) {
+          api.limiter.passwordReauthFailures.give(familyKey);
+          return tooMany(response, api, "password-reauth-account", accountWait);
+        }
+      }
+    }
+    const current: CurrentCredential = byPassword ? { password: fields.currentPassword } : { recoveryKey: fields.recoveryKey };
+    const changed = await api.identity.changePassword(read, { current, newPassword: fields.newPassword }, now, { client: ip.key });
+    if (byPassword && changed.kind !== "invalid") {
+      api.limiter.passwordReauthFailures.give(familyKey);
+      if (accountKey !== null) api.limiter.passwordReauthFailuresPerAccount.give(accountKey);
+    }
+    switch (changed.kind) {
+      case "ok":
+        json(response, 200, { ok: true, signedOut: changed.signedOut }, { "Set-Cookie": changed.setCookie });
+        return;
+      case "invalid":
+        json(response, 403, { error: "invalid-credential" });
+        return;
+      case "bad-password":
+        json(response, 400, { error: "bad-password", problem: changed.problem });
+        return;
+      case "no-password":
+        json(response, 409, { error: "no-password" });
+        return;
+      case "profile-required":
+        json(response, 403, { error: "profile-required" });
+        return;
+      case "not-authenticated":
+        json(response, 401, { error: "not-authenticated" });
+        return;
+      case "busy":
+        json(response, 503, { error: "busy" }, retryAfter(2_000));
+        return;
+      default:
+        json(response, 503, { error: "unavailable" }, retryAfter(5_000));
         return;
     }
   }
@@ -714,7 +841,8 @@ async function serveAccount(
     }
     switch (created.kind) {
       case "ok":
-        json(response, 201, { ok: true, profile: { name: created.name, otherSessions: 0 }, username: created.username }, { "Set-Cookie": created.setCookie });
+        /* P3-ACCT POLICY: the recovery key's ONE appearance (`no-store` is on every response here). */
+        json(response, 201, { ok: true, profile: { name: created.name, otherSessions: 0 }, username: created.username, recoveryKey: created.recoveryKey }, { "Set-Cookie": created.setCookie });
         return;
       case "already-profiled":
         json(response, 409, { error: "already-profiled", profile: { name: created.name } });

@@ -14,7 +14,13 @@
 //                                   that week, and watching it change says nothing finer than the week (review L4,
 //                                   re-review N-4: no exact date or time is published). 0: under a week old.
 //   completedMoneyGames             real-money tables this profile sat at whose GAME COMPLETED (the GameRecord's
-//                                   `completed_at`; the record index is loaded from the durable records at every start).
+//                                   `completed_at`; the record index is loaded from the durable records at every start)
+//                                   and whose escrow was neither CANCELLED nor ANNULLED (the financial record: its phase
+//                                   `cancelled`, or the chain's terminal state ANNULLED / CANCELLED -- an annul can close
+//                                   the escrow while play goes on to the end). P3-ACCT POLICY: with a money layer, a table
+//                                   whose financial record cannot be read just now is NOT counted (fail closed: a fact
+//                                   that cannot be checked never adds standing). Counted over the profile's newest
+//                                   `MAX_MONEY_TABLES_READ` real-money tables (the bound on one answer's reads).
 //   unresolvedDisputes              of this profile's real-money tables, those whose money is in DISPUTE now (the
 //                                   financial record's phase `disputed`: the resolver has not ruled). A dispute is a
 //                                   table's -- the record does not say which seat raised it, and none is blamed here.
@@ -23,10 +29,15 @@
 //                                   `settleable_timeout_*`) -- the chain's own outcome, as the financial record keeps it.
 //   walletVerified / since          the profile has a persisted wallet it PROVED it controls (identity; no address, no
 //                                   proof material is published here).
-//   establishedOpponents            ALWAYS null in this build: "distinct ESTABLISHED profiles played with" needs the
-//                                   owner's definition of "established" (none exists in the repository). The data path is
-//                                   here (`opponentsOf` + `ESTABLISHED_PROFILE`): once the owner defines the predicate,
-//                                   this one fact is filled without touching anything else. No threshold is invented.
+//   establishedOpponents            P3-ACCT POLICY (owner ruling 2026-10-05): the number of DISTINCT other profiles this
+//                                   one has completed a counted real-money game with (exactly the games
+//                                   `completedMoneyGames` counts), each counted ONCE however many games they played
+//                                   together, that are ESTABLISHED: a profile is established once it has completed at
+//                                   least one real-money game (`isEstablished`). Free, cancelled and annulled games never
+//                                   count; no account age is required. A counted game establishes BOTH of its players, so
+//                                   once it is complete its opponent counts (provided that profile still exists and is
+//                                   active). Two profiles are never inferred to be one person from any address or device
+//                                   signal: shared-network facts stay security evidence only, never read here.
 //
 // What is deliberately NOT here: any ranking, score or sanction; any device, address, session or wallet-relationship
 // signal (those may exist as security evidence elsewhere; they are not proof of anything and are not published); any
@@ -51,13 +62,15 @@ export interface TrustFacts {
   readonly walletVerified: boolean;
   /** The month the wallet was proved, `YYYY-MM` (UTC), or null. */
   readonly walletVerifiedSince: string | null;
-  /** Pending the owner's definition of an "established" profile: always null in this build (see the header). */
+  /** Distinct established profiles this one has completed a counted real-money game with (see the header). A number
+   *  (the type keeps `null` for a client of an older build's answer). */
   readonly establishedOpponents: number | null;
 }
 
-/** What an "established" profile is -- THE OWNER'S DECISION (none exists in the repository). `null` until it is made;
- *  while null, `establishedOpponents` is null. A predicate over another profile's own facts. */
-export const ESTABLISHED_PROFILE: ((facts: TrustFacts) => boolean) | null = null;
+/** THE OWNER'S DEFINITION (2026-10-05): a profile is ESTABLISHED once it has COMPLETED at least one real-money game
+ *  (cancelled and annulled games, and free ones, never count; no account-age requirement). */
+export const ESTABLISHED_MIN_COMPLETED_MONEY_GAMES = 1;
+export const isEstablished = (facts: Pick<TrustFacts, "completedMoneyGames">): boolean => facts.completedMoneyGames >= ESTABLISHED_MIN_COMPLETED_MONEY_GAMES;
 
 export interface TrustFactsDeps {
   /** The profile behind a principal: its creation time and its proven wallet's verification time (identity). */
@@ -87,19 +100,51 @@ export const weekStartOf = (ms: number): number => {
 /** The age in whole weeks (as days) from the start of the creation week: the same steps for every account of a week. */
 export const coarseAgeDays = (createdAt: number, now: number): number => Math.max(0, Math.floor((now - weekStartOf(createdAt)) / WEEK)) * 7;
 const isDisputeRoute = (route: string | undefined): boolean => typeof route === "string" && route.startsWith("resolver_");
+/** P3-ACCT POLICY: a table whose escrow was cancelled or annulled is no completed real-money game. */
+const cancelledOrAnnulled = (fin: FinancialGameRecord): boolean => fin.phase === "cancelled" || fin.chain_outcome?.state === "ANNULLED" || fin.chain_outcome?.state === "CANCELLED";
 const isInactivityRoute = (route: string | undefined): boolean => typeof route === "string" && (route.startsWith("liveness_") || route.startsWith("settleable_timeout_"));
 
 export function createTrustFacts(deps: TrustFactsDeps) {
   const cache = new Map<string, { readonly at: number; readonly facts: TrustFacts | null }>();
   const reuseMs = deps.reuseMs ?? 60_000;
 
-  /** The other principals this one completed a real-money game with (the data path of `establishedOpponents`). */
-  function opponentsOf(principalId: string): Set<string> {
-    const out = new Set<string>();
-    for (const record of deps.tablesOf(principalId)) {
-      if (record.money === null || record.completed_at === null) continue;
-      for (const seat of record.seats) if (seat.principal_id !== principalId) out.add(seat.principal_id);
+  /** The real-money tables of this principal that COUNT as completed (see the header), newest first, with the
+   *  dispute / inactivity facts read on the way. */
+  async function moneyFacts(principalId: string): Promise<{ readonly counted: readonly GameRecord[]; readonly unresolvedDisputes: number; readonly disputedGames: number; readonly inactivityExits: number }> {
+    const money = deps
+      .tablesOf(principalId)
+      .filter((record) => record.money !== null)
+      .sort((a, b) => b.created_at - a.created_at)
+      .slice(0, MAX_MONEY_TABLES_READ);
+    const counted: GameRecord[] = [];
+    let unresolvedDisputes = 0;
+    let disputedGames = 0;
+    let inactivityExits = 0;
+    for (const record of money) {
+      let fin: FinancialGameRecord | null = null;
+      if (deps.financial !== undefined) {
+        try {
+          fin = await deps.financial(record.game_id);
+        } catch {
+          fin = null; // a record that cannot be read just now counts as nothing (never as a dispute, never as a game)
+        }
+        if (fin !== null) {
+          if (fin.phase === "disputed") unresolvedDisputes += 1;
+          if (isDisputeRoute(fin.chain_outcome?.route)) disputedGames += 1;
+          if (isInactivityRoute(fin.chain_outcome?.route)) inactivityExits += 1;
+        }
+      }
+      if (record.completed_at === null || record.cancelled_at !== null) continue;
+      if (deps.financial !== undefined && (fin === null || cancelledOrAnnulled(fin))) continue;
+      counted.push(record);
     }
+    return { counted, unresolvedDisputes, disputedGames, inactivityExits };
+  }
+
+  /** The other principals this one completed a COUNTED real-money game with -- each once. */
+  async function opponentsOf(principalId: string): Promise<Set<string>> {
+    const out = new Set<string>();
+    for (const record of (await moneyFacts(principalId)).counted) for (const seat of record.seats) if (seat.principal_id !== principalId) out.add(seat.principal_id);
     return out;
   }
 
@@ -107,47 +152,25 @@ export function createTrustFacts(deps: TrustFactsDeps) {
     const profile = deps.profileFacts(principalId);
     if (profile === null) return null;
     const now = deps.now();
-    const money = deps
-      .tablesOf(principalId)
-      .filter((record) => record.money !== null)
-      .sort((a, b) => b.created_at - a.created_at);
-    let unresolvedDisputes = 0;
-    let disputedGames = 0;
-    let inactivityExits = 0;
-    if (deps.financial !== undefined) {
-      for (const record of money.slice(0, MAX_MONEY_TABLES_READ)) {
-        let fin: FinancialGameRecord | null;
-        try {
-          fin = await deps.financial(record.game_id);
-        } catch {
-          fin = null; // a record that cannot be read just now counts as nothing (never as a dispute)
-        }
-        if (fin === null) continue;
-        if (fin.phase === "disputed") unresolvedDisputes += 1;
-        if (isDisputeRoute(fin.chain_outcome?.route)) disputedGames += 1;
-        if (isInactivityRoute(fin.chain_outcome?.route)) inactivityExits += 1;
-      }
-    }
-    const base: TrustFacts = {
+    const facts = await moneyFacts(principalId);
+    /* Every opponent of a counted game completed that SAME game, so by the owner's definition it is established by it
+       (`isEstablished` holds for any profile with one counted game) -- no further read is needed, and each counts once.
+       It counts while its profile exists and is active (`profileFacts`): a disabled or unknown one does not. */
+    const opponents = new Set<string>();
+    for (const record of facts.counted) for (const seat of record.seats) if (seat.principal_id !== principalId) opponents.add(seat.principal_id);
+    let establishedOpponents = 0;
+    for (const other of opponents) if (deps.profileFacts(other) !== null) establishedOpponents += 1;
+    return {
       memberSince: monthOf(profile.createdAt),
       accountAgeDays: coarseAgeDays(profile.createdAt, now),
-      completedMoneyGames: money.filter((record) => record.completed_at !== null).length,
-      unresolvedDisputes,
-      disputedGames,
-      inactivityExits,
+      completedMoneyGames: facts.counted.length,
+      unresolvedDisputes: facts.unresolvedDisputes,
+      disputedGames: facts.disputedGames,
+      inactivityExits: facts.inactivityExits,
       walletVerified: profile.walletVerifiedAt !== null,
       walletVerifiedSince: profile.walletVerifiedAt === null ? null : monthOf(profile.walletVerifiedAt),
-      establishedOpponents: null,
+      establishedOpponents,
     };
-    const predicate = ESTABLISHED_PROFILE as ((facts: TrustFacts) => boolean) | null;
-    if (predicate === null) return base;
-    /* Reached only once the owner defines "established" (the opponents' own facts, never their ids, decide it). */
-    let established = 0;
-    for (const other of opponentsOf(principalId)) {
-      const theirs = await factsOf(other, false);
-      if (theirs !== null && predicate(theirs)) established += 1;
-    }
-    return { ...base, establishedOpponents: established };
   }
 
   /** One profile's facts (reused for `reuseMs`); null for a principal with no profile. */

@@ -56,7 +56,7 @@ import {
 } from "../../identity/store";
 import { FaultScript, gate } from "./faults";
 import { installFaults } from "./dynamoLocal";
-import { anotherSession, FIXTURE_PASSWORD_HASH, FIXTURE_WALLET, FIXTURE_WALLET_2, identitySet, seededRandom } from "./fixtures";
+import { anotherSession, FIXTURE_PASSWORD_HASH, FIXTURE_PASSWORD_HASH_2, FIXTURE_WALLET, FIXTURE_WALLET_2, identitySet, seededRandom } from "./fixtures";
 import { dynamoSuite, IMMEDIATE, QUIET, roleItem, tableItems } from "./identityDynamoSubjects";
 import { T0, rejection } from "./harness";
 
@@ -180,7 +180,7 @@ function changeGenerator(pool: Pools, seed: number) {
 
   const randomPrecondition = (s: FullIdentitySnapshot): IdentityPrecondition => {
     const known = <T>(items: readonly T[], fallback: T) => (items.length > 0 && chance(0.6) ? pick(items) : fallback);
-    switch (Math.floor(random() * 14)) {
+    switch (Math.floor(random() * 15)) {
       case 0:
         return { kind: "principal-absent", principal_id: known(s.principals.map((p) => p.principal_id), pick(pool.principals)) };
       case 1:
@@ -216,6 +216,12 @@ function changeGenerator(pool: Pools, seed: number) {
         const held = target !== null && target.schema === 2 ? (target.wallet_address ?? null) : null;
         return { kind: "profile-wallet", profile_id: target?.profile_id ?? pick(pool.profiles), wallet_address: chance(0.6) ? held : pick([null, FIXTURE_WALLET, FIXTURE_WALLET_2]) };
       }
+      case 14: {
+        /* P3-ACCT POLICY: the password generation's compare-and-swap (the hash held, another one, or no password). */
+        const target = known(s.profiles, null);
+        const held = target !== null && target.schema === 2 ? (target.password_hash ?? null) : null;
+        return { kind: "profile-password", profile_id: target?.profile_id ?? pick(pool.profiles), password_hash: held !== null && chance(0.6) ? held : pick([FIXTURE_PASSWORD_HASH, FIXTURE_PASSWORD_HASH_2]) };
+      }
       default:
         return { kind: "family-open", family_id: known(s.families.map((f) => f.family_id), pick(pool.families)) };
     }
@@ -223,7 +229,7 @@ function changeGenerator(pool: Pools, seed: number) {
 
   return (s: FullIdentitySnapshot): IdentityChange => {
     const principals = s.principals;
-    const choice = Math.floor(random() * 17);
+    const choice = Math.floor(random() * 18);
     let change: IdentityChange;
     if (choice === 0 || principals.length === 0) {
       /* sometimes a principal never seen before (so principal-absent keeps holding), sometimes one of the pool */
@@ -326,6 +332,14 @@ function changeGenerator(pool: Pools, seed: number) {
         const next = pick([null, FIXTURE_WALLET, FIXTURE_WALLET_2]);
         change = { profiles: [withWallet(target, next)], expect: chance(0.8) ? [{ kind: "profile-wallet", profile_id: target.profile_id, wallet_address: chance(0.8) ? held : pick([null, FIXTURE_WALLET]) }] : [] };
       }
+    } else if (choice === 17 && s.profiles.length > 0) {
+      /* P3-ACCT POLICY: a password replaced (change / reset) under its compare-and-swap -- sometimes pinned wrong */
+      const target = pick(s.profiles);
+      const held = target.schema === 2 ? (target.password_hash ?? null) : null;
+      const next = held === FIXTURE_PASSWORD_HASH ? FIXTURE_PASSWORD_HASH_2 : FIXTURE_PASSWORD_HASH;
+      const replaced = held === null ? withLogin(target, pick(LOGINS)) : { ...target, password_hash: next, password_set_at: tick() };
+      const pinned = held !== null && chance(0.8) ? held : pick([FIXTURE_PASSWORD_HASH, FIXTURE_PASSWORD_HASH_2]);
+      change = { profiles: [replaced], expect: chance(0.85) ? [{ kind: "profile-password", profile_id: target.profile_id, password_hash: pinned }] : [] };
     } else if (choice === 10 && principals.length > 0) {
       /* a principal rewritten: sometimes leaving its profile, or bound to another */
       const target = pick(principals);
@@ -390,7 +404,7 @@ describe("L5-4 A: conditions alone -- DynamoDB's verdict on a planned change is 
       const loaded = await openStore(client, table).load();
       assert.deepEqual(loaded, applyChange(state, {}), `step ${step}: the table holds exactly the model's identity set`);
     }
-    const kinds = ["principal-absent", "principal-unprofiled", "profile-absent", "selector-unused", "profile-selector", "session-absent", "session-open", "link-absent", "link-unconsumed", "family-absent", "family-open", "login-unused", "profile-no-login", "profile-wallet"];
+    const kinds = ["principal-absent", "principal-unprofiled", "profile-absent", "selector-unused", "profile-selector", "session-absent", "session-open", "link-absent", "link-unconsumed", "family-absent", "family-open", "login-unused", "profile-no-login", "profile-wallet", "profile-password"];
     for (const kind of kinds) {
       assert.ok((holds.get(kind) ?? 0) >= 3, `${kind} held in an accepted change (${holds.get(kind) ?? 0})`);
       assert.ok((soleRefusals.get(kind) ?? 0) >= 1, `${kind} alone made the TABLE refuse (${soleRefusals.get(kind) ?? 0})`);

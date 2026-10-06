@@ -65,9 +65,10 @@ export interface Profile {
   display_name: string;
   created_at: number;
   status: "active" | "disabled";
-  /** The recovery key's selector (`rk_…`), a lookup key. P3-ACCT: also the profile's CREDENTIAL EPOCH (every sensitive
-   *  grant and wallet ticket is bound to it); a username/password account has one too, with a SEALED digest
-   *  (`accountCredentials.sealedRecoveryDigest`): no recovery key exists for it. */
+  /** The recovery key's selector (`rk_…`), a lookup key. P3-ACCT: also the profile's CREDENTIAL EPOCH for financial
+   *  credentials (every sensitive grant and wallet ticket is bound to it). P3-ACCT POLICY: every new username/password
+   *  account has a real key (an account-recovery credential); only 343fac2's accounts carry a SEALED digest
+   *  (`accountCredentials.sealedRecoveryDigest`: no key matches it). */
   recovery_selector: string;
   /** Hex SHA-256 of the recovery key's 32-byte secret. Never the secret. */
   recovery_hash: string;
@@ -249,7 +250,12 @@ export type IdentityPrecondition =
   | { readonly kind: "profile-no-login"; readonly profile_id: string }
   /** P3-ACCT: COMPARE-AND-SWAP of the profile's persisted wallet -- the profile is stored and holds exactly this wallet
    *  (`null`: none). */
-  | { readonly kind: "profile-wallet"; readonly profile_id: string; readonly wallet_address: string | null };
+  | { readonly kind: "profile-wallet"; readonly profile_id: string; readonly wallet_address: string | null }
+  /** P3-ACCT POLICY: COMPARE-AND-SWAP of the PASSWORD GENERATION -- the profile is stored and its username login holds
+   *  exactly this password hash. Every password hash is made with a fresh random salt, so the hash IS the generation:
+   *  a change decided against a superseded password (a second writer, a racing change or reset) is refused by every
+   *  store, in the same step as the write. */
+  | { readonly kind: "profile-password"; readonly profile_id: string; readonly password_hash: string };
 
 export interface IdentityChange {
   /** LIVE-3C: checked by the store in the same step that writes the change; any failure writes nothing. */
@@ -700,6 +706,10 @@ export function preconditionFailure(lookups: IdentityLookups, expect: readonly I
           const profile = lookups.profile(condition.profile_id);
           return profile === undefined || (walletOf(profile)?.address ?? null) !== condition.wallet_address;
         }
+        case "profile-password": {
+          const profile = lookups.profile(condition.profile_id);
+          return profile === undefined || loginOf(profile)?.hash !== condition.password_hash;
+        }
         default:
           return true; // an unknown condition never holds
       }
@@ -744,6 +754,10 @@ const PRECONDITION_SHAPES: Readonly<Record<IdentityPrecondition["kind"], readonl
   "profile-wallet": [
     ["profile_id", PROFILE_ID_PATTERN],
     ["wallet_address", walletOrNull],
+  ],
+  "profile-password": [
+    ["profile_id", PROFILE_ID_PATTERN],
+    ["password_hash", isPasswordHash],
   ],
 };
 

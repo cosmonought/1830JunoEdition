@@ -14,12 +14,12 @@
 mod common;
 
 use common::*;
-use cosmwasm_std::{coins, HexBinary, Uint128};
+use cosmwasm_std::{coins, HexBinary, Uint128, Uint64};
 use cw_multi_test::Executor;
 use eighteen_cosmos_escrow::crypto;
 use eighteen_cosmos_escrow::msg::{
-    ExecuteMsg, QueryMsg, RemedyAttestationV1, RemedyKeyResponse, RemedyKeysResponse,
-    ResolveOutcome, SeatSignature,
+    ExecuteMsg, QueryMsg, RemedyApproval, RemedyAttestationV1, RemedyKeyResponse,
+    RemedyKeysResponse, ResolveOutcome, SeatSignature,
 };
 use eighteen_cosmos_escrow::remedy::RemedyAttestation;
 use eighteen_cosmos_escrow::state::{
@@ -65,7 +65,7 @@ fn msg_with(
     s: &Suite,
     a: &RemedyAttestation,
     key: &Key,
-    approvals: Vec<SeatSignature>,
+    approvals: Vec<RemedyApproval>,
 ) -> ExecuteMsg {
     s.remedy_msg_by(a, key, approvals)
 }
@@ -158,7 +158,19 @@ fn no_signature_made_for_another_purpose_verifies() {
         crypto::settle_digest(&encoded),
         crypto::consent_digest(&domain, 1, &Suite::remedy_digest(&a)),
         crypto::annul_digest(&domain, 0),
-        crypto::remedy_approve_digest(&domain, id, 2, 2, 1, 1, 0, &a.log_hash, a.overdue_at, 0),
+        crypto::remedy_approve_digest(
+            &domain,
+            id,
+            2,
+            2,
+            1,
+            1,
+            0,
+            &a.log_hash,
+            a.overdue_at,
+            u64::MAX,
+            0,
+        ),
         sha256(&[&encoded]),
         sha256(&[b"18JUNO/REMEDY/v2", &encoded]),
     ];
@@ -176,7 +188,14 @@ fn no_signature_made_for_another_purpose_verifies() {
         assert_eq!(refused(&mut s, &msg), ContractError::InvalidSignature {});
     }
     // A seat's remedy approval is not an annul (or consent) signature.
-    let as_annul: Vec<SeatSignature> = s.approvals(&a, &[0, 1, 2]);
+    let as_annul: Vec<SeatSignature> = s
+        .approvals(&a, &[0, 1, 2])
+        .into_iter()
+        .map(|x| SeatSignature {
+            seat_index: x.seat_index,
+            signature: x.signature,
+        })
+        .collect();
     let who = s.outsider.clone();
     assert_eq!(
         s.exec(
@@ -191,7 +210,16 @@ fn no_signature_made_for_another_purpose_verifies() {
         ContractError::InvalidConsent { seat_index: 0 }
     );
     // And an annul signature is not an approval.
-    let annul = s.annul_sigs(id, &[0, 1], 0);
+    let until = Uint64::new(s.now().seconds() + DAY);
+    let annul = s
+        .annul_sigs(id, &[0, 1], 0)
+        .into_iter()
+        .map(|x| RemedyApproval {
+            seat_index: x.seat_index,
+            approve_until: until,
+            signature: x.signature,
+        })
+        .collect();
     let msg = msg_with(&s, &a, &s.remedy.clone(), annul);
     assert_eq!(
         refused(&mut s, &msg),
@@ -758,7 +786,8 @@ fn attestation_time_bounds_the_bearer_life() {
     }
     // The first attestation is not relayed in time (an admin pause, a relayer
     // outage): it expired and never revives ...
-    let approvals = s.approvals(&a, &[0, 1]);
+    let horizon = s.now().seconds() + 2 * DAY;
+    let approvals = s.approvals_until(&a, &[0, 1], horizon);
     let first = msg_with(&s, &a, &s.remedy.clone(), approvals.clone());
     s.advance(DAY);
     assert_eq!(
@@ -768,14 +797,20 @@ fn attestation_time_bounds_the_bearer_life() {
         }
     );
     // ... but the same final decision, attested again now, lands -- with the
-    // very same N−1 approvals (they bind the overdue instance, not the
-    // attestation's own time).
+    // very same N−1 approvals (they bind the overdue instance and their own
+    // horizon, not the attestation's own time).
     let mut again = a.clone();
     again.attested_at = s.now().seconds();
     again.expires_at = again.attested_at + 600;
     let m = msg_with(&s, &again, &s.remedy.clone(), approvals);
     s.submit(&m).unwrap();
     assert_eq!(s.state(id), GameState::Settled);
+    // The record names the attestation that took effect.
+    let r = s.game(id).game.remedy.unwrap();
+    assert_eq!(
+        (r.final_at.u64(), r.attested_at.u64(), r.expires_at.u64()),
+        (again.final_at, again.attested_at, again.expires_at)
+    );
 }
 
 /// N−1 foreclosure: every non-defaulting seat must approve; a missing, a
@@ -825,8 +860,9 @@ fn live_n_minus_1_foreclosure_needs_every_other_seat_and_never_the_defaulter() {
     }
     // Out of range.
     let mut extra = s.approvals(&a, &[0, 2, 3]);
-    extra.push(SeatSignature {
+    extra.push(RemedyApproval {
         seat_index: 4,
+        approve_until: Uint64::new(u64::MAX),
         signature: Key::seat(4).sign(&[1; 32]),
     });
     let m = msg_with(&s, &a, &remedy, extra);
@@ -836,6 +872,7 @@ fn live_n_minus_1_foreclosure_needs_every_other_seat_and_never_the_defaulter() {
     );
     // An approval by the wrong key for its seat.
     let mut wrong = s.approvals(&a, &[0, 2, 3]);
+    let until = wrong[1].approve_until.u64();
     wrong[1].signature = Key::seat(0).sign(&crypto::remedy_approve_digest(
         &a.domain,
         id,
@@ -846,6 +883,7 @@ fn live_n_minus_1_foreclosure_needs_every_other_seat_and_never_the_defaulter() {
         a.log_len,
         &a.log_hash,
         a.overdue_at,
+        until,
         2,
     ));
     let m = msg_with(&s, &a, &remedy, wrong);
@@ -856,6 +894,7 @@ fn live_n_minus_1_foreclosure_needs_every_other_seat_and_never_the_defaulter() {
     // An approval signed for another seat index (seat 0's key, naming seat 2).
     let mut renamed = s.approvals(&a, &[0, 2, 3]);
     renamed[0].seat_index = 0;
+    let until = renamed[0].approve_until.u64();
     renamed[0].signature = Key::seat(0).sign(&crypto::remedy_approve_digest(
         &a.domain,
         id,
@@ -866,6 +905,7 @@ fn live_n_minus_1_foreclosure_needs_every_other_seat_and_never_the_defaulter() {
         a.log_len,
         &a.log_hash,
         a.overdue_at,
+        until,
         2,
     ));
     let m = msg_with(&s, &a, &remedy, renamed);
@@ -892,8 +932,10 @@ fn live_n_minus_1_foreclosure_needs_every_other_seat_and_never_the_defaulter() {
         ContractError::InvalidConsent { seat_index: 3 }
     );
     let mut approvals = s.approvals(&a, &[0, 2]);
-    approvals.push(SeatSignature {
+    let until = s.now().seconds() + DAY;
+    approvals.push(RemedyApproval {
         seat_index: 3,
+        approve_until: Uint64::new(until),
         signature: new_key.sign(&crypto::remedy_approve_digest(
             &a.domain,
             id,
@@ -904,6 +946,7 @@ fn live_n_minus_1_foreclosure_needs_every_other_seat_and_never_the_defaulter() {
             a.log_len,
             &a.log_hash,
             a.overdue_at,
+            until,
             3,
         )),
     });
@@ -1156,58 +1199,6 @@ fn strike3_challenge_resolver_upholds_or_annuls_and_never_replaces() {
     s.assert_custody();
 }
 
-/// A resolver holding a seat in a 2.1.0 game never adjudicates its dispute:
-/// neither the defaulter annulling its own third strike nor a creditor
-/// upholding a false one. The dispute then ends by the resolver-timeout exit
-/// (or the players' unanimous annulment).
-#[test]
-fn a_seated_resolver_never_adjudicates_a_strike3_dispute() {
-    for resolver_seat in [2usize, 0] {
-        let mut s = Suite::new();
-        let admin = s.admin.clone();
-        let seat = s.players[resolver_seat].clone();
-        s.exec(
-            &admin,
-            &ExecuteMsg::SetResolver {
-                resolver: seat.to_string(),
-            },
-            &[],
-        )
-        .unwrap();
-        let id = live(&mut s, 3);
-        assert_eq!(s.game(id).game.resolver, Some(seat.clone()));
-        let a = s.attestation(id, RemedyKind::LiveStrike3Foreclose, 2, 0);
-        let m = s.remedy_msg(&a);
-        s.submit(&m).unwrap();
-        s.challenge(id, 2);
-        for outcome in [ResolveOutcome::Uphold {}, ResolveOutcome::Annul {}] {
-            let before = s.game(id).game;
-            let err = s
-                .exec(
-                    &seat,
-                    &ExecuteMsg::Resolve {
-                        chain_game_id: id,
-                        outcome,
-                    },
-                    &[],
-                )
-                .unwrap_err();
-            assert_eq!(err, ContractError::ResolverIsSeated {});
-            assert_eq!(s.game(id).game, before);
-        }
-        // The resolver-timeout exit still ends it (the stored foreclosure
-        // pays; the challenger's bond goes back).
-        let timeout = s.game(id).game.terms.resolver_timeout_secs;
-        s.advance(timeout);
-        let who = s.players[1].clone();
-        s.exec(&who, &Suite::liveness_msg(id), &[]).unwrap();
-        let o = s.game(id).game.outcome.unwrap();
-        assert_eq!(o.route, Route::ResolverTimeoutPayout);
-        assert_eq!(o.amounts[2], Uint128::zero());
-        s.assert_custody();
-    }
-}
-
 /// Approvals bind ONE overdue instance -- its exact log position and its
 /// overdue moment as well as its strike and epoch: approvals collected for an
 /// overdue that was then cured never count for a later attestation, even one
@@ -1218,7 +1209,10 @@ fn approvals_bind_the_overdue_instance_not_just_its_epoch() {
     let mut s = Suite::new();
     let id = live(&mut s, 3);
     let first = s.attestation(id, RemedyKind::LiveForeclose, 2, 10);
-    let stale = s.approvals(&first, &[0, 1]);
+    // The seats' usual one-day horizon, and a week's.
+    let short = s.approvals(&first, &[0, 1]);
+    let short_until = short[0].approve_until.u64();
+    let stale = s.approvals_until(&first, &[0, 1], s.now().seconds() + 7 * DAY);
     // The seat cured; play went on to log 20; three days later a strike-1,
     // epoch-1 foreclosure at log 30 is attested with the old approvals.
     s.post_checkpoint(id, 20, &[1, 1, 1]);
@@ -1228,6 +1222,16 @@ fn approvals_bind_the_overdue_instance_not_just_its_epoch() {
         (later.strike, later.overdue_epoch),
         (first.strike, first.overdue_epoch)
     );
+    // With the one-day horizon the old set is simply dead ...
+    let m = msg_with(&s, &later, &s.remedy.clone(), short);
+    assert_eq!(
+        refused(&mut s, &m),
+        ContractError::ApprovalExpired {
+            seat_index: 0,
+            approve_until: short_until
+        }
+    );
+    // ... and with a week's it still never counts for another instance.
     let m = msg_with(&s, &later, &s.remedy.clone(), stale.clone());
     assert_eq!(
         refused(&mut s, &m),
@@ -1255,6 +1259,73 @@ fn approvals_bind_the_overdue_instance_not_just_its_epoch() {
     let m = msg_with(&s, &base, &s.remedy.clone(), good);
     s.submit(&m).unwrap();
     assert_eq!(s.state(id), GameState::Settled);
+}
+
+/// Each approval carries its seat's own horizon (`approve_until`, signed):
+/// usable up to the second before it, refused from it on whatever the remedy
+/// key attests, and never extendable by whoever relays it. So the approvals of
+/// an overdue the seat later cured stop counting at their horizon even before
+/// a checkpoint past the stall reaches the chain (crypto re-review R1).
+#[test]
+fn approvals_expire_at_their_own_horizon() {
+    let mut s = Suite::new();
+    let id = live(&mut s, 3);
+    let id2 = live(&mut s, 3);
+    let a = s.attestation(id, RemedyKind::LiveForeclose, 2, 0);
+    let b = s.attestation(id2, RemedyKind::LiveForeclose, 2, 0);
+    let until = s.now().seconds() + 600;
+    let approvals = s.approvals_until(&a, &[0, 1], until);
+    let approvals_b = s.approvals_until(&b, &[0, 1], until);
+    let fresh = |s: &Suite, x: &RemedyAttestation| {
+        let mut y = x.clone();
+        y.attested_at = s.now().seconds();
+        y.expires_at = y.attested_at + 600;
+        y
+    };
+    // Presented with a later horizon than the seat signed: not its approval.
+    let mut extended = approvals.clone();
+    extended[0].approve_until = Uint64::new(until + DAY);
+    let m = msg_with(&s, &a, &s.remedy.clone(), extended);
+    assert_eq!(
+        refused(&mut s, &m),
+        ContractError::InvalidConsent { seat_index: 0 }
+    );
+    // A seat that chose an earlier horizon refuses alone once it passes.
+    let mut mixed = approvals.clone();
+    mixed[1] = s.approvals_until(&a, &[1], until - 300).remove(0);
+    s.advance(300);
+    let m = msg_with(&s, &fresh(&s, &a), &s.remedy.clone(), mixed);
+    assert_eq!(
+        refused(&mut s, &m),
+        ContractError::ApprovalExpired {
+            seat_index: 1,
+            approve_until: until - 300
+        }
+    );
+    // At the approvals' last second game B lands ...
+    s.advance(299);
+    let m = msg_with(&s, &fresh(&s, &b), &s.remedy.clone(), approvals_b);
+    s.submit(&m).unwrap();
+    assert_eq!(s.state(id2), GameState::Settled);
+    // ... and from the horizon on game A's never does, however fresh the
+    // attestation.
+    for wait in [1, DAY] {
+        s.advance(wait);
+        let m = msg_with(&s, &fresh(&s, &a), &s.remedy.clone(), approvals.clone());
+        assert_eq!(
+            refused(&mut s, &m),
+            ContractError::ApprovalExpired {
+                seat_index: 0,
+                approve_until: until
+            }
+        );
+    }
+    assert_eq!(s.state(id), GameState::InProgress);
+    // Approvals given anew land it.
+    let m = s.remedy_msg(&fresh(&s, &a));
+    s.submit(&m).unwrap();
+    assert_eq!(s.state(id), GameState::Settled);
+    s.assert_custody();
 }
 
 /// Timeouts stay safe: nobody challenges → the SETTLEABLE liveness exit pays

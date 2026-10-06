@@ -37,8 +37,8 @@ use cosmwasm_vm::{
 use eighteen_cosmos_escrow::crypto;
 use eighteen_cosmos_escrow::msg::{
     CheckpointsResponse, DeadlineChoice, ExecuteMsg, GameResponse, InstantiateMsg, JoinAdmission,
-    QueryMsg, RemedyAttestationV1, ResolveOutcome, SeatSignature, SettlementPayloadV1,
-    SignedCheckpoint,
+    QueryMsg, RemedyApproval, RemedyAttestationV1, ResolveOutcome, SeatSignature,
+    SettlementPayloadV1, SignedCheckpoint,
 };
 use eighteen_cosmos_escrow::payload::{
     Payload, KIND_CHECKPOINT, KIND_TERMINAL, REASON_BANK_BROKEN, REASON_RESOLVER_CORRECTION,
@@ -947,8 +947,9 @@ impl World {
         let approvals = if matches!(remedy, 2 | 4 | 5) {
             (0..n as u8)
                 .filter(|&i| i != defaulting)
-                .map(|i| SeatSignature {
+                .map(|i| RemedyApproval {
                     seat_index: i,
+                    approve_until: Uint64::new(self.time + 86_400),
                     signature: Key::seat(usize::from(i)).sign(&crypto::remedy_approve_digest(
                         &domain,
                         id,
@@ -959,6 +960,7 @@ impl World {
                         log_len,
                         &a.log_hash,
                         overdue_at,
+                        self.time + 86_400,
                         i,
                     )),
                 })

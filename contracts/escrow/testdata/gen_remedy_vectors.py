@@ -12,7 +12,8 @@ and src/remedy.rs module comments, owner decision R1 of 2026-10-06):
                                                                               (166 bytes)
     approve = SHA-256("18JUNO/REMEDY-APPROVE/v1" ‖ domain(32) ‖ u64(chain_game_id)
               ‖ u8(remedy) ‖ u8(defaulting_seat) ‖ u8(strike) ‖ u64(overdue_epoch)
-              ‖ u64(log_len) ‖ log_hash(32) ‖ u64(overdue_at) ‖ u8(approving_seat))
+              ‖ u64(log_len) ‖ log_hash(32) ‖ u64(overdue_at) ‖ u64(approve_until)
+              ‖ u8(approving_seat))
 
 and the settlement domain the attestation names
 
@@ -151,9 +152,10 @@ def remedy_digest(a) -> bytes:
 
 
 def approve_preimage(dom, game_id, remedy, seat, strike, epoch, log_len, log_hash, overdue_at,
-                     approving) -> bytes:
+                     approve_until, approving) -> bytes:
     return (TAG_APPROVE + dom + be(game_id, 8) + be(remedy, 1) + be(seat, 1) + be(strike, 1)
-            + be(epoch, 8) + be(log_len, 8) + log_hash + be(overdue_at, 8) + be(approving, 1))
+            + be(epoch, 8) + be(log_len, 8) + log_hash + be(overdue_at, 8)
+            + be(approve_until, 8) + be(approving, 1))
 
 
 # ------------------------------------------------------------------------- keys
@@ -258,27 +260,34 @@ def att_doc(a):
     return out
 
 
-def approvals_of(a, seats, *, epoch=None, instance=None, key_for=None, digest_for=None):
-    """`preimage` / `digest`: the REMEDY-APPROVE bytes the attestation implies
-    for that seat (what the contract verifies against); `signed_digest`: what
-    the seat actually signed (different only in the mis-approval vectors:
-    another `epoch`, or another overdue `instance` = (log_len, log_hash,
-    overdue_at))."""
+def approvals_of(a, seats, *, until=None, signed_until=None, epoch=None, instance=None,
+                 key_for=None, digest_for=None):
+    """`approve_until`: the horizon each seat set (default: one day after the
+    attestation's finality, so a re-attestation of the same decision carries
+    the very same approvals); `preimage` / `digest`: the REMEDY-APPROVE bytes
+    the attestation and that `approve_until` imply for the seat (what the
+    contract verifies against); `signed_digest`: what the seat actually signed
+    (different only in the mis-approval vectors: another `epoch`, another
+    overdue `instance` = (log_len, log_hash, overdue_at), or another horizon
+    `signed_until` than the one presented)."""
+    until = a["final_at"] + DAY if until is None else until
     out = []
     for s in seats:
         pre = approve_preimage(a["domain"], a["chain_game_id"], a["remedy"], a["defaulting_seat"],
                                a["strike"], a["overdue_epoch"], a["log_len"], a["log_hash"],
-                               a["overdue_at"], s)
+                               a["overdue_at"], until, s)
         log_len, log_hash, overdue_at = (a["log_len"], a["log_hash"], a["overdue_at"]) \
             if instance is None else instance
         signed_pre = approve_preimage(a["domain"], a["chain_game_id"], a["remedy"],
                                       a["defaulting_seat"], a["strike"],
                                       a["overdue_epoch"] if epoch is None else epoch,
-                                      log_len, log_hash, overdue_at, s)
+                                      log_len, log_hash, overdue_at,
+                                      until if signed_until is None else signed_until, s)
         signed = sha256(signed_pre) if digest_for is None else digest_for(s)
         sk = SEATS[s] if key_for is None else key_for(s)
-        out.append({"seat_index": s, "preimage": pre.hex(), "digest": sha256(pre).hex(),
-                    "signed_digest": signed.hex(), "signature": sign(sk, signed).hex(),
+        out.append({"seat_index": s, "approve_until": str(until), "preimage": pre.hex(),
+                    "digest": sha256(pre).hex(), "signed_digest": signed.hex(),
+                    "signature": sign(sk, signed).hex(),
                     "signature_verifies": verifies(SEATS[s], sha256(pre), sign(sk, signed))})
     return out
 
@@ -433,6 +442,11 @@ def main():
     late = B + 2 * HOUR
     reattested = dict(fore, attested_at=late, expires_at=late + 600)
     ahead = dict(annul, attested_at=B + 30, expires_at=B + 600)
+    # The seats' horizon on the foreclosure's approvals (one day after its
+    # finality), and the decision attested again at its last second and at it.
+    horizon = fore["final_at"] + DAY
+    at_last = dict(fore, attested_at=horizon - 1, expires_at=horizon + 599)
+    at_horizon = dict(fore, attested_at=horizon, expires_at=horizon + 600)
     vectors += [
         vector("reattested-foreclose", "live", reattested,
                approvals=approvals_of(reattested, [0, 2]), block_time=late, expect="ok:settled",
@@ -448,6 +462,21 @@ def main():
         vector("not-final", "live", annul, block_time=annul["final_at"] - 1,
                expect=f"RemedyNotFinal {{ final_at: {annul['final_at']} }}",
                note="replayed one second before 30:00", mutates="block_time"),
+        vector("approval-last-second", "live", at_last, approvals=approvals_of(at_last, [0, 2]),
+               block_time=horizon - 1, expect="ok:settled",
+               note="the foreclosure attested again and relayed at its approvals' last usable second",
+               mutates="block_time"),
+        vector("approval-expired", "live", at_horizon, approvals=approvals_of(at_horizon, [0, 2]),
+               block_time=horizon,
+               expect=f"ApprovalExpired {{ seat_index: 0, approve_until: {horizon} }}",
+               note="the same, relayed at the approvals' approve_until: refused whatever the "
+                    "remedy key attests (a cured overdue's approvals die at their horizon)",
+               mutates="approvals"),
+        vector("approval-extended", "live", fore,
+               approvals=approvals_of(fore, [0, 2], until=horizon + DAY, signed_until=horizon),
+               block_time=B, expect="InvalidConsent { seat_index: 0 }",
+               note="the approvals presented with a horizon one day beyond the one the seats signed",
+               mutates="approvals"),
         vector("approval-missing", "live", fore, approvals=approvals_of(fore, [0]), block_time=B,
                expect="MissingConsent { seat_index: 2 }",
                note="seat 2 never approved", mutates="approvals"),
@@ -485,7 +514,8 @@ def main():
                  "evidence_hash(32) || u16(remedy_key_id) (166 bytes); approve = "
                  "SHA-256(\"18JUNO/REMEDY-APPROVE/v1\" || domain(32) || u64(chain_game_id) || u8(remedy) "
                  "|| u8(defaulting_seat) || u8(strike) || u64(overdue_epoch) || u64(log_len) || "
-                 "log_hash(32) || u64(overdue_at) || u8(approving_seat)); integers big-endian; "
+                 "log_hash(32) || u64(overdue_at) || u64(approve_until) || u8(approving_seat)); "
+                 "integers big-endian; "
                  "secp256k1 ECDSA over "
                  "the digest itself, 64-byte r||s, low-s"),
         "tag": TAG_REMEDY.decode(),

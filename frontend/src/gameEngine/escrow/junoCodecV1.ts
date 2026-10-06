@@ -295,6 +295,8 @@ export const JUNO_CONTRACT_ERROR_MAP: Readonly<Record<string, EscrowErrorCode>> 
   DuplicateRemedyKey: "ADMIN_REFUSED",
   ApprovalsNotAllowed: "REQUEST_INVALID",
   DefaulterCannotApprove: "CONSENT_REJECTED",
+  // A seat's approval used from its own approve_until on: the remedy lane collects a fresh approval (never retried).
+  ApprovalExpired: "WINDOW_CLOSED",
   RemedySettlementNotReplaceable: "UNSUPPORTED_CAPABILITY",
   RemedyKeyIdsExhausted: "ADMIN_REFUSED",
 });

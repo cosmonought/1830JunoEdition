@@ -10,13 +10,15 @@
 // ONLY place that intent is made:
 //
 //   - `remedyChainIntent`  builds the record from one FINAL attestation (pure; refuses anything the contract would
-//                          refuse on shape alone, approvals that do not match the remedy and the roster, and any
-//                          signature that does not verify -- low-s ECDSA -- against the REMEDY key and the seats'
-//                          CURRENT consent keys the caller read from the chain);
+//                          refuse on shape alone or against the game's start, approvals that do not match the remedy
+//                          and the roster or whose seat's own horizon (`approve_until`) cannot outlast the
+//                          attestation time, and any signature that does not verify -- low-s ECDSA -- against the
+//                          REMEDY key and the seats' CURRENT consent keys the caller read from the chain);
 //   - `prepareRemedyIntent` writes it once, behind the per-game fence (`remedyFence`, chainIntents.ts): never two open
 //                          remedy intents for a game, nothing after one landed, idempotent across a restart (the same
 //                          slot holding the same work answers `exists`); an earlier intent refused for good (held, no
-//                          live attempt) is superseded first.
+//                          live attempt) is superseded first; a DIFFERENT decision waits until every earlier
+//                          attestation of another decision can no longer land (its usable life, plus a clock margin).
 //
 // Restart safety, replay and durable status are the relayer's generic intent machinery (a signed-or-broadcast attempt
 // is resolved by its transaction hash before anything else is signed; `effectOf` reads `game.remedy` -- the chain's
@@ -33,6 +35,7 @@
 import {
   JUNO_REMEDY_PROTOCOL_V1,
   encodeRemedyAttestationV1,
+  remedyApprovalWire,
   remedyApproveDigestV1,
   remedyAttestationWire,
   remedyDecisionDigestV1,
@@ -50,6 +53,7 @@ import { verifyDigest } from "./secp256k1";
 const MIN_SEATS = 2;
 const MAX_SEATS = 7;
 const PUBKEY = /^0[23][0-9a-f]{64}$/;
+const U64_MAX = (BigInt(1) << BigInt(64)) - BigInt(1);
 const SIGNATURE = /^[0-9a-f]{128}$/;
 
 export interface RemedyIntentInput {
@@ -65,8 +69,13 @@ export interface RemedyIntentInput {
   /** Every seat's CURRENT consent key, in chain seat order, as the chain holds it now (the roster size is its length):
    *  the contract verifies each approval against it, so an approval under a since-rotated key is refused here first. */
   readonly consent_pubkeys: readonly string[];
-  /** Each non-defaulting seat's REMEDY-APPROVE signature (its own consent key's), for remedies 2, 4 and 5; none else. */
-  readonly approvals: readonly { readonly seat_index: number; readonly signature: string }[];
+  /** The chain game's `started_at` (Unix seconds) as the chain holds it: no seat is overdue before one whole allowance
+   *  has run since it (the contract's floor). */
+  readonly started_at: bigint;
+  /** Each non-defaulting seat's REMEDY-APPROVE (its own consent key's signature over the digest naming its own
+   *  `approve_until`), for remedies 2, 4 and 5; none else. */
+  readonly approvals: readonly { readonly seat_index: number; readonly approve_until: bigint; readonly signature: string }[];
+  /** Wall-clock milliseconds. */
   readonly now: number;
 }
 
@@ -92,6 +101,8 @@ export function remedyIntentProblem(input: RemedyIntentInput): string | null {
     return `the attestation is not encodable: ${error instanceof Error ? error.message : String(error)}`;
   }
   if (shape !== null) return shape;
+  if (typeof input.started_at !== "bigint" || input.started_at < BigInt(0)) return "the chain game's start time is unknown";
+  if (a.overdue_at < input.started_at + a.allowance_secs) return "overdue_at precedes the end of the first allowance after the game's start";
   const seats = input.consent_pubkeys.length;
   if (seats < MIN_SEATS || seats > MAX_SEATS) return `a roster of ${seats} seats is not an escrow roster`;
   if (!input.consent_pubkeys.every((key) => PUBKEY.test(key))) return "a seat's consent key is not a 33-byte compressed key (lowercase hex)";
@@ -108,9 +119,14 @@ export function remedyIntentProblem(input: RemedyIntentInput): string | null {
     if (!Number.isInteger(approval.seat_index) || approval.seat_index < 0 || approval.seat_index >= seats) return `approval seat ${String(approval.seat_index)} is not one of the ${seats} seats`;
     if (approval.seat_index === a.defaulting_seat) return `the defaulting seat ${a.defaulting_seat} cannot approve a remedy against itself`;
     if (seen.has(approval.seat_index)) return `seat ${approval.seat_index} approves twice`;
+    if (typeof approval.approve_until !== "bigint" || approval.approve_until < BigInt(0) || approval.approve_until > U64_MAX) return `seat ${approval.seat_index}'s approve_until is not a u64`;
+    /* The contract refuses an approval from its horizon on, and the attestation before its attestation time: an
+       approval whose horizon is not after the attestation time (or already past) could never land. */
+    if (approval.approve_until <= a.attested_at) return `seat ${approval.seat_index}'s approval ends (${approval.approve_until}) before this attestation can be used`;
+    if (approval.approve_until <= BigInt(Math.floor(input.now / 1000))) return `seat ${approval.seat_index}'s approval expired at ${approval.approve_until}`;
     if (!SIGNATURE.test(approval.signature)) return `seat ${approval.seat_index}'s approval is not 64 bytes of lowercase hex`;
-    if (!verifies(input.consent_pubkeys[approval.seat_index], remedyApproveDigestV1(a, approval.seat_index), approval.signature)) {
-      return `seat ${approval.seat_index}'s approval does not verify under its current consent key (for this overdue instance)`;
+    if (!verifies(input.consent_pubkeys[approval.seat_index], remedyApproveDigestV1(a, approval.approve_until, approval.seat_index), approval.signature)) {
+      return `seat ${approval.seat_index}'s approval does not verify under its current consent key (for this overdue instance and horizon)`;
     }
     seen.add(approval.seat_index);
   }
@@ -121,16 +137,18 @@ export function remedyIntentProblem(input: RemedyIntentInput): string | null {
 
 /** The `submit-remedy` intent for one FINAL attestation (throws `RemedyIntentError` on any `remedyIntentProblem`).
  *  Its slot is (decision, expiry); its subject binds the exact REMEDY digest; its message is the contract's
- *  `submit_remedy` with the approvals in seat order. */
+ *  `submit_remedy` with the approvals in seat order; `usable_until` is the first block second it can no longer land:
+ *  the attestation's expiry or the earliest approval horizon, whichever comes first. */
 export function remedyChainIntent(input: RemedyIntentInput): ChainIntentRecord {
   const problem = remedyIntentProblem(input);
   if (problem !== null) throw new RemedyIntentError(problem);
   const a = input.attestation;
   const decision = remedyDecisionDigestV1(a);
   const remedyDigest = remedyDigestV1(a);
-  const approvals = [...input.approvals].sort((x, y) => x.seat_index - y.seat_index).map((x) => ({ seat_index: x.seat_index, signature: x.signature }));
+  const approvals = [...input.approvals].sort((x, y) => x.seat_index - y.seat_index).map((x) => remedyApprovalWire(x));
   const bitmap = approvals.reduce((mask, x) => mask | (1 << x.seat_index), 0);
   const expiresAt = a.expires_at.toString();
+  const usableUntil = input.approvals.reduce((min, x) => (x.approve_until < min ? x.approve_until : min), a.expires_at).toString();
   return newChainIntent({
     game_id: input.game_id,
     instance: input.instance,
@@ -147,6 +165,7 @@ export function remedyChainIntent(input: RemedyIntentInput): ChainIntentRecord {
       final_at: a.final_at.toString(),
       attested_at: a.attested_at.toString(),
       expires_at: expiresAt,
+      usable_until: usableUntil,
       remedy_key_id: a.remedy_key_id,
       remedy_digest: remedyDigest,
       decision,
@@ -190,7 +209,7 @@ async function prepare(store: ChainIntentStore, candidate: ChainIntentRecord, no
     if (error instanceof ChainIntentUnreadableError) return { kind: "hold", why: `the game's intent files are ${error.format}: this build does not add to them` };
     throw error;
   }
-  const fence = remedyFence(existing, candidate);
+  const fence = remedyFence(existing, candidate, now);
   if (fence.kind === "hold") return fence;
   if (fence.kind === "same") return { kind: "exists", record: existing.find((x) => x.intent_id === candidate.intent_id) as ChainIntentRecord };
   for (const earlier of fence.retire) {

@@ -140,11 +140,13 @@ export const FINANCIAL_PROTOCOL_CHANGELOG: ReadonlyArray<ProtocolChangelogRow> =
       "challengeable third strike, the Timed Async paces, No-deadline; the universal unanimous neutral annulment; the " +
       "7-day exceptional review) -- never on 2.0.0, which protocol 3 keeps; the remedy is a new financial operation: " +
       "the `submit-remedy` chain intent (slot = the remedy DECISION and its attestation's expiry; never two open for a " +
-      "game and nothing after one landed -- a fresh attestation of the same decision, or a later decision such as the " +
-      "neutral TimeoutAnnul, only once every earlier one ended without effect: `remedyFence`; relayed only on the " +
-      "remedy lane's gate, the system-pause seam), relaying the dedicated REMEDY key's 18JUNO/REMEDY/v1 attestation " +
-      "(at most one hour of bearer life from its own attestation time) and the seats' REMEDY-APPROVE signatures (bound " +
-      "to one overdue instance); this build binds only a Live action-clock 2.1.0 game; and the intent " +
+      "game and nothing after one landed -- a fresh attestation of the same decision only once every earlier one ended " +
+      "without effect, and a different decision such as the neutral TimeoutAnnul only once no earlier attestation of " +
+      "another decision can still land on chain (its usable life plus a clock margin): `remedyFence`; relayed only on " +
+      "the remedy lane's gate, the system-pause seam), relaying the dedicated REMEDY key's 18JUNO/REMEDY/v1 attestation " +
+      "(at most one hour of bearer life from its own attestation time) and the seats' REMEDY-APPROVE approvals (bound " +
+      "to one overdue instance and to each seat's own signed horizon, `approve_until`); this build binds only a Live " +
+      "action-clock 2.1.0 game and never admits a trusted resolver's wallet to a seat; and the intent " +
       "file schema 2 (`CHAIN_INTENT_SCHEMA`), so a protocol-3 reader classifies every intent this protocol writes as " +
       "`newer` (never parsed, never executed) and this protocol reads a schema-1 intent as `older-unread` (never " +
       "rewritten). Asked both ways: a protocol-3 build must not read or relay a remedy, and this build must not " +

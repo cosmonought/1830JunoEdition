@@ -912,38 +912,76 @@ fn a_checkpoint_withdraws_a_pending_review_request() {
     review(&mut s, id, &resolver).unwrap();
 }
 
-/// A resolver that holds a seat in the game cannot review it (R-4): it could
-/// otherwise request and approve its own neutral exit alone.
+/// A 2.1.0 game never adopts a resolver that holds one of its seats (R-4 and
+/// the timed-remedy re-review): it would judge its own stake (request and
+/// grant its own neutral exit; annul its own third-strike foreclosure or
+/// uphold a false one), and a No-deadline game would be left with no review
+/// at all. `Start` is refused and the game stays FUNDED, where every deposit
+/// can still leave (withdrawal and cancellation, also while paused). Once the
+/// admin names another resolver the same roster starts, under it. (`Resolve`,
+/// `RequestReview` and `ReviewAnnul` keep their own seated-resolver refusals
+/// as a second line; no 2.1.0 game can reach them.)
 #[test]
-fn a_seated_resolver_cannot_review_its_own_game() {
-    let mut s = Suite::new();
-    let admin = s.admin.clone();
-    let seat1 = s.players[1].clone();
-    s.exec(
-        &admin,
-        &ExecuteMsg::SetResolver {
-            resolver: seat1.to_string(),
-        },
-        &[],
-    )
-    .unwrap();
-    let id = no_deadline_game(&mut s, 3);
-    assert_eq!(s.game(id).game.resolver, Some(seat1.clone()));
-    // No seat can even ask (no review could follow), so no deadline is shown.
-    for seat in 0..3 {
-        assert_eq!(
-            request(&mut s, id, seat).unwrap_err(),
-            ContractError::ResolverIsSeated {}
-        );
+fn a_game_never_starts_with_a_seated_resolver() {
+    for no_deadline in [true, false] {
+        let mut s = Suite::new();
+        let admin = s.admin.clone();
+        let op = s.operator.clone();
+        let seat1 = s.players[1].clone();
+        s.exec(
+            &admin,
+            &ExecuteMsg::SetResolver {
+                resolver: seat1.to_string(),
+            },
+            &[],
+        )
+        .unwrap();
+        s.no_deadline = no_deadline;
+        let id = s.funded(3);
+        let kept = s.funded(3);
+        s.no_deadline = false;
+        let start = |s: &Suite, id: u64| ExecuteMsg::Start {
+            chain_game_id: id,
+            roster_hash: s.roster_hash(id),
+        };
+        for game in [id, kept] {
+            let before = s.game(game).game;
+            let msg = start(&s, game);
+            assert_eq!(
+                s.exec(&op, &msg, &[]).unwrap_err(),
+                ContractError::ResolverIsSeated {}
+            );
+            assert_eq!(s.game(game).game, before);
+            assert_eq!(s.state(game), GameState::Funded);
+        }
+        // Nothing is trapped: under pause the seat withdraws its deposit and
+        // the creator cancels the rest.
+        s.exec(&admin, &ExecuteMsg::Pause {}, &[]).unwrap();
+        let held = s.balance(&seat1);
+        s.exec(&seat1, &ExecuteMsg::Withdraw { chain_game_id: id }, &[])
+            .unwrap();
+        assert_eq!(s.balance(&seat1) - held, NET);
+        let creator = s.players[0].clone();
+        s.exec(&creator, &ExecuteMsg::Cancel { chain_game_id: id }, &[])
+            .unwrap();
+        assert_eq!(s.state(id), GameState::Cancelled);
+        s.exec(&admin, &ExecuteMsg::Unpause {}, &[]).unwrap();
+        // Another resolver: the same roster starts, and adopts it.
+        let other = s.addr("resolver-2");
+        s.exec(
+            &admin,
+            &ExecuteMsg::SetResolver {
+                resolver: other.to_string(),
+            },
+            &[],
+        )
+        .unwrap();
+        let msg = start(&s, kept);
+        s.exec(&op, &msg, &[]).unwrap();
+        assert_eq!(s.state(kept), GameState::InProgress);
+        assert_eq!(s.game(kept).game.resolver, Some(other));
+        s.assert_custody();
     }
-    assert_eq!(s.game(id).game.review_request, None);
-    assert_eq!(s.game(id).deadlines.review_annul_available_at, None);
-    s.advance(30 * DAY);
-    assert_eq!(
-        review(&mut s, id, &seat1).unwrap_err(),
-        ContractError::ResolverIsSeated {}
-    );
-    assert_eq!(s.state(id), GameState::InProgress);
 }
 
 /// `ReviewAnnul` names the request it decides (review N-2): a decision taken

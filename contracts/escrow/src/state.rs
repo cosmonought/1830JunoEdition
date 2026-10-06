@@ -301,6 +301,10 @@ pub struct RemedyRecord {
     pub allowance_secs: Uint64,
     pub overdue_at: Uint64,
     pub final_at: Uint64,
+    /// When the remedy key attested the decision that took effect (a
+    /// re-attestation of the same final decision differs only here and in
+    /// `expires_at`, `remedy_key_id` and the digest).
+    pub attested_at: Uint64,
     pub expires_at: Uint64,
     pub evidence_hash: HexBinary,
     pub remedy_key_id: u16,

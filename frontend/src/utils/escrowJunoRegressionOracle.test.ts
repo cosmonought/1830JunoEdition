@@ -476,8 +476,8 @@ describe("the Juno ContractError map is complete and stable", () => {
 
   it("every variant of error.rs is mapped, and nothing else", () => {
     // 54 through escrow 1.0.0; ESCROW-JOIN (2.0.0) adds InvalidAdmission, AdmissionExpired, MigrateUnsupported.
-    // Phase 3 escrow 2.1.0 adds 8 for the exit policy and the review, and 16 for the timed remedies (FP4): 81.
-    expect(variants.length).toBe(81);
+    // Phase 3 escrow 2.1.0 adds 8 for the exit policy and the review, and 17 for the timed remedies (FP4): 82.
+    expect(variants.length).toBe(82);
     expect(Object.keys(JUNO_CONTRACT_ERROR_MAP).sort()).toEqual(variants.slice().sort());
   });
   it("classification carries the neutral code, its retry class, and the native detail", () => {

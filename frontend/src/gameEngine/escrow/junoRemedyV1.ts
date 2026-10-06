@@ -15,12 +15,15 @@
 //             ‖ u64(final_at) ‖ u64(attested_at) ‖ u64(expires_at) ‖ evidence_hash(32) ‖ u16(remedy_key_id)
 //                                                                                                   (166 bytes)
 //   approve = SHA-256("18JUNO/REMEDY-APPROVE/v1" ‖ domain(32) ‖ u64(chain_game_id) ‖ u8(remedy) ‖ u8(defaulting_seat)
-//             ‖ u8(strike) ‖ u64(overdue_epoch) ‖ u64(log_len) ‖ log_hash(32) ‖ u64(overdue_at) ‖ u8(approving_seat))
+//             ‖ u8(strike) ‖ u64(overdue_epoch) ‖ u64(log_len) ‖ log_hash(32) ‖ u64(overdue_at) ‖ u64(approve_until)
+//             ‖ u8(approving_seat))
 //
 // An approval binds ONE overdue instance (its strike, epoch, exact log position and overdue moment -- each must equal
-// the attestation's), never finality or expiry: a cured overdue's approvals are dead for any later attestation, and a
+// the attestation's) and the approving seat's own horizon `approve_until` (Unix seconds; the contract refuses the
+// approval from that block second on), never the attestation's finality or expiry: a cured overdue's approvals are
+// dead for any later attestation and, before a checkpoint past the stall reaches the chain, from their horizon on; a
 // final decision that did not land in time is attested again (a fresh `attested_at`, at most one hour of bearer life)
-// with the same approvals.
+// with the same approvals until their horizon.
 //
 // Every integer fixed-width big-endian, no JSON anywhere. This is the ONLY TypeScript spelling of those bytes. Three
 // independent implementations agree on them: this file, the contract (`contracts/escrow/src/remedy.rs`,
@@ -172,11 +175,21 @@ export function remedyDigestV1(a: RemedyAttestationV1): string {
   return sha256HexOfBytes(remedyPreimageV1(a));
 }
 
-/** What a REMEDY-APPROVE binds: the game, the remedy and its defaulting seat, and ONE overdue instance. */
+/** What a REMEDY-APPROVE binds: the game, the remedy and its defaulting seat, and ONE overdue instance (plus the seat's
+ *  own `approve_until`, passed beside it). */
 export type RemedyApproveFields = Pick<RemedyAttestationV1, "domain" | "chain_game_id" | "remedy" | "defaulting_seat" | "strike" | "overdue_epoch" | "log_len" | "log_hash" | "overdue_at">;
 
+/** One non-defaulting seat's approval as `SubmitRemedy` carries it (`RemedyApproval` in msg.rs). */
+export interface RemedyApprovalV1 {
+  readonly seat_index: number;
+  /** The seat's horizon (Unix seconds, signed): refused by the contract from this block second on. */
+  readonly approve_until: bigint;
+  /** 64-byte low-s `r ‖ s` (lowercase hex) by the seat's current consent key over its REMEDY-APPROVE digest. */
+  readonly signature: string;
+}
+
 /** The exact bytes seat `approvingSeat`'s REMEDY-APPROVE digest is taken over. */
-export function remedyApprovePreimageV1(a: RemedyApproveFields, approvingSeat: number): Uint8Array {
+export function remedyApprovePreimageV1(a: RemedyApproveFields, approveUntil: bigint, approvingSeat: number): Uint8Array {
   return concat([
     utf8Bytes(JUNO_REMEDY_APPROVE_TAG_V1),
     hex32(a.domain, "domain"),
@@ -188,15 +201,24 @@ export function remedyApprovePreimageV1(a: RemedyApproveFields, approvingSeat: n
     u64(a.log_len, "log_len"),
     hex32(a.log_hash, "log_hash"),
     u64(a.overdue_at, "overdue_at"),
+    u64(approveUntil, "approve_until"),
     u8(approvingSeat, "approving_seat"),
   ]);
 }
 
-/** The 32-byte digest a non-defaulting seat's consent key signs to approve the remedy (lowercase hex). A client
- *  builds it from facts it checked itself (never a digest the server hands it): the consent key also signs CONSENT
- *  and ANNUL. */
-export function remedyApproveDigestV1(a: RemedyApproveFields, approvingSeat: number): string {
-  return sha256HexOfBytes(remedyApprovePreimageV1(a, approvingSeat));
+/** The 32-byte digest a non-defaulting seat's consent key signs to approve the remedy until `approveUntil` (lowercase
+ *  hex). A client builds it from facts it checked itself (never a digest the server hands it): the consent key also
+ *  signs CONSENT and ANNUL. */
+export function remedyApproveDigestV1(a: RemedyApproveFields, approveUntil: bigint, approvingSeat: number): string {
+  return sha256HexOfBytes(remedyApprovePreimageV1(a, approveUntil, approvingSeat));
+}
+
+/** An approval as the contract's JSON: `approve_until` as a decimal string. */
+export function remedyApprovalWire(x: RemedyApprovalV1): { seat_index: number; approve_until: string; signature: string } {
+  u8(x.seat_index, "seat_index");
+  u64(x.approve_until, "approve_until");
+  if (typeof x.signature !== "string" || !/^[0-9a-f]{128}$/.test(x.signature)) throw new RemedyInputError("signature must be 64 bytes of lowercase hex");
+  return { seat_index: x.seat_index, approve_until: x.approve_until.toString(), signature: x.signature };
 }
 
 /** The DECISION identity: SHA-256 over a distinct tag and the encoding with `attested_at`, `expires_at` and

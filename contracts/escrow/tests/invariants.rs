@@ -61,11 +61,11 @@ mod common;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use common::*;
-use cosmwasm_std::{coins, Addr, Coin, HexBinary, Uint128, Uint256};
+use cosmwasm_std::{coins, Addr, Coin, HexBinary, Uint128, Uint256, Uint64};
 use cw_multi_test::{AppResponse, Executor};
 use eighteen_cosmos_escrow::crypto;
 use eighteen_cosmos_escrow::msg::{
-    DeadlineChoice, ExecuteMsg, RemedyAttestationV1, ResolveOutcome, SeatSignature,
+    DeadlineChoice, ExecuteMsg, RemedyApproval, RemedyAttestationV1, ResolveOutcome, SeatSignature,
     SettlementPayloadV1, SignedCheckpoint,
 };
 use eighteen_cosmos_escrow::payload::{Payload, KIND_CHECKPOINT, KIND_TERMINAL};
@@ -177,8 +177,9 @@ struct RemedyPlan {
     key_status: &'static str,
     /// The signature is by the key registered under `a.remedy_key_id`.
     sig_ok: bool,
-    /// (seat index, signed by that seat's current key over the right digest).
-    approvals: Vec<(u8, bool)>,
+    /// (seat index, signed by that seat's current key over the right digest,
+    /// its `approve_until`).
+    approvals: Vec<(u8, bool, u64)>,
 }
 
 /// The model's label for a remedy refusal.
@@ -203,6 +204,7 @@ fn remedy_err_label(e: &ContractError) -> &'static str {
         ContractError::InvalidSignature {} => "invalid signature",
         ContractError::DefaulterCannotApprove { .. } => "defaulter",
         ContractError::DuplicateConsent { .. } => "duplicate",
+        ContractError::ApprovalExpired { .. } => "approval expired",
         ContractError::InvalidConsent { .. } => "invalid consent",
         ContractError::MissingConsent { .. } => "missing",
         ContractError::ApprovalsNotAllowed { .. } => "approvals not allowed",
@@ -251,6 +253,8 @@ struct Fuzz {
     checkpointed: BTreeSet<u64>,
     /// `CONFIG.resolver` as the model knows it.
     current_resolver: Addr,
+    /// Starts refused because the current resolver held a seat (2.1.0).
+    seated_starts_refused: usize,
     /// LivenessSettle calls whose carried checkpoint was promoted (OD-ESC2-4).
     carried_ok: usize,
     /// Ordinary checkpoints accepted while paused (OD-ESC2-2).
@@ -312,6 +316,7 @@ impl Fuzz {
             view_trusted: BTreeMap::new(),
             checkpointed: BTreeSet::new(),
             current_resolver: resolver,
+            seated_starts_refused: 0,
             carried_ok: 0,
             paused_checkpoints: 0,
             compromised: BTreeSet::new(),
@@ -574,7 +579,7 @@ impl Fuzz {
                 (Act::RotateRemedyKey, 2),
                 (Act::Challenge, 5),
                 (Act::Resolve, 4),
-                (Act::Finalize, 3),
+                (Act::Finalize, 5),
                 (Act::Consent, 2),
                 (Act::Annul, 2),
                 (Act::Liveness, 3),
@@ -818,8 +823,10 @@ impl Fuzz {
                 } else {
                     self.any_caller()
                 };
-                let roster_hash = if self.rng.chance(92) {
-                    Self::roster_hash_of(&self.game_of(id))
+                let g = self.game_of(id);
+                let right_roster = self.rng.chance(92);
+                let roster_hash = if right_roster {
+                    Self::roster_hash_of(&g)
                 } else {
                     HexBinary::from(vec![1u8; 32])
                 };
@@ -828,6 +835,21 @@ impl Fuzz {
                     roster_hash,
                 };
                 let res = self.exec(&who, &msg, &[]);
+                // A 2.1.0 game never adopts a resolver holding one of its
+                // seats: such a Start is refused (the game stays FUNDED).
+                let seated_resolver = g.state == GameState::Funded
+                    && g.terms.policy.is_some()
+                    && g.seats.iter().any(|x| x.wallet == self.current_resolver);
+                if seated_resolver {
+                    assert!(res.is_err(), "a 2.1.0 game started with a seated resolver");
+                    if who == self.s.operator && !self.paused {
+                        assert_eq!(
+                            res.as_ref().unwrap_err(),
+                            &ContractError::ResolverIsSeated {}
+                        );
+                        self.seated_starts_refused += 1;
+                    }
+                }
                 Some(Self::done(act, Some(id), who, res))
             }
             Act::Checkpoint | Act::Settle => {
@@ -1460,7 +1482,7 @@ impl Fuzz {
                     })
                     .map(|(id, _)| *id)
                     .collect();
-                let id = if !timed.is_empty() && self.rng.chance(85) {
+                let id = if !timed.is_empty() && self.rng.chance(if self.focus { 75 } else { 85 }) {
                     self.rng.pick(&timed)
                 } else if timed.is_empty() && (self.focus || self.rng.chance(75)) {
                     return None;
@@ -1492,7 +1514,7 @@ impl Fuzz {
                     }
                 }
                 let mutation = if self.rng.chance(if self.focus { 50 } else { 30 }) {
-                    Some(self.rng.below(18))
+                    Some(self.rng.below(19))
                 } else {
                     None
                 };
@@ -2644,6 +2666,7 @@ impl Fuzz {
         };
         let mut bad_approval: Option<usize> = None;
         let mut stale_approvals = false;
+        let mut expired_approval: Option<usize> = None;
         match mutation {
             Some(0) => {
                 // The other mode's remedy.
@@ -2725,6 +2748,13 @@ impl Fuzz {
                     stale_approvals = true;
                 }
             }
+            Some(18) => {
+                // One approval used from its own `approve_until` on (its
+                // seat's horizon ran out before the relay).
+                if !approval_seats.is_empty() {
+                    expired_approval = Some(self.rng.below(approval_seats.len() as u64) as usize);
+                }
+            }
             Some(_) => {
                 // Another game's domain (cross-game confusion).
                 a.domain = sha256(&[b"another-game", &a.domain]);
@@ -2749,6 +2779,13 @@ impl Fuzz {
             } else {
                 (a.log_len, a.overdue_at)
             };
+            // Each seat bounds its own approval: a horizon ahead of the block
+            // time, or (mutation 18) at or before it.
+            let approve_until = if expired_approval == Some(k) {
+                now - self.rng.below(2)
+            } else {
+                now + 1 + self.rng.below(2 * DAY)
+            };
             let digest = crypto::remedy_approve_digest(
                 &domain,
                 id,
@@ -2759,6 +2796,7 @@ impl Fuzz {
                 log_len,
                 &a.log_hash,
                 overdue_at,
+                approve_until,
                 *seat,
             );
             let in_range = usize::from(*seat) < n;
@@ -2768,11 +2806,12 @@ impl Fuzz {
             } else {
                 Key::from_label("18JUNO/TEST/fuzz/approval-forger")
             };
-            approvals.push(SeatSignature {
+            approvals.push(RemedyApproval {
                 seat_index: *seat,
+                approve_until: Uint64::new(approve_until),
                 signature: signer_key.sign(&digest),
             });
-            meta.push((*seat, good));
+            meta.push((*seat, good, approve_until));
         }
         let registered = self
             .remedy_keys
@@ -2886,7 +2925,7 @@ impl Fuzz {
         }
         if kind.needs_approvals() {
             let mut seen = BTreeSet::new();
-            for (seat, good) in &plan.approvals {
+            for (seat, good, approve_until) in &plan.approvals {
                 if usize::from(*seat) >= n {
                     return Err("seat range");
                 }
@@ -2895,6 +2934,9 @@ impl Fuzz {
                 }
                 if !seen.insert(*seat) {
                     return Err("duplicate");
+                }
+                if now >= *approve_until {
+                    return Err("approval expired");
                 }
                 if !good {
                     return Err("invalid consent");
@@ -3150,6 +3192,7 @@ fn seeded_random_sequences_preserve_every_invariant() {
     let mut direct_payouts = 0;
     let mut liveness_removed = 0;
     let mut live_no_deadline_refused = 0;
+    let mut seated_starts_refused = 0;
     let mut policies: BTreeMap<String, usize> = BTreeMap::new();
     let mut remedies_ok: BTreeMap<&'static str, usize> = BTreeMap::new();
     let mut remedies_refused: BTreeMap<&'static str, usize> = BTreeMap::new();
@@ -3167,6 +3210,7 @@ fn seeded_random_sequences_preserve_every_invariant() {
         direct_payouts += f.direct_payouts;
         liveness_removed += f.liveness_removed;
         live_no_deadline_refused += f.live_no_deadline_refused;
+        seated_starts_refused += f.seated_starts_refused;
         for p in f.policy.values() {
             *policies.entry(format!("{p:?}")).or_default() += 1;
         }
@@ -3207,7 +3251,8 @@ fn seeded_random_sequences_preserve_every_invariant() {
     assert!(direct_payouts > 0, "no direct payout was ever checked");
     eprintln!(
         "fuzz (18/19): games by policy {policies:?}; {liveness_removed} IN_PROGRESS \
-         liveness refusals on 2.1.0 games; {live_no_deadline_refused} live no-deadline creates refused"
+         liveness refusals on 2.1.0 games; {live_no_deadline_refused} live no-deadline creates refused; \
+         {seated_starts_refused} starts refused for a seated resolver"
     );
     assert_eq!(
         policies.len(),
@@ -3369,6 +3414,7 @@ fn remedy_focused_sequences_preserve_every_invariant() {
         "invalid consent",
         "missing",
         "approvals not allowed",
+        "approval expired",
     ] {
         assert!(
             remedies_refused.get(label).copied().unwrap_or(0) > 0,

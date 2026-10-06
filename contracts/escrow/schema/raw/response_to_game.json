@@ -748,6 +748,7 @@
         "accepted_at",
         "allowance_secs",
         "approvals_bitmap",
+        "attested_at",
         "defaulting_seat",
         "evidence_hash",
         "expires_at",
@@ -773,6 +774,14 @@
           "type": "integer",
           "format": "uint8",
           "minimum": 0.0
+        },
+        "attested_at": {
+          "description": "When the remedy key attested the decision that took effect (a re-attestation of the same final decision differs only here and in `expires_at`, `remedy_key_id` and the digest).",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Uint64"
+            }
+          ]
         },
         "defaulting_seat": {
           "type": "integer",

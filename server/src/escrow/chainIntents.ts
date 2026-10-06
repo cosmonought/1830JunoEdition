@@ -137,6 +137,8 @@ export type ChainIntentOp =
       readonly final_at: string;
       readonly attested_at: string;
       readonly expires_at: string;
+      /** The first block second this intent can no longer land: min(attestation expiry, every approval's horizon). */
+      readonly usable_until: string;
       readonly remedy_key_id: number;
       readonly remedy_digest: string;
       readonly decision: string;
@@ -254,8 +256,9 @@ export function isChainIntentRecord(value: unknown): value is ChainIntentRecord 
 }
 
 /** FP4: whether a remedy intent's message is exactly the attestation its op names -- the chain game, every attested
- *  field, the REMEDY digest and decision recomputed from the message itself, and the approvals' seats (the op's bitmap,
- *  each once, each a 64-byte hex signature). A damaged record never relays an attestation its slot was not made for. */
+ *  field, the REMEDY digest and decision recomputed from the message itself, the approvals' seats (the op's bitmap,
+ *  each once, each with a u64 horizon and a 64-byte hex signature) and the usable life (`usable_until`: the expiry or
+ *  the earliest horizon). A damaged record never relays an attestation its slot was not made for. */
 export function remedyMessageAgrees(op: Record<string, unknown>, msgJson: string): boolean {
   const lead = /^\{"submit_remedy":\{"chain_game_id":(0|[1-9][0-9]{0,19}),/.exec(msgJson);
   if (lead === null || lead[1] !== op.chain_game_id) return false;
@@ -316,14 +319,19 @@ export function remedyMessageAgrees(op: Record<string, unknown>, msgJson: string
   ];
   if (!same.every(([x, y]) => x === y)) return false;
   let bitmap = 0;
+  let usableUntil = a.expires_at;
   for (const entry of body.approvals as unknown[]) {
-    if (!isObject(entry) || !Number.isInteger(entry.seat_index) || (entry.seat_index as number) < 0 || (entry.seat_index as number) > 7) return false;
+    if (!isObject(entry) || Object.keys(entry).length !== 3 || !Number.isInteger(entry.seat_index) || (entry.seat_index as number) < 0 || (entry.seat_index as number) > 7) return false;
     if (typeof entry.signature !== "string" || !/^[0-9a-f]{128}$/.test(entry.signature)) return false;
+    if (typeof entry.approve_until !== "string" || !/^(0|[1-9][0-9]{0,19})$/.test(entry.approve_until)) return false;
+    const until = BigInt(entry.approve_until);
+    if (until > (BigInt(1) << BigInt(64)) - BigInt(1)) return false;
+    if (until < usableUntil) usableUntil = until;
     const bit = 1 << (entry.seat_index as number);
     if ((bitmap & bit) !== 0) return false;
     bitmap |= bit;
   }
-  return bitmap === op.approvals;
+  return bitmap === op.approvals && usableUntil.toString() === op.usable_until;
 }
 
 /** LIVE-4 (L4-4): the intent-file schemas this build reads and writes (`CHAIN_INTENT_SCHEMA`). */
@@ -443,24 +451,33 @@ export function sameChainIntent(a: ChainIntentRecord, b: ChainIntentRecord): boo
 /* FP4: the remedy fence (one open remedy intent per game)              */
 /* ------------------------------------------------------------------ */
 
-/** What preparing `candidate` (a `submit-remedy` intent) may do, given every intent the game already has:
+/** The margin (seconds) by which the server's clock must pass an earlier attestation's usable life before a DIFFERENT
+ *  decision is prepared: the chain decides by block time, which may lag the wall clock. */
+export const REMEDY_FENCE_CLOCK_MARGIN_SECS = 120;
+
+/** What preparing `candidate` (a `submit-remedy` intent) may do at `nowMs`, given every intent the game already has:
  *  - `same`: the candidate's own slot already holds the same work (an idempotent re-prepare after a restart);
  *  - `hold`: a remedy of this game already LANDED (`confirmed`: nothing more, ever); another remedy intent is still
- *    OPEN -- pending, in flight, or held with a live attempt -- so two could both broadcast; or the candidate's own slot
- *    holds different work;
+ *    OPEN -- pending, in flight, or held with a live attempt -- so two could both broadcast; an earlier intent of a
+ *    DIFFERENT decision ended without effect here but its attestation could still land if anyone relayed it (its
+ *    `usable_until`, plus `REMEDY_FENCE_CLOCK_MARGIN_SECS`, is not yet past: anyone may relay a remedy, and a key
+ *    registered or a seat's approval made valid again would revive it); or the candidate's own slot holds different
+ *    work;
  *  - `proceed`: every earlier remedy intent ended without effect -- `superseded` (its attestation expired, or the game
  *    or its trusted sequence moved on), or `held` with no live attempt (refused for good: an approver rotated its
- *    consent key, a contradiction). Those held ones are listed in `retire`: they are superseded first, so a game never
- *    has two open remedy intents. A fresh attestation of the same final decision (an admin pause or an outage outlived
- *    the first) and a DIFFERENT decision (the Live neutral TimeoutAnnul once the foreclosure can no longer land; a new
- *    Async proposal) are both new work.
+ *    consent key, a contradiction) -- and none of another decision can still land. Those held ones are listed in
+ *    `retire`: they are superseded first, so a game never has two open remedy intents. A fresh attestation of the same
+ *    final decision (an admin pause or an outage outlived the first) proceeds at once (whichever lands, the decision is
+ *    the same); a DIFFERENT decision (the Live neutral TimeoutAnnul once the foreclosure can no longer land; a new
+ *    Async proposal) only once every earlier one is dead on chain too.
  *  The chain enforces one terminal outcome on its own (every remedy needs IN_PROGRESS and ends it); this fence keeps the
  *  server from ever having two that could race. Callers serialize per game (the escrow service's per-game queue): the
  *  fence reads, then writes. */
 export type RemedyFence = { readonly kind: "proceed"; readonly retire: readonly ChainIntentRecord[] } | { readonly kind: "same" } | { readonly kind: "hold"; readonly why: string };
 
-export function remedyFence(existing: readonly ChainIntentRecord[], candidate: ChainIntentRecord): RemedyFence {
+export function remedyFence(existing: readonly ChainIntentRecord[], candidate: ChainIntentRecord, nowMs: number): RemedyFence {
   if (candidate.op.kind !== "remedy") return { kind: "hold", why: "not a remedy intent" };
+  const decision = candidate.op.decision;
   const remedies = existing.filter((intent) => intent.op.kind === "remedy");
   const own = remedies.find((intent) => intent.intent_id === candidate.intent_id);
   if (own !== undefined) return sameChainIntent(own, candidate) ? { kind: "same" } : { kind: "hold", why: "a different attestation occupies this remedy slot" };
@@ -468,6 +485,12 @@ export function remedyFence(existing: readonly ChainIntentRecord[], candidate: C
   if (landed !== undefined) return { kind: "hold", why: "a remedy of this game is already confirmed on chain; nothing more is prepared" };
   const open = remedies.find((intent) => intent.status === "pending" || intent.status === "in-flight" || (intent.status === "held" && intent.attempts.some(isLiveAttempt)));
   if (open !== undefined) return { kind: "hold", why: `an earlier remedy intent of this game is still ${open.status}; it must resolve before another is prepared` };
+  const nowSecs = BigInt(Math.floor(nowMs / 1000));
+  const margin = BigInt(REMEDY_FENCE_CLOCK_MARGIN_SECS);
+  const alive = remedies.find((intent) => intent.op.kind === "remedy" && intent.op.decision !== decision && nowSecs < BigInt(intent.op.usable_until) + margin);
+  if (alive !== undefined && alive.op.kind === "remedy") {
+    return { kind: "hold", why: `an earlier attestation of another remedy decision could still land until ${alive.op.usable_until} (block time); a different decision waits until it cannot` };
+  }
   return { kind: "proceed", retire: remedies.filter((intent) => intent.status === "held") };
 }
 

@@ -205,7 +205,7 @@ pub enum ContractError {
     #[error("the review delay has not elapsed; the review may be decided from {at}")]
     ReviewDelayNotElapsed { at: Timestamp },
 
-    #[error("the game's resolver holds a seat in it and cannot review it")]
+    #[error("the game's resolver holds a seat in it, so it can neither review nor judge it")]
     ResolverIsSeated {},
 
     #[error("the pending review request is the one made at {requested_at}, not the one decided")]
@@ -253,6 +253,9 @@ pub enum ContractError {
 
     #[error("the defaulting seat {seat_index} cannot approve a remedy against itself")]
     DefaulterCannotApprove { seat_index: u8 },
+
+    #[error("seat {seat_index}'s remedy approval expired at {approve_until}")]
+    ApprovalExpired { seat_index: u8, approve_until: u64 },
 
     #[error("a third-strike foreclosure can only be upheld or annulled, never replaced")]
     RemedySettlementNotReplaceable {},

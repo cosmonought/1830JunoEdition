@@ -24,7 +24,7 @@ use eighteen_cosmos_escrow::contract::{execute, instantiate, migrate, query};
 use eighteen_cosmos_escrow::crypto;
 use eighteen_cosmos_escrow::msg::{
     CheckpointsResponse, ConfigResponse, DeadlineChoice, ExecuteMsg, GameResponse, InstantiateMsg,
-    JoinAdmission, QueryMsg, RemedyAttestationV1, ResolveOutcome, SeatSignature,
+    JoinAdmission, QueryMsg, RemedyApproval, RemedyAttestationV1, ResolveOutcome, SeatSignature,
     SettlementPayloadV1, SignedCheckpoint,
 };
 use eighteen_cosmos_escrow::payload::{Payload, KIND_CHECKPOINT, KIND_TERMINAL};
@@ -1076,12 +1076,25 @@ impl Suite {
         crypto::remedy_digest(&a.encode().unwrap())
     }
 
-    /// REMEDY-APPROVE signatures of `seats` (by their consent keys) for `a`.
-    pub fn approvals(&self, a: &RemedyAttestation, seats: &[usize]) -> Vec<SeatSignature> {
+    /// REMEDY-APPROVE approvals of `seats` (by their consent keys) for `a`,
+    /// each usable for one day from the current block time.
+    pub fn approvals(&self, a: &RemedyAttestation, seats: &[usize]) -> Vec<RemedyApproval> {
+        let until = self.now().seconds() + DAY;
+        self.approvals_until(a, seats, until)
+    }
+
+    /// REMEDY-APPROVE approvals of `seats` for `a`, usable until `until`.
+    pub fn approvals_until(
+        &self,
+        a: &RemedyAttestation,
+        seats: &[usize],
+        until: u64,
+    ) -> Vec<RemedyApproval> {
         seats
             .iter()
-            .map(|&i| SeatSignature {
+            .map(|&i| RemedyApproval {
                 seat_index: i as u8,
+                approve_until: Uint64::new(until),
                 signature: Key::seat(i).sign(&crypto::remedy_approve_digest(
                     &a.domain,
                     a.chain_game_id,
@@ -1092,6 +1105,7 @@ impl Suite {
                     a.log_len,
                     &a.log_hash,
                     a.overdue_at,
+                    until,
                     i as u8,
                 )),
             })
@@ -1108,7 +1122,7 @@ impl Suite {
         &self,
         a: &RemedyAttestation,
         key: &Key,
-        approvals: Vec<SeatSignature>,
+        approvals: Vec<RemedyApproval>,
     ) -> ExecuteMsg {
         ExecuteMsg::SubmitRemedy {
             chain_game_id: a.chain_game_id,

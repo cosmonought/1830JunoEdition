@@ -19,7 +19,7 @@
 //! remedy      = SHA-256("18JUNO/REMEDY/v1" ‖ encode(attestation))      signed by a REMEDY key
 //! approve     = SHA-256("18JUNO/REMEDY-APPROVE/v1" ‖ domain ‖ u64(chain_game_id) ‖ u8(remedy)
 //!                       ‖ u8(defaulting_seat) ‖ u8(strike) ‖ u64(overdue_epoch) ‖ u64(log_len)
-//!                       ‖ log_hash ‖ u64(overdue_at) ‖ u8(approving_seat))
+//!                       ‖ log_hash ‖ u64(overdue_at) ‖ u64(approve_until) ‖ u8(approving_seat))
 //!                                                                  signed by a seat's consent key
 //! ```
 //!
@@ -32,10 +32,14 @@
 //! REMEDY-APPROVE: one non-defaulting seat's approval of one remedy kind
 //! against one defaulting seat for ONE overdue instance -- its strike, epoch,
 //! the exact log position it stalled at and the moment it became overdue, each
-//! of which must equal the attestation's; it names neither finality nor
-//! expiry, so a seat approves while the overdue is pending, the remedy key
-//! decides finality, and a re-attestation of the same final decision keeps the
-//! approvals. Neither digest is ever signed by
+//! of which must equal the attestation's -- and until when the approval may
+//! be used (`approve_until`, the approving seat's own choice, compared with
+//! block time). It names neither the attestation's finality nor its expiry,
+//! so a seat approves while the overdue is pending, the remedy key decides
+//! finality, and a re-attestation of the same final decision keeps the
+//! approvals until their own horizon; an approval of an overdue that was
+//! later cured is dead from that horizon on even before a checkpoint past the
+//! stall reaches the chain. Neither digest is ever signed by
 //! a settlement signer key or the admission key; every tag differs, so no
 //! signature made for one purpose verifies for another.
 //!
@@ -215,8 +219,10 @@ pub fn remedy_digest(encoded_attestation: &[u8]) -> [u8; 32] {
 /// became overdue (`overdue_at`). Each of them must equal the attestation's,
 /// so an approval given for one overdue never counts for another, whatever
 /// the REMEDY key later attests (a cured overdue's approvals are dead once play
-/// moves on). Finality and expiry are not bound: approvals survive the
-/// re-attestation of the same final decision.
+/// moves on), and `approve_until`: the seat's own bound on the approval's
+/// use (the contract refuses it from that block second on). The attestation's
+/// finality and expiry are not bound: approvals survive the re-attestation of
+/// the same final decision, until their own `approve_until`.
 #[allow(clippy::too_many_arguments)]
 pub fn remedy_approve_digest(
     domain: &[u8; 32],
@@ -228,6 +234,7 @@ pub fn remedy_approve_digest(
     log_len: u64,
     log_hash: &[u8; 32],
     overdue_at: u64,
+    approve_until: u64,
     approving_seat: u8,
 ) -> [u8; 32] {
     let mut hasher = Sha256::new();
@@ -239,6 +246,7 @@ pub fn remedy_approve_digest(
     hasher.update(log_len.to_be_bytes());
     hasher.update(log_hash);
     hasher.update(overdue_at.to_be_bytes());
+    hasher.update(approve_until.to_be_bytes());
     hasher.update([approving_seat]);
     hasher.finalize().into()
 }
@@ -421,22 +429,23 @@ mod tests {
     fn remedy_approve_digest_binds_every_field() {
         let domain = [9u8; 32];
         let log = [4u8; 32];
-        let base = remedy_approve_digest(&domain, 5, 2, 1, 2, 7, 40, &log, 1_000, 0);
+        let base = remedy_approve_digest(&domain, 5, 2, 1, 2, 7, 40, &log, 1_000, 9_000, 0);
         let mut other = domain;
         other[0] ^= 1;
         let mut other_log = log;
         other_log[31] ^= 1;
         for changed in [
-            remedy_approve_digest(&other, 5, 2, 1, 2, 7, 40, &log, 1_000, 0),
-            remedy_approve_digest(&domain, 6, 2, 1, 2, 7, 40, &log, 1_000, 0),
-            remedy_approve_digest(&domain, 5, 5, 1, 2, 7, 40, &log, 1_000, 0),
-            remedy_approve_digest(&domain, 5, 2, 0, 2, 7, 40, &log, 1_000, 0),
-            remedy_approve_digest(&domain, 5, 2, 1, 1, 7, 40, &log, 1_000, 0),
-            remedy_approve_digest(&domain, 5, 2, 1, 2, 8, 40, &log, 1_000, 0),
-            remedy_approve_digest(&domain, 5, 2, 1, 2, 7, 41, &log, 1_000, 0),
-            remedy_approve_digest(&domain, 5, 2, 1, 2, 7, 40, &other_log, 1_000, 0),
-            remedy_approve_digest(&domain, 5, 2, 1, 2, 7, 40, &log, 1_001, 0),
-            remedy_approve_digest(&domain, 5, 2, 1, 2, 7, 40, &log, 1_000, 2),
+            remedy_approve_digest(&other, 5, 2, 1, 2, 7, 40, &log, 1_000, 9_000, 0),
+            remedy_approve_digest(&domain, 6, 2, 1, 2, 7, 40, &log, 1_000, 9_000, 0),
+            remedy_approve_digest(&domain, 5, 5, 1, 2, 7, 40, &log, 1_000, 9_000, 0),
+            remedy_approve_digest(&domain, 5, 2, 0, 2, 7, 40, &log, 1_000, 9_000, 0),
+            remedy_approve_digest(&domain, 5, 2, 1, 1, 7, 40, &log, 1_000, 9_000, 0),
+            remedy_approve_digest(&domain, 5, 2, 1, 2, 8, 40, &log, 1_000, 9_000, 0),
+            remedy_approve_digest(&domain, 5, 2, 1, 2, 7, 41, &log, 1_000, 9_000, 0),
+            remedy_approve_digest(&domain, 5, 2, 1, 2, 7, 40, &other_log, 1_000, 9_000, 0),
+            remedy_approve_digest(&domain, 5, 2, 1, 2, 7, 40, &log, 1_001, 9_000, 0),
+            remedy_approve_digest(&domain, 5, 2, 1, 2, 7, 40, &log, 1_000, 9_001, 0),
+            remedy_approve_digest(&domain, 5, 2, 1, 2, 7, 40, &log, 1_000, 9_000, 2),
         ] {
             assert_ne!(changed, base);
         }

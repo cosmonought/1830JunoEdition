@@ -43,7 +43,7 @@ use crate::helpers::{
     active_remedy_key, add_secs, game_domain, load_game, nonpayable, pay_foreclosure, refund_all,
     require_not_paused, require_state, save_game, trusted_seq, verify_remedy_approvals,
 };
-use crate::msg::{RemedyAttestationV1, SeatSignature};
+use crate::msg::{RemedyApproval, RemedyAttestationV1};
 use crate::payload::KIND_TERMINAL;
 use crate::remedy::{RemedyAttestation, REMEDY_VERSION};
 use crate::state::{
@@ -187,7 +187,9 @@ fn strike3_payload_record(
 ///
 /// Check order: funds → game → state → policy → remedy kind → pause (the
 /// foreclosing kinds) → shape against the game and its terms → finality, attestation time and
-/// expiry against block time → sequence → remedy key → signature → approvals.
+/// expiry against block time → sequence → remedy key → signature → approvals
+/// (each: seat range, not the defaulter, not a duplicate, `approve_until`
+/// against block time, signature; then all N−1 present).
 /// A refusal changes nothing.
 pub fn submit_remedy(
     deps: DepsMut,
@@ -196,7 +198,7 @@ pub fn submit_remedy(
     chain_game_id: u64,
     wire: RemedyAttestationV1,
     signature: HexBinary,
-    approvals: Vec<SeatSignature>,
+    approvals: Vec<RemedyApproval>,
 ) -> Result<Response, ContractError> {
     nonpayable(&info)?;
     let mut game = load_game(deps.storage, chain_game_id)?;
@@ -245,7 +247,7 @@ pub fn submit_remedy(
         key.pubkey.as_slice(),
     )?;
     let approvals_bitmap = if kind.needs_approvals() {
-        verify_remedy_approvals(deps.api, &game, &attestation, &approvals)?
+        verify_remedy_approvals(deps.api, &game, &attestation, &approvals, now_secs)?
     } else if approvals.is_empty() {
         0
     } else {
@@ -302,6 +304,7 @@ pub fn submit_remedy(
         allowance_secs: Uint64::new(attestation.allowance_secs),
         overdue_at: Uint64::new(attestation.overdue_at),
         final_at: Uint64::new(attestation.final_at),
+        attested_at: Uint64::new(attestation.attested_at),
         expires_at: Uint64::new(attestation.expires_at),
         evidence_hash: HexBinary::from(attestation.evidence_hash.as_slice()),
         remedy_key_id: attestation.remedy_key_id,

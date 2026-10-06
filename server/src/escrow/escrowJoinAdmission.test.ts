@@ -265,6 +265,14 @@ describe("ESCROW-JOIN: authorizeJoin issues an admission only through the existi
     assert.ok((await world.service.authorizeJoin(bobAsks(bobTicket))).ok, "and with everything right, it is issued");
   });
 
+  test("escrow 2.1.0: a trusted resolver's wallet is never admitted to a seat (the contract would refuse to start the game)", async () => {
+    const world = makeWorld({ extraResolvers: [WALLETS[1]] });
+    const { bobTicket } = await openSeat(world);
+    assert.equal(refusal(await world.service.authorizeJoin(bobAsks(bobTicket))), "resolver-wallet");
+    assert.equal((await world.ledger.standingGrantOf(GAME_A, BOB))?.admitted_until_secs, null, "nothing recorded");
+    assert.equal(world.ops.lines.filter((line) => line.event === "money.join-admitted").length, 0, "nothing signed");
+  });
+
   test("no conflicting grant: another seat's standing ticket naming the same wallet refuses", async () => {
     const world = makeWorld();
     const { bobTicket } = await openSeat(world);

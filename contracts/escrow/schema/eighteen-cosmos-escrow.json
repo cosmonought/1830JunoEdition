@@ -703,10 +703,10 @@
             ],
             "properties": {
               "approvals": {
-                "description": "Remedies 2, 4, 5: one REMEDY-APPROVE signature per non-defaulting seat. Remedies 1 and 3: empty.",
+                "description": "Remedies 2, 4, 5: one unexpired REMEDY-APPROVE approval per non-defaulting seat. Remedies 1 and 3: empty.",
                 "type": "array",
                 "items": {
-                  "$ref": "#/definitions/SeatSignature"
+                  "$ref": "#/definitions/RemedyApproval"
                 }
               },
               "attestation": {
@@ -1138,6 +1138,29 @@
           "live",
           "async"
         ]
+      },
+      "RemedyApproval": {
+        "description": "A non-defaulting seat's approval of a remedy (escrow 2.1.0): its consent key's 64-byte low-s `r ‖ s` over the REMEDY-APPROVE digest, which binds `approve_until` (Unix seconds, compared with block time): the seat's own bound on how long its approval may be used. From that second on the approval is refused (`ApprovalExpired`), whatever the REMEDY key attests.",
+        "type": "object",
+        "required": [
+          "approve_until",
+          "seat_index",
+          "signature"
+        ],
+        "properties": {
+          "approve_until": {
+            "$ref": "#/definitions/Uint64"
+          },
+          "seat_index": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0.0
+          },
+          "signature": {
+            "$ref": "#/definitions/HexBinary"
+          }
+        },
+        "additionalProperties": false
       },
       "RemedyAttestationV1": {
         "description": "`RemedyAttestationV1` (see `remedy`), in field order. All times are Unix seconds. The contract re-encodes it to the canonical 166 bytes before hashing; nothing here is hashed as JSON.",
@@ -2839,6 +2862,7 @@
             "accepted_at",
             "allowance_secs",
             "approvals_bitmap",
+            "attested_at",
             "defaulting_seat",
             "evidence_hash",
             "expires_at",
@@ -2864,6 +2888,14 @@
               "type": "integer",
               "format": "uint8",
               "minimum": 0.0
+            },
+            "attested_at": {
+              "description": "When the remedy key attested the decision that took effect (a re-attestation of the same final decision differs only here and in `expires_at`, `remedy_key_id` and the digest).",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/Uint64"
+                }
+              ]
             },
             "defaulting_seat": {
               "type": "integer",

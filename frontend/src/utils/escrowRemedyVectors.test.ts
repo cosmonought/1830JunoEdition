@@ -28,6 +28,7 @@ import {
   REVIEW_DELAY_SECS,
   RemedyInputError,
   encodeRemedyAttestationV1,
+  remedyApprovalWire,
   remedyApproveDigestV1,
   remedyApprovePreimageV1,
   remedyAttestationWire,
@@ -40,11 +41,12 @@ import {
 } from "../gameEngine/escrow/junoRemedyV1";
 
 const FILE = join(__dirname, "..", "..", "..", "contracts", "escrow", "testdata", "remedy_vectors_v1.json");
-const FILE_SHA256 = "de7f8dfc2817afea22998153f6224f9b0a536dfaf75a8b22c427f3a0c684127b";
+const FILE_SHA256 = "6613f137eaa07cfd20a70aa4d52a7db5588cf0ef8782a2247261750c1d2b191a";
 const SECP_N = BigInt("0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141");
 
 interface Approval {
   seat_index: number;
+  approve_until: string;
   preimage: string;
   digest: string;
   signed_digest: string;
@@ -114,8 +116,8 @@ describe("FP4: the frozen remedy vectors", () => {
     expect(doc.format).toBe("18JUNO/REMEDY/vectors/v1");
     expect(doc.tag).toBe(JUNO_REMEDY_TAG_V1);
     expect(doc.approve_tag).toBe(JUNO_REMEDY_APPROVE_TAG_V1);
-    expect(doc.vectors).toHaveLength(38);
-    expect(doc.vectors.filter((v) => v.valid).map((v) => v.name)).toEqual(["live-timeout-annul", "live-foreclose", "live-strike3", "async-annul", "async-foreclose", "reattested-foreclose"]);
+    expect(doc.vectors).toHaveLength(41);
+    expect(doc.vectors.filter((v) => v.valid).map((v) => v.name)).toEqual(["live-timeout-annul", "live-foreclose", "live-strike3", "async-annul", "async-foreclose", "reattested-foreclose", "approval-last-second"]);
     expect([LIVE_ACTION_SECS, LIVE_CURE_WINDOW_SECS, REVIEW_DELAY_SECS, MAX_REMEDY_TTL_SECS]).toEqual([1200, 600, 604800, 3600]);
     expect([...ASYNC_PACES_SECS]).toEqual([43200, 86400, 172800, 259200, 604800]);
   });
@@ -131,8 +133,10 @@ describe("FP4: the frozen remedy vectors", () => {
     expect(remedyAttestationWire(a)).toEqual(v.attestation);
     expect(await contractVerdict(doc.keys.remedy.pubkey, v.digest, v.signature)).toBe(v.signature_verifies);
     for (const approval of v.approvals) {
-      expect(hexOf(remedyApprovePreimageV1(a, approval.seat_index))).toBe(approval.preimage);
-      expect(remedyApproveDigestV1(a, approval.seat_index)).toBe(approval.digest);
+      const until = BigInt(approval.approve_until);
+      expect(hexOf(remedyApprovePreimageV1(a, until, approval.seat_index))).toBe(approval.preimage);
+      expect(remedyApproveDigestV1(a, until, approval.seat_index)).toBe(approval.digest);
+      expect(remedyApprovalWire({ seat_index: approval.seat_index, approve_until: until, signature: approval.signature.length === 128 ? approval.signature : "00".repeat(64) }).approve_until).toBe(approval.approve_until);
       expect(await contractVerdict(doc.keys.seats[approval.seat_index].pubkey, approval.digest, approval.signature)).toBe(approval.signature_verifies);
     }
   });
@@ -177,6 +181,9 @@ describe("FP4: the frozen remedy vectors", () => {
     expect(() => encodeRemedyAttestationV1({ ...a, remedy_key_id: 65536 })).toThrow(RemedyInputError);
     expect(() => encodeRemedyAttestationV1({ ...a, domain: "AB".repeat(32) })).toThrow(RemedyInputError);
     expect(() => encodeRemedyAttestationV1({ ...a, log_hash: "ab".repeat(31) })).toThrow(RemedyInputError);
-    expect(() => remedyApproveDigestV1(a, 7.5)).toThrow(RemedyInputError);
+    expect(() => remedyApproveDigestV1(a, BigInt(1), 7.5)).toThrow(RemedyInputError);
+    expect(() => remedyApproveDigestV1(a, BigInt(-1), 0)).toThrow(RemedyInputError);
+    expect(() => remedyApprovalWire({ seat_index: 0, approve_until: BigInt(1) << BigInt(64), signature: "00".repeat(64) })).toThrow(RemedyInputError);
+    expect(() => remedyApprovalWire({ seat_index: 0, approve_until: BigInt(1), signature: "AB".repeat(64) })).toThrow(RemedyInputError);
   });
 });

@@ -1787,6 +1787,9 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
         const deadline = view.deadlines.funding_deadline;
         if (deadline !== null && /^[0-9]+$/.test(deadline) && BigInt(nowSecs) >= BigInt(deadline)) return no("funding-closed", "the escrow's funding deadline has passed");
         if (view.seats.some((seat) => seat.payout_address === wallet)) return no("already-seated", "this wallet already holds a seat of this chain game");
+        /* Escrow 2.1.0: a resolver never holds a seat in a game it would judge (the contract refuses to START such a game,
+           which would leave the table waiting on withdrawals): a trusted resolver's wallet is never admitted. */
+        if (backend.trust.resolvers.includes(wallet)) return no("resolver-wallet", "an escrow resolver's wallet cannot hold a seat at a money table (it would judge its own stake)");
         const expiresAt = nowSecs + admission.ttlSecs;
         const recorded = await deps.tickets.recordAdmission({ gameId: input.gameId, playerId: input.playerId, epoch: grant.epoch, wallet, ticket: grant.ticket, expiresAt });
         /* LIVE-5 L5-2 (F-L5-6): an UNCERTAIN record is not committed -- nothing is signed on it (the admission's record

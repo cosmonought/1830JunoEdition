@@ -11,7 +11,7 @@ use crate::error::ContractError;
 use crate::helpers::{
     active_signer_key, add_secs, check_payload_for_game, full_mask, load_game, nonpayable, pay_out,
     payload_record, require_not_paused, require_state, require_trusted_settlement, save_game,
-    seat_bit, stored_consent_digest, trusted_seq, verify_seat_signatures,
+    seat_bit, seat_index_of, stored_consent_digest, trusted_seq, verify_seat_signatures,
 };
 use crate::msg::{SeatSignature, SettlementPayloadV1};
 use crate::payload::{fixed_bytes, Payload, PayloadUse};
@@ -21,9 +21,10 @@ use crate::state::{
     CHECKPOINTS, CONFIG,
 };
 
-/// Operator only, FUNDED, not paused. The operator's roster hash must equal the
-/// hash of the on-chain roster; the domain, bond, start times and the game's
-/// resolver (the current `CONFIG.resolver`) are frozen.
+/// Operator only, FUNDED, not paused; a 2.1.0 game also needs a resolver that
+/// holds none of its seats. The operator's roster hash must equal the hash of
+/// the on-chain roster; the domain, bond, start times and the game's resolver
+/// (the current `CONFIG.resolver`) are frozen.
 pub fn start(
     deps: DepsMut,
     env: Env,
@@ -41,6 +42,16 @@ pub fn start(
         });
     }
     require_not_paused(&config)?;
+    // Escrow 2.1.0: the resolver a game adopts here judges its disputes and
+    // its exceptional review, and never may while it holds a seat in it
+    // (`resolve`, `review_annul`). A 2.1.0 game whose seats include the
+    // current resolver does not start: it stays FUNDED, where withdrawal and
+    // cancellation still return every deposit (also while paused), until the
+    // seat leaves or the admin names another resolver. A 2.0.0 game keeps its
+    // semantics.
+    if game.terms.policy.is_some() && seat_index_of(&game, &config.resolver).is_some() {
+        return Err(ContractError::ResolverIsSeated {});
+    }
     let provided = fixed_bytes::<32>("roster_hash", &provided_roster_hash)?;
     let wallets: Vec<&str> = game.seats.iter().map(|s| s.wallet.as_str()).collect();
     let computed = roster_hash(&wallets)?;

@@ -52,6 +52,21 @@ const seatSignatures = (consents: readonly SeatSignatureJson[]): SeatSignatureJs
     return { seat_index: consent.seat_index, signature: hexField(consent.signature, HEX64, `consents[${at}].signature`) };
   });
 
+/** FP4: one seat's REMEDY-APPROVE as `SubmitRemedy` carries it (`RemedyApproval` in msg.rs; `remedyApprovalWire`). */
+export interface RemedyApprovalJson {
+  readonly seat_index: number;
+  /** Decimal u64 string: the seat's signed horizon. */
+  readonly approve_until: string;
+  readonly signature: string;
+}
+
+const remedyApprovals = (approvals: readonly RemedyApprovalJson[]): RemedyApprovalJson[] =>
+  approvals.map((approval, at) => {
+    const seat = seatSignatures([{ seat_index: approval.seat_index, signature: approval.signature }])[0];
+    if (typeof approval.approve_until !== "string" || !/^(0|[1-9][0-9]{0,19})$/.test(approval.approve_until) || BigInt(approval.approve_until) > BigInt("18446744073709551615")) throw new JunoAbiError(`approvals[${at}].approve_until`);
+    return { seat_index: seat.seat_index, approve_until: approval.approve_until, signature: seat.signature };
+  });
+
 /** Relayer execute messages (the server signs and pays for these; none carries funds). */
 export const RELAYER_EXECUTE = Object.freeze({
   start: (chainGameId: string, rosterHash: string) => execute("start", u64Json(chainGameId, "chain_game_id"), { roster_hash: hexField(rosterHash, HEX32, "roster_hash") }),
@@ -65,9 +80,10 @@ export const RELAYER_EXECUTE = Object.freeze({
   finalize: (chainGameId: string) => execute("finalize", u64Json(chainGameId, "chain_game_id"), {}),
   annulByConsent: (chainGameId: string, consents: readonly SeatSignatureJson[]) => execute("annul_by_consent", u64Json(chainGameId, "chain_game_id"), { consents: seatSignatures(consents) }),
   /** FP4 (escrow 2.1.0): the dedicated REMEDY key's attestation (`remedyAttestationWire`, junoRemedyV1.ts) and the
-   *  seats' REMEDY-APPROVE signatures (empty for remedies 1 and 3). Carries no address and no amount. */
-  submitRemedy: (chainGameId: string, attestation: Readonly<Record<string, string | number>>, signatureHex: string, approvals: readonly SeatSignatureJson[]) =>
-    execute("submit_remedy", u64Json(chainGameId, "chain_game_id"), { attestation, signature: hexField(signatureHex, HEX64, "signature"), approvals: seatSignatures(approvals) }),
+   *  seats' REMEDY-APPROVE approvals, each with its signed `approve_until` (empty for remedies 1 and 3). Carries no
+   *  address and no amount. */
+  submitRemedy: (chainGameId: string, attestation: Readonly<Record<string, string | number>>, signatureHex: string, approvals: readonly RemedyApprovalJson[]) =>
+    execute("submit_remedy", u64Json(chainGameId, "chain_game_id"), { attestation, signature: hexField(signatureHex, HEX64, "signature"), approvals: remedyApprovals(approvals) }),
 });
 
 export const QUERY = Object.freeze({
@@ -484,7 +500,7 @@ export const JUNO_ERROR_TEMPLATES: Readonly<Record<string, string>> = Object.fre
   ReviewNotAvailable: "the exceptional review is only for an escrow 2.1 game",
   ReviewNotRequested: "no seated wallet has requested the review of game {chain_game_id}",
   ReviewDelayNotElapsed: "the review delay has not elapsed; the review may be decided from {at}",
-  ResolverIsSeated: "the game's resolver holds a seat in it and cannot review it",
+  ResolverIsSeated: "the game's resolver holds a seat in it, so it can neither review nor judge it",
   ReviewRequestMismatch: "the pending review request is the one made at {requested_at}, not the one decided",
   RemedyNotAvailable: "this game's escrow policy has no timed remedies",
   BadRemedyKind: "remedy {got} is unknown",
@@ -500,6 +516,7 @@ export const JUNO_ERROR_TEMPLATES: Readonly<Record<string, string>> = Object.fre
   DuplicateRemedyKey: "this public key is already registered as remedy key {key_id}",
   ApprovalsNotAllowed: "remedy {remedy} carries no seat approvals",
   DefaulterCannotApprove: "the defaulting seat {seat_index} cannot approve a remedy against itself",
+  ApprovalExpired: "seat {seat_index}'s remedy approval expired at {approve_until}",
   RemedySettlementNotReplaceable: "a third-strike foreclosure can only be upheld or annulled, never replaced",
   RemedyKeyIdsExhausted: "the remedy key registry is full",
 });

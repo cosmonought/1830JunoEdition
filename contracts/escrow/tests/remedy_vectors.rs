@@ -5,17 +5,18 @@
 //! specification text. Every byte is reproduced here (the encoding, both
 //! digests, the games' domains), and every replayable vector is then EXECUTED
 //! ON CHAIN in a fresh game at its recorded block time, with exactly the
-//! verdict the generator recorded: the six valid remedies (the five kinds and
-//! a re-attested foreclosure) move the game to their state; every mutated,
-//! mis-signed, stale, expired, premature, future-dated or mis-approved one is
-//! refused with the recorded error and changes nothing.
+//! verdict the generator recorded: the seven valid remedies (the five kinds, a
+//! re-attested foreclosure and one relayed at its approvals' last second) move
+//! the game to their state; every mutated, mis-signed, stale, expired,
+//! premature, future-dated, mis-approved or expired-approval one is refused
+//! with the recorded error and changes nothing.
 
 mod common;
 
 use common::*;
 use cosmwasm_std::{HexBinary, Uint64};
 use eighteen_cosmos_escrow::crypto::{self, DomainInputs};
-use eighteen_cosmos_escrow::msg::{ExecuteMsg, RemedyAttestationV1, SeatSignature};
+use eighteen_cosmos_escrow::msg::{ExecuteMsg, RemedyApproval, RemedyAttestationV1};
 use eighteen_cosmos_escrow::remedy::{RemedyAttestation, REMEDY_ENCODED_LEN};
 use eighteen_cosmos_escrow::state::{GameState, Mode};
 use serde_json::Value;
@@ -23,7 +24,7 @@ use sha2::{Digest, Sha256};
 
 const FILE: &str = include_str!("../testdata/remedy_vectors_v1.json");
 /// The frozen file. Regenerating it is a certified-byte change.
-const FILE_SHA256: &str = "de7f8dfc2817afea22998153f6224f9b0a536dfaf75a8b22c427f3a0c684127b";
+const FILE_SHA256: &str = "6613f137eaa07cfd20a70aa4d52a7db5588cf0ef8782a2247261750c1d2b191a";
 
 fn doc() -> Value {
     serde_json::from_str(FILE).unwrap()
@@ -68,13 +69,14 @@ fn attestation(v: &Value) -> RemedyAttestation {
     }
 }
 
-fn approvals(v: &Value) -> Vec<SeatSignature> {
+fn approvals(v: &Value) -> Vec<RemedyApproval> {
     v["approvals"]
         .as_array()
         .unwrap()
         .iter()
-        .map(|x| SeatSignature {
+        .map(|x| RemedyApproval {
             seat_index: small(&x["seat_index"]) as u8,
+            approve_until: Uint64::new(dec(&x["approve_until"])),
             signature: HexBinary::from(hex(&x["signature"])),
         })
         .collect()
@@ -110,10 +112,11 @@ fn the_file_is_the_frozen_one() {
             "live-strike3",
             "async-annul",
             "async-foreclose",
-            "reattested-foreclose"
+            "reattested-foreclose",
+            "approval-last-second"
         ]
     );
-    assert_eq!(d["vectors"].as_array().unwrap().len(), 38);
+    assert_eq!(d["vectors"].as_array().unwrap().len(), 41);
 }
 
 /// The test keys are the Suite's: remedy key id 1, signer 1, admission 1,
@@ -203,6 +206,7 @@ fn every_encoding_and_digest_is_reproduced() {
                 a.log_len,
                 &a.log_hash,
                 a.overdue_at,
+                dec(&x["approve_until"]),
                 seat,
             );
             assert_eq!(digest.to_vec(), hex(&x["digest"]), "{name} seat {seat}");
@@ -285,7 +289,7 @@ fn every_vector_replays_on_chain_with_the_recorded_verdict() {
         s.assert_custody();
         replayed += 1;
     }
-    assert_eq!(replayed, 37);
+    assert_eq!(replayed, 40);
 }
 
 /// The signature verdict the generator recorded (low-s ECDSA by remedy key

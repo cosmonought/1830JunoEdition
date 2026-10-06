@@ -30,7 +30,7 @@ use cosmwasm_std::{
 
 use crate::crypto::{check_signature, consent_digest, remedy_approve_digest};
 use crate::error::ContractError;
-use crate::msg::SeatSignature;
+use crate::msg::{RemedyApproval, SeatSignature};
 use crate::payload::{fixed_bytes, Payload, PayloadUse};
 use crate::payout::{foreclosure_split, proportional_split, weights_have_positive_sum};
 use crate::remedy::RemedyAttestation;
@@ -406,15 +406,17 @@ pub fn verify_seat_signatures(
 
 /// Escrow 2.1.0: verifies the REMEDY-APPROVE signatures carried by a
 /// `SubmitRemedy` that needs them. Each must come from a seat in range other
-/// than the defaulting one, at most once per seat, and verify against that
-/// seat's CURRENT consent key over the approval digest naming that seat; and
-/// every non-defaulting seat must be present (all N−1). Returns the bit mask
-/// of the approving seats.
+/// than the defaulting one, at most once per seat, be unexpired at the block
+/// time (`now_secs < approve_until`), and verify against that seat's CURRENT
+/// consent key over the approval digest naming that seat and its
+/// `approve_until`; and every non-defaulting seat must be present (all N−1).
+/// Returns the bit mask of the approving seats.
 pub fn verify_remedy_approvals(
     api: &dyn Api,
     game: &Game,
     attestation: &RemedyAttestation,
-    approvals: &[SeatSignature],
+    approvals: &[RemedyApproval],
+    now_secs: u64,
 ) -> Result<u8, ContractError> {
     let domain = game_domain(game)?;
     let defaulting = usize::from(attestation.defaulting_seat);
@@ -438,6 +440,13 @@ pub fn verify_remedy_approvals(
                 seat_index: entry.seat_index,
             });
         }
+        let approve_until = entry.approve_until.u64();
+        if now_secs >= approve_until {
+            return Err(ContractError::ApprovalExpired {
+                seat_index: entry.seat_index,
+                approve_until,
+            });
+        }
         let digest = remedy_approve_digest(
             &domain,
             game.chain_game_id,
@@ -448,6 +457,7 @@ pub fn verify_remedy_approvals(
             attestation.log_len,
             &attestation.log_hash,
             attestation.overdue_at,
+            approve_until,
             entry.seat_index,
         );
         check_signature(

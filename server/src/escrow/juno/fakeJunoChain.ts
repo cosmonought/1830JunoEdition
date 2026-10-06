@@ -197,6 +197,7 @@ interface FakeRemedy {
   overdue_epoch: string;
   log_len: string;
   final_at: string;
+  attested_at: string;
   expires_at: string;
   remedy_key_id: number;
   remedy_digest: string;
@@ -502,7 +503,7 @@ export class FakeJunoChain implements JunoRest {
     if (game.state !== "disputed" || game.dispute === null || game.settlement === null) return { ok: false, error: `wrong state: game is ${game.state}` };
     if (sender !== game.resolver) return { ok: false, error: "unauthorized: resolver" };
     /* Escrow 2.1.0: a resolver seated in the game never adjudicates it; a third strike is upheld or annulled only. */
-    if (game.policy !== null && game.seats.some((seat) => seat.wallet === game.resolver)) return { ok: false, error: "the game's resolver holds a seat in it and cannot review it" };
+    if (game.policy !== null && game.seats.some((seat) => seat.wallet === game.resolver)) return { ok: false, error: "the game's resolver holds a seat in it, so it can neither review nor judge it" };
     if ("replace" in outcome && game.settlement.source === "remedy_strike3") return { ok: false, error: "a third-strike foreclosure can only be upheld or annulled, never replaced" };
     const dispute = game.dispute;
     if ("uphold" in outcome) {
@@ -741,6 +742,8 @@ export class FakeJunoChain implements JunoRest {
         if (sender !== this.options.operator) throw new ContractFailure("unauthorized: only the operator may do this");
         if (this.paused) throw new ContractFailure("the contract is paused");
         if (game.state !== "funded") throw wrongState("funded");
+        /* Escrow 2.1.0 (`play.rs::start`): a game whose seats include the current resolver does not start. */
+        if (game.policy !== null && game.seats.some((seat) => seat.wallet === this.options.resolver)) throw new ContractFailure("the game's resolver holds a seat in it, so it can neither review nor judge it");
         const rosterHash = rosterHashV1(game.seats.map((seat) => seat.wallet));
         if (body.roster_hash !== rosterHash) throw new ContractFailure("the roster hash does not match the on-chain roster");
         if (!apply) return;
@@ -924,7 +927,7 @@ export class FakeJunoChain implements JunoRest {
     if (!/^[0-9a-f]{128}$/.test(signature)) throw new ContractFailure(`a signature must be 64 bytes r||s, got ${signature.length / 2}`);
     const digest = remedyDigestV1(a);
     if (!verifyDigest(Buffer.from(key.pubkey, "hex"), Buffer.from(digest, "hex"), Buffer.from(signature, "hex"))) throw new ContractFailure("invalid signature");
-    const approvals = Array.isArray(body.approvals) ? (body.approvals as Array<{ seat_index: number; signature: string }>) : [];
+    const approvals = Array.isArray(body.approvals) ? (body.approvals as Array<{ seat_index: number; approve_until: string; signature: string }>) : [];
     let bitmap = 0;
     if (remedyNeedsApprovals(a.remedy)) {
       for (const approval of approvals) {
@@ -932,7 +935,10 @@ export class FakeJunoChain implements JunoRest {
         if (seat === undefined) throw new ContractFailure(`seat index ${approval.seat_index} is out of range`);
         if (approval.seat_index === a.defaulting_seat) throw new ContractFailure(`the defaulting seat ${approval.seat_index} cannot approve a remedy against itself`);
         if ((bitmap & (1 << approval.seat_index)) !== 0) throw new ContractFailure(`duplicate signature for seat ${approval.seat_index}`);
-        const approve = remedyApproveDigestV1(a, approval.seat_index);
+        if (typeof approval.approve_until !== "string" || !/^(0|[1-9][0-9]{0,19})$/.test(approval.approve_until)) throw new ContractFailure("Error parsing into type eighteen_cosmos_escrow::msg::ExecuteMsg: approve_until");
+        const until = BigInt(approval.approve_until);
+        if (BigInt(this.time) >= until) throw new ContractFailure(`seat ${approval.seat_index}'s remedy approval expired at ${approval.approve_until}`);
+        const approve = remedyApproveDigestV1(a, until, approval.seat_index);
         if (!/^[0-9a-f]{128}$/.test(approval.signature) || !verifyDigest(Buffer.from(seat.consent_pubkey, "hex"), Buffer.from(approve, "hex"), Buffer.from(approval.signature, "hex"))) {
           throw new ContractFailure(`invalid signature for seat ${approval.seat_index}`);
         }
@@ -980,6 +986,7 @@ export class FakeJunoChain implements JunoRest {
       overdue_epoch: a.overdue_epoch.toString(),
       log_len: a.log_len.toString(),
       final_at: a.final_at.toString(),
+      attested_at: a.attested_at.toString(),
       expires_at: a.expires_at.toString(),
       remedy_key_id: a.remedy_key_id,
       remedy_digest: digest,

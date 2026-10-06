@@ -134,6 +134,8 @@ export interface WorldOptions {
   readonly remedyKeys?: readonly string[];
   /** FP4: the remedy lane's gate (`EscrowServiceDeps.remedyGate`; default none: no remedy is ever relayed). */
   readonly remedyGate?: Parameters<typeof createEscrowService>[0]["remedyGate"];
+  /** FP4: more trusted resolver addresses beside the deployment's own (a test makes a player's wallet one). */
+  readonly extraResolvers?: readonly string[];
 }
 
 export const proofKey = (gameId: string, playerId: string, principalId: string) => `${gameId}|${playerId}|${principalId}`;
@@ -208,7 +210,7 @@ export function makeWorld(options: WorldOptions = {}): World {
       pin,
       symbol: "JUNOX",
       policy: [{ backend: "juno-cosmwasm", chain_id: pin.chain_id, network_class: pin.network_class, deployments: [{ kind: "juno-cosmwasm", contract_address: pin.contract_address, code_checksums: [pin.code_checksum], admin: null }] }],
-      trust: { operators: [RELAYER_ADDRESS], resolvers: ["juno1resolver"], min_challenge_window_secs: BigInt(1), min_liveness_window_secs: BigInt(1), min_resolver_timeout_secs: BigInt(1) },
+      trust: { operators: [RELAYER_ADDRESS], resolvers: ["juno1resolver", ...(options.extraResolvers ?? [])], min_challenge_window_secs: BigInt(1), min_liveness_window_secs: BigInt(1), min_resolver_timeout_secs: BigInt(1) },
       rest: chain,
       settlementKeys: [settlementKeyConfig()],
       settlementSigner: junoSettlementSigner(settlementKeyConfig(), JUNO_CODEC_V1, settlementSigner, journal),

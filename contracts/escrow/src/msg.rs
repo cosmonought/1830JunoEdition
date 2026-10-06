@@ -132,6 +132,18 @@ pub struct SeatSignature {
     pub signature: HexBinary,
 }
 
+/// A non-defaulting seat's approval of a remedy (escrow 2.1.0): its consent
+/// key's 64-byte low-s `r ‖ s` over the REMEDY-APPROVE digest, which binds
+/// `approve_until` (Unix seconds, compared with block time): the seat's own
+/// bound on how long its approval may be used. From that second on the
+/// approval is refused (`ApprovalExpired`), whatever the REMEDY key attests.
+#[cw_serde]
+pub struct RemedyApproval {
+    pub seat_index: u8,
+    pub approve_until: Uint64,
+    pub signature: HexBinary,
+}
+
 /// A signed Checkpoint payload carried inside `LivenessSettle`.
 #[cw_serde]
 pub struct SignedCheckpoint {
@@ -301,9 +313,9 @@ pub enum ExecuteMsg {
         attestation: RemedyAttestationV1,
         /// 64-byte low-s `r ‖ s` by the REMEDY key over the REMEDY digest.
         signature: HexBinary,
-        /// Remedies 2, 4, 5: one REMEDY-APPROVE signature per non-defaulting
-        /// seat. Remedies 1 and 3: empty.
-        approvals: Vec<SeatSignature>,
+        /// Remedies 2, 4, 5: one unexpired REMEDY-APPROVE approval per
+        /// non-defaulting seat. Remedies 1 and 3: empty.
+        approvals: Vec<RemedyApproval>,
     },
     // ------------------------------------------------------------- admin
     Pause {},

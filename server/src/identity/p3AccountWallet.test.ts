@@ -234,9 +234,11 @@ describe("P3-ACCT create account", () => {
       assert.equal((await create(port, signedIn, { username: "Bea2", password: PASSWORD, name: "Bea" })).status, 409, "the CREATE text is refused");
       assert.equal((await post(port, "/gs/api/account/create", signedIn, { username: "Bea2", password: PASSWORD, name: "Bea", ...forged })).status, 409, "and so is the create");
       /* The address's creation budget (6) is spent by every create that reached the account check -- Ann, the forged
-         "ANN", the short password, Bea -- so two more accounts fit and the next is refused at its CREATE text. */
-      for (const name of ["Cy", "Di"]) assert.equal((await create(port, await bootstrapCookie(port), { username: name, password: PASSWORD, name })).status, 201, name);
-      const limited = await create(port, await bootstrapCookie(port), { username: "Ed", password: PASSWORD, name: "Ed" });
+         "ANN", the short password, Bea -- AND (PHASE 3 FINAL security review M1) by the CREATE text's own "username
+         taken" answer for "ANN": a stranger learns no more existing usernames than the accounts it could make. So one
+         more account fits and the next is refused at its CREATE text. */
+      assert.equal((await create(port, await bootstrapCookie(port), { username: "Cy", password: PASSWORD, name: "Cy" })).status, 201, "Cy");
+      const limited = await create(port, await bootstrapCookie(port), { username: "Di", password: PASSWORD, name: "Di" });
       assert.equal(limited.status, 429);
     } finally {
       await stopServer(server);

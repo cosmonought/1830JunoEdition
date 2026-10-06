@@ -203,18 +203,24 @@ fn duplicate_and_out_of_range_seats_are_refused() {
 
 #[test]
 fn a_repeat_is_refused() {
-    let mut s = Suite::new();
-    let id = s.started(2);
-    let sigs = s.annul_sigs(id, &[0, 1], 0);
-    annul(&mut s, id, sigs.clone()).unwrap();
-    assert_eq!(
-        annul(&mut s, id, sigs).unwrap_err(),
-        ContractError::WrongState {
-            expected: "in_progress or settleable".to_string(),
-            actual: "annulled".to_string()
-        }
-    );
-    s.assert_custody();
+    for (legacy, expected) in [
+        (true, "in_progress or settleable"),
+        (false, "in_progress or settleable or disputed"),
+    ] {
+        let mut s = Suite::new();
+        s.legacy = legacy;
+        let id = s.started(2);
+        let sigs = s.annul_sigs(id, &[0, 1], 0);
+        annul(&mut s, id, sigs.clone()).unwrap();
+        assert_eq!(
+            annul(&mut s, id, sigs).unwrap_err(),
+            ContractError::WrongState {
+                expected: expected.to_string(),
+                actual: "annulled".to_string()
+            }
+        );
+        s.assert_custody();
+    }
 }
 
 #[test]
@@ -308,9 +314,12 @@ fn works_while_paused() {
     s.assert_custody();
 }
 
+/// Escrow 2.0.0 games: IN_PROGRESS or SETTLEABLE only. Escrow 2.1.0 games
+/// also accept DISPUTED (the universal unanimous annulment, `tests/remedy.rs`);
+/// FUNDING, FUNDED and every terminal state refuse both.
 #[test]
 fn only_in_progress_or_settleable() {
-    let mut s = Suite::new();
+    let mut s = Suite::new_legacy();
     let funding = s.create(0, 3, Mode::Live, ANTE);
     let funded = s.funded(2);
     let (disputed, _) = s.disputed(2);
@@ -331,6 +340,31 @@ fn only_in_progress_or_settleable() {
             }
         );
     }
+    s.legacy = false;
+    let funding = s.create(0, 3, Mode::Live, ANTE);
+    let funded = s.funded(2);
+    let (disputed, _) = s.disputed(2);
+    let settled = s.settled(2);
+    let cancelled = s.cancelled(2);
+    for (id, actual) in [
+        (funding, "funding"),
+        (funded, "funded"),
+        (settled, "settled"),
+        (cancelled, "cancelled"),
+    ] {
+        assert_eq!(
+            annul(&mut s, id, vec![]).unwrap_err(),
+            ContractError::WrongState {
+                expected: "in_progress or settleable or disputed".to_string(),
+                actual: actual.to_string()
+            }
+        );
+    }
+    // A 2.1.0 DISPUTED game passes the state gate (and then needs every seat).
+    assert_eq!(
+        annul(&mut s, disputed, vec![]).unwrap_err(),
+        ContractError::MissingConsent { seat_index: 0 }
+    );
     let who = s.outsider.clone();
     let id = s.started(2);
     let sigs = s.annul_sigs(id, &[0, 1], 0);

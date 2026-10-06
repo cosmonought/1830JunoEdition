@@ -1,5 +1,5 @@
-//! Governance: pause, the signer-key registry, role addresses and parameters for
-//! future games. Nothing here can move player funds, settle, cancel or annul a
+//! Governance: pause, the signer-key and remedy-key registries, role addresses
+//! and parameters for future games. Nothing here can move player funds, settle, cancel or annul a
 //! game, or change a game that already exists.
 
 use cosmwasm_std::{Addr, DepsMut, Env, HexBinary, MessageInfo, Response, Timestamp};
@@ -9,8 +9,8 @@ use crate::error::ContractError;
 use crate::helpers::nonpayable;
 use crate::payout::BPS_DENOMINATOR;
 use crate::state::{
-    Config, GameParams, SignerKey, ADMISSION_KEYS, CONFIG, NEXT_SIGNER_KEY_ID, SIGNER_KEYS,
-    SIGNER_PUBKEY_INDEX,
+    Config, GameParams, RemedyKey, SignerKey, ADMISSION_KEYS, CONFIG, NEXT_REMEDY_KEY_ID,
+    NEXT_SIGNER_KEY_ID, REMEDY_KEYS, REMEDY_PUBKEY_INDEX, SIGNER_KEYS, SIGNER_PUBKEY_INDEX,
 };
 
 /// Upper bound for every configured duration (10 years), so deadline arithmetic
@@ -26,6 +26,9 @@ pub const MAX_DURATION_SECS: u64 = 10 * 365 * 24 * 60 * 60;
 /// exit to be immune to the admin, so the registry is bounded. Raising the
 /// bound needs a code migration.
 pub const MAX_SIGNER_KEYS: u16 = 64;
+
+/// Upper bound on remedy keys ever registered (ids 1..=64; retired keys count).
+pub const MAX_REMEDY_KEYS: u16 = 64;
 
 fn require_admin(config: &Config, info: &MessageInfo) -> Result<(), ContractError> {
     if info.sender != config.admin {
@@ -71,7 +74,6 @@ pub fn validate_params(params: &GameParams) -> Result<(), ContractError> {
         ),
         ("liveness_window_secs", params.liveness_window_secs),
         ("resolver_timeout_secs", params.resolver_timeout_secs),
-        ("review_delay_secs", params.review_delay_secs),
     ] {
         if value == 0 || value > MAX_DURATION_SECS {
             return Err(ContractError::InvalidParams {
@@ -101,7 +103,8 @@ pub fn validate_denom(denom: &str) -> Result<(), ContractError> {
 /// Registers a compressed secp256k1 key under the next key id. The same key
 /// material can never be registered twice, even after retirement, so retiring a
 /// key (as compromised) always retires the key itself. A current or former
-/// join-admission key is refused: the two roles never share key material.
+/// join-admission key, and any key the remedy registry holds or ever held, is
+/// refused: the roles never share key material.
 pub fn register_signer_key(
     deps: &mut DepsMut,
     now: Timestamp,
@@ -120,6 +123,11 @@ pub fn register_signer_key(
         return Err(ContractError::InvalidParams {
             reason: "a settlement signer key cannot be a current or former join-admission key"
                 .to_string(),
+        });
+    }
+    if let Some(remedy_id) = REMEDY_PUBKEY_INDEX.may_load(deps.storage, key.as_slice())? {
+        return Err(ContractError::InvalidParams {
+            reason: format!("a settlement signer key cannot be remedy key {remedy_id}"),
         });
     }
     let key_id = NEXT_SIGNER_KEY_ID.load(deps.storage)?;
@@ -143,6 +151,97 @@ pub fn register_signer_key(
     )?;
     SIGNER_PUBKEY_INDEX.save(deps.storage, key.as_slice(), &key_id)?;
     Ok(key_id)
+}
+
+/// Escrow 2.1.0: registers a REMEDY attestation key under the next remedy key
+/// id. The remedy key is its own authority: a key any other registry holds or
+/// ever held (a settlement signer key, a current or former join-admission key)
+/// is refused, and the same key material is never registered twice.
+pub fn register_remedy_key(
+    deps: &mut DepsMut,
+    now: Timestamp,
+    pubkey: HexBinary,
+) -> Result<u16, ContractError> {
+    let key = parse_compressed_pubkey("pubkey", pubkey.as_slice())?;
+    if !pubkey_on_curve(deps.api, &key) {
+        return Err(ContractError::BadPubkey {
+            field: "pubkey".to_string(),
+        });
+    }
+    if let Some(existing) = REMEDY_PUBKEY_INDEX.may_load(deps.storage, key.as_slice())? {
+        return Err(ContractError::DuplicateRemedyKey { key_id: existing });
+    }
+    if let Some(signer_id) = SIGNER_PUBKEY_INDEX.may_load(deps.storage, key.as_slice())? {
+        return Err(ContractError::InvalidParams {
+            reason: format!("a remedy key cannot be settlement signer key {signer_id}"),
+        });
+    }
+    if ADMISSION_KEYS.has(deps.storage, key.as_slice()) {
+        return Err(ContractError::InvalidParams {
+            reason: "a remedy key cannot be a current or former join-admission key".to_string(),
+        });
+    }
+    let key_id = NEXT_REMEDY_KEY_ID.may_load(deps.storage)?.unwrap_or(1);
+    if key_id > MAX_REMEDY_KEYS {
+        return Err(ContractError::RemedyKeyIdsExhausted {});
+    }
+    let next = key_id
+        .checked_add(1)
+        .ok_or(ContractError::RemedyKeyIdsExhausted {})?;
+    NEXT_REMEDY_KEY_ID.save(deps.storage, &next)?;
+    REMEDY_KEYS.save(
+        deps.storage,
+        key_id,
+        &RemedyKey {
+            key_id,
+            pubkey,
+            added_at: now,
+            retired_at: None,
+            compromised: false,
+        },
+    )?;
+    REMEDY_PUBKEY_INDEX.save(deps.storage, key.as_slice(), &key_id)?;
+    Ok(key_id)
+}
+
+pub fn add_remedy_key(
+    mut deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    pubkey: HexBinary,
+) -> Result<Response, ContractError> {
+    admin_guard(&deps, &info)?;
+    let key_id = register_remedy_key(&mut deps, env.block.time, pubkey)?;
+    Ok(Response::new()
+        .add_attribute("action", "add_remedy_key")
+        .add_attribute("key_id", key_id.to_string()))
+}
+
+/// Retiring refuses every later attestation under the key. `compromised` also
+/// removes the payout authority of a third-strike foreclosure the key attested
+/// (stored, not yet paid). Escalation only.
+pub fn retire_remedy_key(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    key_id: u16,
+    compromised: bool,
+) -> Result<Response, ContractError> {
+    admin_guard(&deps, &info)?;
+    let mut key = REMEDY_KEYS
+        .may_load(deps.storage, key_id)?
+        .ok_or(ContractError::UnknownRemedyKey { key_id })?;
+    if key.retired_at.is_none() {
+        key.retired_at = Some(env.block.time);
+    }
+    if compromised {
+        key.compromised = true;
+    }
+    REMEDY_KEYS.save(deps.storage, key_id, &key)?;
+    Ok(Response::new()
+        .add_attribute("action", "retire_remedy_key")
+        .add_attribute("key_id", key_id.to_string())
+        .add_attribute("compromised", key.compromised.to_string()))
 }
 
 pub fn pause(deps: DepsMut, info: MessageInfo) -> Result<Response, ContractError> {
@@ -271,7 +370,8 @@ pub fn set_params(
 }
 
 /// A join-admission key: 33-byte compressed, on the curve, and never a key the
-/// signer registry holds or ever held (retired and compromised keys included).
+/// signer or remedy registry holds or ever held (retired and compromised keys
+/// included).
 /// Recorded in `ADMISSION_KEYS` once accepted (`record_admission_key`).
 pub fn validate_admission_key(deps: &DepsMut, pubkey: &HexBinary) -> Result<(), ContractError> {
     let key = parse_compressed_pubkey("admission_pubkey", pubkey.as_slice())?;
@@ -283,6 +383,11 @@ pub fn validate_admission_key(deps: &DepsMut, pubkey: &HexBinary) -> Result<(), 
     if let Some(key_id) = SIGNER_PUBKEY_INDEX.may_load(deps.storage, key.as_slice())? {
         return Err(ContractError::InvalidParams {
             reason: format!("the join-admission key cannot be settlement signer key {key_id}"),
+        });
+    }
+    if let Some(key_id) = REMEDY_PUBKEY_INDEX.may_load(deps.storage, key.as_slice())? {
+        return Err(ContractError::InvalidParams {
+            reason: format!("the join-admission key cannot be remedy key {key_id}"),
         });
     }
     Ok(())

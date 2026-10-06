@@ -682,11 +682,26 @@ export function createJunoRelayer(deps: RelayerDeps): Relayer {
       }
       case "annul":
         /* ESCROW-4: every seat's ANNUL over (domain, trusted_seq). A moved trusted sequence makes these signatures stale. */
+        /* FP4 (escrow 2.1.0): a game with an exit policy is annullable in DISPUTED too (the challenger's bond is
+           returned) -- the universal unanimous neutral annulment. */
         if (g.state === "ANNULLED") return { kind: "done", detail: "the escrow is annulled" };
-        if (g.state !== "IN_PROGRESS" && g.state !== "SETTLEABLE") return { kind: "moot", why: `the escrow is ${g.state}; an annul needs it in progress or settleable` };
+        if (g.state !== "IN_PROGRESS" && g.state !== "SETTLEABLE" && !(g.state === "DISPUTED" && (g.policy ?? null) !== null)) return { kind: "moot", why: `the escrow is ${g.state}; an annul needs it in progress or settleable${(g.policy ?? null) !== null ? " or disputed" : ""}` };
         if (game.trusted_seq !== op.trusted_seq) return { kind: "moot", why: `the trusted sequence moved to ${game.trusted_seq} (the seats sign again)` };
         if (g.seats.length !== op.seats) return { kind: "inconsistent", detail: "the escrow's roster is not the one the signatures were collected for" };
         return { kind: "absent" };
+      case "remedy": {
+        /* FP4 (escrow 2.1.0): one REMEDY attestation. Done when the chain recorded THIS attestation's digest (the game is
+           annulled, foreclosed, or -- a third strike -- settleable on it); inconsistent when another remedy was accepted
+           (the fence makes that impossible from this server) or the escrow has no timed remedies; moot once the game
+           left IN_PROGRESS another way, or once the trusted sequence passed the attested log position (play went on: a
+           cure). Expiry and finality are block-time questions: `readiness`. */
+        const recorded = g.remedy ?? null;
+        if (recorded !== null) return recorded.remedy_digest === op.remedy_digest ? { kind: "done", detail: `remedy ${recorded.kind} is on chain` } : { kind: "inconsistent", detail: `another remedy (${recorded.kind}) was accepted for this game` };
+        if (g.state !== "IN_PROGRESS") return { kind: "moot", why: `the escrow is ${g.state}${g.outcome !== null ? ` (${g.outcome.route})` : ""}: the game ended another way` };
+        if (g.policy !== "timed_remedy_v1") return { kind: "inconsistent", detail: `the escrow's exit policy is ${String(g.policy ?? "none")}, which has no timed remedies` };
+        if (BigInt(game.trusted_seq) >= BigInt(op.log_len) * BigInt(2) + BigInt(1)) return { kind: "moot", why: `the trusted sequence ${game.trusted_seq} passed the attested log position ${op.log_len} (play went on)` };
+        return { kind: "absent" };
+      }
       default:
         return { kind: "inconsistent", detail: "an intent of an unknown kind" };
     }
@@ -719,6 +734,16 @@ export function createJunoRelayer(deps: RelayerDeps): Relayer {
         return { kind: "ready" };
       case "annul":
         return { kind: "ready" }; // AnnulByConsent works while paused (ESCROW-2.2)
+      case "remedy": {
+        /* FP4: an expired attestation never lands (the remedy lane may attest the same final decision again, in a new
+           slot); a foreclosing remedy waits out a pause (a neutral one lands while paused); nothing is submitted before
+           its finality and its attestation time are both reached on chain. */
+        if (blockTime >= Number(op.expires_at)) return { kind: "moot", why: `the remedy attestation expired at ${op.expires_at}` };
+        if (game.paused && (op.remedy === 2 || op.remedy === 3 || op.remedy === 5)) return { kind: "wait", untilMs: soon, why: "the escrow is paused (a foreclosing remedy waits; a neutral one lands)" };
+        const usableAt = Math.max(Number(op.final_at), Number(op.attested_at));
+        if (blockTime < usableAt) return { kind: "wait", untilMs: deps.now() + Math.max(pollMs, (usableAt - blockTime + 6) * 1000), why: `the remedy is final and attested by ${usableAt} (block time)` };
+        return { kind: "ready" };
+      }
       default:
         return { kind: "hold", code: "chain-intent-held", detail: "unknown intent kind" };
     }
@@ -1533,6 +1558,8 @@ export function intentOrder(a: ChainIntentRecord, b: ChainIntentRecord): number 
           return [2, BigInt(op.seq)];
         case "annul":
           return [1, BigInt(op.trusted_seq)];
+        case "remedy":
+          return [1, BigInt(op.log_len) * BigInt(2) + BigInt(1)];
         default:
           return [1, BigInt(op.seq)];
       }

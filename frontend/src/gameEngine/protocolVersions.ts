@@ -99,7 +99,7 @@ export const HOSTED_PROTOCOL_CHANGELOG: ReadonlyArray<ProtocolChangelogRow> = Ob
  *  no bump so far strands anything and none carries migration machinery: an artifact of an older protocol is refused
  *  (the continuation verdict, the stores' exact-shape readers), never reinterpreted. From the first production money
  *  game on, a bump means a drain: the old pool serves its games until they close. */
-export const FINANCIAL_PROTOCOL_VERSION = 3;
+export const FINANCIAL_PROTOCOL_VERSION = 4;
 
 /* LIVE-4 L4-7 (asked both ways; NOT a bump): the owner's hold for a VERIFIED deployment conflict now supersedes a weaker
    hold (the one exception to "the first hold stands"), and a run with no chain facts does not continue a game held
@@ -131,6 +131,25 @@ export const FINANCIAL_PROTOCOL_CHANGELOG: ReadonlyArray<ProtocolChangelogRow> =
       "key-suffixed instances; W-13's quorum-checked host binding; the close of a table that ended unbound; and " +
       "the money GameRecord (`record_schema: 2`, written for money tables only -- no-money records stay exactly " +
       "schema 1, so the hosted protocol does not move). A protocol-2 grant file is refused, never reinterpreted.",
+  }),
+  Object.freeze({
+    version: 4,
+    note:
+      "Phase 3 escrow 2.1 timed remedies (owner decisions R1 and FP4, 2026-10-06): a money game of this protocol is " +
+      "funded on an escrow 2.1.0 deployment (its per-game exit policy: the Live 20/30 action clock with the " +
+      "challengeable third strike, the Timed Async paces, No-deadline; the universal unanimous neutral annulment; the " +
+      "7-day exceptional review) -- never on 2.0.0, which protocol 3 keeps; the remedy is a new financial operation: " +
+      "the `submit-remedy` chain intent (slot = the remedy DECISION and its attestation's expiry; never two open for a " +
+      "game and nothing after one landed -- a fresh attestation of the same decision, or a later decision such as the " +
+      "neutral TimeoutAnnul, only once every earlier one ended without effect: `remedyFence`; relayed only on the " +
+      "remedy lane's gate, the system-pause seam), relaying the dedicated REMEDY key's 18JUNO/REMEDY/v1 attestation " +
+      "(at most one hour of bearer life from its own attestation time) and the seats' REMEDY-APPROVE signatures (bound " +
+      "to one overdue instance); this build binds only a Live action-clock 2.1.0 game; and the intent " +
+      "file schema 2 (`CHAIN_INTENT_SCHEMA`), so a protocol-3 reader classifies every intent this protocol writes as " +
+      "`newer` (never parsed, never executed) and this protocol reads a schema-1 intent as `older-unread` (never " +
+      "rewritten). Asked both ways: a protocol-3 build must not read or relay a remedy, and this build must not " +
+      "continue a 2.0.0 game -- a drain, as every bump. The financial record's own format (v2), the settlement codec " +
+      "(18JUNO/v1) and the hosted protocol do not move.",
   }),
 ]);
 

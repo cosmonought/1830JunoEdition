@@ -19,6 +19,17 @@
 //               node, a wrong chain id, a disabled tx index, an absurd simulation, a malformed answer.
 //
 // Blocks are produced only by `produceBlock()` (tests decide when time passes).
+//
+// FINANCIAL PROTOCOL 4 (Phase 3 escrow 2.1): the fake reports escrow 2.1.0. A game created or seeded WITH a deadline
+// class carries the 2.1.0 exit policy (`timed_remedy_v1` / `no_deadline`, its allowance, its start time) and accepts
+// `submit_remedy` exactly as `contracts/escrow/src/execute/remedy.rs` decides it (the REMEDY key registry, the
+// attestation's shape against the game, finality, expiry, the trusted sequence, the approvals, the foreclosing
+// remedies' pause rule, the three outcomes), and the universal unanimous annulment reaches its DISPUTED state; a
+// resolver seated in a 2.1.0 game never resolves it, a third strike is never replaced, its trust is the remedy
+// registry's, and a 2.1.0 game's compromised settlement is never replaced by a checkpoint at the resolver timeout. A
+// Live game made or seeded WITHOUT a deadline gets the Live action clock (the only Live class the contract accepts); an
+// async one without a deadline keeps the 2.0.0-stored shape (policy null) the pre-FP4 suites model -- a real 2.1.0
+// contract refuses a CreateGame without a deadline.
 
 import { createHash } from "crypto";
 
@@ -37,6 +48,19 @@ import { encodeSignDoc, signDocDigest, txHashOf, u64Of } from "./cosmosTx";
 import { JunoRpcError, type AccountView, type BlockView, type JunoContractFacts, type JunoRest, type SimulateResult, type TxResultView } from "./junoRest";
 import { verifyDigest } from "./secp256k1";
 import { joinAdmissionDigestV1 } from "../../../../frontend/src/gameEngine/escrow/junoJoinAdmissionV1";
+import {
+  ASYNC_PACES_SECS,
+  LIVE_ACTION_SECS,
+  LIVE_CURE_WINDOW_SECS,
+  MAX_REMEDY_TTL_SECS,
+  remedyApproveDigestV1,
+  remedyDigestV1,
+  remedyForecloses,
+  remedyMode,
+  remedyNeedsApprovals,
+  type RemedyAttestationV1,
+  type RemedyKindByte,
+} from "../../../../frontend/src/gameEngine/escrow/junoRemedyV1";
 
 /* ------------------------------------------------------------------ */
 /* Protobuf decoding (the relayer's own transaction shape)              */
@@ -162,6 +186,38 @@ interface PayloadRecordJson {
   payload_digest: string;
 }
 
+/** FP4 (escrow 2.1.0): a CreateGame's `deadline` (`msg.rs::DeadlineChoice`). */
+export type FakeDeadline = { readonly live_action_clock: Record<string, never> } | { readonly async_pace: { readonly allowance_secs: number } } | { readonly no_deadline: Record<string, never> };
+
+/** FP4: the accepted remedy (`state.rs::RemedyRecord`, the fields the server reads). */
+interface FakeRemedy {
+  kind: string;
+  defaulting_seat: number;
+  strike: number;
+  overdue_epoch: string;
+  log_len: string;
+  final_at: string;
+  expires_at: string;
+  remedy_key_id: number;
+  remedy_digest: string;
+  approvals_bitmap: number;
+  accepted_at: number;
+}
+
+const REMEDY_KIND_NAMES: Readonly<Record<number, string>> = Object.freeze({ 1: "live_timeout_annul", 2: "live_foreclose", 3: "live_strike3_foreclose", 4: "async_annul", 5: "async_foreclose" });
+
+/** The fake's terms for a game made without a deadline: Live -> the action clock; async -> the 2.0.0-stored shape. */
+const defaultTerms = (mode: "live" | "async") => (mode === "live" ? { policy: "timed_remedy_v1" as const, allowance_secs: LIVE_ACTION_SECS } : { policy: null, allowance_secs: 0 });
+
+/** FP4: a deadline class against the game's mode (`funding.rs::create_game`, escrow 2.1.0), or why it does not suit. */
+export function fakePolicyOf(mode: "live" | "async", deadline: FakeDeadline): { readonly policy: "timed_remedy_v1" | "no_deadline"; readonly allowance_secs: number } | string {
+  if ("live_action_clock" in deadline) return mode === "live" ? { policy: "timed_remedy_v1", allowance_secs: LIVE_ACTION_SECS } : "this deadline class does not suit the game's mode (live: live_action_clock; async: async_pace or no_deadline)";
+  if (mode !== "async") return "this deadline class does not suit the game's mode (live: live_action_clock; async: async_pace or no_deadline)";
+  if ("no_deadline" in deadline) return { policy: "no_deadline", allowance_secs: 0 };
+  const pace = deadline.async_pace.allowance_secs;
+  return ASYNC_PACES_SECS.includes(pace) ? { policy: "timed_remedy_v1", allowance_secs: pace } : `async pace ${pace} s is not one of 43200, 86400, 172800, 259200, 604800`;
+}
+
 interface FakeGame {
   chain_game_id: number;
   state: string;
@@ -191,6 +247,12 @@ interface FakeGame {
   subsidy_per_seat: string;
   subsidy_bps: number;
   consent_bitmap: number;
+  /** FP4 (escrow 2.1.0): the exit policy and action allowance its deadline fixed (null / 0: a deadline-less game, the
+   *  2.0.0-stored shape), its Start time, and its accepted remedy. */
+  policy: "timed_remedy_v1" | "no_deadline" | null;
+  allowance_secs: number;
+  started_at: number | null;
+  remedy: FakeRemedy | null;
 }
 
 /** JX-6B: the contract's `DisputeRecord` (resolution names: `state.rs::DisputeResolution`, snake_case on the wire). */
@@ -199,7 +261,7 @@ interface FakeDispute {
   bond: string;
   evidence_hash: string;
   disputed_at: number;
-  resolution: "upheld" | "replaced" | "annulled" | "resolver_timeout" | null;
+  resolution: "upheld" | "replaced" | "annulled" | "resolver_timeout" | "annulled_by_consent" | null;
   resolved_at: number | null;
 }
 
@@ -237,6 +299,8 @@ export interface FakeChainOptions {
   /** ESCROW-4: the funding period a CreateGame fixes (seconds; default 3600). */
   readonly fundingPeriodSecs?: number;
   readonly minAnte?: string;
+  /** FP4 (escrow 2.1.0): the REMEDY key registry at instantiation (ids 1, 2, … in order). */
+  readonly remedyKeys?: readonly string[];
 }
 
 export class FakeJunoChain implements JunoRest {
@@ -249,6 +313,8 @@ export class FakeJunoChain implements JunoRest {
   readonly txIndex = new Map<string, TxResultView & { sequenceKey: string }>();
   readonly games = new Map<number, FakeGame>();
   readonly signerKeys: Array<{ key_id: number; pubkey: string; retired: boolean; compromised: boolean }> = [];
+  /** FP4 (escrow 2.1.0): the REMEDY key registry (a key class of its own; tests retire or compromise entries). */
+  readonly remedyKeys: Array<{ key_id: number; pubkey: string; retired: boolean; compromised: boolean }> = [];
   readonly broadcasts: string[] = [];
   /* ---- faults ---- */
   indexDisabled = false;
@@ -270,6 +336,8 @@ export class FakeJunoChain implements JunoRest {
    *  migration to other code, another denom): the chain-attested facts a deployment conflict is judged on. */
   reportedChecksum: string | null = null;
   reportedDenom: string | null = null;
+  /** FP4: what the contract's cw2 version REPORTS, when a test models other code (an escrow 2.0.0 deployment). */
+  reportedContractVersion: string | null = null;
   private nextGameId = 1;
   private nextAccountNumber = BigInt(7);
 
@@ -281,6 +349,7 @@ export class FakeJunoChain implements JunoRest {
     this.admissionPubkey = options.admissionPubkey;
     this.time = options.startTime ?? 1_760_000_000;
     options.signerKeys.forEach((pubkey, i) => this.signerKeys.push({ key_id: i + 1, pubkey, retired: false, compromised: false }));
+    (options.remedyKeys ?? []).forEach((pubkey, i) => this.remedyKeys.push({ key_id: i + 1, pubkey, retired: false, compromised: false }));
   }
 
   fund(address: string, amount: bigint): void {
@@ -292,10 +361,17 @@ export class FakeJunoChain implements JunoRest {
   }
 
   /** A FUNDED game, as the players' wallets would have made it (CreateGame + Joins). */
-  seedFundedGame(input: { seats: FakeSeat[]; anteGross: string; anteNet: string; rulesEngineVersion: number; variantsDigest: string; mode?: 0 | 1 }): string {
+  seedFundedGame(input: { seats: FakeSeat[]; anteGross: string; anteNet: string; rulesEngineVersion: number; variantsDigest: string; mode?: 0 | 1; deadline?: FakeDeadline }): string {
+    const mode = input.mode === 1 ? "async" : "live";
+    const terms = input.deadline === undefined ? defaultTerms(mode) : fakePolicyOf(mode, input.deadline);
+    if (typeof terms === "string") throw new Error(`seedFundedGame: ${terms}`);
     const id = this.nextGameId;
     this.nextGameId += 1;
     this.games.set(id, {
+      policy: terms.policy,
+      allowance_secs: terms.allowance_secs,
+      started_at: null,
+      remedy: null,
       chain_game_id: id,
       state: "funded",
       creator: input.seats[0].wallet,
@@ -330,10 +406,13 @@ export class FakeJunoChain implements JunoRest {
    *  above `min_ante`, the fee cut from it (floor(gross * bps / 10000)), the creator seat 0, FUNDING until the deadline. */
   createGame(
     sender: string,
-    msg: { readonly max_players: number; readonly mode: "live" | "async"; readonly rules_engine_version: number; readonly variants_digest: string; readonly consent_pubkey: string; readonly join_ticket: string },
+    msg: { readonly max_players: number; readonly mode: "live" | "async"; readonly rules_engine_version: number; readonly variants_digest: string; readonly consent_pubkey: string; readonly join_ticket: string; readonly deadline?: FakeDeadline },
     gross: string,
   ): { ok: true; chainGameId: string } | { ok: false; error: string } {
     if (this.paused) return { ok: false, error: "the contract is paused" };
+    /* FP4: a deadline fixes the 2.1.0 policy (absent: `defaultTerms`). */
+    const terms = msg.deadline === undefined ? defaultTerms(msg.mode) : fakePolicyOf(msg.mode, msg.deadline);
+    if (typeof terms === "string") return { ok: false, error: terms };
     if (!Number.isInteger(msg.max_players) || msg.max_players < 2 || msg.max_players > 7) return { ok: false, error: `max_players must be between 2 and 7, got ${msg.max_players}` };
     if (!/^[0-9a-f]{64}$/.test(msg.variants_digest) || !/^[0-9a-f]{64}$/.test(msg.join_ticket) || !/^0[23][0-9a-f]{64}$/.test(msg.consent_pubkey)) return { ok: false, error: "bad length" };
     if (!/^[1-9][0-9]*$/.test(gross)) return { ok: false, error: `expected exactly one non-zero coin of ${this.options.denom}` };
@@ -344,6 +423,10 @@ export class FakeJunoChain implements JunoRest {
     const id = this.nextGameId;
     this.nextGameId += 1;
     this.games.set(id, {
+      policy: terms.policy,
+      allowance_secs: terms.allowance_secs,
+      started_at: null,
+      remedy: null,
       chain_game_id: id,
       state: "funding",
       creator: sender,
@@ -418,6 +501,9 @@ export class FakeJunoChain implements JunoRest {
     if (game === undefined) return { ok: false, error: "not found" };
     if (game.state !== "disputed" || game.dispute === null || game.settlement === null) return { ok: false, error: `wrong state: game is ${game.state}` };
     if (sender !== game.resolver) return { ok: false, error: "unauthorized: resolver" };
+    /* Escrow 2.1.0: a resolver seated in the game never adjudicates it; a third strike is upheld or annulled only. */
+    if (game.policy !== null && game.seats.some((seat) => seat.wallet === game.resolver)) return { ok: false, error: "the game's resolver holds a seat in it and cannot review it" };
+    if ("replace" in outcome && game.settlement.source === "remedy_strike3") return { ok: false, error: "a third-strike foreclosure can only be upheld or annulled, never replaced" };
     const dispute = game.dispute;
     if ("uphold" in outcome) {
       dispute.resolved_at = this.time;
@@ -472,11 +558,13 @@ export class FakeJunoChain implements JunoRest {
     dispute.resolved_at = this.time;
     const keyId = game.settlement.payload.signer_key_id;
     const trusted = (id: number) => this.signerKeys.some((key) => key.key_id === id && !key.compromised);
-    if (trusted(keyId)) {
+    if (this.settlementTrusted(game)) {
       this.payOut(game, "resolver_timeout_payout", { returned: dispute.bond });
       return { ok: true };
     }
-    const best = [...game.checkpoints.entries()].filter(([id]) => trusted(id)).map(([, record]) => record).sort((a, b) => Number(BigInt(b.payload.seq) - BigInt(a.payload.seq)))[0];
+    void keyId;
+    /* Escrow 2.1.0: a game with an exit policy never falls back to a checkpoint (a standings payout): it refunds. */
+    const best = game.policy !== null ? undefined : [...game.checkpoints.entries()].filter(([id]) => trusted(id)).map(([, record]) => record).sort((a, b) => Number(BigInt(b.payload.seq) - BigInt(a.payload.seq)))[0];
     if (best !== undefined) {
       game.settlement = { source: "liveness_checkpoint", payload: best.payload, accepted_at: this.time, window_end: this.time + (this.options.challengeWindowSecs ?? 600) };
       game.consent_bitmap = 0;
@@ -492,13 +580,24 @@ export class FakeJunoChain implements JunoRest {
     if (this.unavailable) throw new JunoRpcError("unavailable", "the fake node is down");
   }
 
+  /** `helpers.rs::settlement_is_trusted`: the stored settlement's key, in the registry its source names (a third strike
+   *  in the remedy registry, everything else in the signer registry), is not compromised. */
+  private settlementTrusted(game: FakeGame): boolean {
+    if (game.settlement === null) return false;
+    const registry = game.settlement.source === "remedy_strike3" ? this.remedyKeys : this.signerKeys;
+    const key = registry.find((entry) => entry.key_id === game.settlement?.payload.signer_key_id);
+    return key !== undefined && !key.compromised;
+  }
+
   private trustedSeq(game: FakeGame): bigint {
     let best = BigInt(0);
     for (const [keyId, record] of game.checkpoints) {
       if (this.signerKeys.find((key) => key.key_id === keyId)?.compromised) continue;
       if (BigInt(record.payload.seq) > best) best = BigInt(record.payload.seq);
     }
-    if (game.settlement !== null && !this.signerKeys.find((key) => key.key_id === game.settlement?.payload.signer_key_id)?.compromised) {
+    /* A third-strike foreclosure's key is a REMEDY key: its trust is the remedy registry's (escrow 2.1.0). */
+    const registry = game.settlement?.source === "remedy_strike3" ? this.remedyKeys : this.signerKeys;
+    if (game.settlement !== null && !registry.find((key) => key.key_id === game.settlement?.payload.signer_key_id)?.compromised) {
       if (BigInt(game.settlement.payload.seq) > best) best = BigInt(game.settlement.payload.seq);
     }
     return best;
@@ -527,6 +626,11 @@ export class FakeJunoChain implements JunoRest {
           liveness_window_secs: this.options.livenessWindowSecs ?? 86_400,
           resolver_timeout_secs: this.options.resolverTimeoutSecs ?? 604_800,
           treasury: this.options.treasury,
+          /* FP4 (escrow 2.1.0; `#[serde(default)]` 0 / null on a deadline-less game). */
+          review_delay_secs: game.policy === null ? 0 : 604_800,
+          allowance_secs: game.allowance_secs,
+          cure_window_secs: game.policy === "timed_remedy_v1" && game.mode === "live" ? LIVE_CURE_WINDOW_SECS : 0,
+          policy: game.policy,
         },
         created_at: nanos(game.created_at),
         funding_deadline: nanos(game.funding_deadline),
@@ -545,7 +649,7 @@ export class FakeJunoChain implements JunoRest {
         domain: game.domain,
         bond: game.bond,
         resolver: game.resolver,
-        started_at: game.roster_hash === null ? null : nanos(this.time),
+        started_at: game.started_at === null ? null : nanos(game.started_at),
         last_activity: game.last_activity === null ? null : nanos(game.last_activity),
         last_seq: game.last_seq,
         settlement: game.settlement === null ? null : { source: game.settlement.source, payload: game.settlement.payload, accepted_at: nanos(game.settlement.accepted_at), window_end: nanos(game.settlement.window_end) },
@@ -558,6 +662,8 @@ export class FakeJunoChain implements JunoRest {
           game.outcome === null
             ? null
             : { route: game.outcome.route, at: nanos(game.outcome.at), amounts: game.outcome.amounts, dust: game.outcome.dust, distributed: game.outcome.distributed ?? "0", bond_returned: game.outcome.bond_returned ?? "0", bond_to_pool: game.outcome.bond_to_pool ?? "0" },
+        review_request: null,
+        remedy: game.remedy === null ? null : { ...game.remedy, accepted_at: nanos(game.remedy.accepted_at) },
       },
       paused: this.paused,
       latest_checkpoint: latest === null ? null : { payload: latest.payload, accepted_at: nanos(latest.accepted_at) },
@@ -651,6 +757,7 @@ export class FakeJunoChain implements JunoRest {
           mode: game.mode === "live" ? 0 : 1,
         });
         game.resolver = this.options.resolver;
+        game.started_at = this.time;
         /* `payout.rs::bond_amount`: max(bond_floor, floor(ante_net * bond_bps / 10000)), frozen at Start. */
         {
           const proportional = (BigInt(game.ante_net) * BigInt(this.options.bondBps ?? 0)) / BigInt(10_000);
@@ -682,6 +789,7 @@ export class FakeJunoChain implements JunoRest {
       case "finalize": {
         if (this.paused) throw new ContractFailure("the contract is paused");
         if (game.state !== "settleable" || game.settlement === null) throw wrongState("settleable");
+        if (!this.settlementTrusted(game)) throw new ContractFailure(`the stored settlement's signer key ${game.settlement.payload.signer_key_id} is compromised; it can no longer be finalized or consented to`);
         if (this.time < game.settlement.window_end) throw new ContractFailure(`the challenge window is open until ${nanos(game.settlement.window_end)}`);
         if (!apply) return;
         this.payOut(game, "finalized");
@@ -692,6 +800,7 @@ export class FakeJunoChain implements JunoRest {
            settlement, verified against that seat's CURRENT key. Every seat consented: paid out at once. */
         if (game.state !== "settleable" || game.settlement === null) throw wrongState("settleable");
         if (this.paused) throw new ContractFailure("the contract is paused");
+        if (!this.settlementTrusted(game)) throw new ContractFailure(`the stored settlement's signer key ${game.settlement.payload.signer_key_id} is compromised; it can no longer be finalized or consented to`);
         const seatIndex = Number(body.seat_index);
         const seat = game.seats[seatIndex];
         if (seat === undefined) throw new ContractFailure(`seat index ${String(body.seat_index)} is out of range`);
@@ -707,7 +816,9 @@ export class FakeJunoChain implements JunoRest {
       case "annul_by_consent": {
         /* ESCROW-4 (`dispute.rs::annul_by_consent`): IN_PROGRESS or SETTLEABLE (works while paused); EVERY seat's signature
            over ANNUL(domain, trusted_seq), each against that seat's current key; every net ante refunded. */
-        if (game.state !== "in_progress" && game.state !== "settleable") throw wrongState("in_progress or settleable");
+        /* FP4 (escrow 2.1.0): a game with an exit policy is annullable while DISPUTED too (the bond goes back). */
+        const policyGame = game.policy !== null;
+        if (game.state !== "in_progress" && game.state !== "settleable" && !(policyGame && game.state === "disputed")) throw wrongState(policyGame ? "in_progress, settleable or disputed" : "in_progress or settleable");
         const consents = Array.isArray(body.consents) ? (body.consents as Array<{ seat_index: number; signature: string }>) : [];
         const digest = annulDigestV1(game.domain ?? "", this.trustedSeq(game));
         const seen = new Set<number>();
@@ -722,13 +833,159 @@ export class FakeJunoChain implements JunoRest {
         }
         for (let at = 0; at < game.seats.length; at += 1) if (!seen.has(at)) throw new ContractFailure(`every seat must sign; seat ${at} is missing`);
         if (!apply) return;
-        game.outcome = { route: "annul_by_consent", at: this.time, amounts: game.seats.map(() => game.ante_net), dust: "0" };
+        let bondReturned = "0";
+        if (game.state === "disputed" && game.dispute !== null) {
+          game.dispute.resolution = "annulled_by_consent";
+          game.dispute.resolved_at = this.time;
+          bondReturned = game.dispute.bond;
+        }
+        game.outcome = { route: "annul_by_consent", at: this.time, amounts: game.seats.map(() => game.ante_net), dust: "0", ...(bondReturned !== "0" ? { distributed: (BigInt(game.ante_net) * BigInt(game.seats.length)).toString(), bond_returned: bondReturned, bond_to_pool: "0" } : {}) };
         game.state = "annulled";
         return;
       }
+      case "submit_remedy":
+        this.submitRemedy(game, body, apply);
+        return;
       default:
         throw new ContractFailure(`Generic error: unknown variant ${variant}`);
     }
+  }
+
+  /** FP4 (escrow 2.1.0): `execute/remedy.rs::submit_remedy`, in the contract's check order and with its Display texts:
+   *  IN_PROGRESS, a `timed_remedy_v1` game, a known kind, the pause (the foreclosing kinds), the attestation against the
+   *  game and its funded terms, finality and expiry against block time, the trusted sequence, an active REMEDY key and
+   *  its signature over the REMEDY digest, then the approvals. Remedies 1 and 4 refund every net deposit (ANNULLED); 2
+   *  and 5 pay the foreclosure split (SETTLED, the remainder to the treasury); 3 stores the foreclosure as a
+   *  challengeable settlement (SETTLEABLE). */
+  private submitRemedy(game: FakeGame, body: Record<string, unknown>, apply: boolean): void {
+    if (game.state !== "in_progress") throw new ContractFailure(`wrong state: game is ${game.state}, this message needs in_progress`);
+    if (game.policy !== "timed_remedy_v1") throw new ContractFailure("this game's escrow policy has no timed remedies");
+    const w = (typeof body.attestation === "object" && body.attestation !== null ? body.attestation : {}) as Record<string, unknown>;
+    const u64 = (field: string): bigint => {
+      const value = w[field];
+      if (typeof value !== "string" || !/^(0|[1-9][0-9]{0,19})$/.test(value)) throw new ContractFailure(`remedy attestation is malformed: ${field}`);
+      return BigInt(value);
+    };
+    const small = (field: string, max: number): number => {
+      const value = w[field];
+      if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > max) throw new ContractFailure(`remedy attestation is malformed: ${field}`);
+      return value;
+    };
+    const hex32 = (field: string): string => {
+      const value = w[field];
+      if (typeof value !== "string" || !/^[0-9a-f]{64}$/.test(value)) throw new ContractFailure(`remedy attestation is malformed: ${field}`);
+      return value;
+    };
+    const a: RemedyAttestationV1 = {
+      version: small("version", 255) as 1,
+      domain: hex32("domain"),
+      chain_game_id: u64("chain_game_id"),
+      remedy: small("remedy", 255) as RemedyKindByte,
+      defaulting_seat: small("defaulting_seat", 255),
+      strike: small("strike", 255),
+      overdue_epoch: u64("overdue_epoch"),
+      log_len: u64("log_len"),
+      log_hash: hex32("log_hash"),
+      allowance_secs: u64("allowance_secs"),
+      overdue_at: u64("overdue_at"),
+      final_at: u64("final_at"),
+      attested_at: u64("attested_at"),
+      expires_at: u64("expires_at"),
+      evidence_hash: hex32("evidence_hash"),
+      remedy_key_id: small("remedy_key_id", 0xffff),
+    };
+    const kind = a.remedy as number;
+    if (![1, 2, 3, 4, 5].includes(kind)) throw new ContractFailure(`remedy ${kind} is unknown`);
+    if (remedyForecloses(a.remedy) && this.paused) throw new ContractFailure("the contract is paused");
+    if (a.version !== 1) throw new ContractFailure(`unsupported payload version ${a.version}`);
+    if (remedyMode(a.remedy) !== (game.mode === "live" ? 0 : 1)) throw new ContractFailure(`remedy ${kind} does not apply to this game's mode`);
+    if (a.domain !== game.domain || a.chain_game_id !== BigInt(game.chain_game_id)) throw new ContractFailure("the payload domain does not match this game");
+    if (a.defaulting_seat >= game.seats.length) throw new ContractFailure(`seat index ${a.defaulting_seat} is out of range`);
+    const strikeOk = kind === 1 || kind === 2 ? a.strike === 1 || a.strike === 2 : kind === 3 ? a.strike === 3 : a.strike === 0;
+    if (!strikeOk) throw new ContractFailure(`strike ${a.strike} is not valid for remedy ${kind}`);
+    if (a.allowance_secs !== BigInt(game.allowance_secs) || a.allowance_secs === BigInt(0)) throw new ContractFailure(`the attestation names allowance ${a.allowance_secs} s, the game was funded with ${game.allowance_secs} s`);
+    const timing = (reason: string) => new ContractFailure(`the attestation's times are inconsistent: ${reason}`);
+    if (a.overdue_at < BigInt(game.started_at ?? 0) + BigInt(game.allowance_secs)) throw timing("overdue_at precedes the end of the first allowance after the game's start");
+    const finalOk = kind === 1 || kind === 2 ? a.final_at >= a.overdue_at + BigInt(LIVE_CURE_WINDOW_SECS) : kind === 3 ? a.final_at === a.overdue_at : a.final_at >= a.overdue_at;
+    if (!finalOk) throw timing("final_at does not follow overdue_at as this remedy requires");
+    if (a.attested_at < a.final_at) throw timing("attested_at precedes final_at");
+    if (a.expires_at <= a.attested_at) throw timing("expires_at must lie after attested_at");
+    if (a.expires_at > a.attested_at + BigInt(MAX_REMEDY_TTL_SECS)) throw timing("expires_at lies more than the remedy TTL after attested_at");
+    if (BigInt(this.time) < a.final_at) throw new ContractFailure(`the remedy is not final before ${a.final_at}`);
+    if (BigInt(this.time) < a.attested_at) throw timing("attested_at lies after the block time");
+    if (BigInt(this.time) >= a.expires_at) throw new ContractFailure(`the remedy attestation expired at ${a.expires_at}`);
+    const seq = a.log_len * BigInt(2) + BigInt(1);
+    const trusted = this.trustedSeq(game);
+    if (seq <= trusted) throw new ContractFailure(`seq ${seq} does not exceed the trusted sequence ${trusted}`);
+    const key = this.remedyKeys.find((entry) => entry.key_id === a.remedy_key_id);
+    if (key === undefined) throw new ContractFailure(`remedy key ${a.remedy_key_id} is not registered`);
+    if (key.retired) throw new ContractFailure(`remedy key ${a.remedy_key_id} is retired`);
+    const signature = String(body.signature);
+    if (!/^[0-9a-f]{128}$/.test(signature)) throw new ContractFailure(`a signature must be 64 bytes r||s, got ${signature.length / 2}`);
+    const digest = remedyDigestV1(a);
+    if (!verifyDigest(Buffer.from(key.pubkey, "hex"), Buffer.from(digest, "hex"), Buffer.from(signature, "hex"))) throw new ContractFailure("invalid signature");
+    const approvals = Array.isArray(body.approvals) ? (body.approvals as Array<{ seat_index: number; signature: string }>) : [];
+    let bitmap = 0;
+    if (remedyNeedsApprovals(a.remedy)) {
+      for (const approval of approvals) {
+        const seat = game.seats[approval.seat_index];
+        if (seat === undefined) throw new ContractFailure(`seat index ${approval.seat_index} is out of range`);
+        if (approval.seat_index === a.defaulting_seat) throw new ContractFailure(`the defaulting seat ${approval.seat_index} cannot approve a remedy against itself`);
+        if ((bitmap & (1 << approval.seat_index)) !== 0) throw new ContractFailure(`duplicate signature for seat ${approval.seat_index}`);
+        const approve = remedyApproveDigestV1(a, approval.seat_index);
+        if (!/^[0-9a-f]{128}$/.test(approval.signature) || !verifyDigest(Buffer.from(seat.consent_pubkey, "hex"), Buffer.from(approve, "hex"), Buffer.from(approval.signature, "hex"))) {
+          throw new ContractFailure(`invalid signature for seat ${approval.seat_index}`);
+        }
+        bitmap |= 1 << approval.seat_index;
+      }
+      for (let at = 0; at < game.seats.length; at += 1) if (at !== a.defaulting_seat && (bitmap & (1 << at)) === 0) throw new ContractFailure(`every seat must sign; seat ${at} is missing`);
+    } else if (approvals.length > 0) throw new ContractFailure(`remedy ${kind} carries no seat approvals`);
+    if (!apply) return;
+    const pool = BigInt(game.ante_net) * BigInt(game.seats.length);
+    if (kind === 1 || kind === 4) {
+      game.outcome = { route: kind === 1 ? "remedy_timeout_annul" : "remedy_annul", at: this.time, amounts: game.seats.map(() => game.ante_net), dust: "0", distributed: pool.toString(), bond_returned: "0", bond_to_pool: "0" };
+      game.state = "annulled";
+    } else if (kind === 2 || kind === 5) {
+      /* `payout::foreclosure_split`: the defaulting seat 0; every other seat its net plus floor(net / (N-1)); the
+         remainder to the treasury. */
+      const net = BigInt(game.ante_net);
+      const others = BigInt(game.seats.length - 1);
+      const share = net / others;
+      game.outcome = { route: "remedy_foreclosure", at: this.time, amounts: game.seats.map((_, at) => (at === a.defaulting_seat ? "0" : (net + share).toString())), dust: (net % others).toString(), distributed: pool.toString(), bond_returned: "0", bond_to_pool: "0" };
+      game.state = "settled";
+    } else {
+      const record: PayloadRecordJson = {
+        seq: seq.toString(),
+        kind: 1,
+        reason: 0,
+        log_len: a.log_len.toString(),
+        log_hash: a.log_hash,
+        appraisal_log_len: "0",
+        appraisal_state_hash: "00".repeat(32),
+        state_schema_version: 0,
+        settlement_weights: game.seats.map((_, at) => (at === a.defaulting_seat ? "0" : "1")),
+        signer_key_id: a.remedy_key_id,
+        issued_at: a.final_at.toString(),
+        payload_digest: digest,
+      };
+      game.settlement = { source: "remedy_strike3", payload: record, accepted_at: this.time, window_end: this.time + (this.options.challengeWindowSecs ?? 600) };
+      if (seq > BigInt(game.last_seq)) game.last_seq = seq.toString();
+      game.consent_bitmap = 0;
+      game.state = "settleable";
+    }
+    game.remedy = {
+      kind: REMEDY_KIND_NAMES[kind],
+      defaulting_seat: a.defaulting_seat,
+      strike: a.strike,
+      overdue_epoch: a.overdue_epoch.toString(),
+      log_len: a.log_len.toString(),
+      final_at: a.final_at.toString(),
+      expires_at: a.expires_at.toString(),
+      remedy_key_id: a.remedy_key_id,
+      remedy_digest: digest,
+      approvals_bitmap: bitmap,
+      accepted_at: this.time,
+    };
   }
 
   /** `helpers.rs::pay_out`; JX-6B: an Uphold adds the bond to the pool first (`toPool`), a Replace or a resolver timeout
@@ -906,8 +1163,9 @@ export class FakeJunoChain implements JunoRest {
         },
         next_chain_game_id: this.nextGameId,
         next_signer_key_id: this.signerKeys.length + 1,
+        next_remedy_key_id: this.remedyKeys.length + 1,
         contract_name: "crates.io:eighteen-cosmos-escrow",
-        contract_version: "2.0.0",
+        contract_version: this.reportedContractVersion ?? "2.1.0",
       };
     }
     if (variant === "games") {
@@ -919,8 +1177,14 @@ export class FakeJunoChain implements JunoRest {
           .filter((game) => game.chain_game_id > after)
           .sort((a, b) => a.chain_game_id - b.chain_game_id)
           .slice(0, limit)
-          .map((game) => ({ chain_game_id: game.chain_game_id, state: game.state, creator: game.creator, mode: game.mode, max_players: game.max_players, seats_filled: game.seats.length, ante_gross: game.ante_gross, pool: (BigInt(game.ante_net) * BigInt(game.seats.length)).toString() })),
+          .map((game) => ({ chain_game_id: game.chain_game_id, state: game.state, creator: game.creator, mode: game.mode, max_players: game.max_players, seats_filled: game.seats.length, ante_gross: game.ante_gross, pool: (BigInt(game.ante_net) * BigInt(game.seats.length)).toString(), policy: game.policy })),
       };
+    }
+    if (variant === "remedy_keys") {
+      /* FP4 (escrow 2.1.0): the REMEDY key registry, paged like the signer keys. */
+      const after = body.start_after === null || body.start_after === undefined ? 0 : Number(body.start_after);
+      const limit = Number(body.limit ?? 30);
+      return { keys: this.remedyKeys.filter((key) => key.key_id > after).slice(0, limit).map((key) => ({ key_id: key.key_id, pubkey: key.pubkey, added_at: nanos(this.time), retired_at: key.retired ? nanos(this.time) : null, compromised: key.compromised })) };
     }
     if (variant === "signer_keys") {
       const after = body.start_after === null || body.start_after === undefined ? 0 : Number(body.start_after);

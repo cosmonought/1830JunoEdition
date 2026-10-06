@@ -268,6 +268,35 @@ export const JUNO_CONTRACT_ERROR_MAP: Readonly<Record<string, EscrowErrorCode>> 
   InvalidAdmission: "ADMISSION_REFUSED",
   AdmissionExpired: "ADMISSION_EXPIRED",
   MigrateUnsupported: "ADMIN_REFUSED",
+  // Escrow 2.1.0 (Phase 3): the per-game exit policy and the exceptional review. A removed exit or a review on a game
+  // that has none is a capability this game lacks (never retried); the review's delay is a deadline.
+  LivenessExitRemoved: "UNSUPPORTED_CAPABILITY",
+  DeadlineNotForMode: "REQUEST_INVALID",
+  BadAsyncPace: "REQUEST_INVALID",
+  ReviewNotAvailable: "UNSUPPORTED_CAPABILITY",
+  ReviewNotRequested: "INVALID_LIFECYCLE",
+  ReviewDelayNotElapsed: "RESOLVER_TIMEOUT_NOT_REACHED",
+  ResolverIsSeated: "UNAUTHORIZED",
+  ReviewRequestMismatch: "INVALID_LIFECYCLE",
+  // Escrow 2.1.0 (FP4): the timed remedies. A remedy attested too early waits for its finality (a window still open);
+  // an expired one never lands (its window closed: the remedy lane decides whether to renew the SAME decision); a
+  // retired remedy key re-signs under the active one; a stale sequence reconciles; a malformed attestation is a bug.
+  RemedyNotAvailable: "UNSUPPORTED_CAPABILITY",
+  BadRemedyKind: "PAYLOAD_INVALID",
+  RemedyNotForMode: "PAYLOAD_INVALID",
+  BadStrike: "PAYLOAD_INVALID",
+  AllowanceMismatch: "PAYLOAD_INVALID",
+  RemedyTiming: "PAYLOAD_INVALID",
+  RemedyNotFinal: "WINDOW_OPEN",
+  RemedyExpired: "WINDOW_CLOSED",
+  MalformedRemedy: "PAYLOAD_INVALID",
+  UnknownRemedyKey: "SIGNER_UNKNOWN",
+  RetiredRemedyKey: "SIGNER_RETIRED",
+  DuplicateRemedyKey: "ADMIN_REFUSED",
+  ApprovalsNotAllowed: "REQUEST_INVALID",
+  DefaulterCannotApprove: "CONSENT_REJECTED",
+  RemedySettlementNotReplaceable: "UNSUPPORTED_CAPABILITY",
+  RemedyKeyIdsExhausted: "ADMIN_REFUSED",
 });
 
 /** A Juno `ContractError` (by variant name) as a neutral error. An unknown name is a BACKEND_INVARIANT: the

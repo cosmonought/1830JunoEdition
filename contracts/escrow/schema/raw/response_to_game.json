@@ -122,6 +122,13 @@
           "enum": [
             "resolver_timeout"
           ]
+        },
+        {
+          "description": "Escrow 2.1.0: every seat signed `AnnulByConsent` while the game was disputed; the bond went back to the challenger, every net deposit to its seat.",
+          "type": "string",
+          "enum": [
+            "annulled_by_consent"
+          ]
         }
       ]
     },
@@ -267,6 +274,18 @@
             }
           ]
         },
+        "remedy": {
+          "description": "Escrow 2.1.0: the accepted timed remedy, if any. Absent on every 2.0.0 game.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RemedyRecord"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "resolver": {
           "description": "`CONFIG.resolver` at `Start`: the only address that may `Resolve` this game, whatever `SetResolver` does later.",
           "anyOf": [
@@ -279,7 +298,7 @@
           ]
         },
         "review_request": {
-          "description": "Escrow 2.1.0, No-deadline games only: the first seated request for the exceptional review. Absent on every 2.0.0 game.",
+          "description": "Escrow 2.1.0: the first seated request for the exceptional review. Absent on every 2.0.0 game.",
           "default": null,
           "anyOf": [
             {
@@ -396,7 +415,7 @@
           ]
         },
         "review_annul_available_at": {
-          "description": "Escrow 2.1.0, IN_PROGRESS No-deadline game with a review request: the resolver may `ReviewAnnul` from this time (request + review delay).",
+          "description": "Escrow 2.1.0, IN_PROGRESS game with a review request: the resolver may `ReviewAnnul` from this time (request + 7-day review delay).",
           "default": null,
           "anyOf": [
             {
@@ -411,17 +430,17 @@
       "additionalProperties": false
     },
     "GamePolicy": {
-      "description": "The exit rules a game was funded under (escrow 2.1.0). Written once at `CreateGame` and never changed by any message, `SetParams` or a migration.\n\nA game stored without a policy (`GameTerms::policy == None`) was created by escrow 2.0.0 code and keeps every 2.0.0 path, including the IN_PROGRESS standings-based `LivenessSettle`. Every game created by 2.1.0 code carries one of these:\n\n* neither has an IN_PROGRESS inactivity exit: no time spent without chain activity ever moves money (`LivenessExitRemoved`); * neither ever promotes a stored checkpoint into its settlement: where 2.0.0 would (a SETTLEABLE or DISPUTED settlement whose signer key was retired as compromised), the game refunds every net deposit. (A terminal `Settle` payload, or a resolver `Replace`, still carries whatever vector its signer or the resolver chose, as in 2.0.0.)\n\nThe variants are versioned by meaning: a later escrow version that adds the timed remedies must add a NEW variant for the games it creates, so a code migration can never hand remedies to a game funded as `TimedNoRemedies`.",
+      "description": "The exit rules a game was funded under (escrow 2.1.0). Written once at `CreateGame` and never changed by any message, `SetParams` or a migration.\n\nA game stored without a policy (`GameTerms::policy == None`) was created by escrow 2.0.0 code and keeps every 2.0.0 path, including the IN_PROGRESS standings-based `LivenessSettle`. Every game created by 2.1.0 code carries one of these:\n\n* neither has an IN_PROGRESS inactivity exit: no time spent without chain activity ever moves money (`LivenessExitRemoved`); * neither ever promotes a stored checkpoint into its settlement: where 2.0.0 would (a SETTLEABLE or DISPUTED settlement whose signer key was retired as compromised), the game refunds every net deposit. (A terminal `Settle` payload, or a resolver `Replace`, still carries whatever vector its signer or the resolver chose, as in 2.0.0.)\n\nEvery 2.1.0 game, whatever its policy, also has the universal unanimous neutral annulment (`AnnulByConsent`, IN_PROGRESS / SETTLEABLE / DISPUTED) and the exceptional review (`RequestReview` / `ReviewAnnul`, a neutral refund decided by the game's snapshotted resolver after 7 days).\n\nThe variants are versioned by meaning: a later escrow version that changes the remedies must add a NEW variant for the games it creates, so a code migration can never change the remedies of a game funded under one.",
       "oneOf": [
         {
-          "description": "A table with an action deadline (every Live table; an Async table with a fixed pace) under THIS build's rules: it ends only by completion or unanimous annulment. The timed default / foreclosure remedies are not in this build (their trust bridge, how the contract learns an off-chain overdue fact, awaits an owner decision), so one absent seat can hold such a game indefinitely. Not for money tables until the remedies exist.",
+          "description": "A table with an action deadline (every Live table; an Async table with one of [`ASYNC_PACES_SECS`]) under the remedy model of 2026-10-06 (`SubmitRemedy`): an off-chain overdue fact enters the contract only as an attestation of the dedicated REMEDY key (`crypto::remedy_digest`), plus, where the policy requires it, the approval of every non-defaulting seat (`crypto::remedy_approve_digest`).\n\n* Live, first/second overdue, uncured at 30:00: neutral TimeoutAnnul (no approvals), or foreclosure with every N−1 approval; * Live, third overdue: foreclosure at the 20:00 expiry, stored as a challengeable settlement (`SettlementSource::RemedyStrike3`); * Timed Async, overdue: neutral annulment or foreclosure, each with every N−1 approval, final at once.",
           "type": "string",
           "enum": [
-            "timed_no_remedies"
+            "timed_remedy_v1"
           ]
         },
         {
-          "description": "An Async table with no action deadline. Inactivity never moves money; it ends by completion, unanimous annulment, or the exceptional review: the game's resolver may refund every net deposit after a seated wallet asked for review (`RequestReview` / `ReviewAnnul`).",
+          "description": "An Async table with no action deadline. Inactivity never moves money: no overdue, no remedy (`SubmitRemedy` is refused). It ends by completion, unanimous annulment, or the exceptional review.",
           "type": "string",
           "enum": [
             "no_deadline"
@@ -456,6 +475,13 @@
         "treasury"
       ],
       "properties": {
+        "allowance_secs": {
+          "description": "Escrow 2.1.0, `TimedRemedyV1`: the action allowance a remedy attestation must name (Live: [`LIVE_ACTION_SECS`]; Timed Async: the host's pace). 0 for No-deadline and 2.0.0 games.",
+          "default": 0,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
         "bond_bps": {
           "type": "integer",
           "format": "uint16",
@@ -466,6 +492,13 @@
         },
         "challenge_window_secs": {
           "description": "This game's challenge window (its mode's value).",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "cure_window_secs": {
+          "description": "Escrow 2.1.0, Live: [`LIVE_CURE_WINDOW_SECS`], the gap a first/second strike remedy's `final_at` must keep from its `overdue_at`. 0 otherwise (a Timed Async remedy is final once its N−1 consensus completes).",
+          "default": 0,
           "type": "integer",
           "format": "uint64",
           "minimum": 0.0
@@ -494,7 +527,7 @@
           "minimum": 0.0
         },
         "review_delay_secs": {
-          "description": "Escrow 2.1.0, No-deadline games: `GameParams::review_delay_secs` at CreateGame. 0 on 2.0.0 and Timed games (no review applies to them).",
+          "description": "Escrow 2.1.0: [`REVIEW_DELAY_SECS`] at CreateGame (every policy). 0 on a 2.0.0 game (no review applies to it).",
           "default": 0,
           "type": "integer",
           "format": "uint64",
@@ -668,8 +701,131 @@
       },
       "additionalProperties": false
     },
+    "RemedyKind": {
+      "description": "The remedies a `SubmitRemedy` attestation can carry (its `remedy` byte). Each one is checked against the game's mode and the strike it names.",
+      "oneOf": [
+        {
+          "description": "1. Live, strike 1 or 2, uncured at `final_at = overdue_at + 10 min`, no complete N−1 approval: every net deposit refunded (ANNULLED). No approvals are carried.",
+          "type": "string",
+          "enum": [
+            "live_timeout_annul"
+          ]
+        },
+        {
+          "description": "2. Live, strike 1 or 2, uncured at `final_at = overdue_at + 10 min`, every non-defaulting seat approved: foreclosure (SETTLED).",
+          "type": "string",
+          "enum": [
+            "live_foreclose"
+          ]
+        },
+        {
+          "description": "3. Live, strike 3, `final_at = overdue_at` (no cure, no vote): the foreclosure is stored as a settlement and enters the challenge window (SETTLEABLE). No approvals are carried.",
+          "type": "string",
+          "enum": [
+            "live_strike3_foreclose"
+          ]
+        },
+        {
+          "description": "4. Timed Async, overdue, every non-defaulting seat approved: every net deposit refunded (ANNULLED).",
+          "type": "string",
+          "enum": [
+            "async_annul"
+          ]
+        },
+        {
+          "description": "5. Timed Async, overdue, every non-defaulting seat approved: foreclosure (SETTLED).",
+          "type": "string",
+          "enum": [
+            "async_foreclose"
+          ]
+        }
+      ]
+    },
+    "RemedyRecord": {
+      "description": "The accepted remedy of a game: the attested facts, which key attested them and who approved. Written once, by the `SubmitRemedy` that ended the game's play (or, for a third strike, that stored its challengeable foreclosure).",
+      "type": "object",
+      "required": [
+        "accepted_at",
+        "allowance_secs",
+        "approvals_bitmap",
+        "defaulting_seat",
+        "evidence_hash",
+        "expires_at",
+        "final_at",
+        "kind",
+        "log_hash",
+        "log_len",
+        "overdue_at",
+        "overdue_epoch",
+        "remedy_digest",
+        "remedy_key_id",
+        "strike"
+      ],
+      "properties": {
+        "accepted_at": {
+          "$ref": "#/definitions/Timestamp"
+        },
+        "allowance_secs": {
+          "$ref": "#/definitions/Uint64"
+        },
+        "approvals_bitmap": {
+          "description": "Bit i set = seat i's REMEDY-APPROVE signature verified (0 for the kinds that carry no approvals).",
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "defaulting_seat": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "evidence_hash": {
+          "$ref": "#/definitions/HexBinary"
+        },
+        "expires_at": {
+          "$ref": "#/definitions/Uint64"
+        },
+        "final_at": {
+          "$ref": "#/definitions/Uint64"
+        },
+        "kind": {
+          "$ref": "#/definitions/RemedyKind"
+        },
+        "log_hash": {
+          "$ref": "#/definitions/HexBinary"
+        },
+        "log_len": {
+          "$ref": "#/definitions/Uint64"
+        },
+        "overdue_at": {
+          "$ref": "#/definitions/Uint64"
+        },
+        "overdue_epoch": {
+          "$ref": "#/definitions/Uint64"
+        },
+        "remedy_digest": {
+          "description": "`SHA-256(\"18JUNO/REMEDY/v1\" ‖ encode(attestation))`.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/HexBinary"
+            }
+          ]
+        },
+        "remedy_key_id": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "strike": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
     "ReviewRequest": {
-      "description": "A seated wallet's request for the exceptional review of a No-deadline game (`RequestReview`). Only the first request is recorded; an accepted `Checkpoint` above `trusted_seq` (proof the table kept playing after the request) withdraws it.",
+      "description": "A seated wallet's request for the exceptional review of an escrow 2.1.0 game (`RequestReview`). Only the first request is recorded; an accepted `Checkpoint` above `trusted_seq` (proof the table kept playing after the request) withdraws it.",
       "type": "object",
       "required": [
         "requested_at",
@@ -767,10 +923,31 @@
           ]
         },
         {
-          "description": "Escrow 2.1.0, No-deadline game: the game's resolver approved a seated wallet's review request; every net deposit refunded.",
+          "description": "Escrow 2.1.0: the game's resolver approved a seated wallet's review request; every net deposit refunded.",
           "type": "string",
           "enum": [
             "review_annul"
+          ]
+        },
+        {
+          "description": "Escrow 2.1.0, Live remedy 1: the overdue seat did not cure by 30:00 and no foreclosure was approved; every net deposit refunded.",
+          "type": "string",
+          "enum": [
+            "remedy_timeout_annul"
+          ]
+        },
+        {
+          "description": "Escrow 2.1.0, Timed Async remedy 4: every non-defaulting seat approved the neutral annulment of an overdue game; every net deposit refunded.",
+          "type": "string",
+          "enum": [
+            "remedy_annul"
+          ]
+        },
+        {
+          "description": "Escrow 2.1.0, remedies 2 and 5: the defaulting seat receives 0, every other seat its own net deposit plus `⌊net_D / (N−1)⌋`, the remainder to the treasury (`payout::foreclosure_split`). (A third-strike foreclosure is paid by the ordinary settlement routes from its stored settlement.)",
+          "type": "string",
+          "enum": [
+            "remedy_foreclosure"
           ]
         }
       ]
@@ -893,6 +1070,13 @@
           "type": "string",
           "enum": [
             "resolver_replacement"
+          ]
+        },
+        {
+          "description": "Escrow 2.1.0: a Live third-strike foreclosure (`SubmitRemedy`, remedy 3). Its `payload` is synthesized from the remedy attestation: kind 1, `seq = 2·log_len + 1`, weight 1 for every seat but the defaulting one (0), `signer_key_id` = the REMEDY key id (trust is checked against the remedy registry, never `SIGNER_KEYS`), `payload_digest` = the REMEDY digest. It is challengeable like any settlement; a resolver may uphold it or annul (never `Replace` it).",
+          "type": "string",
+          "enum": [
+            "remedy_strike3"
           ]
         }
       ]

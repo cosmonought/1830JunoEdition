@@ -190,10 +190,13 @@ pub enum ContractError {
     #[error("this game's escrow policy has no in-progress inactivity exit (escrow 2.1)")]
     LivenessExitRemoved {},
 
-    #[error("a live game always has an action deadline: no_deadline needs mode async")]
-    NoDeadlineNeedsAsync {},
+    #[error("this deadline class does not suit the game's mode (live: live_action_clock; async: async_pace or no_deadline)")]
+    DeadlineNotForMode {},
 
-    #[error("the exceptional review is only for an escrow 2.1 game with no action deadline")]
+    #[error("async pace {got} s is not one of 43200, 86400, 172800, 259200, 604800")]
+    BadAsyncPace { got: u64 },
+
+    #[error("the exceptional review is only for an escrow 2.1 game")]
     ReviewNotAvailable {},
 
     #[error("no seated wallet has requested the review of game {chain_game_id}")]
@@ -208,6 +211,52 @@ pub enum ContractError {
     #[error("the pending review request is the one made at {requested_at}, not the one decided")]
     ReviewRequestMismatch { requested_at: Timestamp },
 
+    // ------------------------------------------------- escrow 2.1.0 remedies
+    #[error("this game's escrow policy has no timed remedies")]
+    RemedyNotAvailable {},
+
+    #[error("remedy {got} is unknown")]
+    BadRemedyKind { got: u8 },
+
+    #[error("remedy {remedy} does not apply to this game's mode")]
+    RemedyNotForMode { remedy: u8 },
+
+    #[error("strike {strike} is not valid for remedy {remedy}")]
+    BadStrike { remedy: u8, strike: u8 },
+
+    #[error("the attestation names allowance {got} s, the game was funded with {expected} s")]
+    AllowanceMismatch { expected: u64, got: u64 },
+
+    #[error("the attestation's times are inconsistent: {reason}")]
+    RemedyTiming { reason: String },
+
+    #[error("the remedy is not final before {final_at}")]
+    RemedyNotFinal { final_at: u64 },
+
+    #[error("the remedy attestation expired at {expires_at}")]
+    RemedyExpired { expires_at: u64 },
+
+    #[error("remedy attestation is malformed: {reason}")]
+    MalformedRemedy { reason: String },
+
+    #[error("remedy key {key_id} is not registered")]
+    UnknownRemedyKey { key_id: u16 },
+
+    #[error("remedy key {key_id} is retired")]
+    RetiredRemedyKey { key_id: u16 },
+
+    #[error("this public key is already registered as remedy key {key_id}")]
+    DuplicateRemedyKey { key_id: u16 },
+
+    #[error("remedy {remedy} carries no seat approvals")]
+    ApprovalsNotAllowed { remedy: u8 },
+
+    #[error("the defaulting seat {seat_index} cannot approve a remedy against itself")]
+    DefaulterCannotApprove { seat_index: u8 },
+
+    #[error("a third-strike foreclosure can only be upheld or annulled, never replaced")]
+    RemedySettlementNotReplaceable {},
+
     // ---------------------------------------------------------------- admin
     #[error("invalid parameter: {reason}")]
     InvalidParams { reason: String },
@@ -219,6 +268,9 @@ pub enum ContractError {
     /// included), which bounds every liveness scan over a game's checkpoints.
     #[error("the signer key registry is full")]
     KeyIdsExhausted {},
+
+    #[error("the remedy key registry is full")]
+    RemedyKeyIdsExhausted {},
 
     // ------------------------------------------------------------ arithmetic
     #[error("arithmetic overflow")]

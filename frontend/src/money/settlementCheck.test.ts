@@ -103,7 +103,7 @@ describe("ESCROW-4 (S-H1, verification pass): what a device approves is what JUN
     const seats = players.map((_unused, index) => ({ wallet: `juno1seat${index}`, joinTicket: "ab".repeat(32), consentPubkey: index === keyAt ? made.pubkey : `02${String(index).repeat(64).slice(0, 64)}` }));
     services.wallet.game = {
       state: "SETTLEABLE", creator: "juno1seat0", maxPlayers: players.length, mode: "live", rulesEngineVersion: 11, variantsDigest: "00".repeat(32), denom: "ujunox", anteGross: "1000000",
-      seats, fundingDeadlineMs: null, paused: false, domain: good.domain, trustedSeq: "3", settlement: { seq: good.seq.toString(), payloadDigest: digest }, bond: null, challengeWindowEndMs: null, resolverTimeoutAtMs: null, resolverTimeoutSecs: null, dispute: null, ...over.facts,
+      seats, fundingDeadlineMs: null, paused: false, domain: good.domain, trustedSeq: "3", settlement: { seq: good.seq.toString(), payloadDigest: digest }, bond: null, policy: "timed_remedy_v1", allowanceSecs: 1200, challengeWindowEndMs: null, resolverTimeoutAtMs: null, resolverTimeoutSecs: null, dispute: null, ...over.facts,
     };
     const port = scriptedPort();
     port.answer("money/escrow-details", 200, { ok: true, checkpoint: null, settlement: { seq: good.seq.toString(), log_len: LOG_LEN, round_key: null, payload: settlementPayloadToWire(good), signature: "ab", settle_digest: digest, status: "confirmed" }, chain: null, roster });

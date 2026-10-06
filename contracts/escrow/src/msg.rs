@@ -10,7 +10,8 @@ use cosmwasm_schema::{cw_serde, QueryResponses};
 use cosmwasm_std::{HexBinary, Timestamp, Uint128, Uint64};
 
 use crate::state::{
-    CheckpointRecord, Config, Game, GameParams, GamePolicy, GameState, Mode, Seat, SignerKey,
+    CheckpointRecord, Config, Game, GameParams, GamePolicy, GameState, Mode, RemedyKey, Seat,
+    SignerKey,
 };
 
 #[cw_serde]
@@ -29,6 +30,56 @@ pub struct InstantiateMsg {
     /// The join-admission key (33-byte compressed secp256k1, on the curve, not
     /// one of `signer_keys`). Every `Join` needs its signature.
     pub admission_pubkey: HexBinary,
+    /// Escrow 2.1.0: REMEDY attestation keys to register at instantiation
+    /// (33-byte compressed, on the curve, never a signer or admission key).
+    /// They receive remedy key ids 1, 2, … in order. May be empty.
+    pub remedy_keys: Vec<HexBinary>,
+}
+
+/// Escrow 2.1.0: the deadline class a game is funded under (`CreateGame`),
+/// frozen into its terms and policy.
+#[cw_serde]
+pub enum DeadlineChoice {
+    /// Live only: the 20-minute action clock with the 30:00 cure / approval
+    /// window and the third-strike foreclosure (`GamePolicy::TimedRemedyV1`).
+    LiveActionClock {},
+    /// Async only: a fixed pace, one of 43200 (12 h), 86400 (24 h), 172800
+    /// (2 d), 259200 (3 d), 604800 (7 d) seconds (`GamePolicy::TimedRemedyV1`).
+    AsyncPace { allowance_secs: u64 },
+    /// Async only: no action deadline, no timed remedy
+    /// (`GamePolicy::NoDeadline`).
+    NoDeadline {},
+}
+
+/// `RemedyAttestationV1` (see `remedy`), in field order. All times are Unix
+/// seconds. The contract re-encodes it to the canonical 166 bytes before
+/// hashing; nothing here is hashed as JSON.
+#[cw_serde]
+pub struct RemedyAttestationV1 {
+    /// Exactly 1.
+    pub version: u8,
+    /// 32 bytes: the game's settlement domain.
+    pub domain: HexBinary,
+    pub chain_game_id: Uint64,
+    /// 1 LiveTimeoutAnnul, 2 LiveForeclose, 3 LiveStrike3Foreclose,
+    /// 4 AsyncAnnul, 5 AsyncForeclose.
+    pub remedy: u8,
+    pub defaulting_seat: u8,
+    /// Live: 1, 2 (remedies 1–2) or 3 (remedy 3). Async: 0.
+    pub strike: u8,
+    pub overdue_epoch: Uint64,
+    pub log_len: Uint64,
+    /// 32 bytes.
+    pub log_hash: HexBinary,
+    pub allowance_secs: Uint64,
+    pub overdue_at: Uint64,
+    pub final_at: Uint64,
+    /// When the REMEDY key signed: `final_at ≤ attested_at ≤` block time.
+    pub attested_at: Uint64,
+    pub expires_at: Uint64,
+    /// 32 bytes.
+    pub evidence_hash: HexBinary,
+    pub remedy_key_id: u16,
 }
 
 /// The hosted server's authorization for the `Join` transaction's SENDER to
@@ -96,6 +147,8 @@ pub enum ResolveOutcome {
     /// resolver's transaction; the bond goes back to the challenger. Its seq
     /// must exceed the game's trusted checkpoint floor only: the disputed
     /// settlement never constrains it, so the same log position is legal.
+    /// Refused for an escrow 2.1.0 third-strike foreclosure
+    /// (`RemedySettlementNotReplaceable`): that one is upheld or annulled.
     Replace { payload: SettlementPayloadV1 },
     /// Refund every seat's net ante; the bond goes back to the challenger.
     Annul {},
@@ -115,13 +168,11 @@ pub enum ExecuteMsg {
         consent_pubkey: HexBinary,
         /// 32 bytes, stored verbatim.
         join_ticket: HexBinary,
-        /// Escrow 2.1.0, required: `true` for an Async table with no action
-        /// deadline (`GamePolicy::NoDeadline`), `false` for a table with one
-        /// (`GamePolicy::TimedNoRemedies` in this build). A Live game is always
-        /// timed: `true` with `mode: live` is refused. Frozen into the game's
-        /// terms. (An escrow 2.0.0 CreateGame without the field does not
-        /// decode: the deadline class is never chosen by default.)
-        no_deadline: bool,
+        /// Escrow 2.1.0, required: the game's deadline class, which must suit
+        /// `mode` (`DeadlineNotForMode`). Frozen into the game's terms. (An
+        /// escrow 2.0.0 CreateGame without the field does not decode: the
+        /// deadline class is never chosen by default.)
+        deadline: DeadlineChoice,
     },
     /// Takes the next seat with exactly the creator's gross ante. The consent
     /// key must not be another seat's current key. The admission must be the
@@ -193,7 +244,10 @@ pub enum ExecuteMsg {
         outcome: ResolveOutcome,
     },
     /// Anyone, with a valid ANNUL signature from every seat over the game's
-    /// trusted sequence (`GameResponse::trusted_seq`).
+    /// trusted sequence (`GameResponse::trusted_seq`). Works while paused.
+    /// IN_PROGRESS or SETTLEABLE; an escrow 2.1.0 game also while DISPUTED
+    /// (the challenger's bond goes back to the challenger). Every net deposit
+    /// is refunded (ANNULLED).
     AnnulByConsent {
         chain_game_id: u64,
         consents: Vec<SeatSignature>,
@@ -213,18 +267,19 @@ pub enum ExecuteMsg {
         #[serde(default)]
         checkpoint: Option<SignedCheckpoint>,
     },
-    /// Escrow 2.1.0, a seated wallet of an IN_PROGRESS No-deadline game: asks
-    /// the game's resolver for the exceptional review. Records the first
-    /// request (seat and time); a later request changes nothing; an accepted
-    /// `Checkpoint` withdraws it. Moves no funds; works while paused.
+    /// Escrow 2.1.0, a seated wallet of any IN_PROGRESS 2.1.0 game: asks the
+    /// game's resolver for the exceptional review. Records the first request
+    /// (seat and time); a later request changes nothing; an accepted
+    /// `Checkpoint` beyond the trusted sequence at the request withdraws it.
+    /// Moves no funds; works while paused.
     RequestReview {
         chain_game_id: u64,
     },
     /// Escrow 2.1.0, the game's resolver (the address it adopted at `Start`,
-    /// never one of the game's own seats) only, on an IN_PROGRESS No-deadline
-    /// game whose review was requested at least `terms.review_delay_secs` ago
-    /// (`GameDeadlines::review_annul_available_at`): refunds every seat's net
-    /// deposit (ANNULLED). It carries no payload and no amounts: the only
+    /// never one of the game's own seats) only, on an IN_PROGRESS 2.1.0 game
+    /// whose review was requested at least 7 days (`terms.review_delay_secs`)
+    /// ago (`GameDeadlines::review_annul_available_at`): refunds every seat's
+    /// net deposit (ANNULLED). It carries no payload and no amounts: the only
     /// outcome it can produce is the neutral refund. Works while paused.
     ReviewAnnul {
         chain_game_id: u64,
@@ -232,6 +287,23 @@ pub enum ExecuteMsg {
         /// (`Game::review_request`). A decision taken for an earlier, since
         /// withdrawn request is refused (`ReviewRequestMismatch`).
         requested_at: Timestamp,
+    },
+    /// Escrow 2.1.0, anyone (a relayer), on an IN_PROGRESS `TimedRemedyV1`
+    /// game: executes a FINAL timed remedy attested by an active REMEDY key,
+    /// with, where the remedy needs them, the REMEDY-APPROVE signatures of
+    /// every non-defaulting seat (and of no other). Remedies 1 and 4 refund
+    /// every net deposit (ANNULLED), 2 and 5 foreclose (SETTLED), 3 stores the
+    /// foreclosure as a challengeable settlement (SETTLEABLE). The foreclosing
+    /// remedies (2, 3, 5) are refused while the contract is paused; the
+    /// neutral ones (1, 4) are not. Carries no address and no amount.
+    SubmitRemedy {
+        chain_game_id: u64,
+        attestation: RemedyAttestationV1,
+        /// 64-byte low-s `r ‖ s` by the REMEDY key over the REMEDY digest.
+        signature: HexBinary,
+        /// Remedies 2, 4, 5: one REMEDY-APPROVE signature per non-defaulting
+        /// seat. Remedies 1 and 3: empty.
+        approvals: Vec<SeatSignature>,
     },
     // ------------------------------------------------------------- admin
     Pause {},
@@ -268,6 +340,18 @@ pub enum ExecuteMsg {
     SetAdmissionKey {
         pubkey: HexBinary,
     },
+    /// Escrow 2.1.0: registers a REMEDY attestation key (33-byte compressed,
+    /// on the curve, never a current or former signer or admission key).
+    AddRemedyKey {
+        pubkey: HexBinary,
+    },
+    /// Escrow 2.1.0: retires a remedy key (later attestations under it are
+    /// refused); `compromised: true` also removes the payout authority of a
+    /// third-strike foreclosure it attested. Escalation only, never reversed.
+    RetireRemedyKey {
+        key_id: u16,
+        compromised: bool,
+    },
 }
 
 #[cw_serde]
@@ -296,6 +380,13 @@ pub enum QueryMsg {
         start_after: Option<u16>,
         limit: Option<u32>,
     },
+    #[returns(RemedyKeyResponse)]
+    RemedyKey { key_id: u16 },
+    #[returns(RemedyKeysResponse)]
+    RemedyKeys {
+        start_after: Option<u16>,
+        limit: Option<u32>,
+    },
     /// What paying the stored settlement's weights from the current pool would
     /// send each seat (and the treasury) right now.
     #[returns(SettlementPreviewResponse)]
@@ -315,6 +406,8 @@ pub struct ConfigResponse {
     pub config: Config,
     pub next_chain_game_id: u64,
     pub next_signer_key_id: u16,
+    /// Escrow 2.1.0.
+    pub next_remedy_key_id: u16,
     pub contract_name: String,
     pub contract_version: String,
 }
@@ -333,8 +426,8 @@ pub struct GameDeadlines {
     pub challenge_window_end: Option<Timestamp>,
     /// DISPUTED: `LivenessSettle` from this time.
     pub resolver_timeout_at: Option<Timestamp>,
-    /// Escrow 2.1.0, IN_PROGRESS No-deadline game with a review request: the
-    /// resolver may `ReviewAnnul` from this time (request + review delay).
+    /// Escrow 2.1.0, IN_PROGRESS game with a review request: the resolver may
+    /// `ReviewAnnul` from this time (request + 7-day review delay).
     #[serde(default)]
     pub review_annul_available_at: Option<Timestamp>,
 }
@@ -413,6 +506,16 @@ pub struct SignerKeyResponse {
 #[cw_serde]
 pub struct SignerKeysResponse {
     pub keys: Vec<SignerKey>,
+}
+
+#[cw_serde]
+pub struct RemedyKeyResponse {
+    pub key: RemedyKey,
+}
+
+#[cw_serde]
+pub struct RemedyKeysResponse {
+    pub keys: Vec<RemedyKey>,
 }
 
 #[cw_serde]

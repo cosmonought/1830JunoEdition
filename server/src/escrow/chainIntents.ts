@@ -42,6 +42,15 @@
 // (`formatFactOf`): `newer` (a later build wrote it), `older-unread` (an earlier one), or `corrupt` (not an intent of any
 // schema, or a damaged current one). The first two are another build's financial data: the relayer never parses or
 // rewrites them (the game is not continued here); none of the three is ever overwritten.
+//
+// FINANCIAL PROTOCOL 4 (Phase 3 escrow 2.1, 2026-10-06): schema 2. It adds the `submit-remedy` intent (the dedicated
+// REMEDY key's attestation and the seats' approvals, relayed to an escrow 2.1.0 game) and moves every intent this build
+// writes to schema 2, so a protocol-3 build reads each of them as `newer` -- never parsed, never relayed, never
+// rewritten -- and this build reads a protocol-3 (schema 1) intent as `older-unread`. A game has AT MOST ONE OPEN remedy
+// intent and nothing after one landed (`remedyFence`): a remedy's slot is (decision, attestation expiry), so a fresh
+// attestation of the same final decision is new work in its own slot, and a later decision (the Live neutral
+// TimeoutAnnul once a foreclosure can no longer land; a new Async proposal) is prepared only after every earlier one
+// ended without effect. A stored remedy intent whose message, key, op and subject disagree is unreadable.
 
 import * as path from "path";
 
@@ -59,9 +68,10 @@ import {
 } from "../../../frontend/src/gameEngine/escrow/escrowModel";
 import type { Coin } from "./juno/cosmosTx";
 import { formatFactOf, type FormatFact } from "../../../frontend/src/gameEngine/compat/continuationVerdict";
+import { remedyDecisionDigestV1, remedyDigestV1, type RemedyAttestationV1, type RemedyKindByte } from "../../../frontend/src/gameEngine/escrow/junoRemedyV1";
 
 export const CHAIN_INTENT_FORMAT = "gs-chain-intent";
-export const CHAIN_INTENT_SCHEMA = 1;
+export const CHAIN_INTENT_SCHEMA = 2;
 
 export type ChainIntentStatus = "pending" | "in-flight" | "confirmed" | "superseded" | "held";
 export const TERMINAL_INTENT_STATUSES: readonly ChainIntentStatus[] = Object.freeze(["confirmed", "superseded"]);
@@ -111,7 +121,28 @@ export type ChainIntentOp =
   | { readonly kind: "settle"; readonly chain_game_id: string; readonly seq: string; readonly log_len: number; readonly settle_digest: string; readonly signer_key_id: number }
   | { readonly kind: "finalize"; readonly chain_game_id: string; readonly seq: string }
   | { readonly kind: "consent"; readonly chain_game_id: string; readonly seq: string; readonly seat_index: number; readonly settle_digest: string; readonly consent_pubkey: string }
-  | { readonly kind: "annul"; readonly chain_game_id: string; readonly trusted_seq: string; readonly seats: number; readonly keys_digest: string };
+  | { readonly kind: "annul"; readonly chain_game_id: string; readonly trusted_seq: string; readonly seats: number; readonly keys_digest: string }
+  /** FP4: one remedy attestation (`junoRemedyV1.ts`), relayed with the approvals it needs. `remedy_digest` is what the
+   *  REMEDY key signed (the chain records it in `game.remedy.remedy_digest`); `decision` is the remedy's identity without
+   *  its attestation time, expiry and key id. The server never makes an approval: each is a seat's own consent-key
+   *  signature. Every field here is the message's own (`isChainIntentRecord` recomputes them from `msg_json`). */
+  | {
+      readonly kind: "remedy";
+      readonly chain_game_id: string;
+      readonly remedy: 1 | 2 | 3 | 4 | 5;
+      readonly defaulting_seat: number;
+      readonly strike: number;
+      readonly overdue_epoch: string;
+      readonly log_len: string;
+      readonly final_at: string;
+      readonly attested_at: string;
+      readonly expires_at: string;
+      readonly remedy_key_id: number;
+      readonly remedy_digest: string;
+      readonly decision: string;
+      /** Bit i = seat i's REMEDY-APPROVE signature is carried (0 for remedies 1 and 3). */
+      readonly approvals: number;
+    };
 
 export interface ChainIntentRecord {
   readonly format: typeof CHAIN_INTENT_FORMAT;
@@ -195,6 +226,15 @@ export function isChainIntentRecord(value: unknown): value is ChainIntentRecord 
     return false;
   }
   if (intentId !== value.intent_id) return false;
+  /* FP4: a remedy intent's key, subject and op name ONE decision and ONE attestation (a damaged file must never relay an
+     attestation its slot was not made for). */
+  const key = value.key as Record<string, unknown>;
+  const subject = value.subject as Record<string, unknown>;
+  const op = value.op as Record<string, unknown>;
+  const remedy = key.op === "submit-remedy";
+  if (remedy !== (op.kind === "remedy") || remedy !== (subject.kind === "remedy")) return false;
+  if (remedy && (op.decision !== key.decision || op.expires_at !== key.expires_at || subject.decision !== key.decision || subject.remedy_digest !== op.remedy_digest || subject.protocol !== "18JUNO/REMEDY/v1")) return false;
+  if (remedy && !remedyMessageAgrees(op, value.msg_json as string)) return false;
   const attempts = value.attempts as unknown[];
   for (let at = 0; at < attempts.length; at += 1) {
     const attempt = attempts[at];
@@ -211,6 +251,79 @@ export function isChainIntentRecord(value: unknown): value is ChainIntentRecord 
   if ((value.status === "held") !== (value.hold !== null)) return false;
   if (value.status === "superseded" && live) return false;
   return isObject(value.retry) && Number.isSafeInteger(value.retry.failures) && Number.isSafeInteger(value.retry.next_at);
+}
+
+/** FP4: whether a remedy intent's message is exactly the attestation its op names -- the chain game, every attested
+ *  field, the REMEDY digest and decision recomputed from the message itself, and the approvals' seats (the op's bitmap,
+ *  each once, each a 64-byte hex signature). A damaged record never relays an attestation its slot was not made for. */
+export function remedyMessageAgrees(op: Record<string, unknown>, msgJson: string): boolean {
+  const lead = /^\{"submit_remedy":\{"chain_game_id":(0|[1-9][0-9]{0,19}),/.exec(msgJson);
+  if (lead === null || lead[1] !== op.chain_game_id) return false;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(msgJson);
+  } catch {
+    return false;
+  }
+  if (!isObject(parsed) || Object.keys(parsed).length !== 1 || !isObject(parsed.submit_remedy)) return false;
+  const body = parsed.submit_remedy;
+  if (!isObject(body.attestation) || typeof body.signature !== "string" || !/^[0-9a-f]{128}$/.test(body.signature) || !Array.isArray(body.approvals)) return false;
+  const w = body.attestation;
+  const big = (field: string): bigint => {
+    const v = w[field];
+    if (typeof v !== "string" || !/^(0|[1-9][0-9]{0,19})$/.test(v)) throw new Error(field);
+    return BigInt(v);
+  };
+  let a: RemedyAttestationV1;
+  let digest: string;
+  let decision: string;
+  try {
+    a = {
+      version: w.version as 1,
+      domain: w.domain as string,
+      chain_game_id: big("chain_game_id"),
+      remedy: w.remedy as RemedyKindByte,
+      defaulting_seat: w.defaulting_seat as number,
+      strike: w.strike as number,
+      overdue_epoch: big("overdue_epoch"),
+      log_len: big("log_len"),
+      log_hash: w.log_hash as string,
+      allowance_secs: big("allowance_secs"),
+      overdue_at: big("overdue_at"),
+      final_at: big("final_at"),
+      attested_at: big("attested_at"),
+      expires_at: big("expires_at"),
+      evidence_hash: w.evidence_hash as string,
+      remedy_key_id: w.remedy_key_id as number,
+    };
+    digest = remedyDigestV1(a);
+    decision = remedyDecisionDigestV1(a);
+  } catch {
+    return false;
+  }
+  if (Object.keys(w).length !== 16 || a.chain_game_id.toString() !== op.chain_game_id) return false;
+  if (digest !== op.remedy_digest || decision !== op.decision) return false;
+  const same: ReadonlyArray<[unknown, unknown]> = [
+    [a.remedy, op.remedy],
+    [a.defaulting_seat, op.defaulting_seat],
+    [a.strike, op.strike],
+    [a.overdue_epoch.toString(), op.overdue_epoch],
+    [a.log_len.toString(), op.log_len],
+    [a.final_at.toString(), op.final_at],
+    [a.attested_at.toString(), op.attested_at],
+    [a.expires_at.toString(), op.expires_at],
+    [a.remedy_key_id, op.remedy_key_id],
+  ];
+  if (!same.every(([x, y]) => x === y)) return false;
+  let bitmap = 0;
+  for (const entry of body.approvals as unknown[]) {
+    if (!isObject(entry) || !Number.isInteger(entry.seat_index) || (entry.seat_index as number) < 0 || (entry.seat_index as number) > 7) return false;
+    if (typeof entry.signature !== "string" || !/^[0-9a-f]{128}$/.test(entry.signature)) return false;
+    const bit = 1 << (entry.seat_index as number);
+    if ((bitmap & bit) !== 0) return false;
+    bitmap |= bit;
+  }
+  return bitmap === op.approvals;
 }
 
 /** LIVE-4 (L4-4): the intent-file schemas this build reads and writes (`CHAIN_INTENT_SCHEMA`). */
@@ -282,7 +395,7 @@ export function annulInstanceOf(instance: string, keysDigest: string): string {
 }
 
 /** Whether an intent belongs to this chain game's instance (a Start of any epoch, a consent under any key, an annul
- *  under any key set, or any other slot of the instance). */
+ *  under any key set, or any other slot of the instance -- a remedy's included). */
 export function intentBelongsTo(intent: ChainIntentRecord, instance: string): boolean {
   if (intent.op.kind === "start") return startEpochOf(intent.instance, instance) !== null;
   if (intent.op.kind === "consent" || intent.op.kind === "annul") {
@@ -324,6 +437,38 @@ export function signedContentOf(msgJson: string): string {
  *  bytes themselves: a re-signed payload is the same work. */
 export function sameChainIntent(a: ChainIntentRecord, b: ChainIntentRecord): boolean {
   return a.intent_id === b.intent_id && sameIntentSubject(a.subject, b.subject) && JSON.stringify(a.op) === JSON.stringify(b.op) && signedContentOf(a.msg_json) === signedContentOf(b.msg_json);
+}
+
+/* ------------------------------------------------------------------ */
+/* FP4: the remedy fence (one open remedy intent per game)              */
+/* ------------------------------------------------------------------ */
+
+/** What preparing `candidate` (a `submit-remedy` intent) may do, given every intent the game already has:
+ *  - `same`: the candidate's own slot already holds the same work (an idempotent re-prepare after a restart);
+ *  - `hold`: a remedy of this game already LANDED (`confirmed`: nothing more, ever); another remedy intent is still
+ *    OPEN -- pending, in flight, or held with a live attempt -- so two could both broadcast; or the candidate's own slot
+ *    holds different work;
+ *  - `proceed`: every earlier remedy intent ended without effect -- `superseded` (its attestation expired, or the game
+ *    or its trusted sequence moved on), or `held` with no live attempt (refused for good: an approver rotated its
+ *    consent key, a contradiction). Those held ones are listed in `retire`: they are superseded first, so a game never
+ *    has two open remedy intents. A fresh attestation of the same final decision (an admin pause or an outage outlived
+ *    the first) and a DIFFERENT decision (the Live neutral TimeoutAnnul once the foreclosure can no longer land; a new
+ *    Async proposal) are both new work.
+ *  The chain enforces one terminal outcome on its own (every remedy needs IN_PROGRESS and ends it); this fence keeps the
+ *  server from ever having two that could race. Callers serialize per game (the escrow service's per-game queue): the
+ *  fence reads, then writes. */
+export type RemedyFence = { readonly kind: "proceed"; readonly retire: readonly ChainIntentRecord[] } | { readonly kind: "same" } | { readonly kind: "hold"; readonly why: string };
+
+export function remedyFence(existing: readonly ChainIntentRecord[], candidate: ChainIntentRecord): RemedyFence {
+  if (candidate.op.kind !== "remedy") return { kind: "hold", why: "not a remedy intent" };
+  const remedies = existing.filter((intent) => intent.op.kind === "remedy");
+  const own = remedies.find((intent) => intent.intent_id === candidate.intent_id);
+  if (own !== undefined) return sameChainIntent(own, candidate) ? { kind: "same" } : { kind: "hold", why: "a different attestation occupies this remedy slot" };
+  const landed = remedies.find((intent) => intent.status === "confirmed");
+  if (landed !== undefined) return { kind: "hold", why: "a remedy of this game is already confirmed on chain; nothing more is prepared" };
+  const open = remedies.find((intent) => intent.status === "pending" || intent.status === "in-flight" || (intent.status === "held" && intent.attempts.some(isLiveAttempt)));
+  if (open !== undefined) return { kind: "hold", why: `an earlier remedy intent of this game is still ${open.status}; it must resolve before another is prepared` };
+  return { kind: "proceed", retire: remedies.filter((intent) => intent.status === "held") };
 }
 
 /* ------------------------------------------------------------------ */

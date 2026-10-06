@@ -172,6 +172,60 @@
       "additionalProperties": false
     },
     {
+      "type": "object",
+      "required": [
+        "remedy_key"
+      ],
+      "properties": {
+        "remedy_key": {
+          "type": "object",
+          "required": [
+            "key_id"
+          ],
+          "properties": {
+            "key_id": {
+              "type": "integer",
+              "format": "uint16",
+              "minimum": 0.0
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "remedy_keys"
+      ],
+      "properties": {
+        "remedy_keys": {
+          "type": "object",
+          "properties": {
+            "limit": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "start_after": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint16",
+              "minimum": 0.0
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    {
       "description": "What paying the stored settlement's weights from the current pool would send each seat (and the treasury) right now.",
       "type": "object",
       "required": [

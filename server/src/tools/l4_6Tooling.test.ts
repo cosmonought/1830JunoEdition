@@ -73,9 +73,10 @@ const GAMES_DOCTOR = path.join(__dirname, "gamesDoctor.js");
  *  them again by certifying 12 for settlement (R12-2's were dc1-ade748b9… and dc1-eb48b18e…), and as Phase 3 W3-K moved
  *  them on the rules axis alone (rules 13 reading [13], settlement still [10, 11, 12]; R12-3's were dc1-41eb96a7… and
  *  dc1-63af8114…), and as Phase 3's dedicated v13 certification moved them by certifying 13 alone (settlement
- *  [10, 11, 12, 13]; W3-K's were dc1-390107d5… and dc1-d01c50c4…). */
+ *  [10, 11, 12, 13]; W3-K's were dc1-390107d5… and dc1-d01c50c4…), and as Phase 3's escrow 2.1 timed remedies moved the
+ *  fixture key by `financial_protocols` alone (financial protocol 4; the v13 certification's was dc1-32fcc496…). */
 const KEY_NO_ESCROW = "dc1-e8d0b4792a7ba07e67199ad2";
-const KEY_FIXTURE_PIN = "dc1-32fcc4967978e78f10874490";
+const KEY_FIXTURE_PIN = "dc1-30d893675c773e9b609699e7";
 
 const PIN_B: FinancialDeploymentPin = Object.freeze({ ...PIN, contract_address: WALLETS[2] });
 const PIN_TYPO: FinancialDeploymentPin = Object.freeze({ ...PIN, denom: "ujunoy" });
@@ -195,7 +196,7 @@ describe("LIVE-4 L4-6: the compatibility descriptor", () => {
     });
   });
 
-  test("the axes are the capability's facts, named: rules 13 reading [13] and settling [10, 11, 12, 13] (12 by Route v12 R12-3; 13 by Phase 3's v13 certification); hosted [1]; financial [] without escrow and [3] with it; client 1 accepting [0, 1]; codec 18JUNO/v1", () => {
+  test("the axes are the capability's facts, named: rules 13 reading [13] and settling [10, 11, 12, 13] (12 by Route v12 R12-3; 13 by Phase 3's v13 certification); hosted [1]; financial [] without escrow and [4] with it (3 until Phase 3's escrow 2.1); client 1 accepting [0, 1]; codec 18JUNO/v1", () => {
     const none = compatibilityDescriptor(thisDeploymentCapability([]));
     assert.deepEqual(
       { ...none.axes },
@@ -212,7 +213,7 @@ describe("LIVE-4 L4-6: the compatibility descriptor", () => {
       },
     );
     const served = compatibilityDescriptor(thisDeploymentCapability([PIN]));
-    assert.deepEqual([served.axes.financial_protocols, served.axes.escrow_deployments], [[3], [KEY_A]]);
+    assert.deepEqual([served.axes.financial_protocols, served.axes.escrow_deployments], [[4], [KEY_A]]);
   });
 
   test("2. the key is production's key: the pinned L4-3 keys; the escrow service's own `servingCapability`; a running server's status snapshot and banner", async () => {
@@ -379,7 +380,7 @@ describe("LIVE-4 L4-6: stored-game inspection asks the canonical verdict through
         if (c.intents === "newer") {
           const intents = path.join(dir, "games", "chain-intents", gameId);
           fs.mkdirSync(intents, { recursive: true });
-          fs.writeFileSync(path.join(intents, `${"f".repeat(64)}.json`), `${JSON.stringify({ format: "gs-chain-intent", schema: 2, game_id: gameId, intent_id: "f".repeat(64) })}\n`);
+          fs.writeFileSync(path.join(intents, `${"f".repeat(64)}.json`), `${JSON.stringify({ format: "gs-chain-intent", schema: 3 /* FP4 writes schema 2 */, game_id: gameId, intent_id: "f".repeat(64) })}\n`);
         }
         const serving = createMoneyServing({ capability: thisDeploymentCapability([c.serves]) });
         if (c.read !== null) serving.recordChainFacts(c.read);
@@ -558,12 +559,12 @@ describe("LIVE-4 L4-6: no inspection command writes", () => {
 /* ================================================================================================= */
 
 describe("LIVE-4 L4-6: no protocol or version moved", () => {
-  test("8. rules 13 (reads [13]; 11 / [11] through LIVE-4, 12 / [12] from Route v12 R12-2 until W3-K); settlement [10, 11, 12, 13] (12 certified by R12-3; 13 by Phase 3's v13 certification); hosted 1; financial 3; client 1 accepting [0, 1]; money GameRecords schema 2; the keys as the v13 certification moved them", () => {
+  test("8. rules 13 (reads [13]; 11 / [11] through LIVE-4, 12 / [12] from Route v12 R12-2 until W3-K); settlement [10, 11, 12, 13] (12 certified by R12-3; 13 by Phase 3's v13 certification); hosted 1; financial 4 (3 until Phase 3's escrow 2.1 timed remedies); client 1 accepting [0, 1]; money GameRecords schema 2; the keys as the v13 certification and financial protocol 4 moved them", () => {
     assert.equal(RULES_ENGINE_VERSION, 13);
     assert.deepEqual([...SUPPORTED_RULES_ENGINE_VERSIONS], [13]);
     assert.deepEqual([...SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS], [10, 11, 12, 13]);
     assert.equal(HOSTED_PROTOCOL_VERSION, 1);
-    assert.equal(FINANCIAL_PROTOCOL_VERSION, 3);
+    assert.equal(FINANCIAL_PROTOCOL_VERSION, 4);
     assert.equal(CLIENT_PROTOCOL_VERSION, 1);
     assert.deepEqual([...ACCEPTED_CLIENT_PROTOCOLS], [0, 1]);
     assert.equal((moneyRecord(mintGameId(), PIN) as unknown as { record_schema: number }).record_schema, 2);

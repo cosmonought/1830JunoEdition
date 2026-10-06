@@ -4,7 +4,7 @@ mod common;
 
 use common::*;
 use cosmwasm_std::{coin, coins, HexBinary, Uint128};
-use eighteen_cosmos_escrow::msg::ExecuteMsg;
+use eighteen_cosmos_escrow::msg::{DeadlineChoice, ExecuteMsg};
 use eighteen_cosmos_escrow::state::{GameState, Mode, Route};
 use eighteen_cosmos_escrow::ContractError;
 
@@ -386,7 +386,7 @@ fn key_ticket_and_digest_lengths_are_enforced() {
         variants_digest: variants_digest(),
         consent_pubkey: HexBinary::from(bytes),
         join_ticket: ticket("x"),
-        no_deadline: false,
+        deadline: DeadlineChoice::LiveActionClock {},
     };
     let uncompressed = {
         let k = Key::seat(0);
@@ -417,7 +417,7 @@ fn key_ticket_and_digest_lengths_are_enforced() {
         variants_digest: variants_digest(),
         consent_pubkey: Key::seat(0).pubkey,
         join_ticket: HexBinary::from(vec![7u8; 31]),
-        no_deadline: false,
+        deadline: DeadlineChoice::LiveActionClock {},
     };
     assert_eq!(
         s.exec(&who, &bad_ticket, &coins(ANTE, DENOM)).unwrap_err(),
@@ -434,7 +434,7 @@ fn key_ticket_and_digest_lengths_are_enforced() {
         variants_digest: HexBinary::from(vec![7u8; 33]),
         consent_pubkey: Key::seat(0).pubkey,
         join_ticket: ticket("x"),
-        no_deadline: false,
+        deadline: DeadlineChoice::LiveActionClock {},
     };
     assert_eq!(
         s.exec(&who, &bad_variants, &coins(ANTE, DENOM))

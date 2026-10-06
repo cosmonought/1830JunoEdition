@@ -21,8 +21,9 @@
 //!     funds, nor an escrow 2.0.0 game's IN_PROGRESS funds (the checker drains
 //!     every live game under a permanent pause at the end of each sequence). An
 //!     escrow 2.1.0 IN_PROGRESS game has no inactivity exit: under a permanent
-//!     pause it leaves only by unanimous AnnulByConsent, or (No-deadline) by
-//!     the resolver's ReviewAnnul after a seated request; the drain uses those
+//!     pause it leaves by unanimous AnnulByConsent, the resolver's ReviewAnnul
+//!     after a seated request, or (Timed) a neutral remedy; the drain uses
+//!     those
 //! 14. a compromised signer's seq cannot permanently block trusted progress
 //! 15. a resolver change cannot affect an already-started game
 //! 16. consent keys are unique within a game
@@ -36,13 +37,24 @@
 //!     (`LivenessExitRemoved`, whatever the time or pause) and never stores a
 //!     checkpoint as its settlement (it never pays round-boundary standings)
 //! 19. escrow 2.1.0 review: RequestReview succeeds only for a seated wallet of
-//!     an IN_PROGRESS No-deadline game and records only the first request;
-//!     ReviewAnnul succeeds only for that game's own resolver after a request,
-//!     and its only outcome is every seat's own net deposit back
+//!     an IN_PROGRESS 2.1.0 game (any policy) and records only the first
+//!     request; ReviewAnnul succeeds only for that game's own resolver after a
+//!     request and the 7-day delay, and its only outcome is every seat's own
+//!     net deposit back
+//! 20. escrow 2.1.0 remedies: SubmitRemedy succeeds exactly when an
+//!     independent model of its rules says so (policy, kind/mode, domain,
+//!     seat, strike, allowance, timing, finality, expiry, sequence, the
+//!     REMEDY key's status and signature, every N−1 approval and no other);
+//!     the foreclosing kinds never succeed while paused; a neutral remedy
+//!     refunds every net deposit, a foreclosure pays the defaulting seat 0
+//!     and every other seat its net deposit plus ⌊net_D/(N−1)⌋ with the
+//!     remainder to the treasury, and a third strike stores a challengeable
+//!     1/0 settlement; a third-strike settlement whose REMEDY key is
+//!     compromised is never paid directly (17)
 //!
-//! The checker mixes three kinds of game: escrow 2.1.0 `Timed` and
-//! `NoDeadline` games, and games rewritten into the shape escrow 2.0.0 stored
-//! (`Suite::make_legacy`), which keep every 2.0.0 path.
+//! The checker mixes three kinds of game: escrow 2.1.0 `TimedRemedyV1` (Live
+//! and paced Async) and `NoDeadline` games, and games rewritten into the shape
+//! escrow 2.0.0 stored (`Suite::make_legacy`), which keep every 2.0.0 path.
 
 mod common;
 
@@ -53,10 +65,15 @@ use cosmwasm_std::{coins, Addr, Coin, HexBinary, Uint128, Uint256};
 use cw_multi_test::{AppResponse, Executor};
 use eighteen_cosmos_escrow::crypto;
 use eighteen_cosmos_escrow::msg::{
-    ExecuteMsg, ResolveOutcome, SeatSignature, SettlementPayloadV1, SignedCheckpoint,
+    DeadlineChoice, ExecuteMsg, RemedyAttestationV1, ResolveOutcome, SeatSignature,
+    SettlementPayloadV1, SignedCheckpoint,
 };
 use eighteen_cosmos_escrow::payload::{Payload, KIND_CHECKPOINT, KIND_TERMINAL};
-use eighteen_cosmos_escrow::state::{Game, GamePolicy, GameState, Mode, Route, SettlementSource};
+use eighteen_cosmos_escrow::remedy::RemedyAttestation;
+use eighteen_cosmos_escrow::state::{
+    Game, GamePolicy, GameState, Mode, RemedyKind, Route, SettlementRecord, SettlementSource,
+    ASYNC_PACES_SECS, MAX_REMEDY_TTL_SECS,
+};
 use eighteen_cosmos_escrow::ContractError;
 
 // ===================================================================== model
@@ -145,6 +162,52 @@ enum Act {
     RequestReview,
     /// Escrow 2.1.0: someone sends ReviewAnnul (19).
     ReviewAnnul,
+    /// Escrow 2.1.0: someone relays a remedy attestation, valid or not (20).
+    Remedy,
+    /// Escrow 2.1.0: the admin registers a remedy key and retires an old one,
+    /// sometimes as compromised (20, 17).
+    RotateRemedyKey,
+}
+
+/// A remedy as the fuzzer built it, with what the model needs to predict it.
+struct RemedyPlan {
+    a: RemedyAttestation,
+    msg: ExecuteMsg,
+    /// Registered and unretired / registered and retired / unknown.
+    key_status: &'static str,
+    /// The signature is by the key registered under `a.remedy_key_id`.
+    sig_ok: bool,
+    /// (seat index, signed by that seat's current key over the right digest).
+    approvals: Vec<(u8, bool)>,
+}
+
+/// The model's label for a remedy refusal.
+fn remedy_err_label(e: &ContractError) -> &'static str {
+    match e {
+        ContractError::WrongState { .. } => "wrong state",
+        ContractError::RemedyNotAvailable {} => "not available",
+        ContractError::BadRemedyKind { .. } => "bad kind",
+        ContractError::Paused {} => "paused",
+        ContractError::BadVersion { .. } => "bad version",
+        ContractError::RemedyNotForMode { .. } => "not for mode",
+        ContractError::DomainMismatch {} => "domain",
+        ContractError::SeatIndexOutOfRange { .. } => "seat range",
+        ContractError::BadStrike { .. } => "strike",
+        ContractError::AllowanceMismatch { .. } => "allowance",
+        ContractError::RemedyTiming { .. } => "timing",
+        ContractError::RemedyNotFinal { .. } => "not final",
+        ContractError::RemedyExpired { .. } => "expired",
+        ContractError::StaleSeq { .. } => "stale",
+        ContractError::UnknownRemedyKey { .. } => "unknown key",
+        ContractError::RetiredRemedyKey { .. } => "retired key",
+        ContractError::InvalidSignature {} => "invalid signature",
+        ContractError::DefaulterCannotApprove { .. } => "defaulter",
+        ContractError::DuplicateConsent { .. } => "duplicate",
+        ContractError::InvalidConsent { .. } => "invalid consent",
+        ContractError::MissingConsent { .. } => "missing",
+        ContractError::ApprovalsNotAllowed { .. } => "approvals not allowed",
+        other => panic!("unexpected remedy refusal {other:?}"),
+    }
 }
 
 struct Done {
@@ -204,6 +267,20 @@ struct Fuzz {
     liveness_removed: usize,
     /// Live + no_deadline CreateGame refused (18).
     live_no_deadline_refused: usize,
+    /// Every registered remedy key (20).
+    remedy_keys: Vec<(u16, Key)>,
+    remedy_retired: BTreeSet<u16>,
+    remedy_compromised: BTreeSet<u16>,
+    next_remedy_label: usize,
+    /// Accepted remedies by kind (20).
+    remedies_ok: BTreeMap<&'static str, usize>,
+    /// Remedies refused, by the model's label (20).
+    remedies_refused: BTreeMap<&'static str, usize>,
+    /// Third-strike settlements that reached a terminal state (20).
+    strike3_closed: BTreeMap<String, usize>,
+    /// Remedy-focused sequences: only 2.1.0 games (mostly Timed), started
+    /// eagerly, and many more (and more often broken) remedies.
+    focus: bool,
 }
 
 const MAX_GAMES: usize = 24;
@@ -243,6 +320,31 @@ impl Fuzz {
             policy: BTreeMap::new(),
             liveness_removed: 0,
             live_no_deadline_refused: 0,
+            remedy_keys: vec![(1, Key::remedy(1))],
+            remedy_retired: BTreeSet::new(),
+            remedy_compromised: BTreeSet::new(),
+            next_remedy_label: 2,
+            remedies_ok: BTreeMap::new(),
+            remedies_refused: BTreeMap::new(),
+            strike3_closed: BTreeMap::new(),
+            focus: false,
+        }
+    }
+
+    fn new_focused(seed: u64) -> Fuzz {
+        let mut f = Fuzz::new(seed);
+        f.focus = true;
+        f
+    }
+
+    /// Whether a stored settlement's key is compromised, as the model knows
+    /// it, in the registry its source names (17, 20).
+    fn settlement_compromised(&self, st: &SettlementRecord) -> bool {
+        let key = st.payload.signer_key_id;
+        if st.source == SettlementSource::RemedyStrike3 {
+            self.remedy_compromised.contains(&key)
+        } else {
+            self.compromised.contains(&key)
         }
     }
 
@@ -460,7 +562,39 @@ impl Fuzz {
         if self.paused && self.rng.chance(30) {
             return Act::PauseToggle;
         }
-        let table: [(Act, u64); 24] = [
+        if self.focus {
+            let table: [(Act, u64); 19] = [
+                (Act::Create, 6),
+                (Act::Join, 16),
+                (Act::Start, 10),
+                (Act::Checkpoint, 9),
+                (Act::Remedy, 30),
+                (Act::Advance, 10),
+                (Act::PauseToggle, 2),
+                (Act::RotateRemedyKey, 2),
+                (Act::Challenge, 5),
+                (Act::Resolve, 4),
+                (Act::Finalize, 3),
+                (Act::Consent, 2),
+                (Act::Annul, 2),
+                (Act::Liveness, 3),
+                (Act::SetKey, 2),
+                (Act::RequestReview, 1),
+                (Act::ReviewAnnul, 1),
+                (Act::Replay, 2),
+                (Act::Stall, 1),
+            ];
+            let total: u64 = table.iter().map(|(_, w)| w).sum();
+            let mut r = self.rng.below(total);
+            for (act, w) in table {
+                if r < w {
+                    return act;
+                }
+                r -= w;
+            }
+            unreachable!()
+        }
+        let table: [(Act, u64); 26] = [
             (Act::Create, 6),
             (Act::Join, 16),
             (Act::Withdraw, 2),
@@ -485,6 +619,8 @@ impl Fuzz {
             (Act::EmergencyRotation, 1),
             (Act::RequestReview, 2),
             (Act::ReviewAnnul, 2),
+            (Act::Remedy, 4),
+            (Act::RotateRemedyKey, 1),
         ];
         let total: u64 = table.iter().map(|(_, w)| w).sum();
         let mut r = self.rng.below(total);
@@ -501,7 +637,13 @@ impl Fuzz {
         use GameState::*;
         match act {
             Act::Create => {
-                if self.games.len() >= MAX_GAMES {
+                // Remedy-focused sequences end games fast: cap the live ones.
+                let live = self
+                    .games
+                    .iter()
+                    .filter(|id| !self.frozen.contains_key(id))
+                    .count();
+                if self.games.len() >= MAX_GAMES && !(self.focus && live < 10) {
                     return None;
                 }
                 let p = self.rng.below(8) as usize;
@@ -523,14 +665,27 @@ impl Fuzz {
                 // games side by side. A Live table asking for no deadline is
                 // refused.
                 let kind = self.rng.below(100);
-                let legacy = kind < 30;
-                let no_deadline = kind >= 65;
+                let legacy = kind < 30 && !self.focus;
+                let no_deadline = if self.focus { kind >= 90 } else { kind >= 65 };
                 // A no-deadline request is an Async table, except now and then
                 // a Live one, which must be refused.
                 let mode = if no_deadline && !self.rng.chance(12) {
                     Mode::Async
                 } else {
                     mode
+                };
+                let deadline = match (no_deadline, mode) {
+                    (true, _) => DeadlineChoice::NoDeadline {},
+                    (false, Mode::Live) => DeadlineChoice::LiveActionClock {},
+                    // The focused run mostly plays the 12-hour pace, so an
+                    // overdue can exist without the world clock jumping days.
+                    (false, Mode::Async) => DeadlineChoice::AsyncPace {
+                        allowance_secs: if self.focus && self.rng.chance(85) {
+                            ASYNC_PACES_SECS[0]
+                        } else {
+                            self.rng.pick(&ASYNC_PACES_SECS)
+                        },
+                    },
                 };
                 let msg = ExecuteMsg::CreateGame {
                     max_players,
@@ -539,7 +694,7 @@ impl Fuzz {
                     variants_digest: variants_digest(),
                     consent_pubkey: key.pubkey.clone(),
                     join_ticket: ticket("fuzz"),
-                    no_deadline,
+                    deadline,
                 };
                 let res = self.exec(&who, &msg, &coins(ante, DENOM));
                 if no_deadline && mode == Mode::Live {
@@ -548,7 +703,7 @@ impl Fuzz {
                         assert!(matches!(res, Err(ContractError::Paused {})), "{res:?}");
                     } else {
                         assert!(
-                            matches!(res, Err(ContractError::NoDeadlineNeedsAsync {})),
+                            matches!(res, Err(ContractError::DeadlineNotForMode {})),
                             "a live no-deadline game: {res:?}"
                         );
                         self.live_no_deadline_refused += 1;
@@ -561,7 +716,7 @@ impl Fuzz {
                     let expected = if no_deadline {
                         GamePolicy::NoDeadline
                     } else {
-                        GamePolicy::TimedNoRemedies
+                        GamePolicy::TimedRemedyV1
                     };
                     assert_eq!(created, Some(expected), "CreateGame policy");
                     let policy = if legacy && !no_deadline {
@@ -848,7 +1003,8 @@ impl Fuzz {
                 Some(d)
             }
             Act::Annul => {
-                let id = self.pick_game(&[InProgress, Settleable])?;
+                // Escrow 2.1.0: DISPUTED too (universal unanimous annulment).
+                let id = self.pick_game(&[InProgress, Settleable, Disputed])?;
                 let g = self.game_of(id);
                 let trusted = self.view_trusted.get(&id).copied().unwrap_or(0);
                 let digest = crypto::annul_digest(&Self::domain_of(&g), trusted);
@@ -1239,13 +1395,11 @@ impl Fuzz {
                 None
             }
             Act::RequestReview => {
-                // Prefer an IN_PROGRESS No-deadline game.
+                // Prefer an IN_PROGRESS 2.1.0 game.
                 let open: Vec<u64> = self
                     .view
                     .iter()
-                    .filter(|(_, g)| {
-                        g.state == InProgress && g.terms.policy == Some(GamePolicy::NoDeadline)
-                    })
+                    .filter(|(_, g)| g.state == InProgress && g.terms.policy.is_some())
                     .map(|(id, _)| *id)
                     .collect();
                 let id = if !open.is_empty() && self.rng.chance(70) {
@@ -1295,6 +1449,140 @@ impl Fuzz {
                 let res = self.exec(&who, &msg, &[]);
                 self.expect_review_annul(id, &g, &who, named, &res);
                 Some(Self::done(act, Some(id), who, res))
+            }
+            Act::Remedy => {
+                // Prefer an IN_PROGRESS TimedRemedyV1 game.
+                let timed: Vec<u64> = self
+                    .view
+                    .iter()
+                    .filter(|(_, g)| {
+                        g.state == InProgress && g.terms.policy == Some(GamePolicy::TimedRemedyV1)
+                    })
+                    .map(|(id, _)| *id)
+                    .collect();
+                let id = if !timed.is_empty() && self.rng.chance(85) {
+                    self.rng.pick(&timed)
+                } else if timed.is_empty() && (self.focus || self.rng.chance(75)) {
+                    return None;
+                } else {
+                    self.pick_game(&[InProgress])?
+                };
+                let g = self.game_of(id);
+                let kinds: Vec<RemedyKind> = match g.mode {
+                    Mode::Live => vec![
+                        RemedyKind::LiveTimeoutAnnul,
+                        RemedyKind::LiveForeclose,
+                        RemedyKind::LiveStrike3Foreclose,
+                    ],
+                    Mode::Async => vec![RemedyKind::AsyncAnnul, RemedyKind::AsyncForeclose],
+                };
+                let kind = self.rng.pick(&kinds);
+                let defaulting = self.rng.below(g.seats.len().max(1) as u64) as u8;
+                // An overdue needs the game to have run one whole allowance
+                // (Live: plus the cure window) -- the server cannot attest one
+                // sooner: mostly let the clock run that far first (time alone
+                // changes nothing); now and then the attestation is too early
+                // and the model predicts the timing refusal.
+                if let (Some(started), true) = (g.started_at, self.rng.chance(90)) {
+                    let earliest =
+                        started.seconds() + g.terms.allowance_secs + g.terms.cure_window_secs + 1;
+                    let now = self.s.now().seconds();
+                    if now < earliest {
+                        self.s.advance(earliest - now + self.rng.below(120));
+                    }
+                }
+                let mutation = if self.rng.chance(if self.focus { 50 } else { 30 }) {
+                    Some(self.rng.below(18))
+                } else {
+                    None
+                };
+                if mutation == Some(8) && g.state == InProgress {
+                    // A stale attestation: first an honest checkpoint (its
+                    // own checked step), then a remedy at a log position
+                    // below it.
+                    let before = self.begin();
+                    let (_, payload, signature) = self.honest_checkpoint(id, &g);
+                    let who = self.any_caller();
+                    let res = self.exec(
+                        &who,
+                        &ExecuteMsg::Checkpoint {
+                            chain_game_id: id,
+                            payload,
+                            signature,
+                        },
+                        &[],
+                    );
+                    assert!(res.is_ok(), "honest checkpoint refused: {res:?}");
+                    self.checkpointed.insert(id);
+                    if self.paused {
+                        self.paused_checkpoints += 1;
+                    }
+                    let d = Self::done(Act::Checkpoint, Some(id), who, res);
+                    self.check(&d, &before);
+                    let before = self.begin();
+                    let g = self.game_of(id);
+                    let plan = self.build_remedy(id, &g, kind, defaulting, mutation);
+                    let who = self.any_caller();
+                    let res = self.exec(&who, &plan.msg, &[]);
+                    self.expect_remedy(id, &g, &plan, &res);
+                    let d = Self::done(act, Some(id), who, res);
+                    self.check(&d, &before);
+                    return None;
+                }
+                let plan = self.build_remedy(id, &g, kind, defaulting, mutation);
+                let who = self.any_caller();
+                let res = self.exec(&who, &plan.msg, &[]);
+                let retired = plan.key_status == "retired";
+                self.expect_remedy(id, &g, &plan, &res);
+                if res.is_ok() {
+                    self.accepted.push((id, plan.msg.clone()));
+                }
+                let mut d = Self::done(act, Some(id), who, res);
+                d.retired_signer = retired;
+                Some(d)
+            }
+            Act::RotateRemedyKey => {
+                let admin = self.s.admin.clone();
+                let key = Key::remedy(self.next_remedy_label);
+                self.next_remedy_label += 1;
+                let res = self.exec(
+                    &admin,
+                    &ExecuteMsg::AddRemedyKey {
+                        pubkey: key.pubkey.clone(),
+                    },
+                    &[],
+                );
+                let key_id: u16 = attr(res.as_ref().unwrap(), "key_id").parse().unwrap();
+                self.remedy_keys.push((key_id, key));
+                let old: Vec<u16> = self
+                    .remedy_keys
+                    .iter()
+                    .map(|(id, _)| *id)
+                    .filter(|id| *id != key_id && !self.remedy_retired.contains(id))
+                    .collect();
+                let mut d = if old.is_empty() {
+                    Self::done(act, None, admin, res)
+                } else {
+                    let victim = self.rng.pick(&old);
+                    let compromised = self.rng.chance(40);
+                    let res = self.exec(
+                        &admin,
+                        &ExecuteMsg::RetireRemedyKey {
+                            key_id: victim,
+                            compromised,
+                        },
+                        &[],
+                    );
+                    self.remedy_retired.insert(victim);
+                    if compromised {
+                        self.remedy_compromised.insert(victim);
+                    }
+                    let mut d = Self::done(act, None, admin, res);
+                    d.compromise = compromised;
+                    d
+                };
+                d.admin = true;
+                Some(d)
             }
             Act::Replay => {
                 if self.accepted.is_empty() || self.games.len() < 2 {
@@ -1371,7 +1659,47 @@ impl Fuzz {
         if a.state.is_terminal() && !b.state.is_terminal() {
             let o = a.outcome.as_ref().unwrap();
             self.routes_seen.insert(format!("{:?}", o.route));
-            if a.state == GameState::Settled {
+            if b.settlement
+                .as_ref()
+                .is_some_and(|st| st.source == SettlementSource::RemedyStrike3)
+            {
+                *self
+                    .strike3_closed
+                    .entry(format!("{:?}", o.route))
+                    .or_default() += 1;
+            }
+            if o.route == Route::RemedyForeclosure {
+                // (20) The foreclosure formula, from an independent model.
+                assert_eq!(a.state, GameState::Settled);
+                assert!(a.settlement.is_none(), "a foreclosure stores no settlement");
+                let r = a.remedy.as_ref().unwrap();
+                let d_seat = usize::from(r.defaulting_seat);
+                let others = b.seats.len() as u128 - 1;
+                let forfeited = b.seats[d_seat].net_deposit.u128();
+                let (share, dust) = (forfeited / others, forfeited % others);
+                let amounts: Vec<u128> = b
+                    .seats
+                    .iter()
+                    .enumerate()
+                    .map(|(i, seat)| {
+                        if i == d_seat {
+                            0
+                        } else {
+                            seat.net_deposit.u128() + share
+                        }
+                    })
+                    .collect();
+                assert_eq!(
+                    o.amounts.iter().map(|x| x.u128()).collect::<Vec<_>>(),
+                    amounts
+                );
+                assert_eq!(o.dust.u128(), dust);
+                assert_eq!(o.distributed.u128(), b.pool.u128());
+                for (seat, amount) in b.seats.iter().zip(amounts.iter()) {
+                    add(&seat.wallet, *amount);
+                }
+                add(&a.terms.treasury, dust);
+            } else if a.state == GameState::Settled {
                 let st = a.settlement.as_ref().unwrap();
                 match (&b.settlement, &o.route) {
                     (_, Route::ResolverReplace) => {
@@ -1474,8 +1802,8 @@ impl Fuzz {
                         .get(&id)
                         .filter(|g| g.state == GameState::Settleable)
                         .and_then(|g| g.settlement.as_ref())
-                        .map(|st| st.payload.signer_key_id)
-                        .filter(|k| self.compromised.contains(k));
+                        .filter(|st| self.settlement_compromised(st))
+                        .map(|st| st.payload.signer_key_id);
                     match (key, self.paused) {
                         (Some(key_id), false) => {
                             assert_eq!(
@@ -1512,6 +1840,18 @@ impl Fuzz {
                     "{:?} accepted while paused",
                     d.act
                 );
+                // (20) a foreclosing remedy never succeeds while paused.
+                if self.paused && d.act == Act::Remedy {
+                    let route = d
+                        .game
+                        .and_then(|id| after.games.get(&id))
+                        .and_then(|g| g.outcome.as_ref())
+                        .map(|o| o.route);
+                    assert!(
+                        matches!(route, Some(Route::RemedyTimeoutAnnul | Route::RemedyAnnul)),
+                        "a foreclosing remedy succeeded while paused: {route:?}"
+                    );
+                }
                 // (8)
                 assert!(!d.retired_signer, "a retired signer's payload was accepted");
                 // (17) Finalize and Consent never accept a stored settlement
@@ -1520,7 +1860,7 @@ impl Fuzz {
                 if let (Some(id), true) = (d.game, matches!(d.act, Act::Finalize | Act::Consent)) {
                     if let Some(st) = before.games.get(&id).and_then(|g| g.settlement.as_ref()) {
                         assert!(
-                            !self.compromised.contains(&st.payload.signer_key_id),
+                            !self.settlement_compromised(st),
                             "{:?} accepted on a compromised settlement",
                             d.act
                         );
@@ -1544,10 +1884,11 @@ impl Fuzz {
                         )
                     );
                     if direct {
-                        let key = a.settlement.as_ref().unwrap().payload.signer_key_id;
+                        let st = a.settlement.as_ref().unwrap();
                         assert!(
-                            !self.compromised.contains(&key),
-                            "(17) game {id} paid a settlement signed by compromised key {key}"
+                            !self.settlement_compromised(st),
+                            "(17) game {id} paid a settlement signed by compromised key {}",
+                            st.payload.signer_key_id
                         );
                         self.direct_payouts += 1;
                     }
@@ -1640,10 +1981,14 @@ impl Fuzz {
                     );
                 }
             }
-            // (19) only a No-deadline game is ever asked to review, and the
-            // first request is never overwritten.
+            // (19) only a 2.1.0 game is ever asked to review, and the first
+            // request is never overwritten.
             if g.review_request.is_some() {
-                assert_eq!(g.terms.policy, Some(GamePolicy::NoDeadline));
+                assert!(g.terms.policy.is_some());
+            }
+            // (20) only a TimedRemedyV1 game ever holds a remedy.
+            if g.remedy.is_some() {
+                assert_eq!(g.terms.policy, Some(GamePolicy::TimedRemedyV1));
             }
             if let Some(b) = before.games.get(id) {
                 if b.review_request.is_some() && b.review_request != g.review_request {
@@ -1662,13 +2007,15 @@ impl Fuzz {
                     && g.state != GameState::InProgress
                     && g.terms.policy.is_some()
                 {
-                    // A 2.1.0 game leaves IN_PROGRESS only by Settle, unanimity
-                    // or the review.
+                    // A 2.1.0 game leaves IN_PROGRESS only by Settle, unanimity,
+                    // the review or a remedy.
                     let route = g.outcome.as_ref().map(|o| o.route);
+                    let source = g.settlement.as_ref().map(|st| st.source);
                     assert!(
                         g.state == GameState::Settleable
-                            && g.settlement.as_ref().unwrap().source
-                                == SettlementSource::TerminalPayload
+                            && (source == Some(SettlementSource::TerminalPayload)
+                                || source == Some(SettlementSource::RemedyStrike3)
+                                    && d.act == Act::Remedy)
                             || matches!(
                                 route,
                                 Some(
@@ -1676,7 +2023,15 @@ impl Fuzz {
                                         | Route::AnnulByConsent
                                         | Route::ReviewAnnul
                                 )
-                            ),
+                            )
+                            || matches!(
+                                route,
+                                Some(
+                                    Route::RemedyTimeoutAnnul
+                                        | Route::RemedyAnnul
+                                        | Route::RemedyForeclosure
+                                )
+                            ) && d.act == Act::Remedy,
                         "2.1.0 game {id} left IN_PROGRESS by {route:?} ({:?})",
                         g.state
                     );
@@ -1915,7 +2270,7 @@ impl Fuzz {
                 g.state == GameState::Settleable
                     && g.settlement
                         .as_ref()
-                        .is_some_and(|st| self.compromised.contains(&st.payload.signer_key_id))
+                        .is_some_and(|st| self.settlement_compromised(st))
             })
             .collect();
         for id in exposed {
@@ -2107,7 +2462,7 @@ impl Fuzz {
             Err("wrong state")
         } else if seat.is_none() {
             Err("not seated")
-        } else if g.terms.policy != Some(GamePolicy::NoDeadline) {
+        } else if g.terms.policy.is_none() {
             Err("not available")
         } else if seated_resolver {
             Err("seated")
@@ -2154,22 +2509,20 @@ impl Fuzz {
             Err("unauthorized")
         } else if seated_resolver {
             Err("seated")
-        } else if g.terms.policy != Some(GamePolicy::NoDeadline) {
+        } else if g.terms.policy.is_none() {
             Err("not available")
-        } else if g.review_request.is_none() {
-            Err("not requested")
-        } else if g.review_request.as_ref().unwrap().requested_at != named {
-            Err("mismatch")
-        } else if self.s.now()
-            < g.review_request
-                .as_ref()
-                .unwrap()
-                .requested_at
-                .plus_seconds(g.terms.review_delay_secs)
-        {
-            Err("delay")
         } else {
-            Ok(())
+            match g.review_request.as_ref() {
+                None => Err("not requested"),
+                Some(request) if request.requested_at != named => Err("mismatch"),
+                Some(request)
+                    if self.s.now()
+                        < request.requested_at.plus_seconds(g.terms.review_delay_secs) =>
+                {
+                    Err("delay")
+                }
+                Some(_) => Ok(()),
+            }
         };
         match (res, expected) {
             (Ok(_), Ok(())) => {
@@ -2202,6 +2555,430 @@ impl Fuzz {
         }
     }
 
+    /// (20) A remedy for game `id` of `kind` against `defaulting`, timed to be
+    /// final now, under an active remedy key (mostly), with every N−1
+    /// approval when the kind needs them; `mutation` breaks one rule.
+    fn build_remedy(
+        &mut self,
+        id: u64,
+        g: &Game,
+        kind: RemedyKind,
+        defaulting: u8,
+        mutation: Option<u64>,
+    ) -> RemedyPlan {
+        let n = g.seats.len();
+        let now = self.s.now().seconds();
+        let started = g.started_at.map(|t| t.seconds()).unwrap_or(0);
+        let trusted = self.view_trusted.get(&id).copied().unwrap_or(0);
+        // The earliest overdue is one allowance after the start; Live 1/2 are
+        // final at least one cure window after it (later when a pause froze
+        // it). A game too young for that gets an attestation the contract
+        // refuses on timing, as the model predicts.
+        let cure = match kind {
+            RemedyKind::LiveTimeoutAnnul | RemedyKind::LiveForeclose => g.terms.cure_window_secs,
+            _ => 0,
+        };
+        let earliest = started + g.terms.allowance_secs;
+        let slack = now.saturating_sub(earliest + cure);
+        let final_at = now - self.rng.below(slack.min(120) + 1);
+        let overdue_at = match kind {
+            RemedyKind::LiveTimeoutAnnul | RemedyKind::LiveForeclose => {
+                // Now and then a cure window a pause stretched.
+                let room = final_at.saturating_sub(cure).saturating_sub(earliest);
+                let paused = if self.rng.chance(4) {
+                    self.rng.below(room.min(900) + 1)
+                } else {
+                    0
+                };
+                final_at.saturating_sub(cure + paused)
+            }
+            RemedyKind::LiveStrike3Foreclose => final_at,
+            RemedyKind::AsyncAnnul | RemedyKind::AsyncForeclose => {
+                let room = final_at.saturating_sub(earliest);
+                final_at - self.rng.below(room.min(g.terms.allowance_secs) + 1)
+            }
+        };
+        let attested_at = final_at + self.rng.below(now - final_at + 1);
+        let strike = match kind {
+            RemedyKind::LiveTimeoutAnnul | RemedyKind::LiveForeclose => 1 + self.rng.below(2) as u8,
+            RemedyKind::LiveStrike3Foreclose => 3,
+            RemedyKind::AsyncAnnul | RemedyKind::AsyncForeclose => 0,
+        };
+        let active: Vec<(u16, Key)> = self
+            .remedy_keys
+            .iter()
+            .filter(|(k, _)| !self.remedy_retired.contains(k))
+            .cloned()
+            .collect();
+        // A well-formed remedy (no mutation) always uses an active key; a
+        // mutated one now and then a retired key (refused as such).
+        let (mut key_id, key) = if active.is_empty() || (mutation.is_some() && self.rng.chance(12))
+        {
+            self.rng.pick(&self.remedy_keys)
+        } else {
+            self.rng.pick(&active)
+        };
+        let mut a = RemedyAttestation {
+            version: 1,
+            domain: Self::domain_of(g),
+            chain_game_id: id,
+            remedy: kind.as_byte(),
+            defaulting_seat: defaulting,
+            strike,
+            overdue_epoch: 1 + self.rng.below(5),
+            log_len: trusted / 2 + self.rng.below(3),
+            log_hash: sha256(&[b"fuzz-remedy-log", &trusted.to_be_bytes()]),
+            allowance_secs: g.terms.allowance_secs,
+            overdue_at,
+            final_at,
+            attested_at,
+            expires_at: attested_at + 1 + self.rng.below(MAX_REMEDY_TTL_SECS),
+            evidence_hash: sha256(&[b"fuzz-clock", &final_at.to_be_bytes()]),
+            remedy_key_id: key_id,
+        };
+        let mut signer = key.clone();
+        let mut approval_seats: Vec<u8> = if kind.needs_approvals() {
+            (0..n as u8).filter(|i| *i != defaulting).collect()
+        } else {
+            vec![]
+        };
+        let mut bad_approval: Option<usize> = None;
+        let mut stale_approvals = false;
+        match mutation {
+            Some(0) => {
+                // The other mode's remedy.
+                a.remedy = match g.mode {
+                    Mode::Live => self.rng.pick(&[4u8, 5]),
+                    Mode::Async => self.rng.pick(&[1u8, 2, 3]),
+                }
+            }
+            Some(1) => a.remedy = self.rng.pick(&[0u8, 6, 255]),
+            Some(2) => {
+                // A strike this remedy does not allow.
+                a.strike = match kind {
+                    RemedyKind::LiveTimeoutAnnul | RemedyKind::LiveForeclose => {
+                        self.rng.pick(&[0u8, 3, 4, 9])
+                    }
+                    RemedyKind::LiveStrike3Foreclose => self.rng.pick(&[0u8, 1, 2, 4]),
+                    RemedyKind::AsyncAnnul | RemedyKind::AsyncForeclose => {
+                        self.rng.pick(&[1u8, 2, 3])
+                    }
+                }
+            }
+            Some(3) => a.defaulting_seat = n as u8 + self.rng.below(2) as u8,
+            Some(4) => a.allowance_secs += 1,
+            Some(5) => {
+                // Not final yet.
+                let ahead = 1 + self.rng.below(DAY);
+                a.overdue_at += ahead;
+                a.final_at += ahead;
+                a.attested_at += ahead;
+                a.expires_at += ahead;
+            }
+            Some(6) => a.expires_at = now - self.rng.below(2),
+            Some(7) => a.expires_at = a.attested_at + MAX_REMEDY_TTL_SECS + 1 + self.rng.below(9),
+            Some(8) => a.log_len = (trusted / 2).saturating_sub(1 + self.rng.below(2)),
+            Some(9) => {
+                signer = self.rng.pick(&[
+                    Key::signer(1),
+                    Key::seat(0),
+                    Key::admission(1),
+                    Key::remedy(99),
+                ])
+            }
+            Some(10) => {
+                a.remedy_key_id = 200;
+                key_id = 200;
+            }
+            Some(11) => {
+                if approval_seats.is_empty() {
+                    approval_seats.push(self.rng.below(n.max(1) as u64) as u8);
+                } else {
+                    approval_seats.remove(self.rng.below(approval_seats.len() as u64) as usize);
+                }
+            }
+            Some(12) => approval_seats.push(defaulting),
+            Some(13) => {
+                if let Some(first) = approval_seats.first().copied() {
+                    approval_seats.push(first);
+                }
+            }
+            Some(14) => {
+                if !approval_seats.is_empty() {
+                    bad_approval = Some(self.rng.below(approval_seats.len() as u64) as usize);
+                }
+            }
+            Some(16) => {
+                // Attested "after" the block time (a signer clock ahead), or
+                // before its own finality.
+                if self.rng.chance(50) {
+                    a.attested_at = now + 1 + self.rng.below(60);
+                    a.expires_at = a.attested_at + 1 + self.rng.below(MAX_REMEDY_TTL_SECS);
+                } else {
+                    a.attested_at = a.final_at.saturating_sub(1 + self.rng.below(60));
+                }
+            }
+            Some(17) => {
+                // Approvals collected for ANOTHER overdue instance (a cured
+                // one: an earlier overdue moment or log position).
+                if !approval_seats.is_empty() {
+                    stale_approvals = true;
+                }
+            }
+            Some(_) => {
+                // Another game's domain (cross-game confusion).
+                a.domain = sha256(&[b"another-game", &a.domain]);
+            }
+            None => {}
+        }
+        let _ = key_id;
+        // Approvals: each listed seat's current key over the digest naming it
+        // (an out-of-range seat signs with a stranger's key).
+        let domain = Self::domain_of(g);
+        let mut approvals = Vec::new();
+        let mut meta = Vec::new();
+        for (k, seat) in approval_seats.iter().enumerate() {
+            // A stale set names the instance's earlier position (one seat of
+            // it, at random, still signs the current one).
+            let stale = stale_approvals && k != 0;
+            let (log_len, overdue_at) = if stale {
+                (
+                    a.log_len.saturating_sub(1 + self.rng.below(3)),
+                    a.overdue_at.saturating_sub(1 + self.rng.below(DAY)),
+                )
+            } else {
+                (a.log_len, a.overdue_at)
+            };
+            let digest = crypto::remedy_approve_digest(
+                &domain,
+                id,
+                a.remedy,
+                a.defaulting_seat,
+                a.strike,
+                a.overdue_epoch,
+                log_len,
+                &a.log_hash,
+                overdue_at,
+                *seat,
+            );
+            let in_range = usize::from(*seat) < n;
+            let good = in_range && bad_approval != Some(k) && !stale;
+            let signer_key = if good {
+                self.current_key(id, g, usize::from(*seat))
+            } else {
+                Key::from_label("18JUNO/TEST/fuzz/approval-forger")
+            };
+            approvals.push(SeatSignature {
+                seat_index: *seat,
+                signature: signer_key.sign(&digest),
+            });
+            meta.push((*seat, good));
+        }
+        let registered = self
+            .remedy_keys
+            .iter()
+            .find(|(k, _)| *k == a.remedy_key_id)
+            .map(|(_, key)| key.clone());
+        let key_status = match &registered {
+            None => "unknown",
+            Some(_) if self.remedy_retired.contains(&a.remedy_key_id) => "retired",
+            Some(_) => "active",
+        };
+        let sig_ok = registered.is_some_and(|k| k.pubkey == signer.pubkey);
+        let digest = crypto::remedy_digest(&a.encode().unwrap());
+        let msg = ExecuteMsg::SubmitRemedy {
+            chain_game_id: id,
+            attestation: RemedyAttestationV1::from(&a),
+            signature: signer.sign(&digest),
+            approvals,
+        };
+        RemedyPlan {
+            a,
+            msg,
+            key_status,
+            sig_ok,
+            approvals: meta,
+        }
+    }
+
+    /// (20) The independent model of `SubmitRemedy`, in the contract's check
+    /// order, from the game as it stood before the message.
+    fn predict_remedy(&self, id: u64, g: &Game, plan: &RemedyPlan) -> Result<(), &'static str> {
+        let a = &plan.a;
+        let now = self.s.now().seconds();
+        let n = g.seats.len();
+        if g.state != GameState::InProgress {
+            return Err("wrong state");
+        }
+        if g.terms.policy != Some(GamePolicy::TimedRemedyV1) {
+            return Err("not available");
+        }
+        let Some(kind) = RemedyKind::from_byte(a.remedy) else {
+            return Err("bad kind");
+        };
+        if kind.forecloses() && self.paused {
+            return Err("paused");
+        }
+        if a.version != 1 {
+            return Err("bad version");
+        }
+        if kind.mode() != g.mode {
+            return Err("not for mode");
+        }
+        if a.domain != Self::domain_of(g) || a.chain_game_id != id {
+            return Err("domain");
+        }
+        if usize::from(a.defaulting_seat) >= n {
+            return Err("seat range");
+        }
+        let strike_ok = match kind {
+            RemedyKind::LiveTimeoutAnnul | RemedyKind::LiveForeclose => {
+                a.strike == 1 || a.strike == 2
+            }
+            RemedyKind::LiveStrike3Foreclose => a.strike == 3,
+            _ => a.strike == 0,
+        };
+        if !strike_ok {
+            return Err("strike");
+        }
+        if a.allowance_secs != g.terms.allowance_secs {
+            return Err("allowance");
+        }
+        let started = g.started_at.unwrap().seconds();
+        let final_ok = match kind {
+            RemedyKind::LiveTimeoutAnnul | RemedyKind::LiveForeclose => {
+                a.final_at >= a.overdue_at + g.terms.cure_window_secs
+            }
+            RemedyKind::LiveStrike3Foreclose => a.final_at == a.overdue_at,
+            _ => a.final_at >= a.overdue_at,
+        };
+        if a.overdue_at < started + g.terms.allowance_secs
+            || !final_ok
+            || a.attested_at < a.final_at
+            || a.expires_at <= a.attested_at
+            || a.expires_at > a.attested_at + MAX_REMEDY_TTL_SECS
+        {
+            return Err("timing");
+        }
+        if now < a.final_at {
+            return Err("not final");
+        }
+        if now < a.attested_at {
+            return Err("timing");
+        }
+        if now >= a.expires_at {
+            return Err("expired");
+        }
+        let trusted = self.view_trusted.get(&id).copied().unwrap_or(0);
+        // The contract's rule, spelled as it is: seq = 2·log_len + 1 must
+        // exceed the trusted sequence.
+        let seq = 2 * a.log_len + 1;
+        if seq <= trusted {
+            return Err("stale");
+        }
+        match plan.key_status {
+            "unknown" => return Err("unknown key"),
+            "retired" => return Err("retired key"),
+            _ => {}
+        }
+        if !plan.sig_ok {
+            return Err("invalid signature");
+        }
+        if kind.needs_approvals() {
+            let mut seen = BTreeSet::new();
+            for (seat, good) in &plan.approvals {
+                if usize::from(*seat) >= n {
+                    return Err("seat range");
+                }
+                if *seat == a.defaulting_seat {
+                    return Err("defaulter");
+                }
+                if !seen.insert(*seat) {
+                    return Err("duplicate");
+                }
+                if !good {
+                    return Err("invalid consent");
+                }
+            }
+            if (0..n as u8).any(|i| i != a.defaulting_seat && !seen.contains(&i)) {
+                return Err("missing");
+            }
+        } else if !plan.approvals.is_empty() {
+            return Err("approvals not allowed");
+        }
+        Ok(())
+    }
+
+    /// (20) Compares a SubmitRemedy result with the model, and an accepted
+    /// remedy's effect with its kind.
+    fn expect_remedy(
+        &mut self,
+        id: u64,
+        g: &Game,
+        plan: &RemedyPlan,
+        res: &Result<AppResponse, ContractError>,
+    ) {
+        let want = self.predict_remedy(id, g, plan);
+        match (res, want) {
+            (Ok(_), Ok(())) => {
+                let kind = RemedyKind::from_byte(plan.a.remedy).unwrap();
+                *self.remedies_ok.entry(kind.as_str()).or_default() += 1;
+                let after = self.s.game(id).game;
+                let r = after
+                    .remedy
+                    .as_ref()
+                    .expect("an accepted remedy is recorded");
+                assert_eq!(r.kind, kind);
+                assert_eq!(r.defaulting_seat, plan.a.defaulting_seat);
+                assert_eq!(
+                    r.remedy_digest.to_vec(),
+                    crypto::remedy_digest(&plan.a.encode().unwrap()).to_vec()
+                );
+                let route = after.outcome.as_ref().map(|o| o.route);
+                match kind {
+                    RemedyKind::LiveTimeoutAnnul => {
+                        assert_eq!(after.state, GameState::Annulled);
+                        assert_eq!(route, Some(Route::RemedyTimeoutAnnul));
+                    }
+                    RemedyKind::AsyncAnnul => {
+                        assert_eq!(after.state, GameState::Annulled);
+                        assert_eq!(route, Some(Route::RemedyAnnul));
+                    }
+                    RemedyKind::LiveForeclose | RemedyKind::AsyncForeclose => {
+                        assert_eq!(after.state, GameState::Settled);
+                        assert_eq!(route, Some(Route::RemedyForeclosure));
+                    }
+                    RemedyKind::LiveStrike3Foreclose => {
+                        assert_eq!(after.state, GameState::Settleable);
+                        let st = after.settlement.as_ref().unwrap();
+                        assert_eq!(st.source, SettlementSource::RemedyStrike3);
+                        assert_eq!(st.payload.seq.u64(), 2 * plan.a.log_len + 1);
+                        assert_eq!(st.payload.signer_key_id, plan.a.remedy_key_id);
+                        let weights: Vec<u128> = st
+                            .payload
+                            .settlement_weights
+                            .iter()
+                            .map(|w| w.u128())
+                            .collect();
+                        let expected: Vec<u128> = (0..g.seats.len() as u8)
+                            .map(|i| u128::from(i != plan.a.defaulting_seat))
+                            .collect();
+                        assert_eq!(weights, expected, "a third strike pays 1/0, no standings");
+                        assert_eq!(
+                            st.window_end,
+                            self.s.now().plus_seconds(g.terms.challenge_window_secs)
+                        );
+                    }
+                }
+            }
+            (Err(e), Err(label)) => {
+                assert_eq!(remedy_err_label(e), label, "SubmitRemedy on {id}: {e:?}");
+                *self.remedies_refused.entry(label).or_default() += 1;
+            }
+            (got, want) => panic!("SubmitRemedy on {id}: got {got:?}, expected {want:?}"),
+        }
+    }
+
     /// (18) A 2.1.0 IN_PROGRESS game that has idled: the liveness exit stays
     /// refused; then it sometimes leaves by unanimity or the review.
     fn stall_v21(&mut self, id: u64) {
@@ -2222,10 +2999,11 @@ impl Fuzz {
         }
     }
 
-    /// Takes a 2.1.0 IN_PROGRESS game out by unanimous AnnulByConsent, or, for
-    /// a No-deadline game, a seated RequestReview followed by the game
-    /// resolver's ReviewAnnul. Every sub-step is checked on its own; with
-    /// `must` the game must end terminal.
+    /// Takes a 2.1.0 IN_PROGRESS game out by unanimous AnnulByConsent, a
+    /// seated RequestReview followed by the game resolver's ReviewAnnul, or
+    /// (Timed) a neutral remedy relayed under an active remedy key. Every
+    /// sub-step is checked on its own; with `must` the game must end terminal
+    /// (all three work while paused).
     fn stall_v21_exit(&mut self, id: u64, must: bool) {
         self.begin();
         let g = self.game_of(id);
@@ -2233,8 +3011,31 @@ impl Fuzz {
             .resolver
             .as_ref()
             .is_some_and(|r| g.seats.iter().any(|x| x.wallet == *r));
-        if g.terms.policy == Some(GamePolicy::NoDeadline) && !seated_resolver && self.rng.chance(60)
-        {
+        let route = self.rng.below(3);
+        if g.terms.policy == Some(GamePolicy::TimedRemedyV1) && route == 0 {
+            // An overdue can be final only once a whole allowance (Live: plus
+            // the cure window) has run since the start.
+            let ready =
+                g.started_at.unwrap().seconds() + g.terms.allowance_secs + g.terms.cure_window_secs;
+            let now = self.s.now().seconds();
+            if now < ready {
+                self.s.advance(ready - now);
+            }
+            let before = self.begin();
+            let g = self.game_of(id);
+            let kind = match g.mode {
+                Mode::Live => RemedyKind::LiveTimeoutAnnul,
+                Mode::Async => RemedyKind::AsyncAnnul,
+            };
+            let defaulting = self.rng.below(g.seats.len() as u64) as u8;
+            let plan = self.build_remedy(id, &g, kind, defaulting, None);
+            let who = self.any_caller();
+            let res = self.exec(&who, &plan.msg, &[]);
+            assert!(res.is_ok(), "neutral remedy refused: {res:?}");
+            self.expect_remedy(id, &g, &plan, &res);
+            let d = Self::done(Act::Remedy, Some(id), who, res);
+            self.check(&d, &before);
+        } else if !seated_resolver && route == 1 {
             if g.review_request.is_none() {
                 let before = self.begin();
                 let who = g.seats[self.rng.below(g.seats.len() as u64) as usize]
@@ -2321,6 +3122,17 @@ fn retarget(msg: ExecuteMsg, to: u64) -> ExecuteMsg {
             chain_game_id: to,
             consents,
         },
+        ExecuteMsg::SubmitRemedy {
+            attestation,
+            signature,
+            approvals,
+            ..
+        } => ExecuteMsg::SubmitRemedy {
+            chain_game_id: to,
+            attestation,
+            signature,
+            approvals,
+        },
         other => panic!("not a recorded message: {other:?}"),
     }
 }
@@ -2339,11 +3151,15 @@ fn seeded_random_sequences_preserve_every_invariant() {
     let mut liveness_removed = 0;
     let mut live_no_deadline_refused = 0;
     let mut policies: BTreeMap<String, usize> = BTreeMap::new();
-    // Escrow 2.1.0: two more seeds and longer sequences than ESCROW-2.x, so
-    // the three policy kinds share the depth the old suite reached alone.
-    for seed in 0..12u64 {
+    let mut remedies_ok: BTreeMap<&'static str, usize> = BTreeMap::new();
+    let mut remedies_refused: BTreeMap<&'static str, usize> = BTreeMap::new();
+    let mut strike3_closed: BTreeMap<String, usize> = BTreeMap::new();
+    // Escrow 2.1.0: more seeds and longer sequences than ESCROW-2.x (14 × 700
+    // with the remedies), so the three policy kinds and the remedy messages
+    // share the depth the old suite reached alone.
+    for seed in 0..14u64 {
         let mut f = Fuzz::new(0x18_c0_5e_5e_ed ^ seed.wrapping_mul(0x1000_0001));
-        f.run(600);
+        f.run(700);
         games += f.games.len();
         carried += f.carried_ok;
         paused_checkpoints += f.paused_checkpoints;
@@ -2353,6 +3169,15 @@ fn seeded_random_sequences_preserve_every_invariant() {
         live_no_deadline_refused += f.live_no_deadline_refused;
         for p in f.policy.values() {
             *policies.entry(format!("{p:?}")).or_default() += 1;
+        }
+        for (k, n) in &f.remedies_ok {
+            *remedies_ok.entry(k).or_default() += n;
+        }
+        for (k, n) in &f.remedies_refused {
+            *remedies_refused.entry(k).or_default() += n;
+        }
+        for (k, n) in &f.strike3_closed {
+            *strike3_closed.entry(k.clone()).or_default() += n;
         }
         for (act, n) in &f.ok {
             *ok.entry(*act).or_default() += n;
@@ -2401,6 +3226,20 @@ fn seeded_random_sequences_preserve_every_invariant() {
         compromised_refusals > 0,
         "no Finalize/Consent ever met a compromised settlement"
     );
+    eprintln!(
+        "fuzz (20): remedies accepted {remedies_ok:?}; refused {remedies_refused:?}; \
+         third-strike settlements closed by {strike3_closed:?}"
+    );
+    // Remedies mixed into the whole workload; `remedy_focused_sequences_…`
+    // drives every kind and every refusal.
+    assert!(
+        remedies_ok.len() >= 3,
+        "too few remedy kinds accepted in the mixed workload: {remedies_ok:?}"
+    );
+    assert!(
+        remedies_refused.len() >= 4,
+        "too few remedy refusals in the mixed workload: {remedies_refused:?}"
+    );
     // The sequences must actually reach deep states for the checks to mean
     // anything.
     for s in [
@@ -2428,6 +3267,9 @@ fn seeded_random_sequences_preserve_every_invariant() {
         "SettleableTimeoutPayout",
         "ResolverTimeoutPayout",
         "ReviewAnnul",
+        "RemedyTimeoutAnnul",
+        "RemedyAnnul",
+        "RemedyForeclosure",
     ] {
         assert!(
             routes.contains(r),
@@ -2455,11 +3297,92 @@ fn seeded_random_sequences_preserve_every_invariant() {
         Act::EmergencyRotation,
         Act::RequestReview,
         Act::ReviewAnnul,
+        Act::Remedy,
+        Act::RotateRemedyKey,
     ] {
         assert!(
             ok.get(&act).copied().unwrap_or(0) > 0,
             "{act:?} never succeeded"
         );
+    }
+}
+
+/// (20) Remedy-focused sequences: 2.1.0 games only, most of them Timed, many
+/// remedies (half of them broken one rule at a time) among the other
+/// messages, pauses and remedy-key rotations; every invariant is checked after
+/// every step, and every remedy against the independent model.
+#[test]
+fn remedy_focused_sequences_preserve_every_invariant() {
+    let mut remedies_ok: BTreeMap<&'static str, usize> = BTreeMap::new();
+    let mut remedies_refused: BTreeMap<&'static str, usize> = BTreeMap::new();
+    let mut strike3_closed: BTreeMap<String, usize> = BTreeMap::new();
+    let mut routes: BTreeSet<String> = BTreeSet::new();
+    for seed in 0..16u64 {
+        let mut f = Fuzz::new_focused(0x2e_3e_d1_e5 ^ seed.wrapping_mul(0x9000_0011));
+        f.run(700);
+        for (k, n) in &f.remedies_ok {
+            *remedies_ok.entry(k).or_default() += n;
+        }
+        for (k, n) in &f.remedies_refused {
+            *remedies_refused.entry(k).or_default() += n;
+        }
+        for (k, n) in &f.strike3_closed {
+            *strike3_closed.entry(k.clone()).or_default() += n;
+        }
+        routes.extend(f.routes_seen.iter().cloned());
+    }
+    eprintln!(
+        "remedy fuzz: accepted {remedies_ok:?}; refused {remedies_refused:?}; \
+         third-strike settlements closed by {strike3_closed:?}; routes {routes:?}"
+    );
+    for kind in [
+        "live_timeout_annul",
+        "live_foreclose",
+        "live_strike3_foreclose",
+        "async_annul",
+        "async_foreclose",
+    ] {
+        assert!(
+            remedies_ok.get(kind).copied().unwrap_or(0) > 0,
+            "remedy {kind} never accepted: {remedies_ok:?}"
+        );
+    }
+    for label in [
+        "wrong state",
+        "not available",
+        "bad kind",
+        "paused",
+        "not for mode",
+        "domain",
+        "seat range",
+        "strike",
+        "allowance",
+        "timing",
+        "not final",
+        "expired",
+        "stale",
+        "unknown key",
+        "retired key",
+        "invalid signature",
+        "defaulter",
+        "duplicate",
+        "invalid consent",
+        "missing",
+        "approvals not allowed",
+    ] {
+        assert!(
+            remedies_refused.get(label).copied().unwrap_or(0) > 0,
+            "no remedy was refused as {label:?}: {remedies_refused:?}"
+        );
+    }
+    for route in ["Finalized", "ResolverUphold", "ResolverAnnul"] {
+        assert!(
+            strike3_closed.contains_key(route),
+            "no third-strike settlement closed by {route}: {strike3_closed:?}"
+        );
+    }
+    for route in ["RemedyTimeoutAnnul", "RemedyAnnul", "RemedyForeclosure"] {
+        assert!(routes.contains(route), "never took route {route}");
     }
 }
 
@@ -2990,6 +3913,7 @@ fn inv10_nothing_signed_for_one_game_is_accepted_by_another() {
                 params: default_params(),
                 signer_keys: vec![Key::signer(1).pubkey],
                 admission_pubkey: Key::admission(1).pubkey,
+                remedy_keys: vec![Key::remedy(1).pubkey],
             },
             &[],
             "escrow-2",

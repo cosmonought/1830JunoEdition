@@ -10,7 +10,8 @@ use eighteen_cosmos_escrow::msg::{
     SettlementPreviewResponse, SignedCheckpoint,
 };
 use eighteen_cosmos_escrow::payload::{Payload, REASON_RESOLVER_CORRECTION};
-use eighteen_cosmos_escrow::state::{GameState, Mode, Route};
+use eighteen_cosmos_escrow::remedy::RemedyAttestation;
+use eighteen_cosmos_escrow::state::{GameState, Mode, RemedyKind, Route};
 use eighteen_cosmos_escrow::ContractError;
 
 /// One terminal game per route into a terminal state.
@@ -129,6 +130,57 @@ fn terminal_games(s: &mut Suite) -> Vec<(Route, u64)> {
     .unwrap();
     out.push((Route::SettleableTimeoutPayout, id));
 
+    // Escrow 2.1.0 remedies (remedy key 1, independent of signer key 1).
+    for (kind, mode, route) in [
+        (
+            RemedyKind::LiveTimeoutAnnul,
+            Mode::Live,
+            Route::RemedyTimeoutAnnul,
+        ),
+        (RemedyKind::AsyncAnnul, Mode::Async, Route::RemedyAnnul),
+        (
+            RemedyKind::LiveForeclose,
+            Mode::Live,
+            Route::RemedyForeclosure,
+        ),
+        (
+            RemedyKind::AsyncForeclose,
+            Mode::Async,
+            Route::RemedyForeclosure,
+        ),
+    ] {
+        let id = s.started_with(3, mode, ANTE);
+        s.remedy_ready(id);
+        let a = s.attestation(id, kind, 2, 10);
+        let msg = s.remedy_msg(&a);
+        s.submit(&msg).unwrap();
+        out.push((route, id));
+    }
+    // A third-strike foreclosure, finalized after its challenge window.
+    let id = s.started_with(3, Mode::Live, ANTE);
+    s.remedy_ready(id);
+    let a = s.attestation(id, RemedyKind::LiveStrike3Foreclose, 1, 10);
+    let msg = s.remedy_msg(&a);
+    s.submit(&msg).unwrap();
+    s.advance(DAY);
+    s.exec(&who, &ExecuteMsg::Finalize { chain_game_id: id }, &[])
+        .unwrap();
+    out.push((Route::Finalized, id));
+    // Universal unanimous annulment of a 2.1.0 DISPUTED game.
+    let (id, _) = s.disputed(3);
+    let trusted = s.trusted_seq(id);
+    let consents = s.annul_sigs(id, &[0, 1, 2], trusted);
+    s.exec(
+        &who,
+        &ExecuteMsg::AnnulByConsent {
+            chain_game_id: id,
+            consents,
+        },
+        &[],
+    )
+    .unwrap();
+    out.push((Route::AnnulByConsent, id));
+
     // Last: retiring key 1 as compromised would break the fixtures above.
     let (settleable, _) = s.settleable(3);
     let (disputed, _) = s.disputed(3);
@@ -179,6 +231,28 @@ fn some_payload(s: &Suite, id: u64, kind_terminal: bool) -> Payload {
 /// Every per-game message, with the funds a caller would plausibly attach.
 fn battery(s: &Suite, id: u64) -> Vec<(ExecuteMsg, Vec<Coin>)> {
     let key2 = Key::signer(2);
+    let g = s.game(id).game;
+    let remedy = RemedyAttestation {
+        version: 1,
+        domain: g
+            .domain
+            .map(|d| <[u8; 32]>::try_from(d.as_slice()).unwrap())
+            .unwrap_or([0u8; 32]),
+        chain_game_id: id,
+        remedy: 1,
+        defaulting_seat: 0,
+        strike: 1,
+        overdue_epoch: 1,
+        log_len: 5_000,
+        log_hash: [1; 32],
+        allowance_secs: 1_200,
+        overdue_at: s.now().seconds() - 600,
+        final_at: s.now().seconds(),
+        attested_at: s.now().seconds(),
+        expires_at: s.now().seconds() + HOUR,
+        evidence_hash: [5; 32],
+        remedy_key_id: 1,
+    };
     let cp = some_payload(s, id, false);
     let tp = some_payload(s, id, true);
     let sig = |p: &Payload| key2.sign(&Suite::settle_digest(p));
@@ -267,6 +341,7 @@ fn battery(s: &Suite, id: u64) -> Vec<(ExecuteMsg, Vec<Coin>)> {
         ),
         (ExecuteMsg::RequestReview { chain_game_id: id }, vec![]),
         (s.review_annul_msg(id), vec![]),
+        (s.remedy_msg_by(&remedy, &s.remedy, vec![]), vec![]),
         (
             ExecuteMsg::LivenessSettle {
                 chain_game_id: id,
@@ -322,9 +397,9 @@ fn assert_all_refused(s: &mut Suite, games: &[(Route, u64)]) -> usize {
 fn every_terminal_route_refuses_every_game_message() {
     let mut s = Suite::new();
     let games = terminal_games(&mut s);
-    assert_eq!(games.len(), 15, "every route into a terminal state");
+    assert_eq!(games.len(), 21, "every route into a terminal state");
     let checked = assert_all_refused(&mut s, &games);
-    assert_eq!(checked, 15 * 17 * 6);
+    assert_eq!(checked, 21 * 18 * 6);
     s.pause();
     assert_all_refused(&mut s, &games);
     s.assert_custody();
@@ -342,10 +417,13 @@ fn terminal_states_by_route() {
             | Route::ResolverUphold
             | Route::ResolverReplace
             | Route::ResolverTimeoutPayout
-            | Route::SettleableTimeoutPayout => GameState::Settled,
-            Route::ResolverAnnul | Route::AnnulByConsent | Route::ReviewAnnul => {
-                GameState::Annulled
-            }
+            | Route::SettleableTimeoutPayout
+            | Route::RemedyForeclosure => GameState::Settled,
+            Route::ResolverAnnul
+            | Route::AnnulByConsent
+            | Route::ReviewAnnul
+            | Route::RemedyTimeoutAnnul
+            | Route::RemedyAnnul => GameState::Annulled,
             Route::CreatorCancel
             | Route::DeadlineCancel
             | Route::LivenessRefund

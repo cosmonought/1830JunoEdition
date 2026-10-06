@@ -4,9 +4,11 @@
 //  ESCROW-4: THE ESCROW CONTRACT'S WALLET MESSAGES -- ONE SPELLING, SHARED BY THE SERVER AND THE BROWSER
 // ==================================================================
 //
-// The frozen escrow 2.0.0 contract (`contracts/escrow/src/msg.rs`) takes these execute messages from a PLAYER'S wallet:
+// The escrow contract (`contracts/escrow/src/msg.rs`; escrow 2.1.0 since financial protocol 4) takes these execute
+// messages from a PLAYER'S wallet:
 //
-//   create_game       the creator's own deposit (the ante is the attached funds; the creator is chain seat 0)
+//   create_game       the creator's own deposit (the ante is the attached funds; the creator is chain seat 0) and, from
+//                     escrow 2.1.0, the game's DEADLINE CLASS (required; never chosen by default)
 //   join              a seat's deposit, carrying the hosted server's ADMISSION for this wallet (ESCROW-JOIN)
 //   withdraw          a seat's own pre-Start refund of its NET deposit (the fee is never returned)
 //   cancel            before Start: the creator at any time, anyone from the funding deadline on
@@ -64,11 +66,32 @@ export function junoExecuteJson(variant: string, chainGameId: string | null, fie
 /** The escrow's `mode` enum, from the neutral 0 (live) / 1 (async). */
 export type JunoEscrowMode = 0 | 1;
 
+/** FP4 (escrow 2.1.0, `msg.rs::DeadlineChoice`): the deadline class a game is funded under, frozen into its policy.
+ *  Live: the 20-minute action clock (its 30:00 cure / approval window, the challengeable third strike). Async: one of
+ *  the five paces (12 h, 24 h, 2 d, 3 d, 7 d), or no deadline (no timed remedy at all). */
+export type JunoDeadlineChoice = { readonly kind: "live_action_clock" } | { readonly kind: "async_pace"; readonly allowanceSecs: number } | { readonly kind: "no_deadline" };
+export const JUNO_ASYNC_PACES_SECS: readonly number[] = Object.freeze([43_200, 86_400, 172_800, 259_200, 604_800]);
+
+/** The `deadline` field's JSON value, refused (never coerced) when it does not suit the mode -- the contract's own
+ *  `DeadlineNotForMode` / `BadAsyncPace`. */
+export function deadlineChoiceJson(mode: JunoEscrowMode, deadline: JunoDeadlineChoice): Record<string, unknown> {
+  if (deadline === null || typeof deadline !== "object") throw new JunoAbiError("deadline");
+  if (deadline.kind === "live_action_clock") {
+    if (mode !== 0) throw new JunoAbiError("deadline: the live action clock is for a live game");
+    return { live_action_clock: {} };
+  }
+  if (mode !== 1) throw new JunoAbiError("deadline: a live game takes the live action clock");
+  if (deadline.kind === "no_deadline") return { no_deadline: {} };
+  if (deadline.kind === "async_pace" && JUNO_ASYNC_PACES_SECS.includes(deadline.allowanceSecs)) return { async_pace: { allowance_secs: deadline.allowanceSecs } };
+  throw new JunoAbiError("deadline: not one of the async paces");
+}
+
 /** Wallet execute messages: the PLAYER's wallet signs and pays for these; the server never signs them. */
 export const WALLET_EXECUTE = Object.freeze({
-  createGame: (a: { maxPlayers: number; mode: JunoEscrowMode; rulesEngineVersion: number; variantsDigest: string; consentPubkey: string; joinTicket: string }) => {
+  createGame: (a: { maxPlayers: number; mode: JunoEscrowMode; rulesEngineVersion: number; variantsDigest: string; consentPubkey: string; joinTicket: string; deadline: JunoDeadlineChoice }) => {
     if (!Number.isInteger(a.maxPlayers) || a.maxPlayers < 2 || a.maxPlayers > 7) throw new JunoAbiError("max_players");
     if (!Number.isInteger(a.rulesEngineVersion) || a.rulesEngineVersion < 0 || a.rulesEngineVersion > 0xffffffff) throw new JunoAbiError("rules_engine_version");
+    const deadline = deadlineChoiceJson(a.mode, a.deadline);
     return junoExecuteJson("create_game", null, {
       max_players: a.maxPlayers,
       mode: a.mode === 0 ? "live" : "async",
@@ -76,6 +99,7 @@ export const WALLET_EXECUTE = Object.freeze({
       variants_digest: hexField(a.variantsDigest, HEX32, "variants_digest"),
       consent_pubkey: hexField(a.consentPubkey, HEX33, "consent_pubkey"),
       join_ticket: hexField(a.joinTicket, HEX32, "join_ticket"),
+      deadline,
     });
   },
   /** ESCROW-JOIN: the admission is the server's signature for THIS wallet (the transaction's sender), this game and this

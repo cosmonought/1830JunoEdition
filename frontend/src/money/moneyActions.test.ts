@@ -45,6 +45,8 @@ const chainFacts = (over: Partial<ChainGameFacts> = {}): ChainGameFacts => ({
   settlement: null,
   /* W2-M: the dispute facts (JX-6C/6E); a funding game has none. */
   bond: null,
+  policy: "timed_remedy_v1",
+  allowanceSecs: 1200,
   challengeWindowEndMs: null,
   resolverTimeoutAtMs: null,
   resolverTimeoutSecs: null,

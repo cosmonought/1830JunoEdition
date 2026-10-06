@@ -2,7 +2,7 @@
 //
 // TEST SUPPORT ONLY (never imported by production code): LIVE-6 relayer rotation's offline doubles --
 //   - `escrowRestFor`      a `JunoRest` answering exactly what `verifyJunoDeployment` and the deploy tools read (node
-//                          info, block, contract, code checksum, the escrow's `config` and `signer_keys` queries, an
+//                          info, block, contract, code checksum, the escrow's `config`, `signer_keys` and (FP4) `remedy_keys` queries, an
 //                          account), built from a parsed configuration and scripted deviations (operator, paused, ...);
 //   - `fakeJunoChain`      a `JunoChainReader` over it (and scripted balances);
 //   - `rotationReadersFor` the post-rotation proof's table readers over a scripted deployment (routing, pool item,
@@ -62,12 +62,14 @@ export function escrowRestFor(config: JunoBackendConfig, script: EscrowChainScri
           params: { subsidy_bps: 250, challenge_window_live_secs: 3600, challenge_window_async_secs: 86400, liveness_window_secs: 3600, resolver_timeout_secs: 3600, min_ante: "1000000", funding_period_live_secs: 3600, funding_period_async_secs: 86400 },
         },
         contract_name: JUNO_ESCROW_CONTRACT_NAME,
-        contract_version: "2.0.0",
+        contract_version: "2.1.0",
         next_signer_key_id: config.settlementKey.signerKeyId + 1,
         next_chain_game_id: 1,
       };
     }
     if ("signer_keys" in q) return { keys: [{ key_id: config.settlementKey.signerKeyId, pubkey: config.settlementKey.publicKeyHex, added_at: "1", retired_at: null, compromised: false }] };
+    /* FP4 (escrow 2.1.0): the deployment holds no REMEDY key (this build holds none; an active one is refused). */
+    if ("remedy_keys" in q) return { keys: [] };
     throw new JunoRpcError("refused", `unexpected query ${query}`);
   };
   const refuse = (what: string) => async (): Promise<never> => {

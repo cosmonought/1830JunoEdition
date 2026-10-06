@@ -17,21 +17,27 @@
 //! check comes after state and pause.
 //!
 //! Escrow 2.1.0 rows and rules: every fixture is created by 2.1.0 code (a
-//! `Timed` game unless the row says No-deadline), so the IN_PROGRESS
-//! LivenessSettle cells answer `LivenessExitRemoved` (after state and role).
-//! The `…Legacy` rows rerun LivenessSettle on fixtures rewritten into the
-//! shape escrow 2.0.0 stored, which keep the 2.0.0 exit. RequestReview and
-//! ReviewAnnul run on No-deadline fixtures (and, refused, on Timed ones):
-//! state → role → policy → request, in that order; neither is blocked by
-//! pause.
+//! Live `TimedRemedyV1` game unless the row says Async or No-deadline), so the
+//! IN_PROGRESS LivenessSettle cells answer `LivenessExitRemoved` (after state
+//! and role), and AnnulByConsent also accepts DISPUTED (the universal
+//! unanimous annulment). The `…Legacy` rows rerun LivenessSettle,
+//! AnnulByConsent and the review on fixtures rewritten into the shape escrow
+//! 2.0.0 stored, which keep every 2.0.0 rule. RequestReview and ReviewAnnul
+//! run on No-deadline and Timed fixtures alike: state → role → policy →
+//! request, in that order; neither is blocked by pause. SubmitRemedy rows (a
+//! valid, final attestation of each kind, relayed by anyone): state → policy
+//! → pause (the foreclosing kinds only).
 
 mod common;
 
 use common::*;
 use cosmwasm_std::{coins, Addr, Coin, HexBinary, Uint128};
-use eighteen_cosmos_escrow::msg::{ExecuteMsg, ResolveOutcome, SeatSignature, SignedCheckpoint};
+use eighteen_cosmos_escrow::msg::{
+    DeadlineChoice, ExecuteMsg, ResolveOutcome, SeatSignature, SignedCheckpoint,
+};
 use eighteen_cosmos_escrow::payload::{Payload, KIND_CHECKPOINT, KIND_TERMINAL};
-use eighteen_cosmos_escrow::state::{GameParams, GamePolicy, GameState, Mode, Route};
+use eighteen_cosmos_escrow::remedy::RemedyAttestation;
+use eighteen_cosmos_escrow::state::{GameParams, GamePolicy, GameState, Mode, RemedyKind, Route};
 use eighteen_cosmos_escrow::ContractError;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -97,8 +103,10 @@ enum Msg {
     LivenessSettleWithCheckpointLegacy,
     /// RequestReview on a No-deadline fixture.
     RequestReview,
-    /// RequestReview on a Timed fixture (never available).
+    /// RequestReview on a Timed fixture (available for every 2.1.0 game).
     RequestReviewTimed,
+    /// RequestReview on a 2.0.0-shaped fixture (never available).
+    RequestReviewLegacy,
     /// ReviewAnnul on a No-deadline fixture whose review seat 1 requested
     /// (IN_PROGRESS is the only state a request can be made in).
     ReviewAnnul,
@@ -107,8 +115,26 @@ enum Msg {
     ReviewAnnulAfterResolverChange,
     /// ReviewAnnul on a No-deadline fixture nobody asked to review.
     ReviewAnnulWithoutRequest,
-    /// ReviewAnnul on a Timed fixture (never available).
+    /// ReviewAnnul on a Timed fixture whose review seat 1 requested.
     ReviewAnnulTimed,
+    /// ReviewAnnul on a 2.0.0-shaped fixture (never available).
+    ReviewAnnulLegacy,
+    /// AnnulByConsent on a 2.0.0-shaped fixture (no DISPUTED).
+    AnnulByConsentLegacy,
+    /// SubmitRemedy, Live: a final neutral TimeoutAnnul (remedy 1).
+    RemedyLiveTimeoutAnnul,
+    /// SubmitRemedy, Live: a final N−1 foreclosure (remedy 2).
+    RemedyLiveForeclose,
+    /// SubmitRemedy, Live: a third-strike foreclosure (remedy 3).
+    RemedyLiveStrike3,
+    /// SubmitRemedy, Timed Async: N−1 annulment (remedy 4).
+    RemedyAsyncAnnul,
+    /// SubmitRemedy, Timed Async: N−1 foreclosure (remedy 5).
+    RemedyAsyncForeclose,
+    /// SubmitRemedy on a No-deadline fixture (never available).
+    RemedyNoDeadline,
+    /// SubmitRemedy on a 2.0.0-shaped fixture (never available).
+    RemedyLegacy,
 }
 
 impl Msg {
@@ -120,15 +146,40 @@ impl Msg {
                 | Msg::ReviewAnnul
                 | Msg::ReviewAnnulAfterResolverChange
                 | Msg::ReviewAnnulWithoutRequest
+                | Msg::RemedyNoDeadline
         )
+    }
+
+    /// The row's fixtures are Timed Async games.
+    fn timed_async(self) -> bool {
+        matches!(self, Msg::RemedyAsyncAnnul | Msg::RemedyAsyncForeclose)
     }
 
     /// The row's fixture is rewritten into the escrow 2.0.0 stored shape.
     fn legacy(self) -> bool {
         matches!(
             self,
-            Msg::LivenessSettleLegacy | Msg::LivenessSettleWithCheckpointLegacy
+            Msg::LivenessSettleLegacy
+                | Msg::LivenessSettleWithCheckpointLegacy
+                | Msg::RequestReviewLegacy
+                | Msg::ReviewAnnulLegacy
+                | Msg::AnnulByConsentLegacy
+                | Msg::RemedyLegacy
         )
+    }
+
+    /// The SubmitRemedy row's remedy.
+    fn remedy(self) -> Option<RemedyKind> {
+        match self {
+            Msg::RemedyLiveTimeoutAnnul | Msg::RemedyNoDeadline | Msg::RemedyLegacy => {
+                Some(RemedyKind::LiveTimeoutAnnul)
+            }
+            Msg::RemedyLiveForeclose => Some(RemedyKind::LiveForeclose),
+            Msg::RemedyLiveStrike3 => Some(RemedyKind::LiveStrike3Foreclose),
+            Msg::RemedyAsyncAnnul => Some(RemedyKind::AsyncAnnul),
+            Msg::RemedyAsyncForeclose => Some(RemedyKind::AsyncForeclose),
+            _ => None,
+        }
     }
 
     /// No cell of the row can succeed.
@@ -138,9 +189,11 @@ impl Msg {
             Msg::FinalizeCompromised
                 | Msg::ConsentCompromised
                 | Msg::LivenessSettleWithCheckpoint
-                | Msg::RequestReviewTimed
+                | Msg::RequestReviewLegacy
                 | Msg::ReviewAnnulWithoutRequest
-                | Msg::ReviewAnnulTimed
+                | Msg::ReviewAnnulLegacy
+                | Msg::RemedyNoDeadline
+                | Msg::RemedyLegacy
         )
     }
 }
@@ -157,6 +210,7 @@ enum Expect {
     LivenessExitRemoved,
     ReviewNotAvailable,
     ReviewNotRequested,
+    RemedyNotAvailable,
 }
 
 fn addr(s: &Suite, role: Role) -> Addr {
@@ -280,10 +334,41 @@ fn oracle(msg: Msg, state: GameState, role: Role, paused: bool) -> Expect {
             }
         }
         Msg::AnnulByConsent => {
+            // Escrow 2.1.0: the universal unanimous annulment, DISPUTED too.
+            if !within(&[InProgress, Settleable, Disputed]) {
+                Expect::WrongState
+            } else {
+                Expect::Ok(Annulled) // anyone relays; works while paused
+            }
+        }
+        Msg::AnnulByConsentLegacy => {
             if !within(&[InProgress, Settleable]) {
                 Expect::WrongState
             } else {
                 Expect::Ok(Annulled) // anyone relays; works while paused
+            }
+        }
+        Msg::RemedyLiveTimeoutAnnul
+        | Msg::RemedyLiveForeclose
+        | Msg::RemedyLiveStrike3
+        | Msg::RemedyAsyncAnnul
+        | Msg::RemedyAsyncForeclose
+        | Msg::RemedyNoDeadline
+        | Msg::RemedyLegacy => {
+            let kind = msg.remedy().unwrap();
+            if !within(&[InProgress]) {
+                Expect::WrongState
+            } else if matches!(msg, Msg::RemedyNoDeadline | Msg::RemedyLegacy) {
+                Expect::RemedyNotAvailable
+            } else if paused && kind.forecloses() {
+                Expect::Paused
+            } else {
+                // Anyone relays; the neutral remedies work while paused.
+                Expect::Ok(match kind {
+                    RemedyKind::LiveTimeoutAnnul | RemedyKind::AsyncAnnul => Annulled,
+                    RemedyKind::LiveForeclose | RemedyKind::AsyncForeclose => Settled,
+                    RemedyKind::LiveStrike3Foreclose => Settleable,
+                })
             }
         }
         Msg::LivenessSettle => {
@@ -344,12 +429,12 @@ fn oracle(msg: Msg, state: GameState, role: Role, paused: bool) -> Expect {
                 Expect::Ok(Settleable) // the carried checkpoint is promoted
             }
         }
-        Msg::RequestReview | Msg::RequestReviewTimed => {
+        Msg::RequestReview | Msg::RequestReviewTimed | Msg::RequestReviewLegacy => {
             if !within(&[InProgress]) {
                 Expect::WrongState
             } else if !seated {
                 Expect::NotSeated
-            } else if matches!(msg, Msg::RequestReviewTimed) {
+            } else if matches!(msg, Msg::RequestReviewLegacy) {
                 Expect::ReviewNotAvailable
             } else {
                 Expect::Ok(InProgress) // moves nothing; works while paused
@@ -358,12 +443,13 @@ fn oracle(msg: Msg, state: GameState, role: Role, paused: bool) -> Expect {
         Msg::ReviewAnnul
         | Msg::ReviewAnnulAfterResolverChange
         | Msg::ReviewAnnulWithoutRequest
-        | Msg::ReviewAnnulTimed => {
+        | Msg::ReviewAnnulTimed
+        | Msg::ReviewAnnulLegacy => {
             if !within(&[InProgress]) {
                 Expect::WrongState
             } else if role != Role::Resolver {
                 Expect::Unauthorized("resolver")
-            } else if matches!(msg, Msg::ReviewAnnulTimed) {
+            } else if matches!(msg, Msg::ReviewAnnulLegacy) {
                 Expect::ReviewNotAvailable
             } else if matches!(msg, Msg::ReviewAnnulWithoutRequest) {
                 Expect::ReviewNotRequested
@@ -519,7 +605,7 @@ fn build(
             },
             vec![],
         ),
-        Msg::AnnulByConsent => {
+        Msg::AnnulByConsent | Msg::AnnulByConsentLegacy => {
             let g = s.game(id);
             let consents = match g.game.domain {
                 Some(_) => s.annul_sigs(id, &[0, 1, 2], g.trusted_seq.u64()),
@@ -537,13 +623,21 @@ fn build(
             )
         }
         Msg::LivenessSettle | Msg::LivenessSettleLegacy => (Suite::liveness_msg(id), vec![]),
-        Msg::RequestReview | Msg::RequestReviewTimed => {
+        Msg::RequestReview | Msg::RequestReviewTimed | Msg::RequestReviewLegacy => {
             (ExecuteMsg::RequestReview { chain_game_id: id }, vec![])
         }
         Msg::ReviewAnnul
         | Msg::ReviewAnnulAfterResolverChange
         | Msg::ReviewAnnulWithoutRequest
-        | Msg::ReviewAnnulTimed => (s.review_annul_msg(id), vec![]),
+        | Msg::ReviewAnnulTimed
+        | Msg::ReviewAnnulLegacy => (s.review_annul_msg(id), vec![]),
+        Msg::RemedyLiveTimeoutAnnul
+        | Msg::RemedyLiveForeclose
+        | Msg::RemedyLiveStrike3
+        | Msg::RemedyAsyncAnnul
+        | Msg::RemedyAsyncForeclose
+        | Msg::RemedyNoDeadline
+        | Msg::RemedyLegacy => (remedy_msg_for(s, id, msg.remedy().unwrap()), vec![]),
         Msg::LivenessSettleWithCheckpoint | Msg::LivenessSettleWithCheckpointLegacy => {
             let p = fresh_payload(s, id, KIND_CHECKPOINT, 0);
             let (payload, signature) = s.signed(&p);
@@ -556,6 +650,48 @@ fn build(
             )
         }
     }
+}
+
+/// A valid, final, unexpired attestation of `kind` against seat 2 for any
+/// fixture (a game not started has no domain: zeros, and its state refuses it
+/// first), with every N−1 approval when the kind needs them.
+fn remedy_msg_for(s: &Suite, id: u64, kind: RemedyKind) -> ExecuteMsg {
+    let g = s.game(id).game;
+    let now = s.now().seconds();
+    let (strike, overdue_at) = match kind {
+        RemedyKind::LiveTimeoutAnnul | RemedyKind::LiveForeclose => (2, now - 600),
+        RemedyKind::LiveStrike3Foreclose => (3, now),
+        RemedyKind::AsyncAnnul | RemedyKind::AsyncForeclose => (0, now - 60),
+    };
+    let allowance = match g.terms.allowance_secs {
+        // A No-deadline or 2.0.0 game has none; the policy refuses it first.
+        0 => 1_200,
+        a => a,
+    };
+    let a = RemedyAttestation {
+        version: 1,
+        domain: domain_or_zero(s, id),
+        chain_game_id: id,
+        remedy: kind.as_byte(),
+        defaulting_seat: 2,
+        strike,
+        overdue_epoch: 4,
+        log_len: 1_000,
+        log_hash: sha256(&[b"matrix-remedy"]),
+        allowance_secs: allowance,
+        overdue_at,
+        final_at: now,
+        attested_at: now,
+        expires_at: now + HOUR,
+        evidence_hash: sha256(&[b"matrix-clock"]),
+        remedy_key_id: 1,
+    };
+    let approvals = if kind.needs_approvals() {
+        s.approvals(&a, &[0, 1])
+    } else {
+        vec![]
+    };
+    s.remedy_msg_by(&a, &s.remedy, approvals)
 }
 
 trait Unchecked {
@@ -588,9 +724,11 @@ impl Unchecked for Suite {
 fn run_cell(msg: Msg, state: GameState, role: Role, paused: bool) -> bool {
     let mut s = Suite::new();
     s.no_deadline = msg.no_deadline();
+    s.force_async = msg.timed_async();
     s.legacy = msg.legacy();
     let (id, stored) = fixture(&mut s, state);
     s.no_deadline = false;
+    s.force_async = false;
     s.legacy = false;
     let policy = s.game(id).game.terms.policy;
     if msg.legacy() {
@@ -598,7 +736,22 @@ fn run_cell(msg: Msg, state: GameState, role: Role, paused: bool) -> bool {
     } else if msg.no_deadline() {
         assert_eq!(policy, Some(GamePolicy::NoDeadline));
     } else {
-        assert_eq!(policy, Some(GamePolicy::TimedNoRemedies));
+        assert_eq!(policy, Some(GamePolicy::TimedRemedyV1));
+    }
+    if msg.timed_async() {
+        assert_eq!(s.game(id).game.mode, Mode::Async);
+    }
+    // A remedy needs an overdue that can exist: one allowance (Live: plus the
+    // cure window) after the start, and a minute more.
+    if msg.remedy().is_some() {
+        let g = s.game(id).game;
+        if let Some(started) = g.started_at {
+            let ready = started.seconds() + g.terms.allowance_secs + g.terms.cure_window_secs + 60;
+            let now = s.now().seconds();
+            if now < ready {
+                s.advance(ready - now);
+            }
+        }
     }
     match msg {
         Msg::CancelAfterDeadline | Msg::Finalize => s.advance(DAY),
@@ -618,7 +771,7 @@ fn run_cell(msg: Msg, state: GameState, role: Role, paused: bool) -> bool {
             s.exec(&admin, &ExecuteMsg::SetResolver { resolver: next }, &[])
                 .unwrap();
         }
-        Msg::ReviewAnnul | Msg::ReviewAnnulAfterResolverChange => {
+        Msg::ReviewAnnul | Msg::ReviewAnnulAfterResolverChange | Msg::ReviewAnnulTimed => {
             if state == GameState::InProgress {
                 let seat1 = s.players[1].clone();
                 s.exec(
@@ -637,9 +790,11 @@ fn run_cell(msg: Msg, state: GameState, role: Role, paused: bool) -> bool {
             // Years of inactivity change nothing for a No-deadline game.
             s.advance(3_650 * DAY);
         }
-        Msg::ReviewAnnulWithoutRequest | Msg::ReviewAnnulTimed | Msg::RequestReviewTimed => {
+        Msg::ReviewAnnulWithoutRequest | Msg::ReviewAnnulLegacy | Msg::RequestReviewTimed => {
             s.advance(3_650 * DAY);
         }
+        // An hour of play, so a Live overdue can have become final.
+        _ if msg.remedy().is_some() => s.advance(HOUR),
         _ => {}
     }
     if paused {
@@ -682,6 +837,7 @@ fn run_cell(msg: Msg, state: GameState, role: Role, paused: bool) -> bool {
         (Err(ContractError::ReviewNotRequested { chain_game_id }), Expect::ReviewNotRequested) => {
             assert_eq!(*chain_game_id, id, "{cell}");
         }
+        (Err(ContractError::RemedyNotAvailable {}), Expect::RemedyNotAvailable) => {}
         _ => panic!("{cell}: got {got:?}, oracle says {expected:?}"),
     }
     if got.is_err() {
@@ -692,7 +848,10 @@ fn run_cell(msg: Msg, state: GameState, role: Role, paused: bool) -> bool {
         );
         assert_eq!(s.contract_balance(), balance, "{cell}");
         assert_eq!(s.balance(&who), caller_balance, "{cell}");
-    } else if matches!(msg, Msg::ReviewAnnul | Msg::ReviewAnnulAfterResolverChange) {
+    } else if matches!(
+        msg,
+        Msg::ReviewAnnul | Msg::ReviewAnnulAfterResolverChange | Msg::ReviewAnnulTimed
+    ) {
         // The only outcome: every seat's own net deposit, nothing else.
         let outcome = s.game(id).game.outcome.unwrap();
         assert_eq!(outcome.route, Route::ReviewAnnul, "{cell}");
@@ -704,6 +863,43 @@ fn run_cell(msg: Msg, state: GameState, role: Role, paused: bool) -> bool {
             "{cell}: the resolver got nothing"
         );
         assert_eq!(s.contract_balance(), balance - 3 * NET, "{cell}");
+    } else if let Some(kind) = msg.remedy() {
+        // The relayer is paid nothing for relaying (a seated relayer gets
+        // exactly its own seat's amount), and the money follows the remedy.
+        let g = s.game(id).game;
+        let own = g
+            .seats
+            .iter()
+            .position(|x| x.wallet == who)
+            .and_then(|i| g.outcome.as_ref().map(|o| o.amounts[i].u128()))
+            .unwrap_or(0);
+        assert_eq!(
+            s.balance(&who),
+            caller_balance + own,
+            "{cell}: the relayer got nothing for relaying"
+        );
+        assert_eq!(g.remedy.as_ref().unwrap().kind, kind, "{cell}");
+        match kind {
+            RemedyKind::LiveTimeoutAnnul | RemedyKind::AsyncAnnul => {
+                assert_eq!(g.outcome.unwrap().amounts, vec![Uint128::new(NET); 3]);
+            }
+            RemedyKind::LiveForeclose | RemedyKind::AsyncForeclose => {
+                let o = g.outcome.unwrap();
+                assert_eq!(o.route, Route::RemedyForeclosure, "{cell}");
+                assert_eq!(
+                    o.amounts,
+                    vec![
+                        Uint128::new(NET + NET / 2),
+                        Uint128::new(NET + NET / 2),
+                        Uint128::zero()
+                    ],
+                    "{cell}"
+                );
+            }
+            RemedyKind::LiveStrike3Foreclose => {
+                assert_eq!(s.contract_balance(), balance, "{cell}: nothing paid yet");
+            }
+        }
     }
     s.assert_custody();
     got.is_ok()
@@ -784,6 +980,16 @@ row! {
     matrix_review_annul_after_resolver_change => Msg::ReviewAnnulAfterResolverChange,
     matrix_review_annul_without_request => Msg::ReviewAnnulWithoutRequest,
     matrix_review_annul_timed => Msg::ReviewAnnulTimed,
+    matrix_request_review_legacy => Msg::RequestReviewLegacy,
+    matrix_review_annul_legacy => Msg::ReviewAnnulLegacy,
+    matrix_annul_by_consent_legacy => Msg::AnnulByConsentLegacy,
+    matrix_remedy_live_timeout_annul => Msg::RemedyLiveTimeoutAnnul,
+    matrix_remedy_live_foreclose => Msg::RemedyLiveForeclose,
+    matrix_remedy_live_strike3 => Msg::RemedyLiveStrike3,
+    matrix_remedy_async_annul => Msg::RemedyAsyncAnnul,
+    matrix_remedy_async_foreclose => Msg::RemedyAsyncForeclose,
+    matrix_remedy_no_deadline => Msg::RemedyNoDeadline,
+    matrix_remedy_legacy => Msg::RemedyLegacy,
 }
 
 // ------------------------------------------------------------ global messages
@@ -801,9 +1007,12 @@ enum Global {
     SetResolver,
     SetTreasury,
     SetParams,
+    /// Escrow 2.1.0.
+    AddRemedyKey,
+    RetireRemedyKey,
 }
 
-const GLOBALS: [Global; 10] = [
+const GLOBALS: [Global; 12] = [
     Global::CreateGame,
     Global::CreateGameNoDeadline,
     Global::Pause,
@@ -814,6 +1023,8 @@ const GLOBALS: [Global; 10] = [
     Global::SetResolver,
     Global::SetTreasury,
     Global::SetParams,
+    Global::AddRemedyKey,
+    Global::RetireRemedyKey,
 ];
 
 fn global_msg(s: &Suite, g: Global, role: Role) -> (ExecuteMsg, Vec<Coin>) {
@@ -826,7 +1037,13 @@ fn global_msg(s: &Suite, g: Global, role: Role) -> (ExecuteMsg, Vec<Coin>) {
                 variants_digest: variants_digest(),
                 consent_pubkey: Key::from_label(&format!("18JUNO/TEST/matrix/{role:?}")).pubkey,
                 join_ticket: ticket("matrix-create"),
-                no_deadline: matches!(g, Global::CreateGameNoDeadline),
+                deadline: if matches!(g, Global::CreateGameNoDeadline) {
+                    DeadlineChoice::NoDeadline {}
+                } else {
+                    DeadlineChoice::AsyncPace {
+                        allowance_secs: DAY,
+                    }
+                },
             },
             coins(ANTE, DENOM),
         ),
@@ -869,6 +1086,19 @@ fn global_msg(s: &Suite, g: Global, role: Role) -> (ExecuteMsg, Vec<Coin>) {
                     min_ante: Uint128::new(3_000_000),
                     ..default_params()
                 },
+            },
+            vec![],
+        ),
+        Global::AddRemedyKey => (
+            ExecuteMsg::AddRemedyKey {
+                pubkey: Key::remedy(5).pubkey,
+            },
+            vec![],
+        ),
+        Global::RetireRemedyKey => (
+            ExecuteMsg::RetireRemedyKey {
+                key_id: 1,
+                compromised: true,
             },
             vec![],
         ),
@@ -925,7 +1155,7 @@ fn matrix_global_messages() {
             }
         }
     }
-    assert_eq!(cells, 10 * 2 * 6);
+    assert_eq!(cells, 12 * 2 * 6);
 }
 
 #[test]
@@ -943,6 +1173,8 @@ fn matrix_unknown_game() {
         Msg::LivenessSettleWithCheckpoint,
         Msg::RequestReview,
         Msg::ReviewAnnul,
+        Msg::RemedyLiveTimeoutAnnul,
+        Msg::RemedyLiveForeclose,
     ] {
         for role in ROLES {
             let mut s = Suite::new();
@@ -1009,6 +1241,17 @@ fn retarget(msg: ExecuteMsg, to: u64) -> ExecuteMsg {
         ExecuteMsg::ReviewAnnul { requested_at, .. } => ExecuteMsg::ReviewAnnul {
             chain_game_id: to,
             requested_at,
+        },
+        ExecuteMsg::SubmitRemedy {
+            attestation,
+            signature,
+            approvals,
+            ..
+        } => ExecuteMsg::SubmitRemedy {
+            chain_game_id: to,
+            attestation,
+            signature,
+            approvals,
         },
         other => panic!("not retargeted: {other:?}"),
     }

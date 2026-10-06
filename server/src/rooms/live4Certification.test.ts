@@ -98,9 +98,11 @@ const sha = (bytes: Buffer | string) => createHash("sha256").update(bytes).diges
    and R12-3 moved them again by certifying 12 for settlement (R12-2's were dc1-ade748b9… / dc1-eb48b18e…). Phase 3 W3-K
    moved them once more, on the rules axis alone (rules 13 reading [13], settlement still [10, 11, 12]; R12-3's were
    dc1-41eb96a7… / dc1-63af8114…), and Phase 3's dedicated v13 certification moved them by certifying 13 alone
-   (settlement [10, 11, 12, 13]; W3-K's were dc1-390107d5… / dc1-d01c50c4…). */
+   (settlement [10, 11, 12, 13]; W3-K's were dc1-390107d5… / dc1-d01c50c4…). Phase 3's escrow 2.1 timed remedies
+   (financial protocol 4) moved the fixture key by `financial_protocols` alone (the v13 certification's was
+   dc1-32fcc496…); the no-escrow key lists no financial protocol and did not move. */
 const KEY_NO_ESCROW = "dc1-e8d0b4792a7ba07e67199ad2";
-const KEY_FIXTURE_PIN = "dc1-32fcc4967978e78f10874490";
+const KEY_FIXTURE_PIN = "dc1-30d893675c773e9b609699e7";
 
 const OTHER_CHECKSUM = "ab".repeat(32);
 const PIN_B: FinancialDeploymentPin = Object.freeze({ ...PIN, contract_address: WALLETS[2] });
@@ -224,13 +226,13 @@ const lastIndex = (answer: Frame): number => {
 /* §1. The pins                                                                                       */
 /* ================================================================================================= */
 
-describe("LIVE-4 L4-7 §1: the certified identity -- no version or key moved (but for Route v12 R12-2's rules bump, R12-3's certification, W3-K's v13 and the v13 certification)", () => {
-  test("rules 13 (reads [13]; 11 / [11] at L4-7, 12 / [12] until W3-K); settlement [10, 11, 12, 13] ([10, 11] at L4-7, 13 by the v13 certification); hosted 1; financial 3; client 1 accepting [0, 1]; money GameRecords schema 2; the two pinned keys", () => {
+describe("LIVE-4 L4-7 §1: the certified identity -- no version or key moved (but for Route v12 R12-2's rules bump, R12-3's certification, W3-K's v13, the v13 certification and Phase 3's financial protocol 4)", () => {
+  test("rules 13 (reads [13]; 11 / [11] at L4-7, 12 / [12] until W3-K); settlement [10, 11, 12, 13] ([10, 11] at L4-7, 13 by the v13 certification); hosted 1; financial 4 (3 until Phase 3's escrow 2.1 timed remedies); client 1 accepting [0, 1]; money GameRecords schema 2; the two pinned keys", () => {
     assert.equal(RULES_ENGINE_VERSION, 13);
     assert.deepEqual([...SUPPORTED_RULES_ENGINE_VERSIONS], [13]);
     assert.deepEqual([...SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS], [10, 11, 12, 13]);
     assert.equal(HOSTED_PROTOCOL_VERSION, 1);
-    assert.equal(FINANCIAL_PROTOCOL_VERSION, 3);
+    assert.equal(FINANCIAL_PROTOCOL_VERSION, 4);
     assert.equal(CLIENT_PROTOCOL_VERSION, 1);
     assert.deepEqual([...ACCEPTED_CLIENT_PROTOCOLS], [0, 1]);
     assert.equal((moneyRecord(mintGameId(), PIN) as unknown as { record_schema: number }).record_schema, 2);
@@ -746,7 +748,7 @@ function writeMoneyGameOnDisk(dir: string, gameId: string, over: { readonly log?
   if (over.intents !== undefined) {
     const intents = path.join(dir, "games", "chain-intents", gameId);
     fs.mkdirSync(intents, { recursive: true });
-    const body = over.intents === "newer" ? `${JSON.stringify({ format: "gs-chain-intent", schema: 2, game_id: gameId, intent_id: "f".repeat(64) })}\n` : "{\"format\":\"gs-chain-intent\",\"sch";
+    const body = over.intents === "newer" ? `${JSON.stringify({ format: "gs-chain-intent", schema: 3 /* FP4 writes schema 2 */, game_id: gameId, intent_id: "f".repeat(64) })}\n` : "{\"format\":\"gs-chain-intent\",\"sch";
     fs.writeFileSync(path.join(intents, `${"f".repeat(64)}.json`), body);
   }
   if (over.tickets !== undefined) {

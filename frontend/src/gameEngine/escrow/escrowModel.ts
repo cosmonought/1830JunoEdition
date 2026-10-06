@@ -661,8 +661,8 @@ export const ESCROW_ERROR_RETRY: Readonly<Record<EscrowErrorCode, EscrowRetry>> 
 /* Idempotent intents (LIVE-3 §11.4 / §19, made backend-neutral)        */
 /* ------------------------------------------------------------------ */
 
-/** The relayer operations that go through a durable intent. */
-export type EscrowIntentOp = "start" | "checkpoint" | "settle" | "relay-consent" | "finalize" | "annul-by-consent";
+/** The relayer operations that go through a durable intent. FP4 (escrow 2.1): `submit-remedy`. */
+export type EscrowIntentOp = "start" | "checkpoint" | "settle" | "relay-consent" | "finalize" | "annul-by-consent" | "submit-remedy";
 
 /**
  * WHERE an intent lives: one key per logical slot, never per payload. Two different payloads for one slot collide on
@@ -674,12 +674,18 @@ export type EscrowIntentKey =
   | { readonly op: "start" }
   | { readonly op: "checkpoint" | "settle" | "finalize"; readonly seq: string }
   | { readonly op: "relay-consent"; readonly seq: string; readonly seat_index: number }
-  | { readonly op: "annul-by-consent"; readonly trusted_seq: string };
+  | { readonly op: "annul-by-consent"; readonly trusted_seq: string }
+  /** FP4: one slot per remedy DECISION (`remedyDecisionDigestV1`: the attestation without its expiry and key id) and
+   *  attestation expiry: a renewed attestation of the same decision is new work in its own slot; a second, different
+   *  decision for the same game is refused before it is prepared (`remedyFence`, chainIntents.ts). */
+  | { readonly op: "submit-remedy"; readonly decision: string; readonly expires_at: string };
 
-/** WHAT the intent submits: the frozen roster hash (start) or the codec digests it relays. */
+/** WHAT the intent submits: the frozen roster hash (start), the codec digests it relays, or (FP4) the remedy decision
+ *  and the exact REMEDY digest its attestation carries (`junoRemedyV1.ts`, its own protocol, not a settlement codec). */
 export type EscrowIntentSubject =
   | { readonly kind: "roster"; readonly roster_hash: string }
-  | { readonly kind: "digest"; readonly digests: readonly CodecDigest[] };
+  | { readonly kind: "digest"; readonly digests: readonly CodecDigest[] }
+  | { readonly kind: "remedy"; readonly protocol: "18JUNO/REMEDY/v1"; readonly decision: string; readonly remedy_digest: string };
 
 /**
  * An intent's lifecycle. The rule that makes restart decidable: the transaction's id (hash), account sequence and
@@ -774,6 +780,10 @@ export function intentIdOf(instance: string, key: EscrowIntentKey): string {
     case "annul-by-consent":
       parts.push(canonicalU64(key.trusted_seq, "trusted_seq"));
       break;
+    case "submit-remedy":
+      if (typeof key.decision !== "string" || !/^[0-9a-f]{64}$/.test(key.decision)) bad("remedy decision");
+      parts.push(key.decision, canonicalU64(key.expires_at, "expires_at"));
+      break;
     default:
       throw new Error(`intentIdOf: unknown intent op ${String((key as { op?: unknown }).op)}`);
   }
@@ -783,6 +793,7 @@ export function intentIdOf(instance: string, key: EscrowIntentKey): string {
 /** Whether an existing intent at this key carries exactly this subject (else the caller HOLDs). */
 export function sameIntentSubject(a: EscrowIntentSubject, b: EscrowIntentSubject): boolean {
   if (a.kind === "roster" || b.kind === "roster") return a.kind === b.kind && (a as { roster_hash: string }).roster_hash === (b as { roster_hash: string }).roster_hash;
+  if (a.kind === "remedy" || b.kind === "remedy") return a.kind === "remedy" && b.kind === "remedy" && a.protocol === b.protocol && a.decision === b.decision && a.remedy_digest === b.remedy_digest;
   if (a.digests.length !== b.digests.length) return false;
   return a.digests.every((d, i) => d.codec === b.digests[i].codec && d.purpose === b.digests[i].purpose && d.hex === b.digests[i].hex);
 }

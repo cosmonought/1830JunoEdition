@@ -7,6 +7,7 @@
     "contract_name",
     "contract_version",
     "next_chain_game_id",
+    "next_remedy_key_id",
     "next_signer_key_id"
   ],
   "properties": {
@@ -22,6 +23,12 @@
     "next_chain_game_id": {
       "type": "integer",
       "format": "uint64",
+      "minimum": 0.0
+    },
+    "next_remedy_key_id": {
+      "description": "Escrow 2.1.0.",
+      "type": "integer",
+      "format": "uint16",
       "minimum": 0.0
     },
     "next_signer_key_id": {
@@ -172,13 +179,6 @@
         },
         "resolver_timeout_secs": {
           "description": "DISPUTED time after which a seated wallet may `LivenessSettle`.",
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0.0
-        },
-        "review_delay_secs": {
-          "description": "Escrow 2.1.0: the wait from a No-deadline game's first review request to the earliest `ReviewAnnul`, so the table can notice (and finish and `Settle`, or post a checkpoint, which withdraws the request) before a resolver acts. Snapshotted into each game at CreateGame. Validated like the other durations (1 s … 10 y); the value is a deployment choice. A configuration carried over from 2.0.0 reads 0 here, and a No-deadline game cannot be created until the admin sets it (`SetParams`).",
-          "default": 0,
           "type": "integer",
           "format": "uint64",
           "minimum": 0.0

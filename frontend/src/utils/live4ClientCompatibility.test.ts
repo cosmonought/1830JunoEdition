@@ -1184,7 +1184,7 @@ describe("player copy: the actual reason, and rules versions only when the rules
 /* ================================================================================================= */
 
 describe("identity: client protocol 1 is spoken; nothing else moved", () => {
-  it("accepted [0, 1], announced 1; rules 11 / [11] at L4-3 (12 / [12] since Route v12 R12-2, 13 / [13] since W3-K) / certified [10, 11] (+12 since R12-3, +13 since the v13 certification); hosted 1; financial 3", () => {
+  it("accepted [0, 1], announced 1; rules 11 / [11] at L4-3 (12 / [12] since Route v12 R12-2, 13 / [13] since W3-K) / certified [10, 11] (+12 since R12-3, +13 since the v13 certification); hosted 1; financial 3 (4 since the Phase 3 escrow 2.1 timed remedies -- the no-escrow pool lists none, so its key does not move)", () => {
     expect([...ACCEPTED_CLIENT_PROTOCOLS]).toEqual([0, 1]);
     expect(ANNOUNCED_CLIENT_PROTOCOL).toBe(1);
     expect(CLIENT_PROTOCOL_VERSION).toBe(1);
@@ -1196,7 +1196,8 @@ describe("identity: client protocol 1 is spoken; nothing else moved", () => {
     expect([...SUPPORTED_RULES_ENGINE_VERSIONS]).toEqual([13]);
     expect([...SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS]).toEqual([10, 11, 12, 13]);
     expect(HOSTED_PROTOCOL_VERSION).toBe(1);
-    expect(FINANCIAL_PROTOCOL_VERSION).toBe(3);
+    expect(FINANCIAL_PROTOCOL_VERSION).toBe(4);
+    expect(thisPool().financial_protocols).toEqual([]);
   });
 
   it("this build's no-escrow key moved from L4-2's dc1-5e141a8b… to dc1-68c4b829… -- and client_protocols is the only field that did", () => {

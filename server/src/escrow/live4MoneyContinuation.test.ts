@@ -207,11 +207,11 @@ async function sealThrough(world: World, gameId: string, entries: readonly Serve
 /* ================================================================================================= */
 
 describe("LIVE-4 L4-4: what this pass must not move", () => {
-  test("no hidden protocol bump: financial protocol 3, hosted 1, rules 11 (settlement [10, 11]), record file v2, money GameRecord schema 2", () => {
-    assert.equal(FINANCIAL_PROTOCOL_VERSION, 3);
+  test("no hidden protocol bump: financial protocol 4 (Phase 3's escrow 2.1 timed remedies, an explicit bump; 3 through ESCROW-4), hosted 1, rules 11 (settlement [10, 11]), record file v2, money GameRecord schema 2", () => {
+    assert.equal(FINANCIAL_PROTOCOL_VERSION, 4);
     assert.deepEqual(
       FINANCIAL_PROTOCOL_CHANGELOG.map((row) => row.version),
-      [1, 2, 3],
+      [1, 2, 3, 4],
     );
     assert.equal(HOSTED_PROTOCOL_VERSION, 1);
     assert.deepEqual(
@@ -223,11 +223,11 @@ describe("LIVE-4 L4-4: what this pass must not move", () => {
     assert.equal(RULES_ENGINE_VERSION, 13);
     assert.deepEqual([...SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS], [10, 11, 12, 13]);
     assert.equal(FINANCIAL_VERSION, 2, "the financial record's own file format");
-    assert.deepEqual(currentMoneyContinuation(), { format: "18COSMOS/MONEY-CONTINUATION/v1", rules_engine_version: 13, hosted_protocol: 1, financial_protocol: 3, settlement_codec: "18JUNO/v1" });
+    assert.deepEqual(currentMoneyContinuation(), { format: "18COSMOS/MONEY-CONTINUATION/v1", rules_engine_version: 13, hosted_protocol: 1, financial_protocol: 4, settlement_codec: "18JUNO/v1" });
     const capability = thisDeploymentCapability([PIN]);
     assert.deepEqual(
       [capability.rules.current, [...capability.rules.supported], [...capability.rules.certified], [...capability.hosted_protocols], [...capability.financial_protocols], [...capability.settlement_codecs]],
-      [13, [13], [10, 11, 12, 13], [1], [3], ["18JUNO/v1"]],
+      [13, [13], [10, 11, 12, 13], [1], [4], ["18JUNO/v1"]],
     );
     assert.match(source("server/src/rooms/gameRecord.ts"), /value\.record_schema === 2 && isGameMoneyTerms\(value\.money\)/, "a money table is record_schema 2");
   });
@@ -649,7 +649,7 @@ describe("LIVE-4 T-13 / D4-15: financial artifacts of another build's format are
       const world = await fileWorld(dir);
       const session = await dealt(world);
       const later = path.join(chainIntentDirectory(dir), GAME_A, `${"f".repeat(64)}.json`);
-      fs.writeFileSync(later, `${JSON.stringify({ format: "gs-chain-intent", schema: 2, game_id: GAME_A, intent_id: "f".repeat(64), route: "a later build's" })}\n`);
+      fs.writeFileSync(later, `${JSON.stringify({ format: "gs-chain-intent", schema: 3 /* FP4 writes schema 2 */, game_id: GAME_A, intent_id: "f".repeat(64), route: "a later build's" })}\n`);
       assert.equal(await createFileChainIntentStore(dir, quiet).formatOf(GAME_A), "newer");
       await assert.rejects(() => createFileChainIntentStore(dir, quiet).listGame(GAME_A), (error: unknown) => error instanceof ChainIntentUnreadableError && error.format === "newer");
       const before = snapshot(dir);

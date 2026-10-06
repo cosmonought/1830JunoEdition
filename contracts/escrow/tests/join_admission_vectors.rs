@@ -277,6 +277,7 @@ fn every_mutated_or_copied_admission_is_refused_on_chain_and_moves_nothing() {
                     params: default_params(),
                     signer_keys: vec![Key::signer(1).pubkey],
                     admission_pubkey: Key::admission(1).pubkey,
+                    remedy_keys: vec![],
                 },
                 &[],
                 "escrow-2",

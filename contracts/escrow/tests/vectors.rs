@@ -11,7 +11,9 @@ use cosmwasm_std::testing::MockApi;
 use cosmwasm_std::{coins, Addr, Api, HexBinary};
 use cw_multi_test::Executor;
 use eighteen_cosmos_escrow::crypto::{self, DomainInputs};
-use eighteen_cosmos_escrow::msg::{ExecuteMsg, ResolveOutcome, SeatSignature, SettlementPayloadV1};
+use eighteen_cosmos_escrow::msg::{
+    DeadlineChoice, ExecuteMsg, ResolveOutcome, SeatSignature, SettlementPayloadV1,
+};
 use eighteen_cosmos_escrow::payload::{Payload, FIXED_ENCODED_LEN, WEIGHT_ENCODED_LEN};
 use eighteen_cosmos_escrow::state::{GameState, Mode};
 use eighteen_cosmos_escrow::ContractError;
@@ -322,7 +324,12 @@ fn onchain_game(
         variants_digest: HexBinary::from(sha256(&[b"18JUNO/TEST/variants"]).as_slice()),
         consent_pubkey: Key::seat(0).pubkey,
         join_ticket: ticket("vector-0"),
-        no_deadline: false,
+        deadline: match mode {
+            Mode::Live => DeadlineChoice::LiveActionClock {},
+            Mode::Async => DeadlineChoice::AsyncPace {
+                allowance_secs: DAY,
+            },
+        },
     };
     suite
         .exec(&wallets[0], &create, &coins(ante, DENOM))

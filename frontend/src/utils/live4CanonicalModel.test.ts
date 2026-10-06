@@ -5,7 +5,7 @@
 // ==================================================================
 //
 // WHAT THIS FILE PROVES, against the pure modules only (no room, no socket, no store -- those are L4-2 / L4-3 / L4-4):
-//   1. the version axes: hosted 1, financial 3 (ESCROW-4's), client 1, each equal to its changelog's last row; the
+//   1. the version axes: hosted 1, financial 4 (3 was ESCROW-4's; 4 is Phase 3 escrow 2.1's), client 1, each equal to its changelog's last row; the
 //      rules engine and settlement certification untouched;
 //   2. T-19, the capability key: an independent golden; identical descriptors give identical keys; every semantic
 //      field moves the key on its own; no diagnostic does, and none can be smuggled in; the serialization does not
@@ -185,9 +185,9 @@ describe("the protocol axes (L4-1 §A)", () => {
   const lastRow = (changelog: ReadonlyArray<ProtocolChangelogRow>) => changelog[changelog.length - 1];
   const consecutive = (changelog: ReadonlyArray<ProtocolChangelogRow>, first: number) => changelog.map((row) => row.version).every((version, at) => version === first + at);
 
-  it("keep ESCROW-4's values: hosted 1, financial 3; the new client protocol starts at 1 over the legacy 0", () => {
+  it("keep ESCROW-4's hosted 1 (financial 3, then 4 since the Phase 3 escrow 2.1 timed remedies); the new client protocol starts at 1 over the legacy 0", () => {
     expect(HOSTED_PROTOCOL_VERSION).toBe(1);
-    expect(FINANCIAL_PROTOCOL_VERSION).toBe(3);
+    expect(FINANCIAL_PROTOCOL_VERSION).toBe(4);
     expect(CLIENT_PROTOCOL_VERSION).toBe(1);
     expect(LEGACY_CLIENT_PROTOCOL).toBe(0);
   });
@@ -208,9 +208,14 @@ describe("the protocol axes (L4-1 §A)", () => {
     }
   });
 
-  it("the rows say what each version is: ESCROW-4's financial 3 and its money-only record schema; the legacy wire", () => {
-    expect(lastRow(FINANCIAL_PROTOCOL_CHANGELOG).note).toMatch(/^ESCROW-4:/);
-    expect(lastRow(FINANCIAL_PROTOCOL_CHANGELOG).note).toMatch(/`record_schema: 2`, written for money tables only/);
+  it("the rows say what each version is: ESCROW-4's financial 3 and its money-only record schema; Phase 3's financial 4 (escrow 2.1, the remedy intent); the legacy wire", () => {
+    expect(FINANCIAL_PROTOCOL_CHANGELOG[2].note).toMatch(/^ESCROW-4:/);
+    expect(FINANCIAL_PROTOCOL_CHANGELOG[2].note).toMatch(/`record_schema: 2`, written for money tables only/);
+    expect(lastRow(FINANCIAL_PROTOCOL_CHANGELOG).version).toBe(4);
+    expect(lastRow(FINANCIAL_PROTOCOL_CHANGELOG).note).toMatch(/^Phase 3 escrow 2\.1 timed remedies/);
+    expect(lastRow(FINANCIAL_PROTOCOL_CHANGELOG).note).toMatch(/never on 2\.0\.0, which protocol 3 keeps/);
+    expect(lastRow(FINANCIAL_PROTOCOL_CHANGELOG).note).toMatch(/`submit-remedy` chain intent/);
+    expect(lastRow(FINANCIAL_PROTOCOL_CHANGELOG).note).toMatch(/settlement codec \(18JUNO\/v1\) and the hosted protocol do not move/);
     expect(FINANCIAL_PROTOCOL_CHANGELOG[1].note).toMatch(/admitted_until_secs/);
     expect(lastRow(HOSTED_PROTOCOL_CHANGELOG).note).toMatch(/does not move this axis/);
     expect(lastRow(HOSTED_PROTOCOL_CHANGELOG).note).toMatch(/read as 1 \(LIVE-4 OD-L4-1\)/);

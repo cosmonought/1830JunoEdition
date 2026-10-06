@@ -15,8 +15,8 @@ use crate::helpers::{load_game, save_game};
 use crate::msg::{GameResponse, GamesResponse, QueryMsg, SeatsResponse};
 use crate::state::{
     Config, DisputeRecord, DisputeResolution, Game, GameParams, GamePolicy, GameState, GameTerms,
-    Mode, Outcome, PayloadRecord, ReviewRequest, Route, Seat, SettlementRecord, SettlementSource,
-    CONFIG,
+    Mode, Outcome, PayloadRecord, RemedyKind, RemedyRecord, ReviewRequest, Route, Seat,
+    SettlementRecord, SettlementSource, CONFIG,
 };
 
 // ------------------------------------------------------------------ variants
@@ -65,6 +65,9 @@ fn all_routes() -> Vec<Route> {
         Route::SettleableTimeoutPayout,
         Route::SettleableTimeoutRefund,
         Route::ReviewAnnul,
+        Route::RemedyTimeoutAnnul,
+        Route::RemedyAnnul,
+        Route::RemedyForeclosure,
     ];
     for r in &all {
         match r {
@@ -82,7 +85,10 @@ fn all_routes() -> Vec<Route> {
             | Route::LivenessRefund
             | Route::SettleableTimeoutPayout
             | Route::SettleableTimeoutRefund
-            | Route::ReviewAnnul => {}
+            | Route::ReviewAnnul
+            | Route::RemedyTimeoutAnnul
+            | Route::RemedyAnnul
+            | Route::RemedyForeclosure => {}
         }
     }
     all
@@ -94,13 +100,15 @@ fn all_resolutions() -> Vec<DisputeResolution> {
         DisputeResolution::Replaced,
         DisputeResolution::Annulled,
         DisputeResolution::ResolverTimeout,
+        DisputeResolution::AnnulledByConsent,
     ];
     for r in &all {
         match r {
             DisputeResolution::Upheld
             | DisputeResolution::Replaced
             | DisputeResolution::Annulled
-            | DisputeResolution::ResolverTimeout => {}
+            | DisputeResolution::ResolverTimeout
+            | DisputeResolution::AnnulledByConsent => {}
         }
     }
     all
@@ -111,12 +119,44 @@ fn all_sources() -> Vec<SettlementSource> {
         SettlementSource::TerminalPayload,
         SettlementSource::LivenessCheckpoint,
         SettlementSource::ResolverReplacement,
+        SettlementSource::RemedyStrike3,
     ];
     for s in &all {
         match s {
             SettlementSource::TerminalPayload
             | SettlementSource::LivenessCheckpoint
-            | SettlementSource::ResolverReplacement => {}
+            | SettlementSource::ResolverReplacement
+            | SettlementSource::RemedyStrike3 => {}
+        }
+    }
+    all
+}
+
+fn all_remedy_kinds() -> Vec<RemedyKind> {
+    let all: Vec<RemedyKind> = (0..=255u8).filter_map(RemedyKind::from_byte).collect();
+    assert_eq!(all.len(), 5);
+    for k in &all {
+        assert_eq!(RemedyKind::from_byte(k.as_byte()), Some(*k));
+        match k {
+            RemedyKind::LiveTimeoutAnnul
+            | RemedyKind::LiveForeclose
+            | RemedyKind::LiveStrike3Foreclose
+            | RemedyKind::AsyncAnnul
+            | RemedyKind::AsyncForeclose => {}
+        }
+    }
+    all
+}
+
+fn all_policies() -> Vec<Option<GamePolicy>> {
+    let all = vec![
+        None,
+        Some(GamePolicy::TimedRemedyV1),
+        Some(GamePolicy::NoDeadline),
+    ];
+    for p in all.iter().flatten() {
+        match p {
+            GamePolicy::TimedRemedyV1 | GamePolicy::NoDeadline => {}
         }
     }
     all
@@ -274,11 +314,29 @@ fn terms(rng: &mut Rng) -> GameTerms {
         resolver_timeout_secs: rng.u64(),
         treasury: rng.addr(),
         review_delay_secs: rng.u64(),
-        policy: rng.pick(&[
-            None,
-            Some(GamePolicy::TimedNoRemedies),
-            Some(GamePolicy::NoDeadline),
-        ]),
+        allowance_secs: rng.u64(),
+        cure_window_secs: rng.u64(),
+        policy: rng.pick(&all_policies()),
+    }
+}
+
+fn remedy(rng: &mut Rng) -> RemedyRecord {
+    RemedyRecord {
+        kind: rng.pick(&all_remedy_kinds()),
+        defaulting_seat: rng.next() as u8,
+        strike: rng.next() as u8,
+        overdue_epoch: Uint64::new(rng.u64()),
+        log_len: Uint64::new(rng.u64()),
+        log_hash: rng.hex(),
+        allowance_secs: Uint64::new(rng.u64()),
+        overdue_at: Uint64::new(rng.u64()),
+        final_at: Uint64::new(rng.u64()),
+        expires_at: Uint64::new(rng.u64()),
+        evidence_hash: rng.hex(),
+        remedy_key_id: rng.pick(&[0u16, 1, 2, 64, u16::MAX]),
+        remedy_digest: rng.hex(),
+        approvals_bitmap: rng.next() as u8,
+        accepted_at: rng.time(),
     }
 }
 
@@ -328,6 +386,7 @@ fn arbitrary_game(rng: &mut Rng) -> Game {
         dispute: rng.opt(dispute),
         outcome: rng.opt(|r| outcome(r, n)),
         review_request: rng.opt(review),
+        remedy: rng.opt(remedy),
     }
 }
 
@@ -370,7 +429,7 @@ fn shaped_game(state: GameState, n: usize, addr_len: usize, variant: usize) -> G
         GameState::Settleable | GameState::Disputed | GameState::Settled
     ) || (state == GameState::Annulled && !even(variant));
     let settlement = with_settlement.then(|| SettlementRecord {
-        source: all_sources()[variant % 3],
+        source: all_sources()[variant % all_sources().len()],
         payload: payload(&mut rng, n),
         accepted_at: Timestamp::from_seconds(1_790_086_400),
         window_end: Timestamp::from_seconds(1_790_172_800),
@@ -380,7 +439,7 @@ fn shaped_game(state: GameState, n: usize, addr_len: usize, variant: usize) -> G
         || (state == GameState::Annulled && !even(variant));
     let resolution = match state {
         GameState::Disputed => None,
-        _ => Some(all_resolutions()[variant % 4]),
+        _ => Some(all_resolutions()[variant % all_resolutions().len()]),
     };
     let dispute = disputed.then(|| DisputeRecord {
         challenger: wallet(1),
@@ -427,12 +486,10 @@ fn shaped_game(state: GameState, n: usize, addr_len: usize, variant: usize) -> G
             liveness_window_secs: 14 * 86_400,
             resolver_timeout_secs: 30 * 86_400,
             treasury: wallet(9),
-            review_delay_secs: [0, 0, 7 * 86_400][variant % 3],
-            policy: [
-                None,
-                Some(GamePolicy::TimedNoRemedies),
-                Some(GamePolicy::NoDeadline),
-            ][variant % 3],
+            review_delay_secs: [0, 7 * 86_400, 7 * 86_400][variant % 3],
+            allowance_secs: [0, if even(variant) { 1_200 } else { 86_400 }, 0][variant % 3],
+            cure_window_secs: [0, if even(variant) { 600 } else { 0 }, 0][variant % 3],
+            policy: all_policies()[variant % 3],
         },
         created_at: Timestamp::from_seconds(1_790_000_000),
         funding_deadline: Timestamp::from_seconds(1_790_086_400),
@@ -461,6 +518,26 @@ fn shaped_game(state: GameState, n: usize, addr_len: usize, variant: usize) -> G
             seat_index: (variant % n.max(1)) as u8,
             requested_at: Timestamp::from_seconds(1_790_070_000),
             trusted_seq: Uint64::new(40),
+        }),
+        remedy: (started && variant % 3 == 1 && variant % 4 != 0).then(|| {
+            let kinds = all_remedy_kinds();
+            RemedyRecord {
+                kind: kinds[variant % kinds.len()],
+                defaulting_seat: (variant % n.max(1)) as u8,
+                strike: (variant % 4) as u8,
+                overdue_epoch: Uint64::new(3),
+                log_len: Uint64::new(41),
+                log_hash: rng.bytes(32),
+                allowance_secs: Uint64::new(1_200),
+                overdue_at: Uint64::new(1_790_070_000),
+                final_at: Uint64::new(1_790_070_600),
+                expires_at: Uint64::new(1_790_074_200),
+                evidence_hash: rng.bytes(32),
+                remedy_key_id: 1,
+                remedy_digest: rng.bytes(32),
+                approvals_bitmap: 0b0110,
+                accepted_at: Timestamp::from_seconds(1_790_070_601),
+            }
         }),
     }
 }
@@ -511,8 +588,8 @@ fn view_serializes_exactly_like_stored_game() {
 }
 
 /// StoredGame's JSON is exactly Game's JSON regrouped: the four groups
-/// partition Game's 28 keys (27 in 2.0.0, plus 2.1.0's `review_request`), and
-/// every value is the byte-identical encoding.
+/// partition Game's 29 keys (27 in 2.0.0, plus 2.1.0's `review_request` and
+/// `remedy`), and every value is the byte-identical encoding.
 #[test]
 fn stored_shape_is_exactly_the_public_game_regrouped() {
     let groups = ["created", "money", "roster", "progress"];
@@ -522,7 +599,7 @@ fn stored_shape_is_exactly_the_public_game_regrouped() {
             serde_json::from_slice(&to_json_vec(&StoredGameView::from(&game)).unwrap()).unwrap();
         let flat = flat.as_object().unwrap();
         let stored = stored.as_object().unwrap();
-        assert_eq!(flat.len(), 28, "the public Game has 28 fields");
+        assert_eq!(flat.len(), 29, "the public Game has 29 fields");
         assert_eq!(
             stored.keys().cloned().collect::<BTreeSet<_>>(),
             groups
@@ -578,12 +655,14 @@ fn fixtures_cover_every_variant_and_every_option() {
     assert!(both(&|g| g.dispute.is_some()));
     assert!(both(&|g| g.outcome.is_some()));
     assert!(both(&|g| g.review_request.is_some()));
-    for policy in [
-        None,
-        Some(GamePolicy::TimedNoRemedies),
-        Some(GamePolicy::NoDeadline),
-    ] {
+    assert!(both(&|g| g.remedy.is_some()));
+    for policy in all_policies() {
         assert!(games.iter().any(|g| g.terms.policy == policy));
+    }
+    for kind in all_remedy_kinds() {
+        assert!(games
+            .iter()
+            .any(|g| g.remedy.as_ref().map(|r| r.kind) == Some(kind)));
     }
     assert!(both(&|g| g
         .seats
@@ -600,39 +679,52 @@ fn fixtures_cover_every_variant_and_every_option() {
 }
 
 /// Escrow 2.1.0 reads a game stored by 2.0.0 code: exactly the stored JSON
-/// without `created.terms.policy`, `created.terms.review_delay_secs` and
-/// `progress.review_request` (the only fields 2.1.0 added). It decodes with `policy == None`, which keeps the
-/// 2.0.0 exits, and no review request; every other field is unchanged. A
-/// migrated 2.0.0 game can therefore never acquire 2.1.0 terms.
+/// without `created.terms.{policy, review_delay_secs, allowance_secs,
+/// cure_window_secs}` and `progress.{review_request, remedy}` (the only fields
+/// 2.1.0 added). It decodes with `policy == None`, which keeps the 2.0.0 exits,
+/// and no review request or remedy; every other field is unchanged. A migrated
+/// 2.0.0 game can therefore never acquire 2.1.0 terms.
 #[test]
 fn a_game_stored_by_escrow_2_0_0_reads_with_no_policy() {
     for mut game in fixtures().into_iter().step_by(5) {
         game.terms.policy = None;
         game.terms.review_delay_secs = 0;
+        game.terms.allowance_secs = 0;
+        game.terms.cure_window_secs = 0;
         game.review_request = None;
+        game.remedy = None;
         let mut json: serde_json::Value =
             serde_json::from_slice(&to_json_vec(&StoredGame::from(game.clone())).unwrap()).unwrap();
         let terms = json["created"]["terms"].as_object_mut().unwrap();
         assert!(terms.remove("policy").is_some());
-        assert_eq!(
-            terms.remove("review_delay_secs"),
-            Some(serde_json::json!(0))
-        );
+        for field in ["review_delay_secs", "allowance_secs", "cure_window_secs"] {
+            assert_eq!(terms.remove(field), Some(serde_json::json!(0)));
+        }
         let progress = json["progress"].as_object_mut().unwrap();
         assert!(progress.remove("review_request").is_some());
+        assert!(progress.remove("remedy").is_some());
         let legacy = serde_json::to_vec(&json).unwrap();
         let text = String::from_utf8(legacy.clone()).unwrap();
-        assert!(
-            !text.contains("policy")
-                && !text.contains("review_request")
-                && !text.contains("review_delay")
-        );
+        for key in [
+            "policy",
+            "review_request",
+            "review_delay_secs",
+            "allowance_secs",
+            "cure_window_secs",
+            "remedy",
+        ] {
+            assert!(
+                !text.contains(&format!("\"{key}\":")),
+                "{key} left in {text}"
+            );
+        }
         let mut storage = MockStorage::new();
         storage.set(&GAMES.key(game.chain_game_id), &legacy);
         let loaded = load_game(&storage, game.chain_game_id).unwrap();
         assert_eq!(loaded, game);
         assert_eq!(loaded.terms.policy, None);
         assert_eq!(loaded.review_request, None);
+        assert_eq!(loaded.remedy, None);
     }
 }
 
@@ -683,7 +775,6 @@ fn queries_return_the_public_game() {
             funding_period_async_secs: 604_800,
             liveness_window_secs: 1_209_600,
             resolver_timeout_secs: 2_592_000,
-            review_delay_secs: 604_800,
         },
         paused: false,
     };

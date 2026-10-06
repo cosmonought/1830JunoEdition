@@ -300,13 +300,14 @@ export const fileIntentSubject: IntentSubject = {
   name: "file (createFileChainIntentStore)",
   backend: "file",
   capabilities: ["durable", "fence", "plant", "fs-faults", "stall-write", "inject-lost-answer", "inject-transient-failure", "validates-shape"],
-  differences: { "INT-07-older": "CHAIN_INTENT_SCHEMA is 1, the first schema: no older intent file can exist to plant (the memory marker still exercises the class)" },
+  /* FP4 (CHAIN_INTENT_SCHEMA 2): a protocol-3 intent file (schema 1) is a real older intent now, planted as one -- the
+     reviewed INT-07-older difference ("schema 1 is the first: no older intent can exist") is gone with it. */
   async open(ctx, options) {
     return createFileChainIntentStore(ctx.dir, { ...quiet, fs: faultFs(ctx), ...writer(options) });
   },
   async plant(ctx, gameId, intentId, what) {
     fs.mkdirSync(path.join(chainIntentDirectory(ctx.dir), gameId), { recursive: true });
-    const text = what === "corrupt" ? `{"format":"${CHAIN_INTENT_FORMAT}",` : JSON.stringify({ format: CHAIN_INTENT_FORMAT, schema: 9, game_id: gameId, intent_id: intentId });
+    const text = what === "corrupt" ? `{"format":"${CHAIN_INTENT_FORMAT}",` : JSON.stringify({ format: CHAIN_INTENT_FORMAT, schema: what === "older" ? 1 : 9, game_id: gameId, intent_id: intentId });
     fs.writeFileSync(intentFile(ctx, `${gameId}/${intentId}`), text);
   },
   async stored(ctx, key) {

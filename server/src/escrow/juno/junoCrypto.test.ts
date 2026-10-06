@@ -155,7 +155,11 @@ describe("ESCROW-3B: the relayer's transaction, bech32 and HD keys", () => {
     assert.equal(QUERY.signerKeys(null, 30), `{"signer_keys":{"start_after":null,"limit":30}}`);
     assert.throws(() => RELAYER_EXECUTE.finalize("1.5"));
     assert.throws(() => RELAYER_EXECUTE.start("1", "AB".repeat(32)), "upper-case hex is refused");
-    assert.match(WALLET_EXECUTE.createGame({ maxPlayers: 4, mode: 0, rulesEngineVersion: 11, variantsDigest: "00".repeat(32), consentPubkey: `02${"11".repeat(32)}`, joinTicket: "22".repeat(32) }), /^\{"create_game":\{"max_players":4,"mode":"live","rules_engine_version":11,/);
+    assert.match(WALLET_EXECUTE.createGame({ maxPlayers: 4, mode: 0, rulesEngineVersion: 11, variantsDigest: "00".repeat(32), consentPubkey: `02${"11".repeat(32)}`, joinTicket: "22".repeat(32), deadline: { kind: "live_action_clock" } }), /^\{"create_game":\{"max_players":4,"mode":"live","rules_engine_version":11,.*"deadline":\{"live_action_clock":\{\}\}\}\}$/);
+    /* FP4 (escrow 2.1.0): the remedy route and the remedy key registry query. */
+    assert.equal(QUERY.remedyKeys(null, 30), `{"remedy_keys":{"start_after":null,"limit":30}}`);
+    assert.match(RELAYER_EXECUTE.submitRemedy("9", { version: 1 }, "cd".repeat(64), []), /^\{"submit_remedy":\{"chain_game_id":9,"attestation":\{"version":1\},"signature":"(cd){64}","approvals":\[\]\}\}$/);
+    assert.throws(() => RELAYER_EXECUTE.submitRemedy("9", { version: 1 }, "CD".repeat(64), []), "upper-case hex is refused");
   });
 });
 

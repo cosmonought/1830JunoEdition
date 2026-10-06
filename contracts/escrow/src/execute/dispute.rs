@@ -9,15 +9,15 @@ use crate::crypto::{annul_digest, settle_digest};
 use crate::error::ContractError;
 use crate::execute::play::{accept_signed_payload, store_checkpoint};
 use crate::helpers::{
-    add_secs, best_checkpoint, check_payload_for_game, game_domain, key_is_trusted, load_game,
-    nonpayable, pay_out, payload_record, refund_all, require_seated, require_state, save_game,
-    seat_index_of, send, trusted_checkpoint_seq, trusted_seq, verify_seat_signatures,
+    add_secs, best_checkpoint, check_payload_for_game, game_domain, load_game, nonpayable, pay_out,
+    payload_record, refund_all, require_seated, require_state, save_game, seat_index_of, send,
+    settlement_is_trusted, trusted_checkpoint_seq, trusted_seq, verify_seat_signatures,
 };
 use crate::msg::{ResolveOutcome, SeatSignature, SignedCheckpoint};
 use crate::payload::{fixed_bytes, Payload, PayloadUse};
 use crate::state::{
-    DisputeRecord, DisputeResolution, Game, GamePolicy, GameState, ReviewRequest, Route,
-    SettlementRecord, SettlementSource,
+    DisputeRecord, DisputeResolution, Game, GameState, ReviewRequest, Route, SettlementRecord,
+    SettlementSource,
 };
 
 /// A seated wallet challenges the stored settlement before the window closes,
@@ -144,6 +144,13 @@ pub fn resolve(
             role: "resolver".to_string(),
         });
     }
+    // Escrow 2.1.0: a resolver holding a seat in the game never adjudicates it
+    // (it would judge its own stake -- a defaulter annulling its own
+    // foreclosure, or a creditor upholding a false one). Such a dispute ends by
+    // the resolver-timeout exit or the players' unanimous annulment.
+    if game.terms.policy.is_some() && seat_index_of(&game, resolver).is_some() {
+        return Err(ContractError::ResolverIsSeated {});
+    }
     let now = env.block.time;
     let mut msgs: Vec<BankMsg> = Vec::new();
     let label = match outcome {
@@ -164,6 +171,16 @@ pub fn resolve(
             "uphold"
         }
         ResolveOutcome::Replace { payload: wire } => {
+            // Escrow 2.1.0: a third-strike foreclosure is upheld or annulled,
+            // never replaced: the resolver can neither pick a winner nor
+            // redirect the defaulting seat's deposit.
+            if game
+                .settlement
+                .as_ref()
+                .is_some_and(|s| matches!(s.source, SettlementSource::RemedyStrike3))
+            {
+                return Err(ContractError::RemedySettlementNotReplaceable {});
+            }
             // Authorised by this transaction's sender, not by a signature: the
             // settlement signer may be the party that cheated. The disputed
             // settlement never constrains its correction (the same log position
@@ -226,6 +243,16 @@ pub fn resolve(
 /// signatures while a compromised signer's seq never enters the digest. Anyone
 /// may submit it while IN_PROGRESS or SETTLEABLE; works while paused. Net antes
 /// refunded.
+///
+/// Escrow 2.1.0 (universal unanimous neutral annulment, owner invariant of
+/// 2026-10-06): a 2.1.0 game also accepts it while DISPUTED. The dispute is
+/// closed (`AnnulledByConsent`) and the challenger's bond goes back to the
+/// challenger in the same transaction, never to the pool or the treasury: all
+/// seats agreeing to unwind neither burns nor redirects it. With FUNDING and
+/// FUNDED (no domain yet: every seat may `Withdraw` its own net deposit) this
+/// covers every non-terminal state in which the contract holds a 2.1.0 game's
+/// escrow. An escrow 2.0.0 game keeps its 2.0.0 states (IN_PROGRESS,
+/// SETTLEABLE).
 pub fn annul_by_consent(
     deps: DepsMut,
     env: Env,
@@ -235,17 +262,36 @@ pub fn annul_by_consent(
 ) -> Result<Response, ContractError> {
     nonpayable(&info)?;
     let mut game = load_game(deps.storage, chain_game_id)?;
-    require_state(&game, &[GameState::InProgress, GameState::Settleable])?;
+    if game.terms.policy.is_some() {
+        require_state(
+            &game,
+            &[
+                GameState::InProgress,
+                GameState::Settleable,
+                GameState::Disputed,
+            ],
+        )?;
+    } else {
+        require_state(&game, &[GameState::InProgress, GameState::Settleable])?;
+    }
     let digest = annul_digest(&game_domain(&game)?, trusted_seq(deps.storage, &game)?);
     verify_seat_signatures(deps.api, &game, &digest, &consents, true)?;
     let now = env.block.time;
-    let msgs = refund_all(
+    let mut msgs: Vec<BankMsg> = Vec::new();
+    let mut bond_returned = Uint128::zero();
+    if game.state == GameState::Disputed {
+        let (bond, bond_msg) =
+            close_dispute(&mut game, DisputeResolution::AnnulledByConsent, now, true)?;
+        msgs.extend(bond_msg);
+        bond_returned = bond;
+    }
+    msgs.extend(refund_all(
         &mut game,
         GameState::Annulled,
         Route::AnnulByConsent,
         now,
-        Uint128::zero(),
-    )?;
+        bond_returned,
+    )?);
     save_game(deps.storage, &game)?;
     Ok(Response::new()
         .add_messages(msgs)
@@ -385,18 +431,17 @@ pub fn liveness_settle(
             label
         }
         GameState::Settleable => {
-            let (window_end, settlement_key) = game
+            let settlement = game
                 .settlement
                 .as_ref()
-                .map(|s| (s.window_end, s.payload.signer_key_id))
                 .ok_or_else(|| ContractError::Invariant {
                     reason: "no stored settlement".to_string(),
                 })?;
-            let available = add_secs(window_end, game.terms.liveness_window_secs)?;
+            let available = add_secs(settlement.window_end, game.terms.liveness_window_secs)?;
             if now < available {
                 return Err(ContractError::LivenessNotReached { at: available });
             }
-            if key_is_trusted(deps.storage, settlement_key)? {
+            if settlement_is_trusted(deps.storage, settlement)? {
                 let weights = stored_weights(&game)?;
                 let pool = game.pool;
                 msgs.extend(pay_out(
@@ -440,14 +485,13 @@ pub fn liveness_settle(
             let (bond, bond_msg) =
                 close_dispute(&mut game, DisputeResolution::ResolverTimeout, now, true)?;
             msgs.extend(bond_msg);
-            let settlement_key = game
+            let settlement = game
                 .settlement
                 .as_ref()
-                .map(|s| s.payload.signer_key_id)
                 .ok_or_else(|| ContractError::Invariant {
                     reason: "no stored settlement".to_string(),
                 })?;
-            if key_is_trusted(deps.storage, settlement_key)? {
+            if settlement_is_trusted(deps.storage, settlement)? {
                 let weights = stored_weights(&game)?;
                 let pool = game.pool;
                 msgs.extend(pay_out(
@@ -489,26 +533,28 @@ pub fn liveness_settle(
     Ok(response.add_attribute("state", game.state.as_str()))
 }
 
-/// The game is an escrow 2.1.0 No-deadline game: the only kind the exceptional
-/// review applies to.
-fn require_no_deadline(game: &Game) -> Result<(), ContractError> {
-    if game.terms.policy == Some(GamePolicy::NoDeadline) {
+/// The game is an escrow 2.1.0 game (any policy): the exceptional review is
+/// the neutral backstop of every one of them (owner policy, 2026-10-06), never
+/// of a 2.0.0 game.
+fn require_reviewable(game: &Game) -> Result<(), ContractError> {
+    if game.terms.policy.is_some() {
         Ok(())
     } else {
         Err(ContractError::ReviewNotAvailable {})
     }
 }
 
-/// Escrow 2.1.0: a seated wallet of an IN_PROGRESS No-deadline game asks the
-/// game's resolver for the exceptional review. Records the first request only;
+/// Escrow 2.1.0: a seated wallet of an IN_PROGRESS 2.1.0 game asks the game's
+/// resolver for the exceptional review. Records the first request only;
 /// a later request (by any seat) is accepted and changes nothing. An accepted
 /// `Checkpoint` above the trusted sequence recorded with the request withdraws
 /// it (the table kept playing), after which a new request starts a new delay.
 /// Refused while the game's resolver holds a seat (no review could follow).
-/// Moves no funds and works while paused. The evidence itself (death, explicit
-/// permanent abandonment, lost access) is off chain; the request only proves
-/// that a seated player asked, so the resolver cannot annul a game nobody
-/// asked about.
+/// Moves no funds and works while paused. The evidence itself (No-deadline:
+/// death, explicit permanent abandonment, lost access; Timed/Live: also a
+/// catastrophic failure of the remedy system) and the bar it must meet are
+/// governance policy, off chain; the request only proves that a seated player
+/// asked, so the resolver cannot annul a game nobody asked about.
 pub fn request_review(
     deps: DepsMut,
     env: Env,
@@ -519,7 +565,7 @@ pub fn request_review(
     let mut game = load_game(deps.storage, chain_game_id)?;
     require_state(&game, &[GameState::InProgress])?;
     let seat = require_seated(&game, &info.sender)?;
-    require_no_deadline(&game)?;
+    require_reviewable(&game)?;
     // A resolver holding a seat can never review this game (`review_annul`),
     // so a request could only advertise an impossible review.
     if let Some(resolver) = &game.resolver {
@@ -546,8 +592,8 @@ pub fn request_review(
 
 /// Escrow 2.1.0: the game's resolver (the address it adopted at `Start`,
 /// whatever `SetResolver` did since, OD-ESC2-5) approves the review of an
-/// IN_PROGRESS No-deadline game that a seated wallet asked for, once the
-/// game's review delay has passed since that request. The only outcome is the
+/// IN_PROGRESS 2.1.0 game that a seated wallet asked for, once the game's
+/// review delay (7 days) has passed since that request. The only outcome is the
 /// neutral refund: every seat's own net deposit back to its own deposit
 /// wallet, nothing to the resolver, the treasury or a "winner" (the message
 /// carries no payload and no amounts). Works while paused. Refused when the
@@ -586,7 +632,7 @@ pub fn review_annul(
     if seat_index_of(&game, resolver).is_some() {
         return Err(ContractError::ResolverIsSeated {});
     }
-    require_no_deadline(&game)?;
+    require_reviewable(&game)?;
     let requested_at = game
         .review_request
         .as_ref()

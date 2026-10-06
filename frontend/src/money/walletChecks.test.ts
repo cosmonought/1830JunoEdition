@@ -74,12 +74,27 @@ describe("ESCROW-4: the table and the messages, built here from neutral fields",
     const view = moneyView({ you: linked([CONSENT]) });
     const built = createGameMessage(TEST_PIN, view, VARIANTS, CONSENT);
     if (!built.ok) throw new Error(built.reason);
-    expect(built.value.msgJson).toBe(WALLET_EXECUTE.createGame({ maxPlayers: 2, mode: 0, rulesEngineVersion: RULES_ENGINE_VERSION, variantsDigest: variantsDigestV1(VARIANTS), consentPubkey: CONSENT, joinTicket: TICKET }));
+    expect(built.value.msgJson).toBe(WALLET_EXECUTE.createGame({ maxPlayers: 2, mode: 0, rulesEngineVersion: RULES_ENGINE_VERSION, variantsDigest: variantsDigestV1(VARIANTS), consentPubkey: CONSENT, joinTicket: TICKET, deadline: { kind: "live_action_clock" } }));
+    // FP4 (escrow 2.1.0): a live table's CreateGame names the 20-minute action clock, as the last field.
+    expect(built.value.msgJson.endsWith(`"join_ticket":"${TICKET}","deadline":{"live_action_clock":{}}}}`)).toBe(true);
     expect(built.value.funds).toEqual([{ denom: "ujunox", amount: "1000000" }]);
     expect(built.value.hint).toBe("create");
     expect(createGameMessage(TEST_PIN, moneyView(), VARIANTS, CONSENT)).toEqual({ ok: false, reason: expect.stringMatching(/Link your wallet/) });
     expect(createGameMessage(TEST_PIN, moneyView({ you: linked(), terms: { rulesEngineVersion: 99 } }), VARIANTS, CONSENT)).toEqual({ ok: false, reason: expect.stringMatching(/rules version this page doesn't/) });
     expect(rulesVersionForEscrow(moneyView({ terms: { rulesEngineVersion: null } })).ok).toBe(false);
+  });
+
+  it("FP4 (escrow 2.1.0): CreateGame always names a deadline class that suits the mode, and an async table's is never guessed", () => {
+    // The page is not told an async table's pace (or no-deadline) yet: it signs nothing rather than pick one.
+    expect(createGameMessage(TEST_PIN, moneyView({ you: linked([CONSENT]), terms: { mode: "async" } }), VARIANTS, CONSENT)).toEqual({ ok: false, reason: expect.stringMatching(/async table's deadline/) });
+    const base = { maxPlayers: 3, rulesEngineVersion: 13, variantsDigest: "00".repeat(32), consentPubkey: CONSENT, joinTicket: TICKET };
+    expect(WALLET_EXECUTE.createGame({ ...base, mode: 1, deadline: { kind: "async_pace", allowanceSecs: 86_400 } })).toMatch(/"mode":"async",.*"deadline":\{"async_pace":\{"allowance_secs":86400\}\}\}\}$/);
+    expect(WALLET_EXECUTE.createGame({ ...base, mode: 1, deadline: { kind: "no_deadline" } })).toMatch(/"deadline":\{"no_deadline":\{\}\}\}\}$/);
+    for (const pace of [43_200, 86_400, 172_800, 259_200, 604_800]) expect(() => WALLET_EXECUTE.createGame({ ...base, mode: 1, deadline: { kind: "async_pace", allowanceSecs: pace } })).not.toThrow();
+    expect(() => WALLET_EXECUTE.createGame({ ...base, mode: 1, deadline: { kind: "async_pace", allowanceSecs: 3_600 } })).toThrow(/async paces/);
+    expect(() => WALLET_EXECUTE.createGame({ ...base, mode: 1, deadline: { kind: "live_action_clock" } })).toThrow(/live game/);
+    expect(() => WALLET_EXECUTE.createGame({ ...base, mode: 0, deadline: { kind: "no_deadline" } })).toThrow(/live action clock/);
+    expect(() => WALLET_EXECUTE.createGame({ ...base, mode: 0, deadline: undefined as never })).toThrow(/deadline/);
   });
 
   it("every other wallet message is the canonical builder's JSON, with funds only where the contract takes them", () => {
@@ -171,6 +186,8 @@ describe("ESCROW-4: the chain game, read by this browser, must be exactly the ta
     trustedSeq: null,
     settlement: null,
     bond: null,
+    policy: "timed_remedy_v1",
+    allowanceSecs: 1200,
     challengeWindowEndMs: null,
     resolverTimeoutAtMs: null,
     resolverTimeoutSecs: null,
@@ -189,5 +206,15 @@ describe("ESCROW-4: the chain game, read by this browser, must be exactly the ta
     expect(problem({ rulesEngineVersion: 10 })).toMatch(/different rules version/);
     expect(problem({ variantsDigest: "00".repeat(32) })).toMatch(/different house rules/);
     expect(problem({ seats: [...facts.seats, { wallet: TEST_WALLET, joinTicket: TICKET, consentPubkey: CONSENT }] })).toMatch(/already holds a seat/);
+    // FP4 (escrow 2.1.0): the deposit funds the game under its exit policy -- the Live 20-minute action clock only.
+    expect(problem({ policy: null })).toMatch(/deadline terms/);
+    expect(problem({ policy: "no_deadline", allowanceSecs: 0 })).toMatch(/deadline terms/);
+    expect(problem({ allowanceSecs: 86_400 })).toMatch(/deadline terms/);
+  });
+
+  it("FP4: the chain's exit policy and allowance are read from the game's terms", () => {
+    const read = chainGameFactsOf({ game: { state: "funding", creator: "c", max_players: 2, mode: "live", rules_engine_version: 13, variants_digest: "ab", denom: "u", ante_gross: "1", seats: [], terms: { policy: "timed_remedy_v1", allowance_secs: 1200 } }, deadlines: {} });
+    expect(read).toMatchObject({ policy: "timed_remedy_v1", allowanceSecs: 1200 });
+    expect(chainGameFactsOf({ game: { state: "funding", creator: "c", max_players: 2, mode: "live", rules_engine_version: 13, variants_digest: "ab", denom: "u", ante_gross: "1", seats: [] }, deadlines: {} })).toMatchObject({ policy: null, allowanceSecs: null });
   });
 });

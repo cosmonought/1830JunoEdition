@@ -1,7 +1,7 @@
 //! The storage-only shape of a game (ESCROW-2.3).
 //!
 //! Handlers, queries and the schema only ever see the public [`Game`]. Under
-//! `GAMES` a game is stored as a [`StoredGame`]: the same 28 fields (27 in 2.0.0), with the
+//! `GAMES` a game is stored as a [`StoredGame`]: the same 29 fields (27 in 2.0.0), with the
 //! same names and the same JSON encodings, regrouped into four nested objects:
 //!
 //! | group      | fields |
@@ -9,7 +9,7 @@
 //! | `created`  | chain_game_id, creator, max_players, mode, rules_engine_version, variants_digest, denom, terms, created_at, funding_deadline |
 //! | `money`    | ante_gross, subsidy_per_seat, ante_net, pool, bond |
 //! | `roster`   | seats, roster_hash, domain, resolver, started_at |
-//! | `progress` | state, last_activity, last_seq, settlement, consent_bitmap, dispute, outcome, review_request |
+//! | `progress` | state, last_activity, last_seq, settlement, consent_bitmap, dispute, outcome, review_request, remedy |
 //!
 //! Why: CosmWasm VM 2.2.9 / 3.0.9 (wasmvm v2.2.8 / v3.0.7) refuse a contract
 //! with a function that declares more than 100 locals. The derived visitor of
@@ -35,9 +35,11 @@
 //! * No compatibility with the previous flat JSON: nothing was ever deployed,
 //!   so there is no stored state to migrate. That is the only reason this
 //!   storage change needs no migration.
-//! * Escrow 2.1.0 adds two fields, both optional and read as absent from a
-//!   game stored by 2.0.0 code: `terms.policy` (inside `created`) and
-//!   `progress.review_request`. A 2.0.0 game read by this code therefore has
+//! * Escrow 2.1.0 adds fields that are all optional or defaulted and read as
+//!   absent from a game stored by 2.0.0 code: `terms.policy`,
+//!   `terms.review_delay_secs`, `terms.allowance_secs`,
+//!   `terms.cure_window_secs` (inside `created`), `progress.review_request` and
+//!   `progress.remedy` (boxed). A 2.0.0 game read by this code therefore has
 //!   `policy == None` and keeps 2.0.0 semantics (`state::GamePolicy`); nothing
 //!   else in the stored shape changed.
 use cosmwasm_schema::cw_serde;
@@ -48,7 +50,8 @@ use cw_storage_plus::{Bound, Map};
 use serde::Serialize;
 
 use crate::state::{
-    DisputeRecord, Game, GameState, GameTerms, Mode, Outcome, ReviewRequest, Seat, SettlementRecord,
+    DisputeRecord, Game, GameState, GameTerms, Mode, Outcome, RemedyRecord, ReviewRequest, Seat,
+    SettlementRecord,
 };
 
 /// `chain_game_id` → the game in its storage-only shape.
@@ -140,6 +143,9 @@ struct StoredProgress {
     /// Escrow 2.1.0; absent in a game stored by 2.0.0 code (read as `None`).
     #[serde(default)]
     review_request: Option<ReviewRequest>,
+    /// Escrow 2.1.0; absent in a game stored by 2.0.0 code (read as `None`).
+    #[serde(default)]
+    remedy: Option<Box<RemedyRecord>>,
 }
 
 // A destructured field left unused is a dropped field: refuse to compile.
@@ -175,6 +181,7 @@ impl From<Game> for StoredGame {
             dispute,
             outcome,
             review_request,
+            remedy,
         } = game;
         StoredGame {
             created: Box::new(StoredCreated {
@@ -212,6 +219,7 @@ impl From<Game> for StoredGame {
                 dispute: dispute.map(Box::new),
                 outcome: outcome.map(Box::new),
                 review_request,
+                remedy: remedy.map(Box::new),
             }),
         }
     }
@@ -262,6 +270,7 @@ impl From<StoredGame> for Game {
             dispute,
             outcome,
             review_request,
+            remedy,
         } = *progress;
         Game {
             chain_game_id,
@@ -292,6 +301,7 @@ impl From<StoredGame> for Game {
             dispute: dispute.map(|d| *d),
             outcome: outcome.map(|o| *o),
             review_request,
+            remedy: remedy.map(|r| *r),
         }
     }
 }
@@ -348,6 +358,7 @@ struct ProgressView<'a> {
     dispute: &'a Option<DisputeRecord>,
     outcome: &'a Option<Outcome>,
     review_request: &'a Option<ReviewRequest>,
+    remedy: &'a Option<RemedyRecord>,
 }
 
 // A destructured field left unused is a dropped field: refuse to compile.
@@ -383,6 +394,7 @@ impl<'a> From<&'a Game> for StoredGameView<'a> {
             dispute,
             outcome,
             review_request,
+            remedy,
         } = game;
         StoredGameView {
             created: CreatedView {
@@ -420,6 +432,7 @@ impl<'a> From<&'a Game> for StoredGameView<'a> {
                 dispute,
                 outcome,
                 review_request,
+                remedy,
             },
         }
     }

@@ -36,14 +36,16 @@ use cosmwasm_vm::{
 };
 use eighteen_cosmos_escrow::crypto;
 use eighteen_cosmos_escrow::msg::{
-    CheckpointsResponse, ExecuteMsg, GameResponse, InstantiateMsg, JoinAdmission, QueryMsg,
-    ResolveOutcome, SeatSignature, SettlementPayloadV1, SignedCheckpoint,
+    CheckpointsResponse, DeadlineChoice, ExecuteMsg, GameResponse, InstantiateMsg, JoinAdmission,
+    QueryMsg, RemedyAttestationV1, ResolveOutcome, SeatSignature, SettlementPayloadV1,
+    SignedCheckpoint,
 };
 use eighteen_cosmos_escrow::payload::{
     Payload, KIND_CHECKPOINT, KIND_TERMINAL, REASON_BANK_BROKEN, REASON_RESOLVER_CORRECTION,
     REASON_ROUND_BOUNDARY,
 };
-use eighteen_cosmos_escrow::state::{GameParams, Mode};
+use eighteen_cosmos_escrow::remedy::RemedyAttestation;
+use eighteen_cosmos_escrow::state::{GameParams, GameState, Mode};
 use k256::ecdsa::signature::hazmat::PrehashSigner;
 use k256::ecdsa::{Signature, SigningKey};
 use serde_json::{json, Value};
@@ -192,6 +194,10 @@ impl Key {
     fn admission(n: usize) -> Key {
         Key::from_label(&format!("18JUNO/TEST/admission/{n}"))
     }
+    /// The REMEDY attestation key (escrow 2.1.0), the contract tests' label.
+    fn remedy(n: usize) -> Key {
+        Key::from_label(&format!("18JUNO/TEST/remedy/{n}"))
+    }
     fn sign(&self, digest: &[u8; 32]) -> HexBinary {
         let sig: Signature = self.sk.sign_prehash(digest).unwrap();
         let sig = sig.normalize_s().unwrap_or(sig);
@@ -220,7 +226,6 @@ fn params() -> GameParams {
         funding_period_async_secs: 7 * DAY,
         liveness_window_secs: 14 * DAY,
         resolver_timeout_secs: 30 * DAY,
-        review_delay_secs: 7 * DAY,
     }
 }
 
@@ -384,6 +389,7 @@ impl World {
             params: params(),
             signer_keys: vec![Key::signer(1).pubkey],
             admission_pubkey: Key::admission(1).pubkey,
+            remedy_keys: vec![Key::remedy(1).pubkey],
         })
         .unwrap();
         let admin = w.admin.clone();
@@ -460,6 +466,13 @@ impl World {
             }),
             None => Err(v["error"].as_str().unwrap_or("?").to_string()),
         }
+    }
+
+    /// A refusal is an answer here (the contract's error text), never a panic.
+    fn try_exec(&mut self, sender: &str, msg: &ExecuteMsg, funds: u128) -> Result<Outcome, String> {
+        let bytes = serde_json::to_vec(msg).unwrap();
+        let sender = sender.to_string();
+        self.run(Call::Execute(&sender, &bytes, funds))
     }
 
     fn exec(&mut self, sender: &str, msg: &ExecuteMsg, funds: u128) -> Outcome {
@@ -575,20 +588,32 @@ impl World {
 
     // -------------------------------------------------------------- funding
     fn create_msg(max_players: u8, seat: usize) -> ExecuteMsg {
+        Self::create_msg_with(
+            max_players,
+            seat,
+            Mode::Live,
+            DeadlineChoice::LiveActionClock {},
+        )
+    }
+
+    /// Escrow 2.1.0: every game is created with its deadline class (a Live
+    /// game the 20-minute action clock; an Async game a pace or none).
+    fn create_msg_with(
+        max_players: u8,
+        seat: usize,
+        mode: Mode,
+        deadline: DeadlineChoice,
+    ) -> ExecuteMsg {
         ExecuteMsg::CreateGame {
             max_players,
-            mode: Mode::Live,
+            mode,
             rules_engine_version: 10,
             variants_digest: HexBinary::from(sha256(&[b"18JUNO/TEST/variants"]).as_slice()),
             consent_pubkey: Key::seat(seat).pubkey,
             join_ticket: HexBinary::from(
                 sha256(&[b"18JUNO/TEST/ticket/", &[seat as u8]]).as_slice(),
             ),
-            // Escrow 2.1.0: a Timed game. NOTE: the "in_progress" LivenessSettle
-            // rows below are escrow 2.0.0 paths; a 2.1.0 artifact refuses them
-            // (`LivenessExitRemoved`), so they must be reworked (and the 2.1.0
-            // review rows added) at the 2.1.0 canonical-artifact gate.
-            no_deadline: false,
+            deadline,
         }
     }
 
@@ -634,6 +659,26 @@ impl World {
         for s in 1..n {
             self.join(id, s);
         }
+        id
+    }
+
+    /// Escrow 2.1.0: a started Timed Async game at `pace` seconds.
+    fn started_async(&mut self, n: usize, pace: u64) -> u64 {
+        let p0 = self.players[0].clone();
+        let msg = Self::create_msg_with(
+            n as u8,
+            0,
+            Mode::Async,
+            DeadlineChoice::AsyncPace {
+                allowance_secs: pace,
+            },
+        );
+        let out = self.exec(&p0, &msg, ANTE);
+        let id: u64 = attr(&out.ok, "chain_game_id").parse().unwrap();
+        for s in 1..n {
+            self.join(id, s);
+        }
+        self.start(id);
         id
     }
 
@@ -851,6 +896,100 @@ impl World {
             },
             0,
         )
+    }
+
+    /// Escrow 2.1.0: a FINAL `SubmitRemedy` for `id` (remedy key 1; the
+    /// overdue as late as the cure window allows, block time moved to its
+    /// finality when needed), with every non-defaulting seat's REMEDY-APPROVE
+    /// where the kind needs them (2, 4, 5).
+    fn remedy_msg(&mut self, id: u64, remedy: u8, defaulting: u8, log_len: u64) -> ExecuteMsg {
+        let g = self.game(id).game;
+        let n = g.seats.len();
+        let started = g.started_at.unwrap().seconds();
+        let cure = if matches!(remedy, 1 | 2) {
+            g.terms.cure_window_secs
+        } else {
+            0
+        };
+        // No overdue before one whole allowance has run since the start.
+        let overdue_at = self
+            .time
+            .saturating_sub(cure)
+            .max(started + g.terms.allowance_secs);
+        let final_at = overdue_at + cure;
+        if self.time < final_at {
+            self.advance(final_at - self.time);
+        }
+        let strike = match remedy {
+            1 | 2 => 1,
+            3 => 3,
+            _ => 0,
+        };
+        let domain: [u8; 32] = g.domain.unwrap().as_slice().try_into().unwrap();
+        let a = RemedyAttestation {
+            version: 1,
+            domain,
+            chain_game_id: id,
+            remedy,
+            defaulting_seat: defaulting,
+            strike,
+            overdue_epoch: 1,
+            log_len,
+            log_hash: sha256(&[b"log", &log_len.to_be_bytes()]),
+            allowance_secs: g.terms.allowance_secs,
+            overdue_at,
+            final_at,
+            attested_at: self.time,
+            expires_at: self.time + 3_600,
+            evidence_hash: sha256(&[b"remedy-evidence"]),
+            remedy_key_id: 1,
+        };
+        let approvals = if matches!(remedy, 2 | 4 | 5) {
+            (0..n as u8)
+                .filter(|&i| i != defaulting)
+                .map(|i| SeatSignature {
+                    seat_index: i,
+                    signature: Key::seat(usize::from(i)).sign(&crypto::remedy_approve_digest(
+                        &domain,
+                        id,
+                        remedy,
+                        defaulting,
+                        strike,
+                        1,
+                        log_len,
+                        &a.log_hash,
+                        overdue_at,
+                        i,
+                    )),
+                })
+                .collect()
+        } else {
+            vec![]
+        };
+        ExecuteMsg::SubmitRemedy {
+            chain_game_id: id,
+            attestation: RemedyAttestationV1::from(&a),
+            signature: Key::remedy(1).sign(&crypto::remedy_digest(&a.encode().unwrap())),
+            approvals,
+        }
+    }
+
+    /// Relays a FINAL remedy (anyone may) and checks the state it reached.
+    fn remedy(&mut self, id: u64, remedy: u8, defaulting: u8, log_len: u64) -> Outcome {
+        let msg = self.remedy_msg(id, remedy, defaulting, log_len);
+        let who = self.outsider.clone();
+        let out = self.exec(&who, &msg, 0);
+        let expected = match remedy {
+            1 | 4 => GameState::Annulled,
+            2 | 5 => GameState::Settled,
+            _ => GameState::Settleable,
+        };
+        assert_eq!(self.game(id).game.state, expected, "remedy {remedy}");
+        out
+    }
+
+    fn state(&mut self, id: u64) -> GameState {
+        self.game(id).game.state
     }
 
     /// Every stored record, grouped by cw-storage-plus namespace.
@@ -1133,28 +1272,113 @@ fn main() {
             &out,
         );
 
-        // LivenessSettle from IN_PROGRESS.
+        // Escrow 2.1.0: no IN_PROGRESS LivenessSettle (`LivenessExitRemoved`);
+        // the timed remedies, the exceptional review and the unanimous
+        // annulment are the in-progress exits.
         let gl = w.started(7);
         w.checkpoint(gl, 10, 7, 1);
-        let gr = w.started(7);
         w.advance(14 * DAY + 60);
-        let p = w.payload(gl, KIND_CHECKPOINT, REASON_ROUND_BOUNDARY, 40, 7, 1);
-        let (payload, signature) = w.signed(&p);
-        let out = w.liveness(gl, Some(SignedCheckpoint { payload, signature }));
+        let seat = w.players[1].clone();
+        let refused = w.try_exec(
+            &seat,
+            &ExecuteMsg::LivenessSettle {
+                chain_game_id: gl,
+                checkpoint: None,
+            },
+            0,
+        );
+        assert!(
+            refused
+                .err()
+                .is_some_and(|e| e.contains("no in-progress inactivity exit")),
+            "2.1.0 refuses the in-progress liveness exit"
+        );
+        assert_eq!(w.state(gl), GameState::InProgress);
+
+        let g1 = w.started(7);
+        w.checkpoint(g1, 10, 7, 1);
+        let out = w.remedy(g1, 1, 6, 40);
         r.add(
             "in_progress",
-            "LivenessSettle carrying checkpoint",
-            "14 d idle; carried newer key-1 checkpoint recorded then promoted (→ SETTLEABLE)",
+            "SubmitRemedy: Live TimeoutAnnul (1)",
+            "remedy key verify, no approvals, 1 checkpoint: refunds 7 (→ ANNULLED)",
             7,
             1,
             1,
             &out,
         );
-        let out = w.liveness(gr, None);
+        let g2 = w.started(7);
+        let out = w.remedy(g2, 2, 6, 40);
         r.add(
             "in_progress",
-            "LivenessSettle (no evidence)",
-            "14 d idle, no checkpoint: refunds 7 net deposits",
+            "SubmitRemedy: Live foreclosure (2)",
+            "remedy key + 6 seat approvals (7 secp256k1 verifies): pays 6 + treasury remainder (→ SETTLED)",
+            7,
+            1,
+            0,
+            &out,
+        );
+        let g3 = w.started(7);
+        let out = w.remedy(g3, 3, 6, 40);
+        r.add(
+            "in_progress",
+            "SubmitRemedy: third strike (3)",
+            "remedy key verify: stores the challengeable foreclosure (→ SETTLEABLE)",
+            7,
+            1,
+            0,
+            &out,
+        );
+        let g5 = w.started_async(7, DAY);
+        let out = w.remedy(g5, 5, 0, 40);
+        r.add(
+            "in_progress",
+            "SubmitRemedy: Timed Async foreclosure (5)",
+            "24 h pace; remedy key + 6 seat approvals: pays 6 + treasury remainder (→ SETTLED)",
+            7,
+            1,
+            0,
+            &out,
+        );
+        let g4 = w.started_async(7, 7 * DAY);
+        let out = w.remedy(g4, 4, 3, 40);
+        r.add(
+            "in_progress",
+            "SubmitRemedy: Timed Async annulment (4)",
+            "7 d pace; remedy key + 6 seat approvals: refunds 7 (→ ANNULLED)",
+            7,
+            1,
+            0,
+            &out,
+        );
+        let grv = w.started(7);
+        let seat = w.players[2].clone();
+        let out = w.exec(&seat, &ExecuteMsg::RequestReview { chain_game_id: grv }, 0);
+        r.add(
+            "in_progress",
+            "RequestReview",
+            "a seated wallet asks for the exceptional review (first request recorded)",
+            7,
+            1,
+            0,
+            &out,
+        );
+        let requested_at = w.game(grv).game.review_request.unwrap().requested_at;
+        w.advance(7 * DAY + 60);
+        let resolver = w.resolver.clone();
+        let out = w.exec(
+            &resolver,
+            &ExecuteMsg::ReviewAnnul {
+                chain_game_id: grv,
+                requested_at,
+            },
+            0,
+        );
+        assert_eq!(w.state(grv), GameState::Annulled);
+        r.add(
+            "in_progress",
+            "ReviewAnnul",
+            "the resolver, 7 d after the request: refunds 7 (→ ANNULLED)",
             7,
             1,
             0,
@@ -1241,10 +1465,11 @@ fn main() {
             &out,
         );
         let out = w.liveness(gcf, None);
+        assert_eq!(w.state(gcf), GameState::Cancelled);
         r.add(
             "settleable",
-            "LivenessSettle, compromised → checkpoint",
-            "settlement key 3 compromised; promotes key-2 checkpoint (→ fresh SETTLEABLE)",
+            "LivenessSettle, compromised (a key-2 checkpoint held)",
+            "settlement key 3 compromised: refunds 7 (a 2.1.0 game never promotes a checkpoint)",
             7,
             3,
             1,
@@ -1333,6 +1558,22 @@ fn main() {
             "disputed",
             "LivenessSettle, resolver timeout",
             "30 d without resolution: pays stored (trusted) + bond back",
+            7,
+            1,
+            0,
+            &out,
+        );
+
+        // Escrow 2.1.0: the universal unanimous annulment reaches DISPUTED.
+        let gda = w.started(7);
+        w.settle(gda, 30, 7, 1, &[]);
+        w.challenge(gda);
+        let out = w.annul(gda, 7);
+        assert_eq!(w.state(gda), GameState::Annulled);
+        r.add(
+            "disputed",
+            "AnnulByConsent",
+            "7 seat signatures while DISPUTED: refunds 7, the bond back to the challenger",
             7,
             1,
             0,
@@ -1527,21 +1768,13 @@ fn main() {
         // C: settlement under key k, later compromised.
         w.settle(gc, ll + 5, 7, k as u16, &[]);
         w.advance(14 * DAY + 60);
-        // B: carried checkpoint under key k (still active).
-        let p = w.payload(
-            gb,
-            KIND_CHECKPOINT,
-            REASON_ROUND_BOUNDARY,
-            ll + 7,
-            7,
-            k as u16,
-        );
-        let (payload, signature) = w.signed(&p);
-        let out = w.liveness(gb, Some(SignedCheckpoint { payload, signature }));
+        // B: a Live TimeoutAnnul over k checkpoints (the trusted-sequence
+        // scan is the remedy's k-dependent work).
+        let out = w.remedy(gb, 1, 6, ll + 7);
         r.add(
             "scaling",
-            "LivenessSettle carrying checkpoint",
-            &format!("IN_PROGRESS, {k} checkpoints"),
+            "SubmitRemedy: Live TimeoutAnnul",
+            &format!("IN_PROGRESS, {k} checkpoints scanned for the trusted sequence"),
             7,
             k,
             k,
@@ -1559,15 +1792,11 @@ fn main() {
         );
         w.advance(DAY + 60);
         let out = w.liveness(gc, None);
-        let route = if k == 1 {
-            "refund (no trusted checkpoint)"
-        } else {
-            "promotes best of k−1 trusted"
-        };
+        assert_eq!(w.state(gc), GameState::Cancelled);
         r.add(
             "scaling",
             "LivenessSettle, compromised settlement",
-            &format!("{k} checkpoints scanned, key {k} skipped: {route}"),
+            &format!("{k} checkpoints held, key {k} compromised: refund (2.1.0 promotes none)"),
             7,
             k,
             k,

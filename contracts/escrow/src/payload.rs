@@ -340,9 +340,9 @@ impl TryFrom<&Payload> for SettlementPayloadV1 {
 }
 
 /// Bounds-checked big-endian reader for [`Payload::decode`].
-struct Reader<'a> {
-    bytes: &'a [u8],
-    pos: usize,
+pub(crate) struct Reader<'a> {
+    pub(crate) bytes: &'a [u8],
+    pub(crate) pos: usize,
 }
 
 impl<'a> Reader<'a> {
@@ -361,29 +361,29 @@ impl<'a> Reader<'a> {
         Ok(out)
     }
 
-    fn u8(&mut self) -> Result<u8, ContractError> {
+    pub(crate) fn u8(&mut self) -> Result<u8, ContractError> {
         Ok(self.take(1)?[0])
     }
 
-    fn u16(&mut self) -> Result<u16, ContractError> {
+    pub(crate) fn u16(&mut self) -> Result<u16, ContractError> {
         let mut buf = [0u8; 2];
         buf.copy_from_slice(self.take(2)?);
         Ok(u16::from_be_bytes(buf))
     }
 
-    fn u64(&mut self) -> Result<u64, ContractError> {
+    pub(crate) fn u64(&mut self) -> Result<u64, ContractError> {
         let mut buf = [0u8; 8];
         buf.copy_from_slice(self.take(8)?);
         Ok(u64::from_be_bytes(buf))
     }
 
-    fn u128(&mut self) -> Result<u128, ContractError> {
+    pub(crate) fn u128(&mut self) -> Result<u128, ContractError> {
         let mut buf = [0u8; 16];
         buf.copy_from_slice(self.take(16)?);
         Ok(u128::from_be_bytes(buf))
     }
 
-    fn array32(&mut self) -> Result<[u8; 32], ContractError> {
+    pub(crate) fn array32(&mut self) -> Result<[u8; 32], ContractError> {
         let mut buf = [0u8; 32];
         buf.copy_from_slice(self.take(32)?);
         Ok(buf)

@@ -28,14 +28,15 @@ use cosmwasm_std::{
     Addr, Api, BankMsg, Coin, HexBinary, MessageInfo, Order, Storage, Timestamp, Uint128, Uint64,
 };
 
-use crate::crypto::{check_signature, consent_digest};
+use crate::crypto::{check_signature, consent_digest, remedy_approve_digest};
 use crate::error::ContractError;
 use crate::msg::SeatSignature;
 use crate::payload::{fixed_bytes, Payload, PayloadUse};
-use crate::payout::{proportional_split, weights_have_positive_sum};
+use crate::payout::{foreclosure_split, proportional_split, weights_have_positive_sum};
+use crate::remedy::RemedyAttestation;
 use crate::state::{
-    CheckpointRecord, Config, Game, GameState, Outcome, PayloadRecord, Route, SignerKey,
-    CHECKPOINTS, SIGNER_KEYS,
+    CheckpointRecord, Config, Game, GameState, Outcome, PayloadRecord, RemedyKey, Route,
+    SettlementRecord, SettlementSource, SignerKey, CHECKPOINTS, REMEDY_KEYS, SIGNER_KEYS,
 };
 
 /// Roster bounds (A3: Level Playing Field money rooms may seat 7).
@@ -222,6 +223,43 @@ pub fn key_is_trusted(storage: &dyn Storage, key_id: u16) -> Result<bool, Contra
     })
 }
 
+/// A registered, unretired REMEDY key (escrow 2.1.0).
+pub fn active_remedy_key(storage: &dyn Storage, key_id: u16) -> Result<RemedyKey, ContractError> {
+    let key = REMEDY_KEYS
+        .may_load(storage, key_id)?
+        .ok_or(ContractError::UnknownRemedyKey { key_id })?;
+    if key.retired_at.is_some() {
+        return Err(ContractError::RetiredRemedyKey { key_id });
+    }
+    Ok(key)
+}
+
+/// `false` if the remedy key was retired as compromised (or is unknown).
+pub fn remedy_key_is_trusted(storage: &dyn Storage, key_id: u16) -> Result<bool, ContractError> {
+    Ok(match REMEDY_KEYS.may_load(storage, key_id)? {
+        Some(key) => !key.compromised,
+        None => false,
+    })
+}
+
+/// Whether a stored settlement still has payout authority: its signing key,
+/// looked up in the registry its source names (a third-strike foreclosure in
+/// the remedy registry, everything else in the signer registry), is not
+/// compromised. A resolver `Replace` is recorded under the payload's own
+/// `signer_key_id` and so follows that key, as in 2.0.0.
+pub fn settlement_is_trusted(
+    storage: &dyn Storage,
+    settlement: &SettlementRecord,
+) -> Result<bool, ContractError> {
+    let key_id = settlement.payload.signer_key_id;
+    match settlement.source {
+        SettlementSource::RemedyStrike3 => remedy_key_is_trusted(storage, key_id),
+        SettlementSource::TerminalPayload
+        | SettlementSource::LivenessCheckpoint
+        | SettlementSource::ResolverReplacement => key_is_trusted(storage, key_id),
+    }
+}
+
 /// The highest seq among this game's stored checkpoints whose signer key is not
 /// compromised (0 when there is none). The floor a resolver `Replace` must
 /// exceed: the disputed settlement itself never constrains its correction.
@@ -242,7 +280,7 @@ pub fn trusted_checkpoint_seq(
 pub fn trusted_seq(storage: &dyn Storage, game: &Game) -> Result<u64, ContractError> {
     let mut floor = trusted_checkpoint_seq(storage, game.chain_game_id)?;
     if let Some(settlement) = &game.settlement {
-        if key_is_trusted(storage, settlement.payload.signer_key_id)? {
+        if settlement_is_trusted(storage, settlement)? {
             floor = floor.max(settlement.payload.seq.u64());
         }
     }
@@ -254,17 +292,18 @@ pub fn trusted_seq(storage: &dyn Storage, game: &Game) -> Result<u64, ContractEr
 /// by `Finalize` and `Consent` before anything else is read or written, so a
 /// refusal moves no funds and changes no state.
 pub fn require_trusted_settlement(storage: &dyn Storage, game: &Game) -> Result<(), ContractError> {
-    let key_id = game
+    let settlement = game
         .settlement
         .as_ref()
-        .map(|s| s.payload.signer_key_id)
         .ok_or_else(|| ContractError::Invariant {
             reason: "no stored settlement".to_string(),
         })?;
-    if key_is_trusted(storage, key_id)? {
+    if settlement_is_trusted(storage, settlement)? {
         Ok(())
     } else {
-        Err(ContractError::CompromisedSettlement { key_id })
+        Err(ContractError::CompromisedSettlement {
+            key_id: settlement.payload.signer_key_id,
+        })
     }
 }
 
@@ -365,6 +404,73 @@ pub fn verify_seat_signatures(
     Ok(mask)
 }
 
+/// Escrow 2.1.0: verifies the REMEDY-APPROVE signatures carried by a
+/// `SubmitRemedy` that needs them. Each must come from a seat in range other
+/// than the defaulting one, at most once per seat, and verify against that
+/// seat's CURRENT consent key over the approval digest naming that seat; and
+/// every non-defaulting seat must be present (all N−1). Returns the bit mask
+/// of the approving seats.
+pub fn verify_remedy_approvals(
+    api: &dyn Api,
+    game: &Game,
+    attestation: &RemedyAttestation,
+    approvals: &[SeatSignature],
+) -> Result<u8, ContractError> {
+    let domain = game_domain(game)?;
+    let defaulting = usize::from(attestation.defaulting_seat);
+    let mut mask = 0u8;
+    for entry in approvals {
+        let index = usize::from(entry.seat_index);
+        let seat = game
+            .seats
+            .get(index)
+            .ok_or(ContractError::SeatIndexOutOfRange {
+                seat_index: entry.seat_index,
+            })?;
+        if index == defaulting {
+            return Err(ContractError::DefaulterCannotApprove {
+                seat_index: entry.seat_index,
+            });
+        }
+        let bit = seat_bit(index)?;
+        if mask & bit != 0 {
+            return Err(ContractError::DuplicateConsent {
+                seat_index: entry.seat_index,
+            });
+        }
+        let digest = remedy_approve_digest(
+            &domain,
+            game.chain_game_id,
+            attestation.remedy,
+            attestation.defaulting_seat,
+            attestation.strike,
+            attestation.overdue_epoch,
+            attestation.log_len,
+            &attestation.log_hash,
+            attestation.overdue_at,
+            entry.seat_index,
+        );
+        check_signature(
+            api,
+            &digest,
+            entry.signature.as_slice(),
+            seat.consent_pubkey.as_slice(),
+        )
+        .map_err(|_| ContractError::InvalidConsent {
+            seat_index: entry.seat_index,
+        })?;
+        mask |= bit;
+    }
+    for index in 0..game.seats.len() {
+        if index != defaulting && mask & seat_bit(index)? == 0 {
+            return Err(ContractError::MissingConsent {
+                seat_index: u8::try_from(index).map_err(|_| ContractError::Overflow {})?,
+            });
+        }
+    }
+    Ok(mask)
+}
+
 /// The consent digest for the game's stored settlement.
 pub fn stored_consent_digest(game: &Game) -> Result<[u8; 32], ContractError> {
     let settlement = game
@@ -445,6 +551,53 @@ pub fn pay_out(
         distributed: pool,
         bond_returned,
         bond_to_pool,
+    });
+    Ok(msgs)
+}
+
+/// Escrow 2.1.0 foreclosure (remedies 2 and 5): the defaulting seat receives
+/// 0, every other seat its own net deposit plus an equal share of the
+/// defaulting seat's, the remainder to the game's treasury
+/// (`payout::foreclosure_split`). No standings, no weights, no address from
+/// the remedy. The pool must equal the sum of net deposits. Zeroes the pool
+/// and moves the game to SETTLED.
+pub fn pay_foreclosure(
+    game: &mut Game,
+    defaulting: usize,
+    route: Route,
+    now: Timestamp,
+) -> Result<Vec<BankMsg>, ContractError> {
+    let mut total = Uint128::zero();
+    let mut nets = Vec::with_capacity(game.seats.len());
+    for seat in &game.seats {
+        total = total.checked_add(seat.net_deposit)?;
+        nets.push(seat.net_deposit);
+    }
+    if total != game.pool {
+        return Err(ContractError::Invariant {
+            reason: "pool differs from the sum of net deposits".to_string(),
+        });
+    }
+    let split = foreclosure_split(&nets, defaulting)?;
+    let mut msgs = Vec::with_capacity(game.seats.len().saturating_add(1));
+    for (seat, amount) in game.seats.iter().zip(split.amounts.iter()) {
+        if let Some(msg) = send(&seat.wallet, *amount, &game.denom) {
+            msgs.push(msg);
+        }
+    }
+    if let Some(msg) = send(&game.terms.treasury, split.dust, &game.denom) {
+        msgs.push(msg);
+    }
+    game.pool = Uint128::zero();
+    game.state = GameState::Settled;
+    game.outcome = Some(Outcome {
+        route,
+        at: now,
+        amounts: split.amounts,
+        dust: split.dust,
+        distributed: total,
+        bond_returned: Uint128::zero(),
+        bond_to_pool: Uint128::zero(),
     });
     Ok(msgs)
 }

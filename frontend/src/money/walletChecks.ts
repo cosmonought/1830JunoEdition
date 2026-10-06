@@ -168,8 +168,12 @@ export function createGameMessage(pin: PinnedEscrowDeployment, view: RoomMoneyVi
   } catch {
     return no("This table's rules can't be committed to an escrow, so nothing was signed.");
   }
+  /* FP4 (escrow 2.1.0): CreateGame names the table's deadline class, and the contract never picks one by default. A
+     live table's is the 20-minute action clock; an async table's pace (12 h .. 7 d) or no-deadline is the host's choice,
+     which this page is not told yet -- so it signs nothing for an async table rather than guess (server clock lane). */
+  if (view.terms.mode !== "live") return no("This async table's deadline (its pace, or no deadline) isn't set for the escrow yet, so nothing was signed.");
   const json = guard(() =>
-    WALLET_EXECUTE.createGame({ maxPlayers: view.terms.seats, mode: view.terms.mode === "live" ? 0 : 1, rulesEngineVersion: rules.value, variantsDigest: digest, consentPubkey: consentKey, joinTicket: link.ticket }),
+    WALLET_EXECUTE.createGame({ maxPlayers: view.terms.seats, mode: 0, rulesEngineVersion: rules.value, variantsDigest: digest, consentPubkey: consentKey, joinTicket: link.ticket, deadline: { kind: "live_action_clock" } }),
   );
   if (!json.ok) return json;
   return message("createGame", json.value, pin, { ante: view.terms.anteGross }, null, consentKey);
@@ -294,6 +298,10 @@ export interface ChainGameFacts {
   readonly settlement: { readonly seq: string; readonly payloadDigest: string } | null;
   /** W2-M (JX-6C): the escrow's challenge bond (base units), exactly what a Dispute must attach; null before Start. */
   readonly bond: string | null;
+  /** FP4 (escrow 2.1.0): the game's exit policy (`timed_remedy_v1`, `no_deadline`; null: stored by 2.0.0 code) and its
+   *  action allowance in seconds (0: none), as the chain froze them at CreateGame. */
+  readonly policy: string | null;
+  readonly allowanceSecs: number | null;
   /** W2-M (JX-6C): when the challenge window closes (ms; the chain gives it only while SETTLEABLE). */
   readonly challengeWindowEndMs: number | null;
   /** W2-M (JX-6E): when the resolver's time runs out (ms; the chain gives it only while DISPUTED). */
@@ -375,6 +383,8 @@ export function chainGameFactsOf(raw: unknown): ChainGameFacts | null {
     trustedSeq: decimal(r.trusted_seq),
     settlement: storedSeq !== null && storedDigest !== null ? { seq: storedSeq, payloadDigest: storedDigest } : null,
     bond: amount(g.bond),
+    policy: typeof terms.policy === "string" ? terms.policy : null,
+    allowanceSecs: secondsOf(terms.allowance_secs),
     challengeWindowEndMs: nanosToMs(d.challenge_window_end),
     resolverTimeoutAtMs: nanosToMs(d.resolver_timeout_at),
     resolverTimeoutSecs: secondsOf(terms.resolver_timeout_secs),
@@ -410,6 +420,9 @@ export function chainGameProblemForJoin(pin: PinnedEscrowDeployment, view: RoomM
   if (facts.fundingDeadlineMs !== null && facts.fundingDeadlineMs <= now) return "Funding for this table has closed on Juno, so nothing was sent.";
   if (facts.denom !== pin.denom || facts.anteGross !== view.terms.anteGross) return "The escrow on Juno asks for a different deposit than this table shows, so nothing was sent.";
   if (facts.maxPlayers !== view.terms.seats || facts.mode !== view.terms.mode) return "The escrow on Juno is for a different table (seats or pace), so nothing was sent.";
+  /* FP4 (escrow 2.1.0): a deposit funds a game under its exit policy. This page signs for a Live table on the 20-minute
+     action clock only (as its own CreateGame does); an async table's pace or no-deadline is not shown to it yet. */
+  if (facts.mode !== "live" || facts.policy !== "timed_remedy_v1" || facts.allowanceSecs !== 1200) return "The escrow on Juno doesn't use the deadline terms this page can show you, so nothing was sent.";
   if (view.terms.rulesEngineVersion === null || facts.rulesEngineVersion !== view.terms.rulesEngineVersion) return "The escrow on Juno commits to a different rules version than this table, so nothing was sent.";
   let digest: string;
   try {

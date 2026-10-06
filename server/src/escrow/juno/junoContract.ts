@@ -10,7 +10,8 @@
 // read on the server, and it changes nothing about it:
 //
 //   execute  (relayer)   start · checkpoint · settle (consents: [] -- relayed one by one, GNOLAND-1 F5) · consent ·
-//                        finalize · annul_by_consent. Never funds (every relayer route is non-payable).
+//                        finalize · annul_by_consent · (FP4, escrow 2.1.0) submit_remedy. Never funds (every relayer
+//                        route is non-payable).
 //   execute  (wallets)   create_game · join (with the server's admission) · withdraw · cancel · set_consent_key ·
 //                        challenge · liveness_settle -- built here for ESCROW-4's WalletRequest; the SERVER never signs
 //                        them (it signs only the admission DIGEST a join carries, `escrowService.authorizeJoin`).
@@ -63,6 +64,10 @@ export const RELAYER_EXECUTE = Object.freeze({
     execute("consent", u64Json(chainGameId, "chain_game_id"), { seat_index: seatSignatures([{ seat_index: seatIndex, signature: signatureHex }])[0].seat_index, signature: hexField(signatureHex, HEX64, "signature") }),
   finalize: (chainGameId: string) => execute("finalize", u64Json(chainGameId, "chain_game_id"), {}),
   annulByConsent: (chainGameId: string, consents: readonly SeatSignatureJson[]) => execute("annul_by_consent", u64Json(chainGameId, "chain_game_id"), { consents: seatSignatures(consents) }),
+  /** FP4 (escrow 2.1.0): the dedicated REMEDY key's attestation (`remedyAttestationWire`, junoRemedyV1.ts) and the
+   *  seats' REMEDY-APPROVE signatures (empty for remedies 1 and 3). Carries no address and no amount. */
+  submitRemedy: (chainGameId: string, attestation: Readonly<Record<string, string | number>>, signatureHex: string, approvals: readonly SeatSignatureJson[]) =>
+    execute("submit_remedy", u64Json(chainGameId, "chain_game_id"), { attestation, signature: hexField(signatureHex, HEX64, "signature"), approvals: seatSignatures(approvals) }),
 });
 
 export const QUERY = Object.freeze({
@@ -71,6 +76,8 @@ export const QUERY = Object.freeze({
   seats: (chainGameId: string) => `{"seats":{"chain_game_id":${u64Json(chainGameId, "chain_game_id")}}}`,
   checkpoints: (chainGameId: string) => `{"checkpoints":{"chain_game_id":${u64Json(chainGameId, "chain_game_id")}}}`,
   signerKeys: (startAfter: number | null, limit: number) => `{"signer_keys":{"start_after":${startAfter === null ? "null" : String(startAfter)},"limit":${limit}}}`,
+  /** FP4 (escrow 2.1.0): the REMEDY key registry, paged like the signer keys. */
+  remedyKeys: (startAfter: number | null, limit: number) => `{"remedy_keys":{"start_after":${startAfter === null ? "null" : String(startAfter)},"limit":${limit}}}`,
   settlementPreview: (chainGameId: string) => `{"settlement_preview":{"chain_game_id":${u64Json(chainGameId, "chain_game_id")}}}`,
   /** ESCROW-4: the contract's game list (ascending by id, at most 30 a page) -- how the server finds a host's CreateGame
    *  when the browser's hint was lost (the chain is the truth; the list only says where to look). */
@@ -158,6 +165,11 @@ export interface JunoGame {
   readonly terms: { readonly challenge_window_secs: string; readonly liveness_window_secs: string; readonly resolver_timeout_secs: string; readonly treasury: string; readonly subsidy_bps: number | null };
   /** ESCROW-4: the non-refundable fee taken from each deposit (base units), as the chain snapshotted it at CreateGame. */
   readonly subsidy_per_seat: string | null;
+  /** FP4 (escrow 2.1.0): the game's exit policy (`timed_remedy_v1`, `no_deadline`); null for a game stored by 2.0.0
+   *  code. Optional: absent from an answer that does not carry it. */
+  readonly policy?: string | null;
+  /** FP4: the accepted remedy, if any: which, against which seat, and the REMEDY digest the chain recorded. */
+  readonly remedy?: { readonly kind: string; readonly defaulting_seat: number; readonly remedy_digest: string; readonly final_at: string } | null;
 }
 
 export interface JunoGameResponse {
@@ -249,6 +261,15 @@ export function parseGameResponse(data: unknown): JunoGameResponse {
         subsidy_bps: orNull(terms.subsidy_bps, (v) => int(v, "terms.subsidy_bps", 10_000)),
       },
       subsidy_per_seat: orNull(g.subsidy_per_seat, (v) => dec(v, "game.subsidy_per_seat")),
+      policy: orNull(terms.policy, (v) => str(v, "terms.policy")),
+      remedy: isObject(g.remedy)
+        ? {
+            kind: str(g.remedy.kind, "remedy.kind"),
+            defaulting_seat: int(g.remedy.defaulting_seat, "remedy.defaulting_seat", 6),
+            remedy_digest: hexOf(g.remedy.remedy_digest, HEX32, "remedy.remedy_digest"),
+            final_at: dec(g.remedy.final_at, "remedy.final_at"),
+          }
+        : null,
     },
     paused: need(typeof data.paused === "boolean", data.paused as boolean, "paused"),
     trusted_seq: dec(data.trusted_seq, "trusted_seq"),
@@ -388,6 +409,12 @@ export function parseSignerKeysResponse(data: unknown): readonly JunoSignerKey[]
   });
 }
 
+/** FP4 (escrow 2.1.0): one page of the REMEDY key registry (the same shape as the signer keys). */
+export function parseRemedyKeysResponse(data: unknown): readonly JunoSignerKey[] {
+  if (!isObject(data) || !Array.isArray(data.keys) || data.keys.length > 64) throw new JunoAbiError("the remedy_keys answer is not a RemedyKeysResponse");
+  return parseSignerKeysResponse(data);
+}
+
 /* ------------------------------------------------------------------ */
 /* Refusals: error.rs Display templates -> ContractError variant        */
 /* ------------------------------------------------------------------ */
@@ -451,6 +478,30 @@ export const JUNO_ERROR_TEMPLATES: Readonly<Record<string, string>> = Object.fre
   InvalidAdmission: "the join admission does not authorize this wallet for this game",
   AdmissionExpired: "the join admission expired at {expires_at}",
   MigrateUnsupported: "cannot migrate from version {from}: its state predates this code; deploy a new contract",
+  LivenessExitRemoved: "this game's escrow policy has no in-progress inactivity exit (escrow 2.1)",
+  DeadlineNotForMode: "this deadline class does not suit the game's mode (live: live_action_clock; async: async_pace or no_deadline)",
+  BadAsyncPace: "async pace {got} s is not one of 43200, 86400, 172800, 259200, 604800",
+  ReviewNotAvailable: "the exceptional review is only for an escrow 2.1 game",
+  ReviewNotRequested: "no seated wallet has requested the review of game {chain_game_id}",
+  ReviewDelayNotElapsed: "the review delay has not elapsed; the review may be decided from {at}",
+  ResolverIsSeated: "the game's resolver holds a seat in it and cannot review it",
+  ReviewRequestMismatch: "the pending review request is the one made at {requested_at}, not the one decided",
+  RemedyNotAvailable: "this game's escrow policy has no timed remedies",
+  BadRemedyKind: "remedy {got} is unknown",
+  RemedyNotForMode: "remedy {remedy} does not apply to this game's mode",
+  BadStrike: "strike {strike} is not valid for remedy {remedy}",
+  AllowanceMismatch: "the attestation names allowance {got} s, the game was funded with {expected} s",
+  RemedyTiming: "the attestation's times are inconsistent: {reason}",
+  RemedyNotFinal: "the remedy is not final before {final_at}",
+  RemedyExpired: "the remedy attestation expired at {expires_at}",
+  MalformedRemedy: "remedy attestation is malformed: {reason}",
+  UnknownRemedyKey: "remedy key {key_id} is not registered",
+  RetiredRemedyKey: "remedy key {key_id} is retired",
+  DuplicateRemedyKey: "this public key is already registered as remedy key {key_id}",
+  ApprovalsNotAllowed: "remedy {remedy} carries no seat approvals",
+  DefaulterCannotApprove: "the defaulting seat {seat_index} cannot approve a remedy against itself",
+  RemedySettlementNotReplaceable: "a third-strike foreclosure can only be upheld or annulled, never replaced",
+  RemedyKeyIdsExhausted: "the remedy key registry is full",
 });
 
 const escapeRe = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

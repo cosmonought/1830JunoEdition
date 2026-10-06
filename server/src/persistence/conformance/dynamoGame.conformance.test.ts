@@ -395,7 +395,8 @@ const dynamoIntentSubject: IntentSubject = {
   name: "dynamodb (createDynamoIntentStore)",
   backend: "dynamodb",
   capabilities: [...DYNAMO_CAPABILITIES, "validates-shape"],
-  differences: { "INT-07-older": "CHAIN_INTENT_SCHEMA is 1, the first schema: no older intent can exist to plant (the memory marker exercises the class; the same reviewed difference as the file store)" },
+  /* FP4 (CHAIN_INTENT_SCHEMA 2): a protocol-3 intent (schema 1) is planted as the real older intent it is; the reviewed
+     INT-07-older difference is gone. */
   async open(ctx) {
     const epoch = ctx.fence.epoch;
     const store = createDynamoIntentStore({ ...(await options(ctx)), relayQueue: QUEUE });
@@ -416,7 +417,7 @@ const dynamoIntentSubject: IntentSubject = {
     return body(ctx, gamePk(game), `INTENT#${id}`);
   },
   async plant(ctx, game, id, what) {
-    const text = what === "corrupt" ? `{"format":"${CHAIN_INTENT_FORMAT}",` : JSON.stringify({ format: CHAIN_INTENT_FORMAT, schema: 9, game_id: game, intent_id: id });
+    const text = what === "corrupt" ? `{"format":"${CHAIN_INTENT_FORMAT}",` : JSON.stringify({ format: CHAIN_INTENT_FORMAT, schema: what === "older" ? 1 : 9, game_id: game, intent_id: id });
     await putRaw(ctx, { pk: S(gamePk(game)), sk: S(`INTENT#${id}`), body: S(text) });
   },
   ...intentHooks,

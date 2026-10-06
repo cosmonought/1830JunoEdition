@@ -295,6 +295,8 @@ const chainFacts = (over: Partial<ChainGameFacts> = {}): ChainGameFacts => ({
   trustedSeq: "23",
   settlement: { seq: "25", payloadDigest: DIGEST },
   bond: "500000",
+  policy: "timed_remedy_v1",
+  allowanceSecs: 1200,
   challengeWindowEndMs: T0 + 600_000,
   resolverTimeoutAtMs: null,
   resolverTimeoutSecs: 7_200,

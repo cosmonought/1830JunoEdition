@@ -1,12 +1,8 @@
-//! Escrow 2.1.0 (owner policy 2026-10-05): the per-game exit policy, the
-//! removed IN_PROGRESS standings exit, the No-deadline exceptional review, and
-//! the settled foreclosure arithmetic.
-//!
-//! What this build does NOT contain, by design: any timed default, overdue,
-//! cure or foreclosure path. The chain cannot see gameplay actions, and how an
-//! off-chain overdue fact would become trustworthy to the contract (the trust
-//! bridge) is an open owner decision. Only the money formula exists, as pure
-//! tested arithmetic (`payout::foreclosure_split`).
+//! Escrow 2.1.0 (owner policy 2026-10-05, remedies 2026-10-06): the per-game
+//! exit policy and deadline class, the removed IN_PROGRESS standings exit, the
+//! exceptional review (every 2.1.0 game, 7 days), and the settled foreclosure
+//! arithmetic. The timed remedies themselves (`SubmitRemedy`) and the universal
+//! unanimous annulment are in `tests/remedy.rs`.
 //!
 //! Adversarial focus: no message, role, pause, time or migration can give a
 //! 2.1.0 game an inactivity payout, a standings payout, a review outcome other
@@ -18,9 +14,12 @@ mod common;
 use common::*;
 use cosmwasm_std::{coins, Uint128};
 use cw_multi_test::Executor;
-use eighteen_cosmos_escrow::msg::{ExecuteMsg, SignedCheckpoint};
+use eighteen_cosmos_escrow::msg::{DeadlineChoice, ExecuteMsg, SignedCheckpoint};
 use eighteen_cosmos_escrow::payout::foreclosure_split;
-use eighteen_cosmos_escrow::state::{GamePolicy, GameState, Mode, Route, SettlementSource};
+use eighteen_cosmos_escrow::state::{
+    GamePolicy, GameState, Mode, RemedyKind, Route, SettlementSource, ASYNC_PACES_SECS,
+    LIVE_ACTION_SECS, LIVE_CURE_WINDOW_SECS, REVIEW_DELAY_SECS,
+};
 use eighteen_cosmos_escrow::ContractError;
 
 const YEARS_10: u64 = 10 * 365 * DAY;
@@ -57,36 +56,112 @@ fn review(
 fn create_records_the_policy_and_a_live_table_is_always_timed() {
     let mut s = Suite::new();
     let creator = s.players[0].clone();
-    for (mode, no_deadline, expected) in [
-        (Mode::Live, false, GamePolicy::TimedNoRemedies),
-        (Mode::Async, false, GamePolicy::TimedNoRemedies),
-        (Mode::Async, true, GamePolicy::NoDeadline),
-    ] {
+    let mut cases = vec![(
+        Mode::Live,
+        DeadlineChoice::LiveActionClock {},
+        GamePolicy::TimedRemedyV1,
+        LIVE_ACTION_SECS,
+        LIVE_CURE_WINDOW_SECS,
+    )];
+    for pace in ASYNC_PACES_SECS {
+        cases.push((
+            Mode::Async,
+            DeadlineChoice::AsyncPace {
+                allowance_secs: pace,
+            },
+            GamePolicy::TimedRemedyV1,
+            pace,
+            0,
+        ));
+    }
+    cases.push((
+        Mode::Async,
+        DeadlineChoice::NoDeadline {},
+        GamePolicy::NoDeadline,
+        0,
+        0,
+    ));
+    for (mode, deadline, expected, allowance, cure) in cases {
         let res = s
             .exec(
                 &creator,
-                &Suite::create_msg_with(3, mode, 0, no_deadline),
+                &Suite::create_msg_deadline(3, mode, 0, deadline),
                 &coins(ANTE, DENOM),
             )
             .unwrap();
         let id: u64 = attr(&res, "chain_game_id").parse().unwrap();
         assert_eq!(attr(&res, "policy"), expected.as_str());
-        assert_eq!(s.game(id).game.terms.policy, Some(expected));
-        assert_eq!(s.game(id).game.review_request, None);
+        assert_eq!(attr(&res, "allowance_secs"), allowance.to_string());
+        let g = s.game(id).game;
+        assert_eq!(g.terms.policy, Some(expected));
+        assert_eq!(g.terms.allowance_secs, allowance);
+        assert_eq!(g.terms.cure_window_secs, cure);
+        assert_eq!(g.terms.review_delay_secs, REVIEW_DELAY_SECS);
+        assert_eq!(g.review_request, None);
+        assert_eq!(g.remedy, None);
     }
-    // A Live table with no deadline is refused before any fund moves.
+    assert_eq!(LIVE_ACTION_SECS, 20 * 60);
+    assert_eq!(LIVE_CURE_WINDOW_SECS, 10 * 60);
+    assert_eq!(REVIEW_DELAY_SECS, 7 * DAY);
+    assert_eq!(
+        ASYNC_PACES_SECS,
+        [12 * HOUR, DAY, 2 * DAY, 3 * DAY, 7 * DAY]
+    );
+    // A deadline class that does not suit the mode, or an unlisted pace, is
+    // refused before any fund moves.
     let next = s.config().next_chain_game_id;
     let balance = s.balance(&creator);
     let treasury = s.balance(&s.treasury.clone());
-    assert_eq!(
-        s.exec(
-            &creator,
-            &Suite::create_msg_with(3, Mode::Live, 0, true),
-            &coins(ANTE, DENOM)
-        )
-        .unwrap_err(),
-        ContractError::NoDeadlineNeedsAsync {}
-    );
+    for (mode, deadline, err) in [
+        (
+            Mode::Live,
+            DeadlineChoice::NoDeadline {},
+            ContractError::DeadlineNotForMode {},
+        ),
+        (
+            Mode::Live,
+            DeadlineChoice::AsyncPace {
+                allowance_secs: DAY,
+            },
+            ContractError::DeadlineNotForMode {},
+        ),
+        (
+            Mode::Async,
+            DeadlineChoice::LiveActionClock {},
+            ContractError::DeadlineNotForMode {},
+        ),
+        (
+            Mode::Async,
+            DeadlineChoice::AsyncPace { allowance_secs: 0 },
+            ContractError::BadAsyncPace { got: 0 },
+        ),
+        (
+            Mode::Async,
+            DeadlineChoice::AsyncPace {
+                allowance_secs: DAY + 1,
+            },
+            ContractError::BadAsyncPace { got: DAY + 1 },
+        ),
+        (
+            Mode::Async,
+            DeadlineChoice::AsyncPace {
+                allowance_secs: LIVE_ACTION_SECS,
+            },
+            ContractError::BadAsyncPace {
+                got: LIVE_ACTION_SECS,
+            },
+        ),
+    ] {
+        assert_eq!(
+            s.exec(
+                &creator,
+                &Suite::create_msg_deadline(3, mode, 0, deadline),
+                &coins(ANTE, DENOM)
+            )
+            .unwrap_err(),
+            err
+        );
+    }
     assert_eq!(s.config().next_chain_game_id, next);
     assert_eq!(s.balance(&creator), balance);
     assert_eq!(s.balance(&s.treasury.clone()), treasury);
@@ -94,7 +169,7 @@ fn create_records_the_policy_and_a_live_table_is_always_timed() {
 }
 
 /// The deadline class is never chosen by default: the CreateGame JSON an
-/// escrow 2.0.0 client sends (no `no_deadline`) does not decode, so nothing is
+/// escrow 2.0.0 client sends (no `deadline`) does not decode, so nothing is
 /// created and no fund moves.
 #[test]
 fn the_escrow_2_0_create_json_without_a_deadline_class_is_refused() {
@@ -115,7 +190,7 @@ fn the_escrow_2_0_create_json_without_a_deadline_class_is_refused() {
         .execute_contract(creator.clone(), contract, &json, &coins(ANTE, DENOM))
         .unwrap_err();
     assert!(
-        format!("{err:?}").contains("missing field `no_deadline`"),
+        format!("{err:?}").contains("missing field `deadline`"),
         "{err:?}"
     );
     assert_eq!(s.balance(&creator), balance);
@@ -158,14 +233,15 @@ fn the_policy_is_frozen_at_create() {
     request(&mut s, nd, 2).unwrap();
     assert_eq!(
         s.game(timed).game.terms.policy,
-        Some(GamePolicy::TimedNoRemedies)
+        Some(GamePolicy::TimedRemedyV1)
     );
+    assert_eq!(s.game(timed).game.terms.allowance_secs, LIVE_ACTION_SECS);
     assert_eq!(s.game(nd).game.terms.policy, Some(GamePolicy::NoDeadline));
     // A game created after SetParams gets the new params, still a 2.1.0 policy.
     let later = s.started(2);
     assert_eq!(
         s.game(later).game.terms.policy,
-        Some(GamePolicy::TimedNoRemedies)
+        Some(GamePolicy::TimedRemedyV1)
     );
     assert_eq!(s.game(later).game.terms.liveness_window_secs, 1);
 }
@@ -604,26 +680,49 @@ fn the_first_review_request_wins_and_repeats_are_idempotent() {
     }
 }
 
-/// The review is only for No-deadline games: a Timed 2.1.0 game and a game
-/// stored by 2.0.0 code refuse both messages.
+/// The review is the neutral backstop of EVERY 2.1.0 game (owner policy,
+/// 2026-10-06): Live, Timed Async and No-deadline alike, with the same 7-day
+/// delay. A game stored by 2.0.0 code refuses both messages.
 #[test]
-fn the_review_is_only_for_no_deadline_games() {
+fn the_review_is_for_every_2_1_game_and_never_a_2_0_game() {
     let mut s = Suite::new();
-    let timed = s.started(3);
+    let live = s.started_with(3, Mode::Live, ANTE);
+    let timed_async = s.started_with(3, Mode::Async, ANTE);
+    let nd = no_deadline_game(&mut s, 3);
     let legacy = s.started(3);
     s.make_legacy(legacy);
     let resolver = s.resolver.clone();
-    for id in [timed, legacy] {
-        assert_eq!(
-            request(&mut s, id, 0).unwrap_err(),
-            ContractError::ReviewNotAvailable {}
-        );
+    assert_eq!(
+        request(&mut s, legacy, 0).unwrap_err(),
+        ContractError::ReviewNotAvailable {}
+    );
+    assert_eq!(
+        review(&mut s, legacy, &resolver).unwrap_err(),
+        ContractError::ReviewNotAvailable {}
+    );
+    for id in [live, timed_async, nd] {
+        assert_eq!(s.game(id).game.terms.review_delay_secs, 7 * DAY);
+        request(&mut s, id, 2).unwrap();
+    }
+    let at = s.now().plus_seconds(7 * DAY);
+    s.advance(7 * DAY - 1);
+    for id in [live, timed_async, nd] {
+        assert_eq!(s.game(id).deadlines.review_annul_available_at, Some(at));
         assert_eq!(
             review(&mut s, id, &resolver).unwrap_err(),
-            ContractError::ReviewNotAvailable {}
+            ContractError::ReviewDelayNotElapsed { at }
         );
-        assert_eq!(s.state(id), GameState::InProgress);
     }
+    s.advance(1);
+    for id in [live, timed_async, nd] {
+        review(&mut s, id, &resolver).unwrap();
+        let o = s.game(id).game.outcome.unwrap();
+        assert_eq!(o.route, Route::ReviewAnnul);
+        assert_eq!(o.amounts, vec![Uint128::new(NET); 3]);
+        assert!(o.dust.is_zero());
+    }
+    assert_eq!(s.state(legacy), GameState::InProgress);
+    s.assert_custody();
 }
 
 /// A finished result cannot be replaced by a review annulment: a request made
@@ -939,106 +1038,91 @@ fn an_emergency_repost_of_a_reached_boundary_keeps_the_request() {
     assert_eq!(s.game(id).game.review_request, None);
 }
 
-/// A configuration carried over from 2.0.0 has no review delay: no
-/// No-deadline game can be created until the admin sets one (a Timed game
-/// still can); `SetParams` refuses a zero delay.
+/// The review delay is the 7-day contract constant, the same for every 2.1.0
+/// policy and out of the admin's reach: `GameParams` has no such field, so a
+/// `SetParams` naming one does not decode, and no parameter change alters it.
 #[test]
-fn a_no_deadline_game_needs_a_configured_review_delay() {
+fn the_review_delay_is_a_seven_day_constant_no_parameter_can_change() {
     let mut s = Suite::new();
-    // The stored 2.0.0 `Config` has no `params.review_delay_secs`.
-    let mut config = serde_json::to_value(s.config().config).unwrap();
-    config["params"]
-        .as_object_mut()
-        .unwrap()
-        .remove("review_delay_secs")
-        .unwrap();
-    s.set_raw(b"config", &serde_json::to_vec(&config).unwrap());
-    assert_eq!(s.config().config.params.review_delay_secs, 0);
-    let creator = s.players[0].clone();
-    assert_eq!(
-        s.exec(
-            &creator,
-            &Suite::create_msg_with(2, Mode::Async, 0, true),
-            &coins(ANTE, DENOM)
-        )
-        .unwrap_err(),
-        ContractError::InvalidParams {
-            reason: "review_delay_secs is not configured".to_string()
-        }
-    );
-    let timed = s.create(0, 2, Mode::Async, ANTE);
-    assert_eq!(s.game(timed).game.terms.review_delay_secs, 0);
     let admin = s.admin.clone();
-    let mut params = default_params();
-    params.review_delay_secs = 0;
-    assert!(matches!(
-        s.exec(&admin, &ExecuteMsg::SetParams { params }, &[])
-            .unwrap_err(),
-        ContractError::InvalidParams { .. }
-    ));
-    s.exec(
-        &admin,
-        &ExecuteMsg::SetParams {
-            params: default_params(),
-        },
-        &[],
-    )
-    .unwrap();
-    let res = s
-        .exec(
-            &creator,
-            &Suite::create_msg_with(2, Mode::Async, 0, true),
-            &coins(ANTE, DENOM),
-        )
+    let contract = s.contract.clone();
+    let mut params = serde_json::to_value(default_params()).unwrap();
+    params["review_delay_secs"] = serde_json::json!(1);
+    let json = serde_json::json!({ "set_params": { "params": params } });
+    let err = s
+        .app
+        .execute_contract(admin.clone(), contract, &json, &[])
+        .unwrap_err();
+    assert!(format!("{err:?}").contains("unknown field"), "{err:?}");
+    let mut short = default_params();
+    short.liveness_window_secs = 1;
+    short.resolver_timeout_secs = 1;
+    s.exec(&admin, &ExecuteMsg::SetParams { params: short }, &[])
         .unwrap();
-    let id: u64 = attr(&res, "chain_game_id").parse().unwrap();
-    assert_eq!(s.game(id).game.terms.review_delay_secs, 7 * DAY);
-    s.assert_custody();
+    for (mode, no_deadline) in [
+        (Mode::Live, false),
+        (Mode::Async, false),
+        (Mode::Async, true),
+    ] {
+        s.no_deadline = no_deadline;
+        let id = s.started_with(2, mode, ANTE);
+        s.no_deadline = false;
+        assert_eq!(s.game(id).game.terms.review_delay_secs, 7 * DAY);
+    }
 }
 
-/// KNOWN GAP of this build, pinned so it cannot be forgotten (review R-1): a
-/// `TimedNoRemedies` game has no exit but completion and unanimity. One absent
-/// seat holds it indefinitely: no liveness exit, no review, no cancel, and
-/// N - 1 annul signatures fail. The timed remedies (pending the owner's
-/// trust-bridge decision) are what must close this before any Timed money
-/// table runs on 2.1.0.
+/// The R-1 gap of the previous build is closed: a Timed game with one absent
+/// seat now has non-unanimous exits (the Live 30:00 neutral annulment, the
+/// Timed Async N−1 annulment, and the review), while the standings exit, a
+/// cancel and an N−1 ANNUL stay refused.
 #[test]
-fn known_gap_a_timed_game_in_this_build_has_no_non_unanimous_exit() {
+fn a_timed_game_with_an_absent_seat_is_no_longer_held_indefinitely() {
     let mut s = Suite::new();
-    let id = s.started(3);
-    assert_eq!(
-        s.game(id).game.terms.policy,
-        Some(GamePolicy::TimedNoRemedies)
-    );
+    let live = s.started_with(3, Mode::Live, ANTE);
+    let timed_async = s.started_with(3, Mode::Async, ANTE);
     s.advance(YEARS_10);
-    assert_eq!(
-        s.liveness(id, 0, None).unwrap_err(),
-        ContractError::LivenessExitRemoved {}
-    );
-    assert_eq!(
-        request(&mut s, id, 0).unwrap_err(),
-        ContractError::ReviewNotAvailable {}
-    );
     let who = s.outsider.clone();
-    assert!(matches!(
-        s.exec(&who, &ExecuteMsg::Cancel { chain_game_id: id }, &[])
+    for id in [live, timed_async] {
+        assert_eq!(
+            s.liveness(id, 0, None).unwrap_err(),
+            ContractError::LivenessExitRemoved {}
+        );
+        assert!(matches!(
+            s.exec(&who, &ExecuteMsg::Cancel { chain_game_id: id }, &[])
+                .unwrap_err(),
+            ContractError::WrongState { .. }
+        ));
+        let consents = s.annul_sigs(id, &[0, 1], 0);
+        assert!(matches!(
+            s.exec(
+                &who,
+                &ExecuteMsg::AnnulByConsent {
+                    chain_game_id: id,
+                    consents
+                },
+                &[]
+            )
             .unwrap_err(),
-        ContractError::WrongState { .. }
-    ));
-    let consents = s.annul_sigs(id, &[0, 1], 0);
-    assert!(matches!(
-        s.exec(
-            &who,
-            &ExecuteMsg::AnnulByConsent {
-                chain_game_id: id,
-                consents
-            },
-            &[]
-        )
-        .unwrap_err(),
-        ContractError::MissingConsent { seat_index: 2 }
-    ));
-    assert_eq!(s.state(id), GameState::InProgress);
+            ContractError::MissingConsent { seat_index: 2 }
+        ));
+    }
+    // Seat 2 is absent. Live: the uncured overdue annuls neutrally at 30:00.
+    let a = s.attestation(live, RemedyKind::LiveTimeoutAnnul, 2, 0);
+    let msg = s.remedy_msg(&a);
+    s.submit(&msg).unwrap();
+    assert_eq!(
+        s.game(live).game.outcome.unwrap().route,
+        Route::RemedyTimeoutAnnul
+    );
+    // Timed Async: seats 0 and 1 approve the neutral annulment.
+    let a = s.attestation(timed_async, RemedyKind::AsyncAnnul, 2, 0);
+    let msg = s.remedy_msg(&a);
+    s.submit(&msg).unwrap();
+    assert_eq!(
+        s.game(timed_async).game.outcome.unwrap().route,
+        Route::RemedyAnnul
+    );
+    s.assert_custody();
 }
 
 // ========================================================== migration (2.0.0)
@@ -1074,7 +1158,7 @@ fn a_migrated_2_0_0_game_keeps_its_2_0_0_exit_and_new_games_get_2_1() {
     let new = s.started(3);
     assert_eq!(
         s.game(new).game.terms.policy,
-        Some(GamePolicy::TimedNoRemedies)
+        Some(GamePolicy::TimedRemedyV1)
     );
     s.advance(14 * DAY);
     // The new game has no IN_PROGRESS exit ...

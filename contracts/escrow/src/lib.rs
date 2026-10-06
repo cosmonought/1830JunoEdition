@@ -19,6 +19,7 @@ pub mod msg;
 pub mod payload;
 pub mod payout;
 pub mod query;
+pub mod remedy;
 pub mod state;
 mod storage;
 

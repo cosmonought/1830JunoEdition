@@ -50,7 +50,7 @@ import { checkSettlementKeyConfig, type SettlementKeyConfig } from "../escrowPor
 import type { FinancialDeploymentPin } from "../moneyLifecycle";
 import { addressOfPublicKey, bech32Decode } from "./cosmosTx";
 import { checkGasPolicy, DEFAULT_GAS_POLICY, type GasPolicy } from "./gasPolicy";
-import { parseConfigResponse, parseSignerKeysResponse, QUERY } from "./junoContract";
+import { parseConfigResponse, parseRemedyKeysResponse, parseSignerKeysResponse, QUERY } from "./junoContract";
 import { checkEndpoint, DEFAULT_ENDPOINT_LIMITS, JunoRpcError, type JunoRest } from "./junoRest";
 import { MAINNET_CHAIN_IDS } from "./signer";
 
@@ -61,14 +61,24 @@ export const JUNO_BACKEND_CONFIG_FORMAT = "18COSMOS/JUNO-BACKEND/v2";
 export const JUNO_BACKEND_CONFIG_FORMAT_V3 = "18COSMOS/JUNO-BACKEND/v3";
 export const JUNO_BACKEND_CONFIG_FORMATS: readonly string[] = Object.freeze([JUNO_BACKEND_CONFIG_FORMAT, JUNO_BACKEND_CONFIG_FORMAT_V3]);
 
-/** The canonical optimized escrow wasm this build is certified against: escrow 2.0.0 with the join admission
- *  (ESCROW-JOIN, built by the ESCROW-B2 procedure; PROJECT_CANONICAL_CONTEXT §D.3). */
+/** The canonical optimized escrow wasm: escrow 2.0.0 with the join admission (ESCROW-JOIN, built by the ESCROW-B2
+ *  procedure; PROJECT_CANONICAL_CONTEXT §D.3).
+ *
+ *  FINANCIAL PROTOCOL 4 (Phase 3 escrow 2.1, 2026-10-06) -- OWNER-MACHINE CERTIFICATION PENDING. This build speaks
+ *  escrow 2.1.0 only (`JUNO_ESCROW_CONTRACT_VERSIONS`). The 2.1.0 artifact's canonical checksum is recorded HERE, in
+ *  place of 2.0.0's, by the owner's official-optimizer build (the cloud pass that wrote this had no Docker daemon).
+ *  Until then the pair of pins is unsatisfiable on any real chain -- the 2.0.0 code (this checksum) always reports
+ *  `contract_version` 2.0.0, which the version pin refuses, and no 2.1.0 code has this checksum -- so financial mode
+ *  verifies NO deployment (`verifyJunoDeployment`: mismatch): fail-closed. The offline fake chain (tests) reports 2.1.0
+ *  with this checksum, which no real deployment can. */
 export const CANONICAL_JUNO_ESCROW_CHECKSUMS: readonly string[] = Object.freeze(["5ecc302221a2dab4bb4f0f71b632f2beeafe9523ebd7b33bd0e94d017b8d09e8"]);
 /** Historical artifacts that must never hold money (ESCROW-B2 1.0.0: its Join seated any wallet paying the ante). */
 export const REFUSED_JUNO_ESCROW_CHECKSUMS: readonly string[] = Object.freeze(["b263277aa5d1d63c33e8e238f27ad2b9ee4749c9a66abe82ef3146d51d119296"]);
 /** The contract's cw2 identity (`contracts/escrow/src/contract.rs`). */
 export const JUNO_ESCROW_CONTRACT_NAME = "crates.io:eighteen-cosmos-escrow";
-export const JUNO_ESCROW_CONTRACT_VERSIONS: readonly string[] = Object.freeze(["2.0.0"]);
+/** FP4: escrow 2.1.0 (the per-game exit policy, the timed remedies, the universal unanimous annulment, the 7-day
+ *  review). 2.0.0 is protocol 3's (a drain: this build never continues a 2.0.0 game). */
+export const JUNO_ESCROW_CONTRACT_VERSIONS: readonly string[] = Object.freeze(["2.1.0"]);
 /** How long a join admission stays usable on chain (seconds): long enough for a wallet approval and inclusion, short
  *  enough that a superseded or revoked ticket's admission dies quickly (the contract compares block time). */
 export const DEFAULT_ADMISSION_TTL_SECS = 600;
@@ -304,7 +314,7 @@ export function parseJunoBackendConfig(raw: unknown, context: { readonly serverM
   /* The build's own pins: the codec, the certified rules and the financial protocol this backend speaks. */
   need(DEPLOYMENT_SETTLEMENT_CODECS.includes("18JUNO/v1"), "this build does not carry the certified 18JUNO/v1 codec");
   need(SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS.length > 0, "this build certifies no rules version for settlement");
-  need(FINANCIAL_PROTOCOL_VERSION === 3, "this build's financial protocol is not the one this backend implements (3)");
+  need(FINANCIAL_PROTOCOL_VERSION === 4, "this build's financial protocol is not the one this backend implements (4: escrow 2.1.0)");
 
   if (problems.length > 0) throw new JunoConfigError(problems);
   return {
@@ -408,6 +418,20 @@ export async function verifyJunoDeployment(config: JunoBackendConfig, rest: Juno
     else if (mine.retired || mine.compromised) problems.push(`signer key ${config.settlementKey.signerKeyId} is ${mine.compromised ? "compromised" : "retired"} on chain`);
     const foreign = keys.filter((key) => !key.retired && !key.compromised && key.key_id !== config.settlementKey.signerKeyId);
     if (foreign.length > 0) problems.push(`the registry has active keys this server does not hold: ${foreign.map((key) => key.key_id).join(", ")} (an unmonitored signer is a hold, never signed around)`);
+    /* FP4 (escrow 2.1.0): a REMEDY key is a financial authority of its own (with the seats' N-1 approvals it forecloses;
+       alone it annuls, or stores a challengeable third-strike foreclosure). This build holds NO remedy key yet (the KMS
+       remedy signer is the server clock lane's), so an ACTIVE remedy key on the deployment is one this server does not
+       control: the deployment is refused, exactly as an unmonitored settlement signer is. */
+    const remedyKeys = [];
+    let remedyAfter: number | null = null;
+    for (let page = 0; page < 8; page += 1) {
+      const batch = parseRemedyKeysResponse(await rest.smart(config.contract, QUERY.remedyKeys(remedyAfter, 30)));
+      remedyKeys.push(...batch);
+      if (batch.length < 30) break;
+      remedyAfter = batch[batch.length - 1].key_id;
+    }
+    const activeRemedy = remedyKeys.filter((key) => !key.retired && !key.compromised);
+    if (activeRemedy.length > 0) problems.push(`the REMEDY registry has active keys this server does not hold: ${activeRemedy.map((key) => key.key_id).join(", ")} (a remedy key can end a game; this build holds none yet)`);
     return problems.length > 0 ? { kind: "mismatch", problems } : { kind: "verified", height: block.height };
   } catch (error) {
     if (error instanceof JunoRpcError && error.kind === "wrong-chain") return { kind: "mismatch", problems: [error.message] };

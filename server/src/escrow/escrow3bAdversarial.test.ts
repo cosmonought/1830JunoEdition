@@ -772,7 +772,7 @@ describe("§20 configuration safety and §23 the operator view", () => {
     world.chain.signerKeys.pop();
     assert.equal((await verifyJunoDeployment({ ...trusted, codeChecksums: ["22".repeat(32)] }, world.chain)).kind, "mismatch");
     /* ESCROW-JOIN: a contract that verifies another admission key (a rotation this server was not told about, or a
-       deployment made for another server) refuses; so does a contract version other than 2.0.0. */
+       deployment made for another server) refuses; so does a contract version other than 2.1.0 (financial protocol 4; 2.0.0 is protocol 3's). */
     world.chain.admissionPubkey = publicKeyOf(RELAYER_SECRET).toString("hex");
     const otherKey = await verifyJunoDeployment(trusted, world.chain);
     assert.equal(otherKey.kind, "mismatch");
@@ -795,7 +795,7 @@ describe("§20 configuration safety and §23 the operator view", () => {
     const game = money.games[0];
     assert.equal(game.phase, "in-progress");
     assert.equal(game.binding?.chain_game_id, "1");
-    assert.equal(game.continuation?.financial_protocol, 3, "ESCROW-4: financial protocol 3 (the v3 ticket grants, relayed consent/annul, W-13, the money GameRecord)");
+    assert.equal(game.continuation?.financial_protocol, 4, "financial protocol 4 (Phase 3 escrow 2.1: the timed remedies; 3 was ESCROW-4's v3 ticket grants, relayed consent/annul, W-13, the money GameRecord)");
     assert.ok(game.roster !== null && game.chain?.started_height !== null);
     const evidence = game.intents.map((intent) => `${intent.op}:${intent.evidence}`);
     assert.ok(evidence.includes("start:confirmed"));

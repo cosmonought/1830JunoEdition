@@ -25,7 +25,7 @@ import { createMemorySigningJournal, type InspectableSigningJournal } from "./si
 import { serverPrefixReplay, type PrefixReplay } from "./settlementEvidence";
 import { createMemoryWalletTicketStore, createWalletTicketLedger, type WalletTicketStore } from "./walletTickets";
 import { addressOfPublicKey } from "./juno/cosmosTx";
-import { FakeJunoChain } from "./juno/fakeJunoChain";
+import { FakeJunoChain, type FakeDeadline } from "./juno/fakeJunoChain";
 import { DEFAULT_GAS_POLICY } from "./juno/gasPolicy";
 import { createJunoRelayer, type Relayer, type RelayerAuthority } from "./juno/relayer";
 import { publicKeyOf, signDigest } from "./juno/secp256k1";
@@ -130,6 +130,10 @@ export interface WorldOptions {
   readonly relayerTuning?: { readonly pageAfterMs?: number; readonly queueRefreshMs?: number; readonly failureBudget?: number; readonly rebroadcastMs?: number };
   /** LIVE-6 L6-7: the money games the service's load and chain sweep visit (AWS: the open-money-game index). */
   readonly openGames?: () => Promise<string[]>;
+  /** FP4 (escrow 2.1.0): the offline chain's REMEDY key registry (ids 1, 2, … in order; default none). */
+  readonly remedyKeys?: readonly string[];
+  /** FP4: the remedy lane's gate (`EscrowServiceDeps.remedyGate`; default none: no remedy is ever relayed). */
+  readonly remedyGate?: Parameters<typeof createEscrowService>[0]["remedyGate"];
 }
 
 export const proofKey = (gameId: string, playerId: string, principalId: string) => `${gameId}|${playerId}|${principalId}`;
@@ -160,6 +164,7 @@ export function makeWorld(options: WorldOptions = {}): World {
     ...(options.resolverTimeoutSecs !== undefined ? { resolverTimeoutSecs: options.resolverTimeoutSecs } : {}),
     ...(options.bondBps !== undefined ? { bondBps: options.bondBps } : {}),
     ...(options.bondFloor !== undefined ? { bondFloor: options.bondFloor } : {}),
+    ...(options.remedyKeys !== undefined ? { remedyKeys: options.remedyKeys } : {}),
   });
   chain.fund(RELAYER_ADDRESS, BigInt(10_000_000));
   const clock = { now: T0 };
@@ -231,6 +236,7 @@ export function makeWorld(options: WorldOptions = {}): World {
       ...(world.restoreSafeMode ? { restoreSafeMode: true } : {}),
       ...(options.continuation !== undefined ? { continuation: options.continuation } : {}),
       ...(options.openGames !== undefined ? { openGames: options.openGames } : {}),
+      ...(options.remedyGate !== undefined ? { remedyGate: options.remedyGate } : {}),
     });
     const seam = options.relayerSeam?.() ?? {};
     relayer = createJunoRelayer({
@@ -284,7 +290,7 @@ export function makeWorld(options: WorldOptions = {}): World {
 }
 
 /** Issues the seats' tickets through the real ledger, then has their wallets fund the chain game with exactly them. */
-export async function fundedGame(world: World, gameId: string, players: readonly string[] = [ALICE, BOB]): Promise<string> {
+export async function fundedGame(world: World, gameId: string, players: readonly string[] = [ALICE, BOB], deadline?: FakeDeadline): Promise<string> {
   const tickets: string[] = [];
   for (let i = 0; i < players.length; i += 1) {
     const issued = await world.ledger.issue({
@@ -304,14 +310,16 @@ export async function fundedGame(world: World, gameId: string, players: readonly
     anteNet: "1000000",
     rulesEngineVersion: RULES_ENGINE_VERSION,
     variantsDigest: variantsDigestV1(VARIANTS),
+    /* FP4: an async deadline class (a pace, or none) is an async game's. */
+    ...(deadline !== undefined ? { deadline, ...(!("live_action_clock" in deadline) ? { mode: 1 as const } : {}) } : {}),
   });
 }
 
 /** create -> bind -> freeze + Start -> Start on chain. Returns the chain game id. */
-export async function startedGame(world: World, gameId: string = GAME_A): Promise<string> {
+export async function startedGame(world: World, gameId: string = GAME_A, deadline?: FakeDeadline): Promise<string> {
   const created = await world.service.createMoneyGame(gameId);
   if (!created.ok) throw new Error(`create: ${created.detail}`);
-  const chainGameId = await fundedGame(world, gameId);
+  const chainGameId = await fundedGame(world, gameId, [ALICE, BOB], deadline);
   const bound = await world.service.bindChainGame(gameId, chainGameId, VARIANTS);
   if (!bound.ok) throw new Error(`bind: ${bound.detail}`);
   const started = await world.service.requestStart(gameId, [{ player_id: ALICE }, { player_id: BOB }]);

@@ -68,8 +68,12 @@ pub fn proportional_split(pool: Uint128, weights: &[Uint128]) -> Result<Split, C
 /// Subsidies and gas already spent are not part of any net deposit, so nothing
 /// is fabricated: `Σ amounts + dust = Σ net_deposits` exactly (the pool).
 /// Pure arithmetic: which seat defaulted, and whether the foreclosure is
-/// authorised at all, is decided elsewhere (no execute path calls this yet;
-/// the trust bridge that would is an open owner decision).
+/// authorised at all, is decided by `SubmitRemedy` (a REMEDY-key attestation,
+/// plus every N−1 approval for remedies 2 and 5; see `helpers::pay_foreclosure`).
+/// A third-strike foreclosure is stored as a settlement with weight 1 for every
+/// non-defaulting seat and 0 for the defaulting one; with the equal net
+/// deposits every started game has, `proportional_split` of that vector over
+/// the pool is exactly this split (`strike3_weights_pay_the_foreclosure_split`).
 pub fn foreclosure_split(
     net_deposits: &[Uint128],
     defaulting: usize,
@@ -241,6 +245,38 @@ mod tests {
         assert!(foreclosure_split(&[], 0).is_err());
         assert!(foreclosure_split(&[u(1)], 0).is_err());
         assert!(foreclosure_split(&[u(1), u(1)], 2).is_err());
+    }
+
+    #[test]
+    fn strike3_weights_pay_the_foreclosure_split() {
+        // A third-strike settlement pays the pool by weights 1 (others) / 0
+        // (defaulter); with equal net deposits that is the foreclosure split,
+        // amounts and dust alike.
+        for seats in 2..=7usize {
+            for defaulting in 0..seats {
+                for net in [
+                    0u128,
+                    1,
+                    5,
+                    1_950_000,
+                    1_950_001,
+                    999_999_999_999,
+                    u128::MAX / 7,
+                ] {
+                    let deposits = vec![u(net); seats];
+                    let pool = u(net * seats as u128);
+                    let weights: Vec<Uint128> = (0..seats)
+                        .map(|i| if i == defaulting { u(0) } else { u(1) })
+                        .collect();
+                    let by_weights = proportional_split(pool, &weights).unwrap();
+                    let foreclosure = foreclosure_split(&deposits, defaulting).unwrap();
+                    assert_eq!(
+                        by_weights, foreclosure,
+                        "{seats} seats, {defaulting}, {net}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

@@ -58,8 +58,15 @@ const THIS_BUILD_NO_ESCROW_TEXT =
   '"escrow_deployments":[],"financial_protocols":[],"format":"18COSMOS/DEPLOYMENT-CAPABILITY/v1","hosted_protocols":[1],' +
   '"rules":{"certified":[10,11,12,13],"current":13,"supported":[13]},"settlement_codecs":["18JUNO/v1"]}';
 const THIS_BUILD_NO_ESCROW_KEY = "dc1-e8d0b4792a7ba07e67199ad2";
-/** This build serving the ESCROW-3B fixture deployment (`escrow3bSupport.PIN`), cross-checked the same way. */
-const THIS_BUILD_FIXTURE_KEY = "dc1-32fcc4967978e78f10874490";
+/** This build serving the ESCROW-3B fixture deployment (`escrow3bSupport.PIN`), cross-checked the same way. Phase 3's
+ *  escrow 2.1 (financial protocol 4) moved it by `financial_protocols` alone; the no-escrow key lists no financial
+ *  protocol and did not move. */
+const THIS_BUILD_FIXTURE_KEY = "dc1-30d893675c773e9b609699e7";
+/** The fixture key at Phase 3's v13 certification (financial protocol 3): the FP4 bump moved it. */
+const V13CERT_FIXTURE_KEY = "dc1-32fcc4967978e78f10874490";
+/** A capability as the build made it before financial protocol 4 (the historical reconstructions below): a served
+ *  deployment then carried financial protocol 3; a capability serving none lists no financial protocol either way. */
+const asFp3 = (capability: DeploymentCapability): DeploymentCapability => (capability.financial_protocols.length === 0 ? capability : deploymentCapability({ ...capability, financial_protocols: [3] }));
 /** The same two keys at Phase 3 W3-K (rules 13, settlement still [10, 11, 12]): the v13 certification moved them by
  *  certifying 13 alone. */
 const W3K_NO_ESCROW_KEY = "dc1-390107d5e7024f4a9180efeb";
@@ -83,14 +90,14 @@ const L4_2_NO_ESCROW_KEY = "dc1-5e141a8b20871e5069520928";
 const L4_2_FIXTURE_KEY = "dc1-0b0a7d27f1daf0017372b2a9";
 
 describe("L4-1: the moved constants are the shared ones, unchanged", () => {
-  test("hosted 1 and financial 3, re-exported from escrow/moneyContinuation.ts as the very same values", () => {
+  test("hosted 1 and financial 4 (3 until Phase 3's escrow 2.1), re-exported from escrow/moneyContinuation.ts as the very same values", () => {
     assert.equal(PIN_TYPES_AGREE, true);
     assert.equal(money.HOSTED_PROTOCOL_VERSION, 1);
-    assert.equal(money.FINANCIAL_PROTOCOL_VERSION, 3);
+    assert.equal(money.FINANCIAL_PROTOCOL_VERSION, 4);
     assert.equal(money.HOSTED_PROTOCOL_VERSION, shared.HOSTED_PROTOCOL_VERSION);
     assert.equal(money.FINANCIAL_PROTOCOL_VERSION, shared.FINANCIAL_PROTOCOL_VERSION);
     assert.equal(shared.HOSTED_PROTOCOL_CHANGELOG[shared.HOSTED_PROTOCOL_CHANGELOG.length - 1].version, 1);
-    assert.equal(shared.FINANCIAL_PROTOCOL_CHANGELOG[shared.FINANCIAL_PROTOCOL_CHANGELOG.length - 1].version, 3);
+    assert.equal(shared.FINANCIAL_PROTOCOL_CHANGELOG[shared.FINANCIAL_PROTOCOL_CHANGELOG.length - 1].version, 4);
     assert.equal(shared.CLIENT_PROTOCOL_CHANGELOG[shared.CLIENT_PROTOCOL_CHANGELOG.length - 1].version, shared.CLIENT_PROTOCOL_VERSION);
   });
 
@@ -100,9 +107,12 @@ describe("L4-1: the moved constants are the shared ones, unchanged", () => {
     assert.equal(money.isMoneyContinuationIdentity, sharedIdentity.isMoneyContinuationIdentity);
   });
 
-  test("ESCROW-4's continuation identity is exactly what it was but for the rules: rules 13 (11 until Route v12 R12-2, 12 until W3-K), hosted 1, financial 3, 18JUNO/v1", () => {
-    assert.deepEqual({ ...money.THIS_DEPLOYMENT }, { supportedRules: [13], certifiedRules: [10, 11, 12, 13], hostedProtocol: 1, financialProtocol: 3, settlementCodecs: ["18JUNO/v1"] });
-    assert.deepEqual(money.currentMoneyContinuation(), { format: "18COSMOS/MONEY-CONTINUATION/v1", rules_engine_version: 13, hosted_protocol: 1, financial_protocol: 3, settlement_codec: "18JUNO/v1" });
+  test("ESCROW-4's continuation identity is exactly what it was but for the rules and the financial protocol: rules 13 (11 until Route v12 R12-2, 12 until W3-K), hosted 1, financial 4 (3 until Phase 3's escrow 2.1), 18JUNO/v1", () => {
+    assert.deepEqual({ ...money.THIS_DEPLOYMENT }, { supportedRules: [13], certifiedRules: [10, 11, 12, 13], hostedProtocol: 1, financialProtocol: 4, settlementCodecs: ["18JUNO/v1"] });
+    assert.deepEqual(money.currentMoneyContinuation(), { format: "18COSMOS/MONEY-CONTINUATION/v1", rules_engine_version: 13, hosted_protocol: 1, financial_protocol: 4, settlement_codec: "18JUNO/v1" });
+    /* FP4 is a drain: a money game of protocol 3 (an escrow 2.0.0 game) is not continued by this build. */
+    const fp3 = money.moneyContinuationVerdict({ ...money.currentMoneyContinuation(), financial_protocol: 3 });
+    assert.equal(fp3.continues ? "continues" : fp3.why, "financial-protocol");
     /* Route v12 R12-3 certified 12 for settlement, so this build's own money identity continued again (at R12-2 it was
        `rules-not-certified`). Phase 3 W3-K's v13 was NOT certified, so it was `rules-not-certified` again until Phase 3's
        dedicated v13 certification added 13: this build's own money identity continues once more. */
@@ -157,7 +167,7 @@ describe("L4-1: the canonical money branch reproduces ESCROW-3A's verdict, reaso
   const identities: unknown[] = [];
   for (const rules of [10, 11, 12]) {
     for (const hosted of [1, 2]) {
-      for (const financial of [2, 3]) {
+      for (const financial of [2, 3, 4]) {
         for (const codec of ["18JUNO/v1", "18GNO/v1"]) identities.push({ format: money.MONEY_CONTINUATION_FORMAT, rules_engine_version: rules, hosted_protocol: hosted, financial_protocol: financial, settlement_codec: codec });
       }
     }
@@ -234,7 +244,7 @@ describe("L4-1: this build's capability and its key (visible in review when eith
       [[] as DeploymentPin[], LIVE4_NO_ESCROW_KEY, L4_2_NO_ESCROW_KEY],
       [[PIN] as DeploymentPin[], LIVE4_FIXTURE_KEY, L4_2_FIXTURE_KEY],
     ] as const) {
-      const capability = deploymentCapability({ ...thisDeploymentCapability(pins), rules: RULES_11 });
+      const capability = deploymentCapability({ ...asFp3(thisDeploymentCapability(pins)), rules: RULES_11 });
       assert.equal(compatibilityKey(capability), now);
       assert.notEqual(now, before, "the key moved");
       const legacyOnly = deploymentCapability({ ...capability, client_protocols: [0] });
@@ -250,9 +260,9 @@ describe("L4-1: this build's capability and its key (visible in review when eith
   test("Route v12 R12-2 moved both keys on the rules axis ALONE: rules 11 gives back the LIVE-4 keys exactly", () => {
     for (const [pins, now, before] of [
       [[] as DeploymentPin[], THIS_BUILD_NO_ESCROW_KEY, LIVE4_NO_ESCROW_KEY],
-      [[PIN] as DeploymentPin[], THIS_BUILD_FIXTURE_KEY, LIVE4_FIXTURE_KEY],
+      [[PIN] as DeploymentPin[], V13CERT_FIXTURE_KEY, LIVE4_FIXTURE_KEY],
     ] as const) {
-      const capability = thisDeploymentCapability(pins);
+      const capability = asFp3(thisDeploymentCapability(pins));
       assert.equal(compatibilityKey(capability), now);
       const atEleven = deploymentCapability({ ...capability, rules: RULES_11 });
       assert.equal(compatibilityKey(atEleven), before, "with rules 11, the LIVE-4 key comes back exactly");
@@ -267,7 +277,7 @@ describe("L4-1: this build's capability and its key (visible in review when eith
       [[] as DeploymentPin[], R12_3_NO_ESCROW_KEY, R12_2_NO_ESCROW_KEY],
       [[PIN] as DeploymentPin[], R12_3_FIXTURE_KEY, R12_2_FIXTURE_KEY],
     ] as const) {
-      const capability = deploymentCapability({ ...thisDeploymentCapability(pins), rules: RULES_12_CERTIFIED });
+      const capability = deploymentCapability({ ...asFp3(thisDeploymentCapability(pins)), rules: RULES_12_CERTIFIED });
       assert.equal(compatibilityKey(capability), r12_3);
       const uncertified = deploymentCapability({ ...capability, rules: RULES_12_UNCERTIFIED });
       assert.equal(compatibilityKey(uncertified), before, "with 12 uncertified, the R12-2 key comes back exactly");
@@ -279,7 +289,7 @@ describe("L4-1: this build's capability and its key (visible in review when eith
       [[] as DeploymentPin[], W3K_NO_ESCROW_KEY, R12_3_NO_ESCROW_KEY],
       [[PIN] as DeploymentPin[], W3K_FIXTURE_KEY, R12_3_FIXTURE_KEY],
     ] as const) {
-      const capability = deploymentCapability({ ...thisDeploymentCapability(pins), rules: RULES_13_UNCERTIFIED });
+      const capability = deploymentCapability({ ...asFp3(thisDeploymentCapability(pins)), rules: RULES_13_UNCERTIFIED });
       assert.equal(compatibilityKey(capability), w3k);
       const atTwelve = deploymentCapability({ ...capability, rules: RULES_12_CERTIFIED });
       assert.equal(compatibilityKey(atTwelve), before, "with rules 12, the R12-3 key comes back exactly");
@@ -294,9 +304,9 @@ describe("L4-1: this build's capability and its key (visible in review when eith
   test("Phase 3's dedicated v13 certification moved both keys again, by certifying 13 alone: rules 13 certified [10, 11, 12] gives back the W3-K keys exactly", () => {
     for (const [pins, now, before] of [
       [[] as DeploymentPin[], THIS_BUILD_NO_ESCROW_KEY, W3K_NO_ESCROW_KEY],
-      [[PIN] as DeploymentPin[], THIS_BUILD_FIXTURE_KEY, W3K_FIXTURE_KEY],
+      [[PIN] as DeploymentPin[], V13CERT_FIXTURE_KEY, W3K_FIXTURE_KEY],
     ] as const) {
-      const capability = thisDeploymentCapability(pins);
+      const capability = asFp3(thisDeploymentCapability(pins));
       assert.equal(compatibilityKey(capability), now);
       const uncertified = deploymentCapability({ ...capability, rules: RULES_13_UNCERTIFIED });
       assert.equal(compatibilityKey(uncertified), before, "with 13 uncertified, the W3-K key comes back exactly");
@@ -308,9 +318,23 @@ describe("L4-1: this build's capability and its key (visible in review when eith
     }
   });
 
-  test("serving the ESCROW-3B fixture deployment: financial 3 appears with it, and the key moves", () => {
+  test("Phase 3's escrow 2.1 (financial protocol 4) moved the fixture key by financial_protocols ALONE: [3] gives back the v13-certification key; the no-escrow key did not move", () => {
     const capability = thisDeploymentCapability([PIN]);
-    assert.deepEqual(capability.financial_protocols, [3]);
+    assert.equal(compatibilityKey(capability), THIS_BUILD_FIXTURE_KEY);
+    const fp3 = asFp3(capability);
+    assert.equal(compatibilityKey(fp3), V13CERT_FIXTURE_KEY, "with financial protocol 3, the v13-certification key comes back exactly");
+    const nowText = JSON.parse(capabilityCanonicalText(capability)) as Record<string, unknown>;
+    const beforeText = JSON.parse(capabilityCanonicalText(fp3)) as Record<string, unknown>;
+    assert.deepEqual(Object.keys(nowText).filter((field) => JSON.stringify(nowText[field]) !== JSON.stringify(beforeText[field])), ["financial_protocols"]);
+    assert.deepEqual([beforeText.financial_protocols, nowText.financial_protocols], [[3], [4]]);
+    /* A pool of each protocol is a different pool: a protocol-3 (escrow 2.0.0) pool and this one never share a key. */
+    assert.notEqual(THIS_BUILD_FIXTURE_KEY, V13CERT_FIXTURE_KEY);
+    assert.equal(compatibilityKey(thisDeploymentCapability([])), THIS_BUILD_NO_ESCROW_KEY);
+  });
+
+  test("serving the ESCROW-3B fixture deployment: financial 4 appears with it (3 until Phase 3's escrow 2.1), and the key moves", () => {
+    const capability = thisDeploymentCapability([PIN]);
+    assert.deepEqual(capability.financial_protocols, [4]);
     assert.deepEqual(capability.hosted_protocols, [1]);
     assert.deepEqual(capability.escrow_deployments.map((served) => served.pin), [PIN]);
     assert.notEqual(compatibilityKey(capability), THIS_BUILD_NO_ESCROW_KEY);

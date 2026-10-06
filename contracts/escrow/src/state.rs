@@ -63,16 +63,31 @@ pub struct GameParams {
     pub liveness_window_secs: u64,
     /// DISPUTED time after which a seated wallet may `LivenessSettle`.
     pub resolver_timeout_secs: u64,
-    /// Escrow 2.1.0: the wait from a No-deadline game's first review request
-    /// to the earliest `ReviewAnnul`, so the table can notice (and finish and
-    /// `Settle`, or post a checkpoint, which withdraws the request) before a
-    /// resolver acts. Snapshotted into each game at CreateGame. Validated like
-    /// the other durations (1 s … 10 y); the value is a deployment choice. A
-    /// configuration carried over from 2.0.0 reads 0 here, and a No-deadline
-    /// game cannot be created until the admin sets it (`SetParams`).
-    #[serde(default)]
-    pub review_delay_secs: u64,
 }
+
+/// Escrow 2.1.0 owner policy (2026-10-06): the Live action clock. Every
+/// required gameplay action gets 20 minutes; a first or second expiry makes the
+/// acting seat OVERDUE, curable until 30:00 (`LIVE_CURE_WINDOW_SECS` after the
+/// expiry); a third expiry forecloses at once. Frozen into a Live game's terms.
+pub const LIVE_ACTION_SECS: u64 = 20 * 60;
+/// See [`LIVE_ACTION_SECS`]: the 20:00–30:00 cure / approval window.
+pub const LIVE_CURE_WINDOW_SECS: u64 = 10 * 60;
+/// The paces a Timed Async host may choose (12 h, 24 h, 2 d, 3 d, 7 d). An
+/// expired allowance makes the responsible seat OVERDUE; nothing happens
+/// automatically.
+pub const ASYNC_PACES_SECS: [u64; 5] = [43_200, 86_400, 172_800, 259_200, 604_800];
+/// The exceptional review's delay (owner policy, 2026-10-06: 7 days), from a
+/// seated wallet's request to the earliest `ReviewAnnul`. A contract constant,
+/// snapshotted into every 2.1.0 game's terms at CreateGame.
+pub const REVIEW_DELAY_SECS: u64 = 7 * 24 * 60 * 60;
+/// A remedy attestation is refused once block time reaches its `expires_at`,
+/// and `expires_at` may lie at most this long after its `attested_at` (which
+/// is itself at most the block time): no signed attestation stays usable for
+/// more than an hour. A final remedy that did not land in time (an admin
+/// pause, a relayer or AWS outage) is attested again, never extended; a
+/// pre-outage attestation dies within the hour, and the server decides afresh
+/// (the system-pause rules) whether to attest again.
+pub const MAX_REMEDY_TTL_SECS: u64 = 60 * 60;
 
 /// Live or async; its byte (0 or 1) is part of the settlement domain.
 #[cw_serde]
@@ -145,34 +160,156 @@ impl GameState {
 ///   `Settle` payload, or a resolver `Replace`, still carries whatever vector
 ///   its signer or the resolver chose, as in 2.0.0.)
 ///
-/// The variants are versioned by meaning: a later escrow version that adds the
-/// timed remedies must add a NEW variant for the games it creates, so a code
-/// migration can never hand remedies to a game funded as
-/// `TimedNoRemedies`.
+/// Every 2.1.0 game, whatever its policy, also has the universal unanimous
+/// neutral annulment (`AnnulByConsent`, IN_PROGRESS / SETTLEABLE / DISPUTED)
+/// and the exceptional review (`RequestReview` / `ReviewAnnul`, a neutral
+/// refund decided by the game's snapshotted resolver after 7 days).
+///
+/// The variants are versioned by meaning: a later escrow version that changes
+/// the remedies must add a NEW variant for the games it creates, so a code
+/// migration can never change the remedies of a game funded under one.
 #[cw_serde]
 #[derive(Copy, Eq)]
 pub enum GamePolicy {
-    /// A table with an action deadline (every Live table; an Async table with a
-    /// fixed pace) under THIS build's rules: it ends only by completion or
-    /// unanimous annulment. The timed default / foreclosure remedies are not in
-    /// this build (their trust bridge, how the contract learns an off-chain
-    /// overdue fact, awaits an owner decision), so one absent seat can hold
-    /// such a game indefinitely. Not for money tables until the remedies exist.
-    TimedNoRemedies,
-    /// An Async table with no action deadline. Inactivity never moves money; it
-    /// ends by completion, unanimous annulment, or the exceptional review: the
-    /// game's resolver may refund every net deposit after a seated wallet asked
-    /// for review (`RequestReview` / `ReviewAnnul`).
+    /// A table with an action deadline (every Live table; an Async table with
+    /// one of [`ASYNC_PACES_SECS`]) under the remedy model of 2026-10-06
+    /// (`SubmitRemedy`): an off-chain overdue fact enters the contract only as
+    /// an attestation of the dedicated REMEDY key (`crypto::remedy_digest`),
+    /// plus, where the policy requires it, the approval of every non-defaulting
+    /// seat (`crypto::remedy_approve_digest`).
+    ///
+    /// * Live, first/second overdue, uncured at 30:00: neutral TimeoutAnnul
+    ///   (no approvals), or foreclosure with every N−1 approval;
+    /// * Live, third overdue: foreclosure at the 20:00 expiry, stored as a
+    ///   challengeable settlement (`SettlementSource::RemedyStrike3`);
+    /// * Timed Async, overdue: neutral annulment or foreclosure, each with
+    ///   every N−1 approval, final at once.
+    TimedRemedyV1,
+    /// An Async table with no action deadline. Inactivity never moves money:
+    /// no overdue, no remedy (`SubmitRemedy` is refused). It ends by
+    /// completion, unanimous annulment, or the exceptional review.
     NoDeadline,
 }
 
 impl GamePolicy {
     pub fn as_str(self) -> &'static str {
         match self {
-            GamePolicy::TimedNoRemedies => "timed_no_remedies",
+            GamePolicy::TimedRemedyV1 => "timed_remedy_v1",
             GamePolicy::NoDeadline => "no_deadline",
         }
     }
+}
+
+/// The remedies a `SubmitRemedy` attestation can carry (its `remedy` byte).
+/// Each one is checked against the game's mode and the strike it names.
+#[cw_serde]
+#[derive(Copy, Eq)]
+pub enum RemedyKind {
+    /// 1. Live, strike 1 or 2, uncured at `final_at = overdue_at + 10 min`, no
+    ///    complete N−1 approval: every net deposit refunded (ANNULLED). No
+    ///    approvals are carried.
+    LiveTimeoutAnnul,
+    /// 2. Live, strike 1 or 2, uncured at `final_at = overdue_at + 10 min`,
+    ///    every non-defaulting seat approved: foreclosure (SETTLED).
+    LiveForeclose,
+    /// 3. Live, strike 3, `final_at = overdue_at` (no cure, no vote): the
+    ///    foreclosure is stored as a settlement and enters the challenge
+    ///    window (SETTLEABLE). No approvals are carried.
+    LiveStrike3Foreclose,
+    /// 4. Timed Async, overdue, every non-defaulting seat approved: every net
+    ///    deposit refunded (ANNULLED).
+    AsyncAnnul,
+    /// 5. Timed Async, overdue, every non-defaulting seat approved:
+    ///    foreclosure (SETTLED).
+    AsyncForeclose,
+}
+
+impl RemedyKind {
+    pub fn from_byte(byte: u8) -> Option<RemedyKind> {
+        match byte {
+            1 => Some(RemedyKind::LiveTimeoutAnnul),
+            2 => Some(RemedyKind::LiveForeclose),
+            3 => Some(RemedyKind::LiveStrike3Foreclose),
+            4 => Some(RemedyKind::AsyncAnnul),
+            5 => Some(RemedyKind::AsyncForeclose),
+            _ => None,
+        }
+    }
+
+    pub fn as_byte(self) -> u8 {
+        match self {
+            RemedyKind::LiveTimeoutAnnul => 1,
+            RemedyKind::LiveForeclose => 2,
+            RemedyKind::LiveStrike3Foreclose => 3,
+            RemedyKind::AsyncAnnul => 4,
+            RemedyKind::AsyncForeclose => 5,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RemedyKind::LiveTimeoutAnnul => "live_timeout_annul",
+            RemedyKind::LiveForeclose => "live_foreclose",
+            RemedyKind::LiveStrike3Foreclose => "live_strike3_foreclose",
+            RemedyKind::AsyncAnnul => "async_annul",
+            RemedyKind::AsyncForeclose => "async_foreclose",
+        }
+    }
+
+    /// The mode the remedy belongs to.
+    pub fn mode(self) -> Mode {
+        match self {
+            RemedyKind::LiveTimeoutAnnul
+            | RemedyKind::LiveForeclose
+            | RemedyKind::LiveStrike3Foreclose => Mode::Live,
+            RemedyKind::AsyncAnnul | RemedyKind::AsyncForeclose => Mode::Async,
+        }
+    }
+
+    /// Takes a seat's net deposit (blocked while the contract is paused, like
+    /// every payout by a signed vector). The neutral kinds refund every seat
+    /// and stay available while paused.
+    pub fn forecloses(self) -> bool {
+        matches!(
+            self,
+            RemedyKind::LiveForeclose
+                | RemedyKind::LiveStrike3Foreclose
+                | RemedyKind::AsyncForeclose
+        )
+    }
+
+    /// Needs the approval of every non-defaulting seat.
+    pub fn needs_approvals(self) -> bool {
+        matches!(
+            self,
+            RemedyKind::LiveForeclose | RemedyKind::AsyncAnnul | RemedyKind::AsyncForeclose
+        )
+    }
+}
+
+/// The accepted remedy of a game: the attested facts, which key attested them
+/// and who approved. Written once, by the `SubmitRemedy` that ended the game's
+/// play (or, for a third strike, that stored its challengeable foreclosure).
+#[cw_serde]
+pub struct RemedyRecord {
+    pub kind: RemedyKind,
+    pub defaulting_seat: u8,
+    pub strike: u8,
+    pub overdue_epoch: Uint64,
+    pub log_len: Uint64,
+    pub log_hash: HexBinary,
+    pub allowance_secs: Uint64,
+    pub overdue_at: Uint64,
+    pub final_at: Uint64,
+    pub expires_at: Uint64,
+    pub evidence_hash: HexBinary,
+    pub remedy_key_id: u16,
+    /// `SHA-256("18JUNO/REMEDY/v1" ‖ encode(attestation))`.
+    pub remedy_digest: HexBinary,
+    /// Bit i set = seat i's REMEDY-APPROVE signature verified (0 for the kinds
+    /// that carry no approvals).
+    pub approvals_bitmap: u8,
+    pub accepted_at: Timestamp,
 }
 
 /// Terms copied from the configuration when the game was created, plus the
@@ -190,10 +327,20 @@ pub struct GameTerms {
     pub resolver_timeout_secs: u64,
     /// Where this game's subsidies and dust go.
     pub treasury: Addr,
-    /// Escrow 2.1.0, No-deadline games: `GameParams::review_delay_secs` at
-    /// CreateGame. 0 on 2.0.0 and Timed games (no review applies to them).
+    /// Escrow 2.1.0: [`REVIEW_DELAY_SECS`] at CreateGame (every policy). 0 on
+    /// a 2.0.0 game (no review applies to it).
     #[serde(default)]
     pub review_delay_secs: u64,
+    /// Escrow 2.1.0, `TimedRemedyV1`: the action allowance a remedy attestation
+    /// must name (Live: [`LIVE_ACTION_SECS`]; Timed Async: the host's pace).
+    /// 0 for No-deadline and 2.0.0 games.
+    #[serde(default)]
+    pub allowance_secs: u64,
+    /// Escrow 2.1.0, Live: [`LIVE_CURE_WINDOW_SECS`], the gap a first/second
+    /// strike remedy's `final_at` must keep from its `overdue_at`. 0 otherwise
+    /// (a Timed Async remedy is final once its N−1 consensus completes).
+    #[serde(default)]
+    pub cure_window_secs: u64,
     /// `None` = created by escrow 2.0.0 code (2.0.0 semantics, see
     /// [`GamePolicy`]); every 2.1.0 game has `Some`. The per-game gate that
     /// keeps a code migration from changing the terms a game was funded under.
@@ -201,8 +348,8 @@ pub struct GameTerms {
     pub policy: Option<GamePolicy>,
 }
 
-/// A seated wallet's request for the exceptional review of a No-deadline game
-/// (`RequestReview`). Only the first request is recorded; an accepted
+/// A seated wallet's request for the exceptional review of an escrow 2.1.0
+/// game (`RequestReview`). Only the first request is recorded; an accepted
 /// `Checkpoint` above `trusted_seq` (proof the table kept playing after the
 /// request) withdraws it.
 #[cw_serde]
@@ -275,6 +422,14 @@ pub enum SettlementSource {
     /// A resolver `Replace` (reason ResolverCorrection), authorised by the
     /// resolver's transaction rather than a signature.
     ResolverReplacement,
+    /// Escrow 2.1.0: a Live third-strike foreclosure (`SubmitRemedy`, remedy
+    /// 3). Its `payload` is synthesized from the remedy attestation: kind 1,
+    /// `seq = 2·log_len + 1`, weight 1 for every seat but the defaulting one
+    /// (0), `signer_key_id` = the REMEDY key id (trust is checked against the
+    /// remedy registry, never `SIGNER_KEYS`), `payload_digest` = the REMEDY
+    /// digest. It is challengeable like any settlement; a resolver may uphold
+    /// it or annul (never `Replace` it).
+    RemedyStrike3,
 }
 
 #[cw_serde]
@@ -294,6 +449,10 @@ pub enum DisputeResolution {
     Annulled,
     /// Nobody adjudicated before the resolver timeout; the bond went back.
     ResolverTimeout,
+    /// Escrow 2.1.0: every seat signed `AnnulByConsent` while the game was
+    /// disputed; the bond went back to the challenger, every net deposit to its
+    /// seat.
+    AnnulledByConsent,
 }
 
 #[cw_serde]
@@ -335,9 +494,20 @@ pub enum Route {
     /// is compromised and no usable checkpoint exists (or, for a 2.1.0 game,
     /// whatever checkpoints exist): refund.
     SettleableTimeoutRefund,
-    /// Escrow 2.1.0, No-deadline game: the game's resolver approved a seated
-    /// wallet's review request; every net deposit refunded.
+    /// Escrow 2.1.0: the game's resolver approved a seated wallet's review
+    /// request; every net deposit refunded.
     ReviewAnnul,
+    /// Escrow 2.1.0, Live remedy 1: the overdue seat did not cure by 30:00 and
+    /// no foreclosure was approved; every net deposit refunded.
+    RemedyTimeoutAnnul,
+    /// Escrow 2.1.0, Timed Async remedy 4: every non-defaulting seat approved
+    /// the neutral annulment of an overdue game; every net deposit refunded.
+    RemedyAnnul,
+    /// Escrow 2.1.0, remedies 2 and 5: the defaulting seat receives 0, every
+    /// other seat its own net deposit plus `⌊net_D / (N−1)⌋`, the remainder to
+    /// the treasury (`payout::foreclosure_split`). (A third-strike foreclosure
+    /// is paid by the ordinary settlement routes from its stored settlement.)
+    RemedyForeclosure,
 }
 
 /// The terminal money movement of a game.
@@ -403,10 +573,14 @@ pub struct Game {
     pub consent_bitmap: u8,
     pub dispute: Option<DisputeRecord>,
     pub outcome: Option<Outcome>,
-    /// Escrow 2.1.0, No-deadline games only: the first seated request for the
-    /// exceptional review. Absent on every 2.0.0 game.
+    /// Escrow 2.1.0: the first seated request for the exceptional review.
+    /// Absent on every 2.0.0 game.
     #[serde(default)]
     pub review_request: Option<ReviewRequest>,
+    /// Escrow 2.1.0: the accepted timed remedy, if any. Absent on every 2.0.0
+    /// game.
+    #[serde(default)]
+    pub remedy: Option<RemedyRecord>,
 }
 
 /// A registered settlement-signer key.
@@ -424,6 +598,22 @@ pub struct SignerKey {
     pub compromised: bool,
 }
 
+/// A registered REMEDY attestation key (escrow 2.1.0): the dedicated authority
+/// for `SubmitRemedy`, a key class of its own. Never a settlement signer key,
+/// never a join-admission key (current or former, either way round).
+#[cw_serde]
+pub struct RemedyKey {
+    pub key_id: u16,
+    pub pubkey: HexBinary,
+    pub added_at: Timestamp,
+    /// Attestations under this key are refused from this time on.
+    pub retired_at: Option<Timestamp>,
+    /// Retired as compromised: a third-strike foreclosure it attested loses its
+    /// payout authority (`Finalize` / `Consent` refuse it; the liveness exits
+    /// refund instead). Never cleared.
+    pub compromised: bool,
+}
+
 pub const CONFIG: Item<Config> = Item::new("config");
 /// Next `chain_game_id` (the first game is 1).
 pub const NEXT_GAME_ID: Item<u64> = Item::new("next_game_id");
@@ -438,6 +628,12 @@ pub const SIGNER_PUBKEY_INDEX: Map<&[u8], u16> = Map::new("signer_pubkey_index")
 /// be registered as a settlement signer key: a key rotated out because it
 /// leaked must not come back with settlement authority.
 pub const ADMISSION_KEYS: Map<&[u8], Timestamp> = Map::new("admission_keys");
+/// Next remedy `key_id` (the first key is 1). Absent in a 2.0.0 deployment
+/// (read as 1).
+pub const NEXT_REMEDY_KEY_ID: Item<u16> = Item::new("next_remedy_key_id");
+pub const REMEDY_KEYS: Map<u16, RemedyKey> = Map::new("remedy_keys");
+/// Compressed pubkey → remedy key_id: a key is registered at most once.
+pub const REMEDY_PUBKEY_INDEX: Map<&[u8], u16> = Map::new("remedy_pubkey_index");
 // Games live under the `games` namespace, owned by the private `storage`
 // module (storage-only `StoredGame` shape; read and written only through
 // `helpers::{load_game, save_game}` and the `Games` query).

@@ -6,10 +6,10 @@ use cosmwasm_std::{Binary, Deps, DepsMut, Env, MessageInfo, Response, StdResult}
 use cw2::{get_contract_version, set_contract_version};
 
 use crate::error::ContractError;
-use crate::execute::{admin, dispute, funding, play};
+use crate::execute::{admin, dispute, funding, play, remedy};
 use crate::helpers::nonpayable;
 use crate::msg::{ExecuteMsg, InstantiateMsg, MigrateMsg, QueryMsg};
-use crate::state::{Config, CONFIG, NEXT_GAME_ID, NEXT_SIGNER_KEY_ID};
+use crate::state::{Config, CONFIG, NEXT_GAME_ID, NEXT_REMEDY_KEY_ID, NEXT_SIGNER_KEY_ID};
 
 /// cw2 contract name. `migrate` refuses any stored contract with another name,
 /// so there is no upgrade path from the legacy gameplay contract (which has no
@@ -47,9 +47,16 @@ pub fn instantiate(
     CONFIG.save(deps.storage, &config)?;
     NEXT_GAME_ID.save(deps.storage, &1)?;
     NEXT_SIGNER_KEY_ID.save(deps.storage, &1)?;
+    NEXT_REMEDY_KEY_ID.save(deps.storage, &1)?;
     let mut key_ids = Vec::with_capacity(msg.signer_keys.len());
     for pubkey in msg.signer_keys {
         key_ids.push(admin::register_signer_key(&mut deps, env.block.time, pubkey)?.to_string());
+    }
+    // After the signer keys, so a remedy key equal to one of them (or to the
+    // admission key) is refused: the three authorities never share a key.
+    let mut remedy_ids = Vec::with_capacity(msg.remedy_keys.len());
+    for pubkey in msg.remedy_keys {
+        remedy_ids.push(admin::register_remedy_key(&mut deps, env.block.time, pubkey)?.to_string());
     }
     let mut response = Response::new()
         .add_attribute("action", "instantiate")
@@ -61,11 +68,15 @@ pub fn instantiate(
         .add_attribute("resolver", config.resolver.as_str())
         .add_attribute("treasury", config.treasury.as_str())
         .add_attribute("denom", config.denom)
-        .add_attribute("signer_key_count", key_ids.len().to_string());
+        .add_attribute("signer_key_count", key_ids.len().to_string())
+        .add_attribute("remedy_key_count", remedy_ids.len().to_string());
     // wasmd rejects an empty attribute value, so the id list is only emitted
     // when there is one (instantiating with no signer keys is allowed).
     if !key_ids.is_empty() {
         response = response.add_attribute("signer_key_ids", key_ids.join(","));
+    }
+    if !remedy_ids.is_empty() {
+        response = response.add_attribute("remedy_key_ids", remedy_ids.join(","));
     }
     Ok(response)
 }
@@ -85,7 +96,7 @@ pub fn execute(
             variants_digest,
             consent_pubkey,
             join_ticket,
-            no_deadline,
+            deadline,
         } => funding::create_game(
             deps,
             env,
@@ -96,7 +107,7 @@ pub fn execute(
             variants_digest,
             consent_pubkey,
             join_ticket,
-            no_deadline,
+            deadline,
         ),
         ExecuteMsg::Join {
             chain_game_id,
@@ -162,6 +173,20 @@ pub fn execute(
             chain_game_id,
             requested_at,
         } => dispute::review_annul(deps, env, info, chain_game_id, requested_at),
+        ExecuteMsg::SubmitRemedy {
+            chain_game_id,
+            attestation,
+            signature,
+            approvals,
+        } => remedy::submit_remedy(
+            deps,
+            env,
+            info,
+            chain_game_id,
+            attestation,
+            signature,
+            approvals,
+        ),
         ExecuteMsg::Pause {} => admin::pause(deps, info),
         ExecuteMsg::Unpause {} => admin::unpause(deps, info),
         ExecuteMsg::AddSignerKey { pubkey } => admin::add_signer_key(deps, env, info, pubkey),
@@ -174,6 +199,11 @@ pub fn execute(
         ExecuteMsg::SetTreasury { treasury } => admin::set_treasury(deps, env, info, treasury),
         ExecuteMsg::SetParams { params } => admin::set_params(deps, info, params),
         ExecuteMsg::SetAdmissionKey { pubkey } => admin::set_admission_key(deps, env, info, pubkey),
+        ExecuteMsg::AddRemedyKey { pubkey } => admin::add_remedy_key(deps, env, info, pubkey),
+        ExecuteMsg::RetireRemedyKey {
+            key_id,
+            compromised,
+        } => admin::retire_remedy_key(deps, env, info, key_id, compromised),
     }
 }
 
@@ -215,10 +245,11 @@ pub const FIRST_ADMISSION_VERSION: (u64, u64, u64) = (2, 0, 0);
 /// for 2.x; a same-version migrate is a no-op.
 ///
 /// 2.0.0 → 2.1.0 needs none either: `Config` is unchanged, and a game stored
-/// by 2.0.0 code reads with `terms.policy == None` and no review request, so
-/// it keeps exactly the 2.0.0 exits it was funded under (the per-game gate,
-/// `state::GamePolicy`). Only games created after the migration get the 2.1.0
-/// policy. (The JX-1 2.0.0 testnet instance has no wasm admin and can never be
+/// by 2.0.0 code reads with `terms.policy == None`, no review request and no
+/// remedy, so it keeps exactly the 2.0.0 exits it was funded under (the
+/// per-game gate, `state::GamePolicy`). Only games created after the migration
+/// get a 2.1.0 policy. The remedy key registry starts empty (its next id reads
+/// as 1) until the admin adds a key. (The JX-1 2.0.0 testnet instance has no wasm admin and can never be
 /// migrated; 2.1.0 is deployed as a new instance.)
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn migrate(deps: DepsMut, _env: Env, _msg: MigrateMsg) -> Result<Response, ContractError> {
@@ -274,7 +305,6 @@ mod tests {
             funding_period_async_secs: 604_800,
             liveness_window_secs: 1_209_600,
             resolver_timeout_secs: 2_592_000,
-            review_delay_secs: 604_800,
         };
         let msg = InstantiateMsg {
             admin: "admin".to_string(),
@@ -289,6 +319,7 @@ mod tests {
                 "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
             )
             .unwrap(),
+            remedy_keys: vec![],
         };
         let err = instantiate(
             deps.as_mut(),

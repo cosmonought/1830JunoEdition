@@ -11,11 +11,12 @@ use crate::helpers::{
     require_state, require_unique_consent_key, save_game, seat_bit, seat_index_of, send,
     MAX_PLAYERS, MIN_PLAYERS,
 };
-use crate::msg::{CreateGameResponse, JoinAdmission};
+use crate::msg::{CreateGameResponse, DeadlineChoice, JoinAdmission};
 use crate::payload::fixed_bytes;
 use crate::payout::{bond_amount, subsidy_cut};
 use crate::state::{
-    Game, GamePolicy, GameState, GameTerms, Mode, Route, Seat, CONFIG, NEXT_GAME_ID,
+    Game, GamePolicy, GameState, GameTerms, Mode, Route, Seat, ASYNC_PACES_SECS, CONFIG,
+    LIVE_ACTION_SECS, LIVE_CURE_WINDOW_SECS, NEXT_GAME_ID, REVIEW_DELAY_SECS,
 };
 
 #[allow(clippy::too_many_arguments)]
@@ -29,30 +30,32 @@ pub fn create_game(
     variants_digest: HexBinary,
     consent_pubkey: HexBinary,
     join_ticket: HexBinary,
-    no_deadline: bool,
+    deadline: DeadlineChoice,
 ) -> Result<Response, ContractError> {
     let config = CONFIG.load(deps.storage)?;
     require_not_paused(&config)?;
     if !(MIN_PLAYERS..=MAX_PLAYERS).contains(&max_players) {
         return Err(ContractError::BadMaxPlayers { got: max_players });
     }
-    // Escrow 2.1.0: every game this code creates carries an exit policy; a
-    // Live table always has an action deadline.
-    let policy = match (mode, no_deadline) {
-        (_, false) => GamePolicy::TimedNoRemedies,
-        (Mode::Async, true) => GamePolicy::NoDeadline,
-        (Mode::Live, true) => return Err(ContractError::NoDeadlineNeedsAsync {}),
-    };
-    // A No-deadline game needs a configured review delay (a configuration
-    // carried over from 2.0.0 has none until the admin sets one).
-    let review_delay_secs = match policy {
-        GamePolicy::NoDeadline if config.params.review_delay_secs == 0 => {
-            return Err(ContractError::InvalidParams {
-                reason: "review_delay_secs is not configured".to_string(),
-            })
+    // Escrow 2.1.0: every game this code creates carries an exit policy and
+    // the timing terms its remedies are checked against. A Live table always
+    // has the action clock; an Async table either a listed pace or none.
+    let (policy, allowance_secs, cure_window_secs) = match (mode, deadline) {
+        (Mode::Live, DeadlineChoice::LiveActionClock {}) => (
+            GamePolicy::TimedRemedyV1,
+            LIVE_ACTION_SECS,
+            LIVE_CURE_WINDOW_SECS,
+        ),
+        (Mode::Async, DeadlineChoice::AsyncPace { allowance_secs }) => {
+            if !ASYNC_PACES_SECS.contains(&allowance_secs) {
+                return Err(ContractError::BadAsyncPace {
+                    got: allowance_secs,
+                });
+            }
+            (GamePolicy::TimedRemedyV1, allowance_secs, 0)
         }
-        GamePolicy::NoDeadline => config.params.review_delay_secs,
-        GamePolicy::TimedNoRemedies => 0,
+        (Mode::Async, DeadlineChoice::NoDeadline {}) => (GamePolicy::NoDeadline, 0, 0),
+        _ => return Err(ContractError::DeadlineNotForMode {}),
     };
     fixed_bytes::<32>("variants_digest", &variants_digest)?;
     parse_compressed_pubkey("consent_pubkey", consent_pubkey.as_slice())?;
@@ -99,7 +102,9 @@ pub fn create_game(
         liveness_window_secs: params.liveness_window_secs,
         resolver_timeout_secs: params.resolver_timeout_secs,
         treasury: config.treasury.clone(),
-        review_delay_secs,
+        review_delay_secs: REVIEW_DELAY_SECS,
+        allowance_secs,
+        cure_window_secs,
         policy: Some(policy),
     };
     let game = Game {
@@ -140,6 +145,7 @@ pub fn create_game(
         dispute: None,
         outcome: None,
         review_request: None,
+        remedy: None,
     };
     save_game(deps.storage, &game)?;
 
@@ -153,6 +159,7 @@ pub fn create_game(
         .add_attribute("subsidy", subsidy)
         .add_attribute("ante_net", net)
         .add_attribute("policy", policy.as_str())
+        .add_attribute("allowance_secs", allowance_secs.to_string())
         .add_attribute("state", game.state.as_str())
         .set_data(to_json_binary(&CreateGameResponse { chain_game_id })?);
     if let Some(msg) = send(&game.terms.treasury, subsidy, &game.denom) {

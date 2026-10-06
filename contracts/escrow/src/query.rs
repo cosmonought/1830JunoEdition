@@ -12,12 +12,13 @@ use crate::error::ContractError;
 use crate::helpers::{add_secs, best_checkpoint, load_game, trusted_seq};
 use crate::msg::{
     CheckpointView, CheckpointsResponse, ConfigResponse, GameDeadlines, GameResponse, GameSummary,
-    GamesResponse, QueryMsg, SeatView, SeatsResponse, SettlementPreviewResponse, SignerKeyResponse,
-    SignerKeysResponse,
+    GamesResponse, QueryMsg, RemedyKeyResponse, RemedyKeysResponse, SeatView, SeatsResponse,
+    SettlementPreviewResponse, SignerKeyResponse, SignerKeysResponse,
 };
 use crate::payout::proportional_split;
 use crate::state::{
-    Game, GameState, CHECKPOINTS, CONFIG, NEXT_GAME_ID, NEXT_SIGNER_KEY_ID, SIGNER_KEYS,
+    Game, GameState, CHECKPOINTS, CONFIG, NEXT_GAME_ID, NEXT_REMEDY_KEY_ID, NEXT_SIGNER_KEY_ID,
+    REMEDY_KEYS, SIGNER_KEYS,
 };
 
 const DEFAULT_LIMIT: u32 = 10;
@@ -56,6 +57,23 @@ pub fn dispatch(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
                 .collect::<StdResult<Vec<_>>>()?;
             to_json_binary(&SignerKeysResponse { keys })
         }
+        QueryMsg::RemedyKey { key_id } => to_json_binary(&RemedyKeyResponse {
+            key: REMEDY_KEYS.load(deps.storage, key_id)?,
+        }),
+        QueryMsg::RemedyKeys { start_after, limit } => {
+            let limit = limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT) as usize;
+            let keys = REMEDY_KEYS
+                .range(
+                    deps.storage,
+                    start_after.map(Bound::exclusive),
+                    None,
+                    Order::Ascending,
+                )
+                .take(limit)
+                .map(|item| item.map(|(_, key)| key))
+                .collect::<StdResult<Vec<_>>>()?;
+            to_json_binary(&RemedyKeysResponse { keys })
+        }
         QueryMsg::SettlementPreview { chain_game_id } => {
             to_json_binary(&settlement_preview(deps, chain_game_id)?)
         }
@@ -67,6 +85,7 @@ fn config(deps: Deps) -> StdResult<ConfigResponse> {
         config: CONFIG.load(deps.storage)?,
         next_chain_game_id: NEXT_GAME_ID.load(deps.storage)?,
         next_signer_key_id: NEXT_SIGNER_KEY_ID.load(deps.storage)?,
+        next_remedy_key_id: NEXT_REMEDY_KEY_ID.may_load(deps.storage)?.unwrap_or(1),
         contract_name: CONTRACT_NAME.to_string(),
         contract_version: CONTRACT_VERSION.to_string(),
     })

@@ -248,29 +248,40 @@ fn only_a_settleable_game_can_be_challenged() {
     s.assert_custody();
 }
 
+/// A DISPUTED game refuses everything but resolution (and, for an escrow
+/// 2.1.0 game only, the universal unanimous annulment: `tests/remedy.rs`).
 #[test]
 fn a_disputed_game_refuses_every_non_resolution_message() {
+    for legacy in [true, false] {
+        a_disputed_game_refuses_every_non_resolution_message_for(legacy);
+    }
+}
+
+fn a_disputed_game_refuses_every_non_resolution_message_for(legacy: bool) {
     let mut s = Suite::new();
+    s.legacy = legacy;
     let (id, p) = s.disputed(3);
     let who = s.outsider.clone();
     let digest = s.consent_digest(id, &p);
     let later = s.terminal_payload(id, 1, 500, &[1, 1, 1]);
-    let msgs = vec![
+    let mut msgs = vec![
         ExecuteMsg::Finalize { chain_game_id: id },
         ExecuteMsg::Consent {
             chain_game_id: id,
             seat_index: 0,
             signature: Key::seat(0).sign(&digest),
         },
-        ExecuteMsg::AnnulByConsent {
-            chain_game_id: id,
-            consents: s.annul_sigs(id, &[0, 1, 2], s.last_seq(id)),
-        },
         s.settle_msg(id, &later, &[0, 1, 2]),
         s.checkpoint_msg(id, &s.checkpoint_payload(id, 600, &[1, 1, 1])),
         ExecuteMsg::Withdraw { chain_game_id: id },
         ExecuteMsg::Cancel { chain_game_id: id },
     ];
+    if legacy {
+        msgs.push(ExecuteMsg::AnnulByConsent {
+            chain_game_id: id,
+            consents: s.annul_sigs(id, &[0, 1, 2], s.last_seq(id)),
+        });
+    }
     s.advance(2 * DAY);
     for msg in &msgs {
         for sender in [who.clone(), s.players[0].clone()] {

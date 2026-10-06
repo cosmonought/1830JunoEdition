@@ -158,6 +158,11 @@ export interface EscrowServiceDeps {
    *  financial record (`financial.list()`), as before. The roster preload (PROCESS only) and `refreshRoster` (a claim)
    *  are not discovery and are unchanged. */
   readonly openGames?: () => Promise<string[]>;
+  /** FP4 (escrow 2.1.0): the remedy lane's word, asked before a `submit-remedy` intent is relayed -- where the server
+   *  clock lane's SYSTEM PAUSE holds a remedy that is not yet financially final (a pre-outage attestation waits; it
+   *  expires within the hour and is attested again only under the system-pause rules). ABSENT (this build: the lane is
+   *  not built): no remedy intent is ever relayed -- fail closed. */
+  readonly remedyGate?: (gameId: string, intent: ChainIntentRecord) => Promise<{ readonly kind: "ok" } | { readonly kind: "wait"; readonly why: string }>;
 }
 
 export type ServiceRefusal = { readonly ok: false; readonly code: string; readonly detail: string };
@@ -919,7 +924,10 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
       const mine = await deps.intents.load(bound.record.game_id, probe.intent_id);
       if (mine !== null && (mine.op.kind === "settle" || mine.op.kind === "checkpoint") && mine.op.settle_digest === digestHex && mine.op.seq === seq) return true;
     }
-    return false;
+    /* FP4 (escrow 2.1.0): a third-strike foreclosure is stored as a settlement whose digest is the REMEDY digest and
+       whose seq is 2*log_len + 1 -- this server's when its own remedy intent relayed exactly that attestation. */
+    const remedies = (await deps.intents.listGame(bound.record.game_id)).filter((intent) => intent.op.kind === "remedy" && intentBelongsTo(intent, instance));
+    return remedies.some((intent) => intent.op.kind === "remedy" && intent.op.remedy === 3 && intent.op.remedy_digest === digestHex && (BigInt(intent.op.log_len) * BigInt(2) + BigInt(1)).toString() === seq);
   }
 
   /** What the chain says now, as lifecycle events (the chain wins). A HELD game is observed (its chain outcome is
@@ -1199,6 +1207,19 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
     const checksum = await backend.rest.codeChecksum(contract.code_id);
     const config = parseConfigResponse(configRaw);
     const g = response.game;
+    /* FP4 (escrow 2.1.0): this build binds only a chain game funded under an exit policy it serves -- a Live game on
+       the 20-minute action clock. A game stored by escrow 2.0.0 code (no policy: an older game of a migrated
+       deployment) is financial protocol 3's; an async game's deadline class (its pace, or none) is the table's choice,
+       which no table records yet (the server clock lane), so it is not bound under terms nobody at the table chose. */
+    const policyProblem =
+      (g.policy ?? null) === null
+        ? "the chain game was stored by escrow 2.0.0 code (no exit policy): financial protocol 3's, not this build's"
+        : g.mode !== 0
+          ? "an async money table's deadline class (its pace, or no deadline) is not recorded by any table yet"
+          : g.policy !== "timed_remedy_v1"
+            ? `the chain game's exit policy is ${String(g.policy)}, not the Live action clock`
+            : null;
+    if (policyProblem !== null) return { ok: false, code: expect !== null ? "not-the-hosts-escrow" : "terms-mismatch", detail: policyProblem };
     if (expect !== null) {
       const refusal = (detail: string) => ({ ok: false as const, code: "not-the-hosts-escrow", detail });
       if (g.chain_game_id !== chainGameId) return refusal("the chain answered for another game");
@@ -1334,7 +1355,9 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
     const binding = bound.binding;
     const response = await readGame(binding.chain_game_id);
     const g = response.game;
-    if (g.state !== "IN_PROGRESS" && g.state !== "SETTLEABLE") return refuse("wrong-state", `the escrow is ${g.state}; an annul is for a game in progress or settleable`);
+    /* FP4 (escrow 2.1.0): the universal unanimous neutral annulment also reaches a DISPUTED game (bond returned). */
+    const annullable = g.state === "IN_PROGRESS" || g.state === "SETTLEABLE" || (g.state === "DISPUTED" && (g.policy ?? null) !== null);
+    if (!annullable) return refuse("wrong-state", `the escrow is ${g.state}; an annul is for a game in progress, settleable${(g.policy ?? null) !== null ? " or disputed" : ""}`);
     if (g.domain === null) return refuse("wrong-state", "the escrow has no domain");
     const trusted = response.trusted_seq;
     const digest = annulDigestV1(g.domain, BigInt(trusted));
@@ -1665,6 +1688,12 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
       const binding = record.binding?.escrow;
       /* ESCROW-4: a consent or annul lives in its key-suffixed slot family of the same instance. */
       if (binding == null || !intentBelongsTo(intent, escrowInstanceKey(binding))) return { kind: "hold", code: "binding-mismatch", why: "the intent is not this game's chain game" };
+      if (intent.op.kind === "remedy") {
+        /* FP4: a remedy is relayed only on the remedy lane's word (its system pause freezes what is not yet final). */
+        if (deps.remedyGate === undefined) return { kind: "wait", why: "no remedy lane is configured in this build: a remedy intent is not relayed" };
+        const gate = await deps.remedyGate(intent.game_id, intent);
+        if (gate.kind !== "ok") return { kind: "wait", why: gate.why };
+      }
       return { kind: "ok" };
     },
 
@@ -1944,8 +1973,10 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
           /* A contradiction the relayer found keeps its code (the canonical conflict codes included, L4-4). */
           const passes: readonly FinancialHoldCode[] = ["chain-inconsistent", "binding-mismatch", "continuation-incompatible"];
           const code: FinancialHoldCode = passes.includes(intent.hold?.code as FinancialHoldCode) ? (intent.hold?.code as FinancialHoldCode) : "chain-intent-held";
-          /* A held checkpoint is not a held game (a newer one may land); a contradiction always is. */
-          if (intent.op.kind !== "checkpoint" || code !== "chain-intent-held") await hold(intent.game_id, code, `${intent.op.kind}: ${intent.hold?.detail ?? ""}`);
+          /* A held checkpoint is not a held game (a newer one may land); FP4: nor is a held remedy refused for good (an
+             approver rotated its key, the attempts failed) -- a later remedy (the neutral TimeoutAnnul) may still land.
+             A contradiction always is. */
+          if ((intent.op.kind !== "checkpoint" && intent.op.kind !== "remedy") || code !== "chain-intent-held") await hold(intent.game_id, code, `${intent.op.kind}: ${intent.hold?.detail ?? ""}`);
           return;
         }
         if (intent.status === "confirmed" && intent.op.kind === "checkpoint") {

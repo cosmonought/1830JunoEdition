@@ -169,6 +169,8 @@ async function disputingSeat() {
     settlement: { seq: recorded.seq.toString(), payloadDigest: digest },
     /* W2-M (JX-6C): Juno, re-read before the Dispute, still holds this payout, this bond and an open window. */
     bond: "500000",
+    policy: "timed_remedy_v1",
+    allowanceSecs: 1200,
     challengeWindowEndMs: T0 + 600_000,
     resolverTimeoutAtMs: null,
     resolverTimeoutSecs: 7_200,

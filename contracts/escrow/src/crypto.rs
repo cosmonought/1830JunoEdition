@@ -16,7 +16,28 @@
 //! join        = SHA-256("18JUNO/JOIN/v1" ‖ u16(len) ‖ chain_id ‖ u16(len) ‖ contract_addr
 //!                       ‖ u64(chain_game_id) ‖ u16(len) ‖ wallet ‖ join_ticket ‖ u64(expires_at))
 //!                                                                        signed by the admission key
+//! remedy      = SHA-256("18JUNO/REMEDY/v1" ‖ encode(attestation))      signed by a REMEDY key
+//! approve     = SHA-256("18JUNO/REMEDY-APPROVE/v1" ‖ domain ‖ u64(chain_game_id) ‖ u8(remedy)
+//!                       ‖ u8(defaulting_seat) ‖ u8(strike) ‖ u64(overdue_epoch) ‖ u64(log_len)
+//!                       ‖ log_hash ‖ u64(overdue_at) ‖ u8(approving_seat))
+//!                                                                  signed by a seat's consent key
 //! ```
+//!
+//! REMEDY (escrow 2.1.0, owner decision R1, 2026-10-06): the dedicated remedy
+//! attestation key's statement that an off-chain timing fact became FINAL:
+//! which seat defaulted, on which strike and overdue epoch, at which exact log
+//! position, when it became overdue and final, when it was attested and until
+//! when the statement may be used, and the hash of the control-plane clock
+//! evidence. The 166-byte encoding is in `remedy::RemedyAttestation::encode`.
+//! REMEDY-APPROVE: one non-defaulting seat's approval of one remedy kind
+//! against one defaulting seat for ONE overdue instance -- its strike, epoch,
+//! the exact log position it stalled at and the moment it became overdue, each
+//! of which must equal the attestation's; it names neither finality nor
+//! expiry, so a seat approves while the overdue is pending, the remedy key
+//! decides finality, and a re-attestation of the same final decision keeps the
+//! approvals. Neither digest is ever signed by
+//! a settlement signer key or the admission key; every tag differs, so no
+//! signature made for one purpose verifies for another.
 //!
 //! JOIN (the join admission, 2026-09-28): the hosted server's authorization for
 //! ONE wallet (the `Join` transaction's own sender, never a message field) to
@@ -46,6 +67,10 @@ pub const TAG_CONSENT: &[u8] = b"18JUNO/CONSENT/v1";
 pub const TAG_ANNUL: &[u8] = b"18JUNO/ANNUL/v1";
 /// The join admission (see the module comment).
 pub const TAG_JOIN: &[u8] = b"18JUNO/JOIN/v1";
+/// The remedy attestation (see the module comment).
+pub const TAG_REMEDY: &[u8] = b"18JUNO/REMEDY/v1";
+/// A non-defaulting seat's approval of a remedy (see the module comment).
+pub const TAG_REMEDY_APPROVE: &[u8] = b"18JUNO/REMEDY-APPROVE/v1";
 /// `evidence_hash = SHA-256(tag ‖ exported log bytes)`. Computed off-chain; the
 /// contract stores the 32 bytes a challenger supplies and never interprets them.
 pub const TAG_EVIDENCE: &[u8] = b"18JUNO/EVIDENCE/v1";
@@ -174,6 +199,50 @@ pub fn join_admission_digest(
     Ok(hasher.finalize().into())
 }
 
+/// The digest a REMEDY key signs: `SHA-256(REMEDY tag ‖ encode(attestation))`.
+pub fn remedy_digest(encoded_attestation: &[u8]) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(TAG_REMEDY);
+    hasher.update(encoded_attestation);
+    hasher.finalize().into()
+}
+
+/// The digest seat `approving_seat`'s consent key signs to approve `remedy`
+/// against `defaulting_seat` for ONE overdue instance of the game bound by
+/// `domain` / `chain_game_id`: its `strike`, `overdue_epoch`, the exact log
+/// position it stalled at (`log_len`, `log_hash` -- the log does not move while
+/// a seat is overdue; a cure is what ends the instance) and the moment it
+/// became overdue (`overdue_at`). Each of them must equal the attestation's,
+/// so an approval given for one overdue never counts for another, whatever
+/// the REMEDY key later attests (a cured overdue's approvals are dead once play
+/// moves on). Finality and expiry are not bound: approvals survive the
+/// re-attestation of the same final decision.
+#[allow(clippy::too_many_arguments)]
+pub fn remedy_approve_digest(
+    domain: &[u8; 32],
+    chain_game_id: u64,
+    remedy: u8,
+    defaulting_seat: u8,
+    strike: u8,
+    overdue_epoch: u64,
+    log_len: u64,
+    log_hash: &[u8; 32],
+    overdue_at: u64,
+    approving_seat: u8,
+) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(TAG_REMEDY_APPROVE);
+    hasher.update(domain);
+    hasher.update(chain_game_id.to_be_bytes());
+    hasher.update([remedy, defaulting_seat, strike]);
+    hasher.update(overdue_epoch.to_be_bytes());
+    hasher.update(log_len.to_be_bytes());
+    hasher.update(log_hash);
+    hasher.update(overdue_at.to_be_bytes());
+    hasher.update([approving_seat]);
+    hasher.finalize().into()
+}
+
 /// `true` iff the `s` half of `r ‖ s` is at most ⌊n/2⌋. Big-endian byte
 /// comparison of equal-length arrays is numeric comparison.
 pub fn is_low_s(signature: &[u8; SIGNATURE_LEN]) -> bool {
@@ -236,7 +305,8 @@ pub fn check_signature(
     }
 }
 
-/// [`check_signature`] for the settlement signer, with specific errors.
+/// [`check_signature`] for the settlement signer (and the remedy key), with
+/// specific errors.
 pub fn verify_settlement_signature(
     api: &dyn Api,
     digest: &[u8; 32],
@@ -323,6 +393,53 @@ mod tests {
                 .unwrap(),
             base
         );
+    }
+
+    #[test]
+    fn tags_are_pairwise_distinct_and_prefix_free() {
+        let tags = [
+            TAG_DOMAIN,
+            TAG_ROSTER,
+            TAG_SETTLE,
+            TAG_CONSENT,
+            TAG_ANNUL,
+            TAG_JOIN,
+            TAG_EVIDENCE,
+            TAG_REMEDY,
+            TAG_REMEDY_APPROVE,
+        ];
+        for (i, a) in tags.iter().enumerate() {
+            for (j, b) in tags.iter().enumerate() {
+                if i != j {
+                    assert!(!b.starts_with(a), "{:?} prefixes {:?}", a, b);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn remedy_approve_digest_binds_every_field() {
+        let domain = [9u8; 32];
+        let log = [4u8; 32];
+        let base = remedy_approve_digest(&domain, 5, 2, 1, 2, 7, 40, &log, 1_000, 0);
+        let mut other = domain;
+        other[0] ^= 1;
+        let mut other_log = log;
+        other_log[31] ^= 1;
+        for changed in [
+            remedy_approve_digest(&other, 5, 2, 1, 2, 7, 40, &log, 1_000, 0),
+            remedy_approve_digest(&domain, 6, 2, 1, 2, 7, 40, &log, 1_000, 0),
+            remedy_approve_digest(&domain, 5, 5, 1, 2, 7, 40, &log, 1_000, 0),
+            remedy_approve_digest(&domain, 5, 2, 0, 2, 7, 40, &log, 1_000, 0),
+            remedy_approve_digest(&domain, 5, 2, 1, 1, 7, 40, &log, 1_000, 0),
+            remedy_approve_digest(&domain, 5, 2, 1, 2, 8, 40, &log, 1_000, 0),
+            remedy_approve_digest(&domain, 5, 2, 1, 2, 7, 41, &log, 1_000, 0),
+            remedy_approve_digest(&domain, 5, 2, 1, 2, 7, 40, &other_log, 1_000, 0),
+            remedy_approve_digest(&domain, 5, 2, 1, 2, 7, 40, &log, 1_001, 0),
+            remedy_approve_digest(&domain, 5, 2, 1, 2, 7, 40, &log, 1_000, 2),
+        ] {
+            assert_ne!(changed, base);
+        }
     }
 
     #[test]

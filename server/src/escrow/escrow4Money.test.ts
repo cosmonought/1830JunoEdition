@@ -158,13 +158,13 @@ describe("ESCROW-4 / LIVE-4 amendment §4: money creation checks the settlement 
     } finally {
       await world.close();
     }
-    /* The same world with the real constants creates it, under financial protocol 3. */
+    /* The same world with the real constants creates it, under financial protocol 4 (3 until Phase 3's escrow 2.1). */
     const real = await moneyServer();
     try {
       const host = await player(real, "Now");
       const table = await openMoneyTable(host);
       const fin = await real.financial.load(table.gameId);
-      assert.deepEqual(fin?.continuation, { format: "18COSMOS/MONEY-CONTINUATION/v1", rules_engine_version: RULES_ENGINE_VERSION, hosted_protocol: 1, financial_protocol: 3, settlement_codec: "18JUNO/v1" });
+      assert.deepEqual(fin?.continuation, { format: "18COSMOS/MONEY-CONTINUATION/v1", rules_engine_version: RULES_ENGINE_VERSION, hosted_protocol: 1, financial_protocol: 4, settlement_codec: "18JUNO/v1" });
     } finally {
       await real.close();
     }

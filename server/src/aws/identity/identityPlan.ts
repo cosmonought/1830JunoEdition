@@ -109,6 +109,7 @@ export type Clause =
   /** P3-ACCT: the item has no such attribute at all (a schema-1 profile has no `login_key`). */
   | { readonly op: "attr-absent"; readonly attr: string }
   | { readonly op: "gt"; readonly attr: string; readonly value: AttributeValue }
+  | { readonly op: "lt"; readonly attr: string; readonly value: AttributeValue }
   | { readonly op: "in"; readonly attr: string; readonly values: readonly AttributeValue[] }
   | { readonly op: "or"; readonly of: readonly Clause[] }
   | { readonly op: "and"; readonly of: readonly Clause[] };
@@ -121,6 +122,7 @@ export const cl = Object.freeze({
   notNull: (attr: string): Clause => ({ op: "not-null", attr }),
   attrAbsent: (attr: string): Clause => ({ op: "attr-absent", attr }),
   gtN: (attr: string, value: number): Clause => ({ op: "gt", attr, value: N(value) }),
+  ltN: (attr: string, value: number): Clause => ({ op: "lt", attr, value: N(value) }),
   inS: (attr: string, values: readonly string[]): Clause => ({ op: "in", attr, values: values.map(S) }),
   or: (...of: Clause[]): Clause => ({ op: "or", of }),
   and: (...of: Clause[]): Clause => ({ op: "and", of }),
@@ -166,6 +168,8 @@ class Expression {
         return `attribute_not_exists(${this.name(clause.attr)})`;
       case "gt":
         return `${this.name(clause.attr)} > ${this.value(clause.value)}`;
+      case "lt":
+        return `${this.name(clause.attr)} < ${this.value(clause.value)}`;
       case "in":
         return `${this.name(clause.attr)} IN (${clause.values.map((value) => this.value(value)).join(", ")})`;
       case "or":
@@ -379,7 +383,10 @@ export function planIdentityChange(change: IdentityChange, view: IdentityPlanVie
     const login = loginOf(record);
     const unset = [cl.attrAbsent("login_key"), cl.isNull("login_key")];
     add(target, cl.or(cl.absent(), ...unset, ...(login === null ? [] : [cl.eqS("login_key", login.key)])), "a profile's username never changes or goes");
-    if (record.schema !== 2) add(target, cl.or(cl.absent(), cl.attrAbsent("login_key")), "a profile never returns to schema 1");
+    if (record.schema === 1) add(target, cl.or(cl.absent(), cl.attrAbsent("login_key")), "a profile never returns to schema 1");
+    /* PHASE 3 FINAL: a schema-3 profile (the Authorization Wallet model) is made as one and stays one; no legacy record
+       ever becomes one (there is no migration). */
+    add(target, record.schema === 3 ? cl.or(cl.absent(), cl.gtN("schema", 2)) : cl.or(cl.absent(), cl.ltN("schema", 3)), "a profile never changes between the legacy and the Authorization Wallet schema");
   }
   for (const record of change.families ?? []) {
     const target = spec(keys.family(record.family_id), "family");

@@ -11,6 +11,8 @@
 // it.
 
 import * as http from "http";
+
+import { keplrAccount, type KeplrAccount } from "../testSupport/authorizationWallets";
 import { WebSocket } from "ws";
 
 import { createGameServer, type GameServerIdentity, type GameServerOptions } from "../gameServer";
@@ -491,12 +493,13 @@ export async function seedGame(records: RecordStore, claims: readonly string[] =
 }
 
 /* ==================================================================
-    LIVE-2E: PRODUCTION BROWSERS -- A COOKIE, AND A PROFILE BEFORE ANY GAME SOCKET
+    PRODUCTION BROWSERS -- A COOKIE, AND AN ACCOUNT BEFORE ANY GAME SOCKET
    ==================================================================
-   Profiles are mandatory: a production (cookie) principal opens no game socket until its browser has created, recovered
-   or linked a profile -- the upgrade answers 403 (step "profile"). So a suite that needs a real cookie principal on a
-   socket walks what a browser walks: `POST /gs/api/session` (201 + the session cookie), then `POST /gs/api/profile`
-   (201 + the recovery key, shown once). Real HTTP, the allowed Origin, JSON. */
+   Accounts are mandatory to play: a production (cookie) principal plays no seat until its browser has created or signed
+   in to an account. PHASE 3 FINAL: an account is a username, a password and ONE Authorization Wallet -- so a suite that
+   needs a real cookie principal walks what a browser walks: `POST /gs/api/session` (201 + the session cookie), then
+   `POST /gs/api/account/authorization` (the CREATE text), the wallet's ADR-036 signature (a test Keplr account), and
+   `POST /gs/api/account/create` (201 + a FRESH cookie). Real HTTP, the allowed Origin, JSON. No recovery key exists. */
 export const PROD_ORIGIN = "https://play.example";
 
 export interface ApiAnswer {
@@ -556,38 +559,61 @@ export async function bootstrapCookie(port: number, origin: string = PROD_ORIGIN
 }
 
 export interface ProfiledBrowser {
-  /** The session cookie (`__Host-gs_session=v1.se_….<secret>`), unchanged by the profile's creation. */
+  /** The session cookie the account create set (`__Host-gs_session=v1.se_….<secret>`). */
   cookie: string;
-  /** The recovery key, as the one response that delivers it showed it. */
-  recoveryKey: string;
   /** The profile's display name as the server cleaned it. */
   name: string;
+  /** PHASE 3 FINAL: the account's username, password and Authorization Wallet (a test Keplr account). */
+  username: string;
+  password: string;
+  wallet: KeplrAccount;
 }
 
-/** LIVE-2E: "bootstrap + create profile + cookie" over real HTTP -- a browser that may now open game sockets. */
+/** PHASE 3 FINAL: usernames are unique; `profiledBrowser` derives one per call. */
+let profiledSerial = 0;
+
+/** "bootstrap + create an account (with its Authorization Wallet) + its cookie" over real HTTP -- a browser that may now
+ *  open game sockets. */
 export async function profiledBrowser(port: number, name = "Player", origin: string = PROD_ORIGIN): Promise<ProfiledBrowser> {
-  const cookie = await bootstrapCookie(port, origin);
-  const created = await apiRequest(port, "/gs/api/profile", { cookie, body: { name }, origin });
-  if (created.status !== 201 || created.body === null) throw new Error(`create profile: expected 201, got ${created.status} ${created.text}`);
-  const profile = created.body.profile as { name: string };
-  return { cookie, recoveryKey: created.body.recoveryKey as string, name: profile.name };
+  profiledSerial += 1;
+  const username = `${name.replace(/[^A-Za-z0-9._-]/g, "").slice(0, 40) || "player"}-${process.pid}-${profiledSerial}`;
+  const account = await accountBrowser(port, username, "correct horse battery", name, origin);
+  return { cookie: account.cookie, name: account.name, username, password: account.password, wallet: account.wallet };
 }
 
-/** P3-ACCT: a browser that CREATED A USERNAME/PASSWORD ACCOUNT -- its cookie is the FRESH one the create answer set (the
- *  bootstrap's was replaced). */
+/** A browser that CREATED A USERNAME/PASSWORD ACCOUNT with its Authorization Wallet -- its cookie is the FRESH one the
+ *  create answer set (the bootstrap's was replaced). */
 export interface AccountBrowser {
   readonly cookie: string;
   readonly username: string;
   readonly password: string;
   readonly name: string;
+  /** PHASE 3 FINAL: the account's Authorization Wallet. */
+  readonly wallet: KeplrAccount;
 }
 
-export async function accountBrowser(port: number, username: string, password = "correct horse battery", name = username.slice(0, 24), origin: string = PROD_ORIGIN): Promise<AccountBrowser> {
+/** PHASE 3 FINAL: the CREATE text for this browser and username, signed by `wallet` (the create's proof fields). */
+export async function createAuthorization(port: number, cookie: string, username: string, wallet: KeplrAccount, origin: string = PROD_ORIGIN): Promise<{ operation: string; pubKey: string; signature: string }> {
+  const minted = await apiRequest(port, "/gs/api/account/authorization", { cookie, body: { purpose: "create", username, wallet: wallet.address }, origin });
+  if (minted.status !== 200 || minted.body === null) throw new Error(`authorization (create): expected 200, got ${minted.status} ${minted.text}`);
+  const texts = minted.body.texts as Array<{ text: string }>;
+  return { operation: minted.body.operation as string, ...wallet.sign(texts[0].text) };
+}
+
+export async function accountBrowser(
+  port: number,
+  username: string,
+  password = "correct horse battery",
+  name = username.slice(0, 24),
+  origin: string = PROD_ORIGIN,
+  wallet: KeplrAccount = keplrAccount(`authorization/${username}`),
+): Promise<AccountBrowser> {
   const before = await bootstrapCookie(port, origin);
-  const created = await apiRequest(port, "/gs/api/account/create", { cookie: before, body: { username, password, name }, origin });
+  const proof = await createAuthorization(port, before, username, wallet, origin);
+  const created = await apiRequest(port, "/gs/api/account/create", { cookie: before, body: { username, password, name, ...proof }, origin });
   const cookie = cookieFromAnswer(created);
   if (created.status !== 201 || cookie === null) throw new Error(`create account: expected 201 + a cookie, got ${created.status} ${created.text}`);
-  return { cookie, username, password, name: (created.body?.profile as { name: string }).name };
+  return { cookie, username, password, name: (created.body?.profile as { name: string }).name, wallet };
 }
 
 /** P3-ACCT: a fresh browser logs in; its new cookie (or the refusal). */

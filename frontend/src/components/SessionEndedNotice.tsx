@@ -6,9 +6,9 @@
 // console-only one.
 //
 // LIVE-2E / P3-ACCT: "Continue" never starts anybody new: it gives this browser a fresh, signed-out session and the
-// reload lands on the public homepage, where "Log in" (username and password -- or, for a profile made before
-// accounts, its recovery key or a link code) brings the SAME account back, with its seats, which the server kept all
-// along.
+// reload lands on the public homepage, where "Log in" (username and password; "Forgot password?" with the account's
+// Authorization Wallet) brings the SAME account back, with its seats, which the server kept all along. (PHASE 3 FINAL: a
+// `retired` session belonged to an account made before Authorization Wallets -- its owner makes a new account.)
 
 import { forgetActiveTable } from "../utils/activeGame";
 import React, { useState } from "react";

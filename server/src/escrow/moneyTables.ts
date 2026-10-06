@@ -17,12 +17,12 @@
 //                   network, contract, table, seat and wallet (`walletProof.ts`) -> a ticket issued in the game's ACTOR
 //                   TASK, with the verified proof recorded on the grant (the join admission's precondition). The refusal
 //                   policy is exact (below); nothing is ever reassigned automatically.
-//                   P3-ACCT: the AUTHORITY is either the session's "Confirm it's you" grant (a recent sign-in, the
-//                   password, or a legacy recovery key) -- or, for the wallet the PROFILE already proved it controls
-//                   (its persisted, verified wallet), that wallet's own fresh signature: a returning player is never asked
-//                   for the password just to play another game with the wallet they already proved. Any OTHER wallet
-//                   still needs the grant (a stolen cookie alone can neither link a new wallet nor replace the profile's),
-//                   and a link authorized by the grant persists its wallet to the profile.
+//                   PHASE 3 FINAL: the AUTHORITY is either the session's "Confirm it's you" grant (a sign-in in the last
+//                   few minutes, or the password) -- or, when the wallet being linked IS the account's designated
+//                   AUTHORIZATION WALLET, that wallet's own fresh signature (it is a stronger authority than the password:
+//                   it can recover the account). Any other wallet needs the grant (a stolen cookie alone can never bind
+//                   a wallet to a seat). A link changes nothing about the account: no wallet is ever persisted to, or
+//                   inferred as, the profile -- a seat's wallet is that table's, and the account is the player.
 //   admission       a joiner's Join needs the server's admission (ESCROW-JOIN): `authorizeJoin` runs in the game's actor
 //                   task, so a seat op and an admission never interleave (R-J1: the seat is locked until the admission's
 //                   expiry plus the clock margin).
@@ -135,9 +135,10 @@ export interface MoneyCaller {
   /** This session holds a live "Confirm it's you" grant (`/gs/api/profile/reauth`, 3A; P3-ACCT: or a sign-in in the
    *  last few minutes, which makes one). */
   readonly sensitive: boolean;
-  /** P3-ACCT: the wallet this caller's PROFILE proved it controls (persisted, verified), or null. A fresh proof by this
-   *  wallet authorizes its own link without the grant. */
-  readonly profileWallet: string | null;
+  /** PHASE 3 FINAL: the caller's account's designated Authorization Wallet (null: none -- never for an active account).
+   *  A fresh proof by THIS wallet authorizes its own link without the grant. It is never the seat's wallet by itself:
+   *  each table's seat binds whatever wallet the player links and funds there. */
+  readonly authorizationWallet: string | null;
   /** The request's allow-listed Origin: the challenge's `Site:`. */
   readonly origin: string;
 }
@@ -181,22 +182,16 @@ export interface MoneyTablesDeps {
   readonly challenges?: ChallengeBook;
   /** Tests: the observer's ticks are driven by hand. */
   readonly manualObserver?: boolean;
-  /** P3-ACCT: persist a wallet whose proof a GRANT-authorized link just verified to the caller's profile (identity's
-   *  `associateWallet`). Absent: nothing is persisted (every link then needs the grant, as before). */
-  readonly associateWallet?: (
-    context: { readonly principalId: string; readonly familyId: string; readonly recoverySelector: string; readonly seen: string | null },
-    wallet: string,
-    verifiedAt: number,
-  ) => Promise<"associated" | "unchanged" | "no-profile" | "stale" | "unavailable">;
 }
 
-/** P3-ACCT: what authorizes a wallet link for `wallet` -- the session's grant, or the profile's own proven wallet. */
-function linkAuthority(caller: MoneyCaller, wallet: string): "grant" | "profile-wallet" | null {
+/** What authorizes a wallet link for `wallet` -- the session's grant, or (PHASE 3 FINAL) the account's own
+ *  Authorization Wallet linking itself. */
+function linkAuthority(caller: MoneyCaller, wallet: string): "grant" | "authorization-wallet" | null {
   if (caller.sensitive) return "grant";
-  if (caller.profileWallet !== null && caller.profileWallet === wallet) return "profile-wallet";
+  if (caller.authorizationWallet !== null && caller.authorizationWallet === wallet) return "authorization-wallet";
   return null;
 }
-const CONFIRM_FIRST = "Confirm it's you (your password, or a profile's recovery key) to use a wallet that isn't this account's verified wallet; then the wallet signs.";
+const CONFIRM_FIRST = "Confirm it's you with your password to link this wallet to your seat; then the wallet signs.";
 
 type Snapshot = Awaited<ReturnType<WalletTicketLedger["snapshot"]>>;
 type Grant = Snapshot["grants"][number];
@@ -499,11 +494,14 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
 
   /** Look for the host's CreateGame: first a hinted chain game id, then the contract's game list from the ticket's own
    *  floor. Every candidate is BOUND only through W-13 (a quorum read proving it is exactly the table's). */
-  async function discover(entry: TableCache, record: GameRecord): Promise<boolean> {
+  async function discover(entry: TableCache, record: GameRecord, grant?: Grant): Promise<boolean> {
     if (!deps.service.isReady()) return false;
     const grants = entry.ledger?.grants ?? [];
-    const hostGrant = standingLinkOf(grants, record.host_player_id);
-    if (hostGrant === null) return false;
+    /* PHASE 3 FINAL: a link decision may look for the host's CreateGame under ANY ticket the host's seat was issued
+       (`grant`), not only the standing one -- a host's ante on chain binds the table's wallet even after its link stopped
+       standing (a security event), so a later link of ANOTHER wallet can never orphan it. */
+    const hostGrant = grant ?? standingLinkOf(grants, record.host_player_id);
+    if (hostGrant === null || hostGrant.player_id !== record.host_player_id || hostGrant.proof === null) return false;
     const expect = hostExpectation(record, hostGrant);
     /* A candidate refused because the backend isn't verified yet may pass later: the scan stops before it and reads it
        again next time (review S-L1). Every other refusal is about the candidate itself (not the host's escrow, other
@@ -1236,7 +1234,7 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
     if (!isTable(table)) return table;
     const wallet = canonicalJunoWallet(body.wallet);
     if (wallet === null) return refusal(400, "bad-wallet", "That isn't a Juno wallet address.");
-    /* P3-ACCT: the grant, or the profile's own proven wallet (its fresh signature, next, is the proof). */
+    /* The grant, or the account's own Authorization Wallet (its fresh signature, next, is the proof). */
     if (linkAuthority(caller, wallet) === null) return refusal(403, "reauth-required", CONFIRM_FIRST);
     if (table.record.status !== "waiting" || dealtRecord(table.record)) return refusal(409, "wrong-state", "A wallet is linked before the game starts.");
     /* W2-M (AUD-20.14): before the wallet signs, say which wallet this seat's standing link would replace (the
@@ -1289,7 +1287,30 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
     if (snapshot.grants.some((grant) => grant.player_id !== playerId && grant.standing && grant.proof !== null && grant.wallet === wallet)) {
       return no(409, "wallet-in-use", "That wallet is already linked to another seat at this table.");
     }
-    const bound = fin.binding?.escrow ?? null;
+    let bound = fin.binding?.escrow ?? null;
+    /* PHASE 3 FINAL (owner ruling 2026-10-06: ONCE A PLAYER HAS ANTED INTO A TABLE, THAT TABLE'S FINANCIAL WALLET
+       BINDING CANNOT BE CHANGED): a host's ante is its CreateGame, which needs no admission -- so before this link could
+       issue a new ticket, the chain is searched for a CreateGame under EVERY proven ticket this seat was ever issued
+       (newest first), standing or not. One found is bound (W-13), and the decision below then sees the host's deposit
+       on chain: the same wallet relinks it (free), any other wallet is refused until that escrow is cancelled. */
+    if (bound === null && isHost && !(newest !== undefined && newest.standing && newest.proof !== null)) {
+      const entry = entryOf(record.game_id);
+      entry.ledger = snapshot;
+      const earlier = grants.filter((grant) => grant.proof !== null).sort((a, b) => b.epoch - a.epoch);
+      const seenTickets = new Set<string>();
+      try {
+        for (const grant of earlier) {
+          if (seenTickets.has(grant.ticket)) continue;
+          seenTickets.add(grant.ticket);
+          if (await discover(entry, record, grant)) {
+            bound = (await deps.financial.load(record.game_id))?.binding?.escrow ?? null;
+            break;
+          }
+        }
+      } catch {
+        return no(503, "chain-unavailable", "Juno couldn't be checked just now, so the wallet wasn't linked. Try again in a moment.");
+      }
+    }
     if (bound !== null) {
       let game: JunoGameResponse;
       try {
@@ -1310,7 +1331,16 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
       if (admitted !== null) return no(409, "admission-outstanding", "This seat's join approval hasn't expired yet. Deposit with the linked wallet, or wait for the approval to lapse.");
       const mine = new Set(grants.map((grant) => grant.wallet));
       const earlierDeposit = seats.find((seat) => mine.has(seat.wallet) && seat.wallet !== wallet);
-      if (earlierDeposit !== undefined) return no(409, "withdraw-or-relink-first", `This seat still has a deposit from ${earlierDeposit.wallet} on Juno. Relink that wallet (free), or withdraw its deposit first.`);
+      /* PHASE 3 FINAL: the ante is the binding -- a seat whose deposit is on chain keeps that deposit's wallet. */
+      if (earlierDeposit !== undefined) {
+        return no(
+          409,
+          "withdraw-or-relink-first",
+          isHost
+            ? `Your table's ante is already on Juno from ${earlierDeposit.wallet}, so its payout wallet can't change. Relink that wallet (free), or cancel the escrow on Juno first.`
+            : `This seat's ante is already on Juno from ${earlierDeposit.wallet}, so its payout wallet can't change. Relink that wallet (free), or withdraw that deposit first.`,
+        );
+      }
     } else if (isHost && newest !== undefined && newest.standing && newest.proof !== null) {
       /* A host's CreateGame needs no admission: before a new ticket orphans it, look for it once more. */
       const entry = entryOf(record.game_id);
@@ -1340,7 +1370,7 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
   async function walletLink(caller: MoneyCaller, body: Record<string, unknown>): Promise<MoneyAnswer> {
     const down = serviceReady();
     if (down !== null) return down;
-    if (!caller.sensitive && caller.profileWallet === null) return refusal(403, "reauth-required", CONFIRM_FIRST);
+    if (!caller.sensitive && caller.authorizationWallet === null) return refusal(403, "reauth-required", CONFIRM_FIRST);
     const table = tableFor(caller, body.gameId);
     if (!isTable(table)) return table;
     const elsewhere = await notServedHere(table.record);
@@ -1352,8 +1382,8 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
     if (taken.kind === "spent") return taken.signature === signature ? (taken.result as MoneyAnswer) : refusal(409, "challenge-used", "That link request was already used. Start the link again.");
     const entry = taken.entry;
     const nonce = entry.nonce;
-    /* P3-ACCT: decided again at LINK time, for the wallet the challenge names (a grant that lapsed meanwhile, or a profile
-       wallet that changed, refuses). Not spent: the same signature may be sent again once authorized. */
+    /* Decided again at LINK time, for the wallet the challenge names (a grant that lapsed meanwhile, or an Authorization
+       Wallet replaced meanwhile, refuses). Not spent: the same signature may be sent again once authorized. */
     const authority = linkAuthority(caller, entry.wallet);
     if (authority === null) return refusal(403, "reauth-required", CONFIRM_FIRST);
     /* The nonce is spent with its answer -- unless the answer is "try again" (the chain or the table busy for a moment):
@@ -1422,9 +1452,9 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
         playerId: seat.player_id,
         wallet: entry.wallet,
         context: { principalId: caller.principalId, familyId: caller.familyId, recoverySelector: caller.recoverySelector },
-        /* P3-ACCT: always true here -- a link reaches this point only with an authority (a sensitive grant, or the
-           profile's own proven wallet), checked at the challenge and again above. The ledger keeps its own check as a
-           backstop against a caller that skipped it. */
+        /* Always true here -- a link reaches this point only with an authority (a sensitive grant, or the account's own
+           Authorization Wallet), checked at the challenge and again above. The ledger keeps its own check as a backstop
+           against a caller that skipped it. */
         reauthorized: authority !== null,
         proof,
         consentKey,
@@ -1439,19 +1469,8 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
       return answer({ mode: decision.relinkFrom === null ? "issued" : "relinked", wallet: entry.wallet, epoch: issued.epoch, ticket: issued.ticket });
     });
     soon(table.record.game_id);
-    /* The challenge is spent FIRST (money review NIT): its single use never waits on the identity write below. */
-    const linked = finish(ran.ok ? ran.value : refusal(ran.code === "not-found" ? 404 : 503, ran.code, ran.reason));
-    /* P3-ACCT: a GRANT-authorized link of a wallet the profile has not proved persists it to the profile (the proof's own
-       verification time); the profile's wallet authorizes its later links. A failure to persist changes nothing about
-       the link (the next one simply asks for the grant again). Audited without ids. */
-    if (linked.ok && authority === "grant" && entry.wallet !== caller.profileWallet && deps.associateWallet !== undefined) {
-      /* Re-review N-3: bound to the context that authorized THIS link (decided inside the identity queue). */
-      const persisted = await deps
-        .associateWallet({ principalId: caller.principalId, familyId: caller.familyId, recoverySelector: caller.recoverySelector, seen: caller.profileWallet }, entry.wallet, proof.verified_at)
-        .catch(() => "unavailable" as const);
-      if (persisted === "associated") audit("money.profile-wallet", { game_id: table.record.game_id, replaced: caller.profileWallet !== null });
-    }
-    return linked;
+    /* PHASE 3 FINAL: a link writes nothing about the account (no wallet is persisted to or inferred as the profile). */
+    return finish(ran.ok ? ran.value : refusal(ran.code === "not-found" ? 404 : 503, ran.code, ran.reason));
   }
 
   async function joinAdmission(caller: MoneyCaller, body: Record<string, unknown>): Promise<MoneyAnswer> {

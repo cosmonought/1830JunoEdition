@@ -17,8 +17,8 @@
 // `components/AccountDialog.tsx`, then resumes the action). Nothing holds the app behind the bootstrap any more. The port answers by name only; no response
 // carries an id.
 //
-// P3-ACCT: A SIGN-IN REPLACES THE SESSION. Creating an account, logging in, recovering or linking a profile -- and
-// (P3-ACCT POLICY) changing the password or resetting a forgotten one -- gives this browser a FRESH session (the old one is revoked `replaced`, and its sockets close 4401). While such a request is in
+// P3-ACCT: A SIGN-IN REPLACES THE SESSION. Creating an account, logging in, recovering one with its Authorization
+// Wallet ("Forgot password?") and changing the password give this browser a FRESH session (the old one is revoked `replaced`, and its sockets close 4401). While such a request is in
 // flight, a bootstrap waits for it -- so a socket that closed under the old session reconnects with the NEW cookie, not
 // a bootstrap that raced the response. And a bootstrap told `replaced` asks once more after a moment: another tab of
 // this browser may have just signed in, and its new cookie may still be landing in the jar. The wait is bounded: a
@@ -30,7 +30,8 @@
 //
 // `session-ended` IS TERMINAL FOR THIS PAGE. The links stop, and `SessionEndedNotice` asks the player; only their
 // explicit "Continue" sends `{fresh: true}` (P3-ACCT: a signed-out visitor again, on the public homepage, where Log in
-// -- or, for a profile from before accounts, its recovery key or a device-link code -- brings the account back).
+// brings the account back -- PHASE 3 FINAL: a `retired` session belonged to an account made before Authorization
+// Wallets, and its owner makes a new account).
 // Nothing here ever does that on its own -- a known session that ended must
 // never quietly become somebody new (LIVE-2 §4.1).
 //
@@ -49,31 +50,30 @@ export interface SessionAccount {
   /** How many OTHER devices are signed in to this profile (for "Sign out other devices"). */
   readonly otherSessions: number;
   readonly development?: boolean;
+  /** PHASE 3 FINAL: the account's username (told only to its own session; empty for the development stand-in). An open
+   *  table compares it to notice that THIS BROWSER changed account under it (another tab signed in or out) -- and asks,
+   *  never re-seating the table silently as someone else (`utils/tableAccountGuard.ts`). */
+  readonly username?: string;
 }
 
 /** LIVE-2E: the `/gs/api/*` routes a page may post to besides the bootstrap -- a closed list, so no caller can put a
  *  credential (or anything else) in a URL. */
 export type SessionApiPath =
   | "session/revoke"
-  | "profile"
-  | "profile/recover"
-  | "profile/link"
-  | "profile/link-code"
-  | "profile/recovery-key"
   | "profile/sign-out-others"
-  /** ESCROW-3A: re-authenticate THIS session with the recovery key before a sensitive action. */
+  /** ESCROW-3A: "Confirm it's you" -- re-authenticate THIS session with the account's password before a sensitive action. */
   | "profile/reauth"
-  /** ESCROW-3A: the creating page received its recovery key (the lost-response rescue closes). */
-  | "profile/key-received"
-  /** P3-ACCT: the username/password account (`profileApi.ts`). */
+  /** The account (`profileApi.ts`): username + password + the Authorization Wallet. */
   | "account/create"
   | "account/login"
-  | "account/credentials"
   | "account/me"
-  | "account/forget-wallet"
-  /** P3-ACCT POLICY: "Change password" (signed in) and "Forgot password?" (signed out, with the recovery key). */
+  /** "Change password" (signed in). */
   | "account/password"
-  | "account/reset"
+  /** PHASE 3 FINAL: the Authorization Wallet's texts (CREATE / RECOVER), "Forgot password?" by it, and its replacement. */
+  | "account/authorization"
+  | "account/recover"
+  | "account/authorization-wallet/challenge"
+  | "account/authorization-wallet/replace"
   /** P3-ACCT: the factual trust indicators (`trustApi.ts`); no id, username or wallet in any answer. */
   | "trust/table"
   | "trust/me"
@@ -174,16 +174,17 @@ export const SIGN_IN_TIMEOUT_MS = 30_000;
 
 /** P3-ACCT: the routes that REPLACE this browser's session (a sign-in of any kind). While one is in flight, a bootstrap
  *  waits for it (see the header). */
-export const SESSION_REPLACING_PATHS: ReadonlySet<SessionApiPath> = new Set<SessionApiPath>(["account/create", "account/login", "profile/recover", "profile/link", "account/password", "account/reset"]);
+export const SESSION_REPLACING_PATHS: ReadonlySet<SessionApiPath> = new Set<SessionApiPath>(["account/create", "account/login", "account/recover", "account/password"]);
 
-/** LIVE-2E: the account a bootstrap body names -- a name and a count, nothing else -- or `null` (signed out: a visitor). */
+/** LIVE-2E: the account a bootstrap body names -- a name, a count and (PHASE 3 FINAL) the username, nothing else -- or
+ *  `null` (signed out: a visitor). */
 function accountOf(body: unknown): SessionAccount | null {
   const profile = body !== null && typeof body === "object" ? (body as { profile?: unknown }).profile : null;
   if (profile === null || typeof profile !== "object") return null;
-  const { name, otherSessions } = profile as { name?: unknown; otherSessions?: unknown };
+  const { name, otherSessions, username } = profile as { name?: unknown; otherSessions?: unknown; username?: unknown };
   if (typeof name !== "string" || name.trim() === "" || name.length > 64) return null;
   const others = typeof otherSessions === "number" && Number.isInteger(otherSessions) && otherSessions >= 0 ? otherSessions : 0;
-  return { name, otherSessions: others };
+  return { name, otherSessions: others, ...(typeof username === "string" && username.length <= 256 ? { username } : {}) };
 }
 
 /** The hosted bootstrap (LIVE-2 §4.1). */
@@ -395,6 +396,9 @@ export function sessionEndedSentence(reason: string | null): string {
       return "This browser signed in to an account, which replaced its earlier session.";
     case "signed-out-remotely":
       return "It was signed out from another of your devices.";
+    /* PHASE 3 FINAL */
+    case "retired":
+      return "It belonged to an account made before Authorization Wallets. That account is retired: create a new account to keep playing.";
     default:
       return "This browser sent a session the server could not accept.";
   }

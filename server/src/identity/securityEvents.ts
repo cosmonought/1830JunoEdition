@@ -54,12 +54,19 @@
 //     the replay follows the chain: at each hash the CONFIRMED replacement from it when there is one (two: refused),
 //     otherwise its LAST one, confirmed or not -- as `credentials-established` (a replacement whose confirmation alone
 //     was lost is its player's way back in; a phantom's new password is one its own player chose). Never back: a hash
-//     some replacement retired is never re-installed. A wrong guess has its remedy in the account's recovery key (a
-//     reset), so no operator review is opened. Its `family_ids` are re-applied like `signed-out-others`.
-//   - the persisted WALLET (P3-ACCT) is NOT journaled: the restore CLEARS every profile's wallet (fail safe -- a wallet
-//     is re-proven, under a fresh sign-in, on its next money action; nothing the player removed can come back).
+//     some replacement retired is never re-installed. A wrong guess has its remedy in the account's Authorization Wallet
+//     ("Forgot password?"), so no operator review is opened. Its `family_ids` are re-applied like `signed-out-others`.
+//   - the LEGACY persisted wallet (P3-ACCT, schema 2) is NOT journaled: the restore CLEARS it (fail safe).
+//   - PHASE 3 FINAL: a schema-3 profile's AUTHORIZATION WALLET is journaled: its first designation travels inside the
+//     profile's `profile-created`; every replacement is an `authorization-wallet-replaced` (`from_wallet`/`from_since` ->
+//     `to_wallet`/`to_since`; the designation time strictly increases, so the replacements form a CHAIN with no cycle even
+//     when a wallet comes back). The replay follows it from the designation the profile holds: at each step the CONFIRMED
+//     replacement from it (two different ones: refused), otherwise its LAST one, confirmed or not -- as
+//     `password-replaced` (both wallets signed every replacement: whichever was committed, the player asked for it; no
+//     review). A designation a replacement retired is never re-installed. "Forgot password?" by the Authorization Wallet
+//     is a `password-replaced` with `via: "authorization-wallet"`.
 //
-// WHAT IS RECORDED (and what is not): the seven kinds of change below, each carrying exactly what a replay needs to
+// WHAT IS RECORDED (and what is not): the eight kinds of change below, each carrying exactly what a replay needs to
 // re-apply it idempotently and in any order -- a rotation names the selector it replaced and the one it installed (a
 // chain, not a clock), a revocation names its families -- and their confirmations. Plain session rotations and
 // single-session evictions are NOT recorded: the restore procedure signs every session out (preflight §17.3 step 3). No
@@ -93,11 +100,31 @@ interface SecurityEventCommon {
 
 /** The kinds of security CHANGE an event records (every kind but `confirmed`). P3-ACCT adds `credentials-established`:
  *  a LEGACY profile set its username and password (a new account's are inside its `profile-created`, schema 2). */
-export type SecurityChangeKind = "profile-created" | "recovery-key-rotated" | "family-revoked" | "signed-out-others" | "principal-disabled" | "credentials-established" | "password-replaced";
-export const SECURITY_CHANGE_KINDS: readonly SecurityChangeKind[] = Object.freeze(["profile-created", "recovery-key-rotated", "family-revoked", "signed-out-others", "principal-disabled", "credentials-established", "password-replaced"]);
+export type SecurityChangeKind =
+  | "profile-created"
+  | "recovery-key-rotated"
+  | "family-revoked"
+  | "signed-out-others"
+  | "principal-disabled"
+  | "credentials-established"
+  | "password-replaced"
+  | "authorization-wallet-replaced";
+export const SECURITY_CHANGE_KINDS: readonly SecurityChangeKind[] = Object.freeze([
+  "profile-created",
+  "recovery-key-rotated",
+  "family-revoked",
+  "signed-out-others",
+  "principal-disabled",
+  "credentials-established",
+  "password-replaced",
+  "authorization-wallet-replaced",
+]);
 
-/** P3-ACCT POLICY: what authorized a password replacement (the current password, or the recovery key). */
-export const PASSWORD_REPLACED_VIA = Object.freeze(["password", "recovery-key"] as const);
+/** What authorized a password replacement: the current password ("Change password"), the Authorization Wallet ("Forgot
+ *  password?", PHASE 3 FINAL), or -- in journals written before it, read only -- a recovery key. */
+export const PASSWORD_REPLACED_VIA = Object.freeze(["password", "recovery-key", "authorization-wallet"] as const);
+
+const JUNO_WALLET = /^juno1[02-9ac-hj-np-z]{38}$/;
 
 export type SecurityEvent =
   /** A profile was created: the principal as bound to it and the profile, exactly as committed (no secret). */
@@ -140,6 +167,17 @@ export type SecurityEvent =
       readonly kept_family_id: string | null;
       readonly family_ids: readonly string[];
     })
+  /** PHASE 3 FINAL: the Authorization Wallet was replaced (the old one approved, the new one accepted -- both signed).
+   *  `from_wallet` designated since `from_since` is retired from this change on; `to_wallet` designated since `to_since`
+   *  (> `from_since`) is the account's. */
+  | (SecurityEventCommon & {
+      readonly kind: "authorization-wallet-replaced";
+      readonly profile_id: string;
+      readonly from_wallet: string;
+      readonly from_since: number;
+      readonly to_wallet: string;
+      readonly to_since: number;
+    })
   /** Review F2: the change the event `confirms` (of kind `confirmed_kind`, same principal) WAS committed. */
   | (SecurityEventCommon & { readonly kind: "confirmed"; readonly confirms: string; readonly confirmed_kind: SecurityChangeKind });
 
@@ -155,6 +193,7 @@ const KIND_FIELDS: Readonly<Record<SecurityEventKind, readonly string[]>> = {
   "principal-disabled": ["family_ids"],
   "credentials-established": ["profile_id", "login_key", "login_name", "password_hash", "set_at"],
   "password-replaced": ["profile_id", "from_hash", "to_hash", "set_at", "via", "kept_family_id", "family_ids"],
+  "authorization-wallet-replaced": ["profile_id", "from_wallet", "from_since", "to_wallet", "to_since"],
   confirmed: ["confirms", "confirmed_kind"],
 };
 const COMMON_FIELDS = ["format", "version", "event_id", "kind", "at", "principal_id"];
@@ -242,6 +281,19 @@ export function isSecurityEvent(value: unknown): value is SecurityEvent {
         isFamilyList(value.family_ids, 0) &&
         (value.kept_family_id === null || !(value.family_ids as string[]).includes(value.kept_family_id as string))
       );
+    case "authorization-wallet-replaced":
+      return (
+        typeof value.profile_id === "string" &&
+        PROFILE_ID_PATTERN.test(value.profile_id) &&
+        typeof value.from_wallet === "string" &&
+        JUNO_WALLET.test(value.from_wallet) &&
+        typeof value.to_wallet === "string" &&
+        JUNO_WALLET.test(value.to_wallet) &&
+        value.from_wallet !== value.to_wallet &&
+        isEventTime(value.from_since) &&
+        isEventTime(value.to_since) &&
+        (value.to_since as number) > (value.from_since as number)
+      );
     case "confirmed":
       return (
         typeof value.confirms === "string" &&
@@ -277,8 +329,9 @@ export function canonicalSecurityEvent(event: SecurityEvent): SecurityEvent {
         recovery_rotated_at: p.recovery_rotated_at,
         schema: p.schema,
       };
-      /* P3-ACCT: a schema-2 profile carries its six fields too, in their stored order (a schema-1 one, none). */
-      if (p.schema === 2) for (const field of PROFILE_V2_FIELDS) profile[field] = (p as unknown as Record<string, unknown>)[field];
+      /* P3-ACCT: a schema-2 (PHASE 3 FINAL: or schema-3) profile carries its six fields too, in their stored order (a
+         schema-1 one, none). */
+      if (p.schema !== 1) for (const field of PROFILE_V2_FIELDS) profile[field] = (p as unknown as Record<string, unknown>)[field];
       out[key] = profile;
     } else if (key === "family_ids") {
       out[key] = [...(value as string[])];

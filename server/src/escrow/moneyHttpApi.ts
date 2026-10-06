@@ -23,8 +23,9 @@
 // limit (a field the route does not name -- a player id, a creation receipt, anything -- is 400); `no-store`; no CORS. The
 // caller is the request's OWN current, profiled session: its principal decides the seat (a body never names one), and
 // SENSITIVE means that session holds a live "Confirm it's you" grant (`hasSensitiveAuth`, ESCROW-3A; P3-ACCT: a recent
-// sign-in makes one) -- the lost-create-response rescue is never an authority here (INV-CR). P3-ACCT: the caller also
-// carries its PROFILE's proven wallet, which authorizes that wallet's own links (`moneyTables.ts` `linkAuthority`).
+// sign-in makes one). PHASE 3 FINAL: the caller also carries its account's designated AUTHORIZATION WALLET, which
+// authorizes that one wallet's own links (`moneyTables.ts` `linkAuthority`). The wallet Keplr has selected in the browser
+// is never sent as, or read as, the caller: the session decides the account, the account decides the seat.
 // Budgeted per session, apart from the profile actions. Nothing here logs a body, a signature or an id.
 
 import type { IncomingMessage, ServerResponse } from "http";
@@ -152,7 +153,7 @@ async function serve(request: IncomingMessage, response: ServerResponse, api: Mo
     recoverySelector: context.recoverySelector,
     principalId: context.principalId,
     sensitive: api.identity.hasSensitiveAuth(read, now),
-    profileWallet: api.identity.profileWallet(context.principalId)?.address ?? null,
+    authorizationWallet: api.identity.authorizationWallet(context.principalId)?.address ?? null,
     origin,
   };
   const handler = money.routes[route];

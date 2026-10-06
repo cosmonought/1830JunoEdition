@@ -17,9 +17,9 @@ export interface TrustFacts {
   readonly unresolvedDisputes: number;
   readonly disputedGames: number;
   readonly inactivityExits: number;
-  readonly walletVerified: boolean;
-  /** `YYYY-MM`, UTC. */
-  readonly walletVerifiedSince: string | null;
+  /** PHASE 3 FINAL: the month the account's current Authorization Wallet was designated, `YYYY-MM` (UTC). Every active
+   *  account has one; it is not a payout wallet and not a connected wallet. */
+  readonly authorizationWalletSince: string | null;
   /** Null until the owner defines an "established" profile (no threshold is invented here or on the server). */
   readonly establishedOpponents: number | null;
 }
@@ -32,8 +32,8 @@ export function trustFactsOf(raw: unknown): TrustFacts | null {
   if (raw === null || typeof raw !== "object") return null;
   const r = raw as Record<string, unknown>;
   const numbers = [count(r.accountAgeDays), count(r.completedMoneyGames), count(r.unresolvedDisputes), count(r.disputedGames), count(r.inactivityExits)];
-  if (typeof r.memberSince !== "string" || !MONTH.test(r.memberSince) || numbers.some((n) => n === null) || typeof r.walletVerified !== "boolean") return null;
-  const since = r.walletVerifiedSince;
+  if (typeof r.memberSince !== "string" || !MONTH.test(r.memberSince) || numbers.some((n) => n === null)) return null;
+  const since = r.authorizationWalletSince;
   if (!(since === null || (typeof since === "string" && MONTH.test(since)))) return null;
   const established = r.establishedOpponents;
   if (!(established === null || count(established) !== null)) return null;
@@ -45,8 +45,7 @@ export function trustFactsOf(raw: unknown): TrustFacts | null {
     unresolvedDisputes,
     disputedGames,
     inactivityExits,
-    walletVerified: r.walletVerified,
-    walletVerifiedSince: since as string | null,
+    authorizationWalletSince: since as string | null,
     establishedOpponents: established as number | null,
   };
 }

@@ -1,18 +1,15 @@
-// The slim top bar -- wallet status, session key, room controls -- moved out of
-// `App.tsx` unchanged, with its three private helpers and its one CSS string.
+// The slim top bar -- the account chip, room controls -- moved out of
+// `App.tsx`, with its private helper and its one CSS string. (Phase 3 final, §12: the
+// parked on-chain mode's wallet cluster -- address, balance, Connect, session key -- is gone.)
 //
-// `firstMissingEnvVar`, `nativeBalanceTitle` and `statusDotColor` each have
+// `firstMissingEnvVar` has
 // exactly one caller. As top-level functions in a 9,600-line file they looked
 // like shared utilities and meant reading `TopBar` required scrolling away from
 // it. `NETA_CREDIT_CSS` likewise styles one link in one component.
 
 import React from "react";
 
-import { useWallet } from "../context/WalletContext";
-import { useGameSession } from "../context/GameSessionContext";
-import { chainConfigError, formatNativeAmount, NATIVE_DENOM_DISPLAY } from "../config";
-import { ConnectWalletButton } from "./ConnectWalletButton";
-import { truncateAddress } from "../utils/address";
+import { chainConfigError } from "../config";
 import { styles } from "../styles/appStyles";
 // Design note #1075: the volume, the off switch, and which effects play -- one panel, two buttons.
 import AudioControls from "./AudioControls";
@@ -48,35 +45,6 @@ import { type AudioCategoryToggle } from "./AudioControlPopover";
  *  sentence. */
 function firstMissingEnvVar(message: string): string | null {
   return message.match(/REACT_APP_[A-Z_]+/)?.[0] ?? null;
-}
-
-/** Hover text for the native balance pill -- the exact base-denom integer
- *  alongside the formatted figure, so a player can verify the conversion and
- *  see that no precision was invented. */
-function nativeBalanceTitle(coin: { denom: string; amount: string } | null): string {
-  if (!coin) return "Native balance unavailable — connect a wallet on a configured chain.";
-  return `${coin.amount} ${coin.denom} (raw base-denom integer)`;
-}
-
-/** Design note #34: the status PILLS became status DOTS, so this returns a
- *  fill only -- there is no longer any text sitting on the colour to need a
- *  matching foreground. Same four states, same meanings. */
-function statusDotColor(
-  status: "disconnected" | "connecting" | "connected" | "error"
-    | "uninitialized" | "initializing" | "ready",
-): React.CSSProperties {
-  switch (status) {
-    case "connected":
-    case "ready":
-      return { backgroundColor: "#2f9e57" };
-    case "connecting":
-    case "initializing":
-      return { backgroundColor: "#c9a94c" };
-    case "error":
-      return { backgroundColor: "#c05050" };
-    default:
-      return { backgroundColor: "#2a2a2a" };
-  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -142,8 +110,6 @@ export default function TopBar({
     sfxCategories?: readonly AudioCategoryToggle[];
   };
 }) {
-  const wallet = useWallet();
-  const session = useGameSession();
   /* Design note #1075: one open panel at a time, named rather than a pair of booleans -- two flags can
      both be true and would render two overlapping popovers from the same corner. */
   /** Design note #1094: the disclosure's outer bound -- both trigger buttons and whichever panel is open.
@@ -157,24 +123,6 @@ export default function TopBar({
   // environment variable. Computed at render -- these are build-time constants
   // that cannot change during a session, so there is nothing to cache.
   const configError = chainConfigError();
-
-  const walletStatusLabel: Record<typeof wallet.status, string> = {
-    disconnected: "Disconnected",
-    connecting: "Connecting...",
-    connected: "Connected",
-    error: "Error",
-  };
-
-  const sessionStatusLabel: Record<typeof session.sessionStatus, string> = {
-    uninitialized: "Not Initialized",
-    initializing: "Initializing...",
-    ready: "Ready",
-    error: "Error",
-  };
-
-  // Only offer the session key when pressing it would do something. See
-  // design note #34 -- the disabled-forever button was pure width.
-  const canInitSession = wallet.status === "connected" && session.sessionStatus !== "ready";
 
   return (
     <header style={styles.topBar}>
@@ -238,8 +186,8 @@ export default function TopBar({
           survivable (#1250, #1253); a control pressed once per browser does not need to be live. */}
       <UiScalePicker />
 
-      {/* LIVE-2E: who this browser plays as, and its profile actions (link a device, rotate the recovery key, sign
-          out). With the player-only controls, before the wallet cluster that can cost money. */}
+      {/* LIVE-2E: who this browser plays as, and its account actions (change password, change the Authorization Wallet,
+          sign out). With the player-only controls, before the wallet cluster that can cost money. */}
       <ProfileMenu />
 
       {/* W1-N / AUD-01.09: the log export, visible. It writes nothing to the room, so it sits with the player-only
@@ -279,71 +227,15 @@ export default function TopBar({
         />
       )}
 
-      {wallet.error && (
-        <span style={styles.topBarError} title={wallet.error}>
-          {wallet.error}
-        </span>
-      )}
-      {session.sessionError && (
-        <span style={styles.topBarError} title={session.sessionError}>
-          {session.sessionError}
-        </span>
-      )}
-
-      {/* Session key: a dot plus, when it would do something, a button. */}
-      <span
-        style={{ ...styles.topBarDot, ...statusDotColor(session.sessionStatus) }}
-        title={`Session key: ${sessionStatusLabel[session.sessionStatus]}${
-          session.sessionAddress ? ` (${session.sessionAddress})` : ""
-        }`}
-        aria-label={`Session key ${sessionStatusLabel[session.sessionStatus]}`}
-      />
-      {canInitSession && (
-        <button
-          type="button"
-          style={styles.topBarButton}
-          onClick={session.initializeSessionKey}
-          disabled={session.sessionStatus === "initializing"}
-          title="Authorise a session key so gameplay actions do not each need a wallet popup."
-        >
-          {session.sessionStatus === "initializing" ? "Initializing..." : "Session Key"}
-        </button>
-      )}
-
-      {wallet.status === "connected" && (
-        <>
-          <span
-            style={styles.nativeBalancePill}
-            title={nativeBalanceTitle(wallet.nativeBalance)}
-          >
-            <span style={styles.nativeBalanceAmount}>
-              {wallet.nativeBalance ? formatNativeAmount(wallet.nativeBalance.amount) : "--"}
-            </span>
-            <span style={styles.nativeBalanceDenom}>{NATIVE_DENOM_DISPLAY}</span>
-          </span>
-          <span style={styles.topBarAddress} title={wallet.address ?? undefined}>
-            {truncateAddress(wallet.address)}
-          </span>
-        </>
-      )}
-
-      <span
-        style={{ ...styles.topBarDot, ...statusDotColor(wallet.status) }}
-        title={`Wallet: ${walletStatusLabel[wallet.status]}`}
-        aria-label={`Wallet ${walletStatusLabel[wallet.status]}`}
-      />
-
-      {wallet.status === "connected" ? (
-        <button type="button" style={styles.topBarButton} onClick={wallet.disconnect}>
-          Disconnect
-        </button>
-      ) : (
-        // Design note #34 + `ConnectWalletButton`'s own design note #0: the
-        // burner-wallet recommendation ships WITH the button, so no entry
-        // point can skip it.
-        <ConnectWalletButton buttonStyle={styles.topBarConnectButton} />
-      )}
-
+      {/* ==================================================================
+           PHASE 3 FINAL (§12): NO WALLET CLUSTER IN THE BAR -- A KEPLR ADDRESS IS NOT "WHO YOU ARE"
+          ==================================================================
+          This strip used to carry the parked on-chain mode's wallet furniture: a Connect / Disconnect button, the
+          connected address, its balance, a wallet dot and a session-key dot. Beside the account chip it answered
+          "who am I" with a Keplr address -- exactly the question the owner ruled a wallet may NOT answer: the PROFILE
+          is the player, and the account chip (`ProfileMenu`) is the only "who" on this bar. Every table here is a
+          hosted table whose actor the server derives from the session; a seat's wallet is chosen, linked and signed
+          with in the money panel, per seat, and Keplr is consulted only at the moment it must sign. */}
       {onLeaveGame && (
         <button type="button" style={styles.topBarButton} onClick={onLeaveGame}>
           &larr; Lobby

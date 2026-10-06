@@ -17,7 +17,7 @@
 // unknown -- which the identity service treats as a restart-required fault, never as success and never silently.
 
 import { StoreDefiniteError, StoreUncertainError } from "../persistence/storeResult";
-import { isLoginKey, isLoginName, isPasswordHash, loginKeyOf } from "./accountCredentials";
+import { isLoginKey, isLoginName, isPasswordHash, loginKeyOf, sealedRecoveryDigest } from "./accountCredentials";
 import { FAMILY_ID_PATTERN, familyIdOf, PRINCIPAL_ID_PATTERN, PROFILE_ID_PATTERN, RECOVERY_SELECTOR_PATTERN, SESSION_ID_PATTERN } from "./ids";
 
 /* ==================================================================
@@ -54,9 +54,23 @@ export interface Principal {
  *        migrated) or all set: the username's canonical form (unique, the login lookup -- NEVER an authority key), the
  *        username as chosen (shown only to the account's own sessions), the scrypt hash (`accountCredentials.ts`), and
  *        when it was set. Once set, the username never changes (no rename in this phase).
- *    wallet_address / wallet_verified_at   both null, or the payout wallet the profile PROVED it controls (an ADR-036
- *        signature verified by this server, at a moment a sensitive authentication stood) and when that proof was
- *        verified. A browser's claim never sets it. */
+ *    wallet_address / wallet_verified_at   both null, or (schema 2: 343fac2 / caad745 only) the payout wallet a game link
+ *        persisted for convenience. A browser's claim never set it.
+ *
+ *  PHASE 3 FINAL (AUTHORIZATION WALLET, owner ruling 2026-10-06): SCHEMA 3 is the account model this build makes. Same
+ *  keys as schema 2, with stricter meaning -- every schema-3 record holds ALL of:
+ *    the username login (all four login fields set: the ordinary sign-in is username + password);
+ *    wallet_address / wallet_verified_at   the profile's ONE designated AUTHORIZATION WALLET (proven by an ADR-036
+ *        signature over a domain-separated "1830JUNO/PROFILE-AUTHORIZATION" text the server minted -- at creation, or by
+ *        a replacement both the old and the new wallet signed) and when that designation was made. Never null: no
+ *        schema-3 profile exists without its Authorization Wallet (the store refuses one).
+ *    recovery_selector / recovery_hash / recovery_rotated_at   NO RECOVERY KEY. The selector is now the profile's
+ *        INTERNAL CREDENTIAL EPOCH only: random (128 bits), never shown, never a credential -- ESCROW-3A binds every
+ *        sensitive grant and every wallet ticket to it, so it keeps exactly its stored format (`rk_…`) and its equality
+ *        semantics. The digest is the SEALED one (`accountCredentials.sealedRecoveryDigest`): no key can ever match it.
+ *  A schema-3 record never goes back to schema 2 or 1, and no schema-1/2 record ever becomes schema 3 (there is no legacy
+ *  migration: a profile without an Authorization Wallet is RETIRED -- see `sessions.ts` -- and its owner makes a new
+ *  account). */
 export interface Profile {
   profile_id: string;
   /** Immutable: the one principal this profile controls. */
@@ -65,16 +79,17 @@ export interface Profile {
   display_name: string;
   created_at: number;
   status: "active" | "disabled";
-  /** The recovery key's selector (`rk_…`), a lookup key. P3-ACCT: also the profile's CREDENTIAL EPOCH for financial
-   *  credentials (every sensitive grant and wallet ticket is bound to it). P3-ACCT POLICY: every new username/password
-   *  account has a real key (an account-recovery credential); only 343fac2's accounts carry a SEALED digest
-   *  (`accountCredentials.sealedRecoveryDigest`: no key matches it). */
+  /** The profile's INTERNAL CREDENTIAL EPOCH (`rk_…`; ESCROW-3A: every sensitive grant and wallet ticket is bound to
+   *  it). Schema 3: random, never shown, never a credential (no recovery key exists). Schemas 1-2 (legacy, retired): it
+   *  was also the lookup key of a recovery key. */
   recovery_selector: string;
-  /** Hex SHA-256 of the recovery key's 32-byte secret. Never the secret. */
+  /** Schema 3: the SEALED digest (no key matches). Legacy: hex SHA-256 of a recovery key's secret. Never a secret. */
   recovery_hash: string;
+  /** When the credential epoch was last set. */
   recovery_rotated_at: number;
-  /** The record's own schema, for LIVE-3's migration. 2: P3-ACCT (the six fields below are present). */
-  schema: 1 | 2;
+  /** The record's own schema, for LIVE-3's migration. 2: P3-ACCT (the six fields below are present). 3: the
+   *  Authorization Wallet model (the same six fields, every one set). */
+  schema: 1 | 2 | 3;
   login_key?: string | null;
   login_name?: string | null;
   password_hash?: string | null;
@@ -87,24 +102,30 @@ export interface Profile {
 export const PROFILE_V2_FIELDS = Object.freeze(["login_key", "login_name", "password_hash", "password_set_at", "wallet_address", "wallet_verified_at"] as const);
 
 /** P3-ACCT: a profile as schema 2 (a schema-1 record gains the six fields, every one null). Never changes a schema-2
- *  record. What every write that sets a credential or a wallet starts from. */
+ *  (or schema-3) record. Used only by the identity restore's replay of a LEGACY profile's journaled credentials. */
 export function asSchema2(profile: Profile): Profile {
-  if (profile.schema === 2) return { ...profile };
+  if (profile.schema !== 1) return { ...profile };
   return { ...profile, schema: 2, login_key: null, login_name: null, password_hash: null, password_set_at: null, wallet_address: null, wallet_verified_at: null };
 }
 
 /** P3-ACCT: the profile's username login, when it has one. */
 export const loginOf = (profile: Profile): { key: string; name: string; hash: string } | null =>
-  profile.schema === 2 && typeof profile.login_key === "string" && typeof profile.login_name === "string" && typeof profile.password_hash === "string"
+  profile.schema !== 1 && typeof profile.login_key === "string" && typeof profile.login_name === "string" && typeof profile.password_hash === "string"
     ? { key: profile.login_key, name: profile.login_name, hash: profile.password_hash }
     : null;
 
-/** P3-ACCT: the profile's persisted, verified wallet, when it has one. */
+/** P3-ACCT (schema 2 only): the LEGACY persisted convenience wallet, when it has one. It authorizes nothing in this build;
+ *  only the identity restore reads it (to clear it). */
 export const walletOf = (profile: Profile): { address: string; verifiedAt: number } | null =>
   profile.schema === 2 && typeof profile.wallet_address === "string" && typeof profile.wallet_verified_at === "number" ? { address: profile.wallet_address, verifiedAt: profile.wallet_verified_at } : null;
 
-/** P3-ACCT: the same profile with no persisted wallet (unchanged when it has none -- a schema-1 profile never has one). */
-export const withoutWallet = (profile: Profile): Profile => (walletOf(profile) === null ? profile : { ...profile, wallet_address: null, wallet_verified_at: null });
+/** PHASE 3 FINAL: the profile's designated AUTHORIZATION WALLET and when it was designated (schema 3 only; every
+ *  schema-3 profile has one). Null for a legacy profile (retired). */
+export const authorizationWalletOf = (profile: Profile): { address: string; since: number } | null =>
+  profile.schema === 3 && typeof profile.wallet_address === "string" && typeof profile.wallet_verified_at === "number" ? { address: profile.wallet_address, since: profile.wallet_verified_at } : null;
+
+/** The wallet field AS STORED (any schema): what the `profile-wallet` compare-and-swap compares. */
+export const storedWalletOf = (profile: Profile): string | null => (profile.schema !== 1 && typeof profile.wallet_address === "string" ? profile.wallet_address : null);
 
 /** P3-ACCT: a canonical Juno account address (20-byte data: `juno1` + 38 bech32 symbols). Shape only; the money layer
  *  decodes the bech32 (`walletProof.canonicalJunoWallet`) before anything sets a wallet. */
@@ -370,7 +391,7 @@ const HEX_64 = /^[0-9a-f]{64}$/;
 
 export function isProfile(value: unknown): value is Profile {
   if (!isRecordObject(value)) return false;
-  if (value.schema === 2) {
+  if (value.schema === 2 || value.schema === 3) {
     if (!exactKeys(value, [...PROFILE_KEYS, ...PROFILE_V2_FIELDS])) return false;
     /* P3-ACCT: the login is all or nothing, and its key is its name's canonical form; the wallet is a pair. */
     const login = [value.login_key, value.login_name, value.password_hash, value.password_set_at];
@@ -379,7 +400,12 @@ export function isProfile(value: unknown): value is Profile {
       isLoginName(value.login_name) && isLoginKey(value.login_key) && value.login_key === loginKeyOf(value.login_name as string) && isPasswordHash(value.password_hash) && isTime(value.password_set_at);
     const noWallet = value.wallet_address === null && value.wallet_verified_at === null;
     const hasWallet = typeof value.wallet_address === "string" && JUNO_WALLET_PATTERN.test(value.wallet_address) && isTime(value.wallet_verified_at);
-    if (!(noLogin || hasLogin) || !(noWallet || hasWallet)) return false;
+    if (value.schema === 3) {
+      /* PHASE 3 FINAL: a username login AND an Authorization Wallet, always; and no recovery key can exist (the sealed
+         digest of its own epoch). */
+      if (!hasLogin || !hasWallet) return false;
+      if (typeof value.recovery_selector !== "string" || value.recovery_hash !== sealedRecoveryDigest(value.recovery_selector)) return false;
+    } else if (!(noLogin || hasLogin) || !(noWallet || hasWallet)) return false;
   } else if (!exactKeys(value, PROFILE_KEYS)) {
     return false;
   }
@@ -396,7 +422,7 @@ export function isProfile(value: unknown): value is Profile {
     typeof value.recovery_hash === "string" &&
     HEX_64.test(value.recovery_hash) &&
     isTime(value.recovery_rotated_at) &&
-    (value.schema === 1 || value.schema === 2)
+    (value.schema === 1 || value.schema === 2 || value.schema === 3)
   );
 }
 
@@ -704,7 +730,7 @@ export function preconditionFailure(lookups: IdentityLookups, expect: readonly I
         }
         case "profile-wallet": {
           const profile = lookups.profile(condition.profile_id);
-          return profile === undefined || (walletOf(profile)?.address ?? null) !== condition.wallet_address;
+          return profile === undefined || storedWalletOf(profile) !== condition.wallet_address;
         }
         case "profile-password": {
           const profile = lookups.profile(condition.profile_id);
@@ -904,7 +930,10 @@ export class IdentityIndex implements IdentityLookups {
       const before = this.profiles.get(record.profile_id);
       if (before !== undefined && before.principal_id !== record.principal_id) return `${where}: profile #${at} would move to another principal`;
       /* P3-ACCT: a profile never goes back to schema 1, and its username, once set, never changes or goes. */
-      if (before !== undefined && before.schema === 2 && record.schema !== 2) return `${where}: profile #${at} would return to schema 1`;
+      if (before !== undefined && before.schema === 2 && record.schema === 1) return `${where}: profile #${at} would return to schema 1`;
+      /* PHASE 3 FINAL: a schema-3 profile is made as one and stays one (no legacy profile is ever given an Authorization
+         Wallet -- there is no migration -- and no Authorization-Wallet profile ever loses it). */
+      if (before !== undefined && (before.schema === 3) !== (record.schema === 3)) return `${where}: profile #${at} would change between the legacy and the Authorization Wallet schema`;
       const loginBefore = before === undefined ? null : loginOf(before);
       const login = loginOf(record);
       if (loginBefore !== null && login?.key !== loginBefore.key) return `${where}: profile #${at} would change or drop its username`;

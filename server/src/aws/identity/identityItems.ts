@@ -359,7 +359,7 @@ function decodeRecord(item: Item, fields: FieldSpec, extra: readonly string[] = 
 /* ------------------------------------------------------------------ */
 
 export const principalItem = (record: Principal): Item => encodeRecord(keys.principal(record.principal_id), PRINCIPAL_FIELDS, record);
-export const profileItem = (record: Profile): Item => encodeRecord(keys.profile(record.profile_id), record.schema === 2 ? PROFILE_FIELDS_V2 : PROFILE_FIELDS, record);
+export const profileItem = (record: Profile): Item => encodeRecord(keys.profile(record.profile_id), record.schema === 1 ? PROFILE_FIELDS : PROFILE_FIELDS_V2, record);
 export const userItem = (record: UserRecord): Item => encodeRecord(keys.user(record.login_key), USER_FIELDS, record);
 export const sessionItem = (record: Session): Item => encodeRecord(keys.session(record.session_id), SESSION_FIELDS, record);
 export const familyItem = (record: SessionFamily): Item => encodeRecord(keys.family(record.family_id), FAMILY_FIELDS, record);
@@ -441,9 +441,10 @@ export function decodeItem(item: Item): DecodedItem | { readonly problem: string
       return record !== null && isPrincipal(record) && record.principal_id === suffix ? { kind, record } : bad;
     }
     case "profile": {
-      /* P3-ACCT: the record's own `schema` says which field set it carries (exactly that set, nothing else). */
+      /* P3-ACCT: the record's own `schema` says which field set it carries (exactly that set, nothing else). PHASE 3
+         FINAL: schema 3 (the Authorization Wallet model) carries schema 2's field set, every field set. */
       const schema = decodeValue(item.schema, "N");
-      const record = decodeRecord(item, schema.ok && schema.value === 2 ? PROFILE_FIELDS_V2 : PROFILE_FIELDS);
+      const record = decodeRecord(item, schema.ok && (schema.value === 2 || schema.value === 3) ? PROFILE_FIELDS_V2 : PROFILE_FIELDS);
       return record !== null && isProfile(record) && record.profile_id === suffix ? { kind, record } : bad;
     }
     case "user": {

@@ -29,8 +29,11 @@
 //   disputedGames / inactivityExits of this profile's real-money tables, those the escrow CLOSED through the dispute
 //                                   resolver (route `resolver_*`) / through its inactivity exit (`liveness_*`,
 //                                   `settleable_timeout_*`) -- the chain's own outcome, as the financial record keeps it.
-//   walletVerified / since          the profile has a persisted wallet it PROVED it controls (identity; no address, no
-//                                   proof material is published here).
+//   authorizationWalletSince        PHASE 3 FINAL: the month the account's current AUTHORIZATION WALLET was designated
+//                                   (at creation, or by its latest replacement -- both proven by ADR-036 signatures). Every
+//                                   active account has one, so this is "since when", not "whether". It is NOT a payout
+//                                   wallet and NOT the wallet connected in anyone's browser; no address and no proof
+//                                   material is published here.
 //   establishedOpponents            P3-ACCT POLICY (owner ruling 2026-10-05): the number of DISTINCT other profiles this
 //                                   one has completed a counted real-money game with (exactly the games
 //                                   `completedMoneyGames` counts), each counted ONCE however many games they played
@@ -61,9 +64,8 @@ export interface TrustFacts {
   readonly unresolvedDisputes: number;
   readonly disputedGames: number;
   readonly inactivityExits: number;
-  readonly walletVerified: boolean;
-  /** The month the wallet was proved, `YYYY-MM` (UTC), or null. */
-  readonly walletVerifiedSince: string | null;
+  /** PHASE 3 FINAL: the month the account's current Authorization Wallet was designated, `YYYY-MM` (UTC). */
+  readonly authorizationWalletSince: string | null;
   /** Distinct established profiles this one has completed a counted real-money game with (see the header). A number
    *  (the type keeps `null` for a client of an older build's answer). */
   readonly establishedOpponents: number | null;
@@ -75,8 +77,8 @@ export const ESTABLISHED_MIN_COMPLETED_MONEY_GAMES = 1;
 export const isEstablished = (facts: Pick<TrustFacts, "completedMoneyGames">): boolean => facts.completedMoneyGames >= ESTABLISHED_MIN_COMPLETED_MONEY_GAMES;
 
 export interface TrustFactsDeps {
-  /** The profile behind a principal: its creation time and its proven wallet's verification time (identity). */
-  readonly profileFacts: (principalId: string) => { readonly createdAt: number; readonly walletVerifiedAt: number | null } | null;
+  /** The profile behind a principal: its creation time and its Authorization Wallet's designation time (identity). */
+  readonly profileFacts: (principalId: string) => { readonly createdAt: number; readonly authorizationWalletSince: number | null } | null;
   /** Every table the index knows that this principal sits at (the room host's record index). */
   readonly tablesOf: (principalId: string) => readonly GameRecord[];
   /** A real-money table's financial record (absent: no money layer -- every money count is from the records alone). */
@@ -169,8 +171,7 @@ export function createTrustFacts(deps: TrustFactsDeps) {
       unresolvedDisputes: facts.unresolvedDisputes,
       disputedGames: facts.disputedGames,
       inactivityExits: facts.inactivityExits,
-      walletVerified: profile.walletVerifiedAt !== null,
-      walletVerifiedSince: profile.walletVerifiedAt === null ? null : monthOf(profile.walletVerifiedAt),
+      authorizationWalletSince: profile.authorizationWalletSince === null ? null : monthOf(profile.authorizationWalletSince),
       establishedOpponents,
     };
     return { facts: result, reusable: !facts.incomplete };

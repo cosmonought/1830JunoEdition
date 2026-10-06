@@ -28,7 +28,7 @@ import { payoutPreview } from "../gameEngine/settlementPreview";
 import type { GameStateResponse } from "../gameEngine/gameState";
 import { sha256Hex } from "../gameEngine/sha256";
 import type { MoneyDepositEntry, RoomMoneyView } from "../utils/moneyProtocol";
-import { reauthenticate } from "../utils/profileApi";
+import { reauthenticateWithPassword } from "../utils/profileApi";
 import { sessionPort, type SessionPort } from "../utils/sessionBootstrap";
 import type { PinnedEscrowDeployment } from "./escrowDeployment";
 import { txBytesToBase64 } from "./keplrWallet";
@@ -130,10 +130,10 @@ export async function connectWallet(services: MoneyServices = moneyServices()): 
   return done();
 }
 
-/** "Confirm it's you": the recovery key goes to the server once (`/gs/api/profile/reauth`) and is dropped here. */
-export async function confirmItsYou(recoveryKey: string, port: SessionPort = sessionPort(), now: () => number = () => Date.now()): Promise<ActionOutcome> {
-  const result = await reauthenticate(recoveryKey, port);
-  if (!result.ok) return refuse(result.error === "invalid-credential" ? "That recovery key doesn't work for this profile. Check it and try again." : "The game server couldn't confirm it just now. Try again.");
+/** "Confirm it's you": the account's password goes to the server once (`/gs/api/profile/reauth`) and is dropped here. */
+export async function confirmItsYou(password: string, port: SessionPort = sessionPort(), now: () => number = () => Date.now()): Promise<ActionOutcome> {
+  const result = await reauthenticateWithPassword(password, port);
+  if (!result.ok) return refuse(result.error === "invalid-credential" ? "That password doesn't match this account. Check it and try again." : "The game server couldn't confirm it just now. Try again.");
   /* Believe the grant for no longer than the server's window from THIS clock (the server has the last word). */
   updateMoneySession({ confirmedUntil: Math.min(result.expiresAt, now() + 5 * 60 * 1000) });
   return done();
@@ -475,11 +475,12 @@ export async function approveDeposit(ctx: TableContext): Promise<ActionOutcome> 
                           (the server's approval re-reads the proof itself; nothing waits on a view for it).
      Ante confirmed.      the server's view shows the deposit funded (Juno read by the server; never assumed here).
 
-   KEPLR PROMPTS. First table on a new wallet: connect (once per site), one link signature, one transaction. A
-   returning player whose account already proved this wallet: one link signature (the server's challenge names this
-   table and seat and is single-use -- it cannot be skipped without changing the protocol) and one transaction; no
-   password, no recovery key. Signatures are never combined: a message signature and a transaction are different
-   things to Keplr and to Juno.
+   KEPLR PROMPTS. Every table: connect (once per site), one link signature (the server's challenge names this table and
+   seat and is single-use -- it cannot be skipped without changing the protocol) and one transaction. "Confirm it's you"
+   (the password) is asked only for a wallet that is not the account's Authorization Wallet, and only more than five
+   minutes after signing in. The Authorization Wallet is never required here: each table uses whatever wallet the player
+   antes with, and THAT wallet is the table's payout wallet from the deposit on. Signatures are never combined: a message
+   signature and a transaction are different things to Keplr and to Juno.
 
    STOPPING IS SAFE AT EVERY STEP. A refusal returns at once with its sentence and the step that cures it (`needs`):
    "Confirm it's you" (the server asked: a new wallet, more than five minutes after signing in -- once confirmed, the

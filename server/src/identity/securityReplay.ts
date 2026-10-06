@@ -48,11 +48,20 @@
 //                        or the one `credentials-established` / a creation installs here) the replay follows it: at each
 //                        hash, the confirmed replacement from it (two different ones: refused), else its LAST one in
 //                        journal order (time, then event id), confirmed or not -- as `credentials-established` (the
-//                        account's recovery key is the remedy for a wrong guess: no review). A hash a replacement retired
+//                        account's Authorization Wallet -- PHASE 3 FINAL -- is the remedy for a wrong guess: no review). A hash a replacement retired
 //                        is never installed again; a cycle is refused. A table hash that no replacement names while
 //                        replacements of this profile exist is refused (the table contradicts the journal). Its
 //                        `family_ids` are closed like `signed-out-others`.
-//   WALLETS (P3-ACCT)    every profile's persisted wallet is CLEARED (not journaled: re-proven on the next money action).
+//   WALLETS (P3-ACCT)    a LEGACY (schema-2) profile's persisted convenience wallet is CLEARED (it was never journaled).
+//   authorization-wallet-replaced (PHASE 3 FINAL)
+//                        a schema-3 profile's Authorization Wallet: a CHAIN of designations (wallet, since) -- `since`
+//                        strictly increases, so it never cycles even when a wallet comes back. From the designation the
+//                        profile holds (the table's, or its creation's) the replay follows it: at each designation the
+//                        confirmed replacement from it (two different ones: refused), else its LAST one in journal order,
+//                        confirmed or not (both wallets signed every replacement: no review). A designation a replacement
+//                        retired is never installed again; a table designation that no replacement names while
+//                        replacements of this profile exist is refused (the table contradicts the journal). The internal
+//                        credential epoch is not part of it (no current action moves the epoch).
 //
 // THE PROPERTIES (what the tests pin):
 //   deterministic   a function of (the table's identity set, the journal as a SET, the restore id, the replay's fixed
@@ -142,6 +151,8 @@ export interface ReplayReport {
   readonly wallets_cleared: number;
   /** P3-ACCT POLICY: profiles whose password the journal's replacements advanced. */
   readonly passwords_advanced: number;
+  /** PHASE 3 FINAL: profiles whose Authorization Wallet the journal's replacements advanced. */
+  readonly authorization_wallets_advanced: number;
 }
 
 export interface ReplayPlan {
@@ -198,6 +209,7 @@ type Rotation = Extract<SecurityEvent, { kind: "recovery-key-rotated" }>;
 type Creation = Extract<SecurityEvent, { kind: "profile-created" }>;
 type Establishment = Extract<SecurityEvent, { kind: "credentials-established" }>;
 type Replacement = Extract<SecurityEvent, { kind: "password-replaced" }>;
+type WalletReplacement = Extract<SecurityEvent, { kind: "authorization-wallet-replaced" }>;
 
 const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
 const byText = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
@@ -241,7 +253,7 @@ export function planSecurityReplay(input: ReplayInput): ReplayPlan {
 
   const byKind: Record<string, number> = {};
   for (const event of journal.events) byKind[event.kind] = (byKind[event.kind] ?? 0) + 1;
-  const counters = { withdrawn: 0, changes: 0, created: 0, advanced: 0, disabled: 0, familiesClosed: 0, signedOut: 0, links: 0, unknownFamilies: 0, unconfirmed: 0, credentials: 0, wallets: 0, passwords: 0 };
+  const counters = { withdrawn: 0, changes: 0, created: 0, advanced: 0, disabled: 0, familiesClosed: 0, signedOut: 0, links: 0, unknownFamilies: 0, unconfirmed: 0, credentials: 0, wallets: 0, passwords: 0, authorizationWallets: 0 };
 
   /* ---- P3-ACCT: who wins each username (the header's rule), over the whole journal ---- */
   const confirmedAnywhere = new Set<string>();
@@ -484,7 +496,39 @@ export function planSecurityReplay(input: ReplayInput): ReplayPlan {
         profile = { ...profile, password_hash: hash, password_set_at: setAt };
       }
     }
-    /* ---- P3-ACCT: the persisted wallet is cleared (re-proven on the next money action) ---- */
+    /* ---- PHASE 3 FINAL: the Authorization Wallet's chain of replacements (the header's rule) ---- */
+    const walletSteps = events.filter((event): event is WalletReplacement => event.kind === "authorization-wallet-replaced");
+    let authorizationFrom: string | null = null;
+    if (walletSteps.length > 0) {
+      if (profile === undefined) throw new SecurityReplayError(`wallet replacement ${walletSteps[0].event_id} names a profile this principal does not have`);
+      const profileId = profile.profile_id;
+      for (const event of walletSteps) if (event.profile_id !== profileId) throw new SecurityReplayError(`wallet replacement ${event.event_id} names another profile than this principal's`);
+      if (profile.schema !== 3 || typeof profile.wallet_address !== "string" || typeof profile.wallet_verified_at !== "number") throw new SecurityReplayError(`wallet replacement ${walletSteps[0].event_id} names a profile with no Authorization Wallet`);
+      const node = (wallet: string, since: number): string => `${wallet}@${since}`;
+      const from = new Map<string, WalletReplacement[]>();
+      for (const event of walletSteps) from.set(node(event.from_wallet, event.from_since), [...(from.get(node(event.from_wallet, event.from_since)) ?? []), event]); // journal order kept
+      const named = new Set(walletSteps.flatMap((event) => [node(event.from_wallet, event.from_since), node(event.to_wallet, event.to_since)]));
+      const tableNode = node(profile.wallet_address, profile.wallet_verified_at);
+      if (!named.has(tableNode) && !created) throw new SecurityReplayError("the restored table's Authorization Wallet is on none of the journal's replacements");
+      let wallet = profile.wallet_address;
+      let since = profile.wallet_verified_at;
+      const seen = new Set<string>([tableNode]);
+      for (let steps = from.get(node(wallet, since)); steps !== undefined && steps.length > 0; steps = from.get(node(wallet, since))) {
+        const confirmedSteps = steps.filter((event) => confirmed.has(event.event_id));
+        if (new Set(confirmedSteps.map((event) => node(event.to_wallet, event.to_since))).size > 1) throw new SecurityReplayError(`two confirmed wallet replacements start from one designation (${confirmedSteps.map((event) => event.event_id).join(", ")})`);
+        const step = confirmedSteps[0] ?? steps[steps.length - 1];
+        const next = node(step.to_wallet, step.to_since);
+        if (seen.has(next)) throw new SecurityReplayError(`the wallet replacements form a cycle (${step.event_id})`);
+        seen.add(next);
+        wallet = step.to_wallet;
+        since = step.to_since;
+      }
+      if (node(wallet, since) !== tableNode) {
+        authorizationFrom = profile.wallet_address;
+        profile = { ...profile, wallet_address: wallet, wallet_verified_at: since };
+      }
+    }
+    /* ---- P3-ACCT: a LEGACY profile's persisted convenience wallet is cleared (`walletOf`: schema 2 only) ---- */
     let walletCleared = false;
     if (profile !== undefined && walletOf(profile) !== null) {
       profile = { ...profile, wallet_address: null, wallet_verified_at: null };
@@ -548,6 +592,11 @@ export function planSecurityReplay(input: ReplayInput): ReplayPlan {
       expect.push({ kind: "profile-password", profile_id: profile.profile_id, password_hash: passwordFrom });
     }
     if (passwordFrom !== null) counters.passwords += 1;
+    /* PHASE 3 FINAL: the Authorization Wallet the table holds is pinned (a profile created here is pinned by its creation). */
+    if (authorizationFrom !== null && !created && profile !== undefined) {
+      expect.push({ kind: "profile-wallet", profile_id: profile.profile_id, wallet_address: authorizationFrom });
+      counters.authorizationWallets += 1;
+    }
     if (credentialsInstalled !== null) counters.credentials += 1;
     if (walletCleared) counters.wallets += 1;
     if (keyAdvanced) counters.advanced += 1;
@@ -610,6 +659,7 @@ export function planSecurityReplay(input: ReplayInput): ReplayPlan {
       credentials_installed: counters.credentials,
       wallets_cleared: counters.wallets,
       passwords_advanced: counters.passwords,
+      authorization_wallets_advanced: counters.authorizationWallets,
     },
   };
 }

@@ -28,8 +28,7 @@
 // (in memory and in the store) until no browser could still hold their cookie: 180 days after the cookie was set,
 // and never less than the 7-day audit window after a revocation.
 
-import { createHash, timingSafeEqual } from "crypto";
-
+import { APP_NAME } from "../../../frontend/src/config";
 import { StoreDefiniteError } from "../persistence/storeResult";
 import {
   cleanLoginName,
@@ -39,39 +38,34 @@ import {
   KdfGate,
   loginKeyOf,
   PASSWORD_MAX_BYTES,
-  hasRecoveryKey,
+  sealedRecoveryDigest,
   verifyPassword,
   warmPasswordKdf,
   type PasswordKdfParams,
   type PasswordProblem,
 } from "./accountCredentials";
+import { createAuthorizationBook, verifyAuthorization, type AuthorizationBook, type AuthorizationOperation, type AuthorizationSignature } from "./authorizationWallet";
 import { sessionSetCookie, type SessionCookieRead } from "./cookies";
 import type { SensitiveAuthGrantStore } from "./grants";
 import {
-  canonicalLinkCode,
   cryptoRandom,
   familyIdOf,
-  linkCodeHash,
-  mintLinkCode,
   mintPrincipalId,
   mintProfileId,
-  mintRecoveryKey,
+  mintRecoverySelector,
   mintSecret,
   mintSessionId,
   mintUnique,
-  parseRecoveryKey,
   secretHash,
   secretMatches,
   type RandomSource,
 } from "./ids";
 import {
-  asSchema2,
+  authorizationWalletOf,
   isDisplayName,
   isSecurityRevocation,
   JUNO_WALLET_PATTERN,
   loginOf,
-  walletOf,
-  withoutWallet,
   type IdentityChange,
   type IdentitySnapshot,
   type IdentityStore,
@@ -98,26 +92,14 @@ export interface IdentityPolicy {
   provisionalLimit: number;
   /** A revoked session is kept at least this long for the audit trail (LIVE-2 §14.1). */
   auditRetentionMs: number;
-  /** LIVE-2E: how long a "Link another device" code lives. */
-  linkCodeTtlMs: number;
-  /** LIVE-2E: unexpired, unused link codes a profile may hold at once (a new one retires the oldest). */
-  maxOutstandingLinkCodes: number;
-  /** ESCROW-3A (brief §10B): how long a re-authentication (the recovery key, presented again) lets THIS session take a
-   *  sensitive action -- rotate the recovery key, sign out other devices, and (ESCROW-4) change a wallet binding. */
+  /** ESCROW-3A (brief §10B): how long a re-authentication ("Confirm it's you" with the password, or a sign-in) lets THIS
+   *  session take a sensitive action -- sign out other devices, (ESCROW-4) link a wallet to a seat, and (PHASE 3 FINAL,
+   *  an explicit confirmation only) begin replacing the Authorization Wallet. */
   sensitiveAuthMs: number;
-  /** ESCROW-3A (owner review): how long the ONE-TIME creation rescue stays open when a create's response may have been
-   *  lost (`createProfile` with a creation receipt). It is consumed by its one use, closed at once by the creating
-   *  page's acknowledgement of the key, and forgotten by a restart; this only bounds how long an unanswered one waits. */
-  creationRescueMs: number;
   /** P3-ACCT: the scrypt parameters NEW password hashes are made with (a stored hash carries its own). */
   passwordKdf: PasswordKdfParams;
   /** P3-ACCT: how many password KDF computations may run at once (beyond it a request is answered `busy`). */
   kdfConcurrency: number;
-  /** P3-ACCT (review L2): whether the LIVE-2E route that makes a NEW recovery-key profile (`POST /gs/api/profile`) is
-   *  still served. The owner's model gives new accounts no recovery key, so the production entry points turn it OFF
-   *  (`start.ts`, `awsRuntime.ts`); it stays on by default only for the test harnesses and tools that build legacy
-   *  profiles on purpose. Recovering, re-authenticating with and rotating an EXISTING profile's key are unaffected. */
-  legacyProfileCreation: boolean;
 }
 
 export const DEFAULT_IDENTITY_POLICY: IdentityPolicy = Object.freeze({
@@ -129,19 +111,15 @@ export const DEFAULT_IDENTITY_POLICY: IdentityPolicy = Object.freeze({
   maxActiveSessions: 10,
   provisionalLimit: 50_000,
   auditRetentionMs: 7 * DAY,
-  linkCodeTtlMs: 10 * 60 * 1000,
-  /* LIVE-2E adversarial review (H1): ONE. A new code retires any earlier unused one, so a device that saw a single
-     code cannot stockpile more to outlive the owner's "Sign out other devices". */
-  maxOutstandingLinkCodes: 1,
   sensitiveAuthMs: 5 * 60 * 1000,
-  creationRescueMs: 10 * 60 * 1000,
   passwordKdf: DEFAULT_PASSWORD_KDF,
   kdfConcurrency: 4,
-  legacyProfileCreation: true,
 });
 
-/** Why a known session no longer opens anything -- the stable reasons of `401 session-ended`. */
-export type SessionEndReason = "expired" | "rotated" | "unreadable" | RevokeReason;
+/** Why a known session no longer opens anything -- the stable reasons of `401 session-ended`. PHASE 3 FINAL adds
+ *  `retired`: the session belongs to a LEGACY profile (one made before Authorization Wallets), which this build does not
+ *  serve -- its owner makes a new account. */
+export type SessionEndReason = "expired" | "rotated" | "unreadable" | "retired" | RevokeReason;
 
 export type BootstrapOutcome =
   /** `principalId` is for the server's own use (the profile answer); it never goes on the wire. */
@@ -165,17 +143,6 @@ export type UpgradeAuth =
 
 export type SocketVerdict = "ok" | "expired" | "revoked";
 
-/* LIVE-2E: the answers of the profile operations. None carries an id; `recoveryKey` and `linkCode` are handed to the
-   caller exactly once, to be returned to the one authenticated browser that asked, and are never kept. */
-export type CreateProfileOutcome =
-  | { kind: "ok"; name: string; recoveryKey: string }
-  /** P3-ACCT: this server makes no new recovery-key profiles (`IdentityPolicy.legacyProfileCreation`). */
-  | { kind: "retired" }
-  | { kind: "not-authenticated" }
-  | { kind: "already-profiled"; name: string }
-  | { kind: "bad-name" }
-  | { kind: "unavailable" };
-
 export type CredentialOutcome =
   /** `sessionId` is the fresh session's (server-side only: never on the wire). */
   | { kind: "ok"; name: string; setCookie: string; principalId: string; sessionId: string }
@@ -184,11 +151,11 @@ export type CredentialOutcome =
   /** LIVE-2E review (M2): this browser's principal is durable -- it played before profiles existed and may hold
    *  seats. Signing it in to another profile would orphan them; it must create its own profile to keep them. */
   | { kind: "has-tables" }
-  /** One answer for every wrong, expired, used, revoked or disabled credential: nothing says which. */
+  /** One answer for every wrong, unknown, disabled or malformed credential: nothing says which. */
   | { kind: "invalid" }
-  /** P3-ACCT POLICY: a VALID recovery key of an account that has a password. The key is an account-recovery credential
-   *  there, never a sign-in: the browser is sent to "Forgot password?" (a reset). Said only to a holder of that key. */
-  | { kind: "password-account" }
+  /** PHASE 3 FINAL: the RIGHT password of a LEGACY account (made before Authorization Wallets): this build does not sign
+   *  it in. Said only to a holder of that password. */
+  | { kind: "legacy-account" }
   | { kind: "unavailable" };
 
 export type ProfileActionOutcome<T> =
@@ -196,11 +163,8 @@ export type ProfileActionOutcome<T> =
   | { kind: "not-authenticated" }
   | { kind: "profile-required" }
   /** ESCROW-3A: a sensitive action on a session that has not re-authenticated recently (the client asks for the
-   *  recovery key, `POST /gs/api/profile/reauth`, and retries). Says nothing else. */
+   *  password, `POST /gs/api/profile/reauth`, and retries). Says nothing else. */
   | { kind: "reauth-required" }
-  /** P3-ACCT (review H1): a recovery-key action on an account that has no recovery key (a username/password account
-   *  never gets one: a key would be a second, password-free credential). */
-  | { kind: "no-recovery-key" }
   | { kind: "unavailable" };
 
 /** ESCROW-3A: the answer to a re-authentication. `expiresAt` is when the grant lapses (the client may say so). */
@@ -208,37 +172,43 @@ export type ReauthOutcome =
   | { kind: "ok"; expiresAt: number }
   | { kind: "not-authenticated" }
   | { kind: "profile-required" }
-  /** The one answer for every wrong, malformed or other profile's key: nothing says which. */
+  /** The one answer for every wrong or missing password: nothing says which. */
   | { kind: "invalid" };
 
-/** ESCROW-3A (F-2): whether a credential issued under (principal, family, recovery selector) still stands. */
+/** ESCROW-3A (F-2): whether a credential issued under (principal, family, credential epoch) still stands. The epoch is
+ *  the profile's `recovery_selector` (`why: "recovery-key"` keeps its historical name: it means the epoch moved). */
 export type SecurityStanding = { kind: "standing" } | { kind: "ended"; why: "principal" | "profile" | "family" | "recovery-key" };
 
-/** What `POST /gs/api/session` may say about the account: a name and a count, never an id. */
+/** What `POST /gs/api/session` may say about the account: a name, the username and a count, never an id. */
 export interface AccountView {
   name: string;
   /** Other sessions (devices or browsers) of this profile that are signed in now. */
   otherSessions: number;
+  /** PHASE 3 FINAL: the account's username -- told only to the account's own session (the bootstrap answers the cookie's
+   *  holder alone). The page uses it to notice that THIS BROWSER's account changed under an open table (another tab
+   *  signed in or out) and to ask, never to re-seat a table silently as someone else. */
+  username: string;
 }
 
-/** P3-ACCT: what `POST /gs/api/account/me` tells the account's OWN session (never an id, a hash or a selector). */
+/** What `POST /gs/api/account/me` tells the account's OWN session (never an id, a hash or a selector). */
 export interface AccountDetails extends AccountView {
-  /** The username (shown only to this account's own sessions), or null for a legacy profile without one. */
-  username: string | null;
-  /** P3-ACCT: a legacy profile with a recovery key (it may keep using it until it is retired; see the report). */
-  recoveryKey: boolean;
-  /** P3-ACCT: the payout wallet this profile proved it controls, and when that proof was verified. */
-  wallet: { address: string; verifiedAt: number } | null;
-  /** P3-ACCT: when the profile was created (epoch ms). */
+  /** PHASE 3 FINAL: the account's designated Authorization Wallet (its own sessions only: it is the wallet the owner
+   *  needs to recover the account), and when it was designated. */
+  authorizationWallet: { address: string; since: number };
+  /** When the profile was created (epoch ms). */
   memberSince: number;
 }
 
 /* ==================================================================
-    P3-ACCT: THE ANSWERS OF THE USERNAME/PASSWORD OPERATIONS (none carries an id, a password or a hash)
+    THE ANSWERS OF THE ACCOUNT OPERATIONS (none carries an id, a password or a hash)
    ================================================================== */
+
+/** PHASE 3 FINAL: why an Authorization Wallet proof was refused. One answer for a signature that does not verify, a key
+ *  of another wallet, or an operation that is unknown, expired, another session's or of another kind. */
+export type AuthorizationProblem = "authorization-invalid" | "authorization-used";
+
 export type CreateAccountOutcome =
-  /** `recoveryKey`: the account's recovery key -- its ONE appearance (the caller answers it to this browser only). */
-  | { kind: "ok"; name: string; username: string; recoveryKey: string; setCookie: string; principalId: string; sessionId: string }
+  | { kind: "ok"; name: string; username: string; setCookie: string; principalId: string; sessionId: string }
   | { kind: "not-authenticated" }
   | { kind: "already-profiled"; name: string }
   | { kind: "bad-name" }
@@ -246,93 +216,74 @@ export type CreateAccountOutcome =
   | { kind: "bad-password"; problem: PasswordProblem }
   /** The username is taken. (Account creation necessarily says so; it is budgeted like every creation.) */
   | { kind: "username-taken" }
+  /** The Authorization Wallet's proof is missing, invalid, of another username, or already used. */
+  | { kind: AuthorizationProblem }
   /** Too many password computations at once: try again in a moment. */
   | { kind: "busy" }
   | { kind: "unavailable" };
 
 export type LoginOutcome = CredentialOutcome | { kind: "busy" };
 
-export type EstablishCredentialsOutcome =
-  | { kind: "ok"; username: string }
+/** PHASE 3 FINAL: an Authorization Wallet text minted for this browser (the operation names it; the texts are what Keplr
+ *  signs, in order). */
+export type MintOutcome =
+  | { kind: "ok"; operation: string; texts: readonly { purpose: string; signer: string; text: string }[]; expiresAt: number }
   | { kind: "not-authenticated" }
+  | { kind: "already-profiled" }
+  | { kind: "has-tables" }
   | { kind: "profile-required" }
   | { kind: "reauth-required" }
-  | { kind: "credentials-exist" }
   | { kind: "bad-username" }
-  | { kind: "bad-password"; problem: PasswordProblem }
+  | { kind: "bad-wallet" }
   | { kind: "username-taken" }
-  | { kind: "busy" }
-  | { kind: "unavailable" };
+  /** REPLACE: the new wallet is the current one. */
+  | { kind: "same-wallet" };
 
-/* ==================================================================
-    P3-ACCT POLICY FOLLOW-UP: CHANGE PASSWORD, FORGOT PASSWORD (none of these answers carries an id, a password, a key
-    or a hash)
-   ================================================================== */
-
-/** The credential that authorizes replacing the password: the CURRENT password, or the account's recovery key -- sent in
- *  the request itself (never a standing grant: a cookie stolen inside a sign-in's five minutes must not replace a
- *  credential). */
-export type CurrentCredential = { readonly password: unknown } | { readonly recoveryKey: unknown };
-
+/** "Change password" (signed in): the CURRENT password, in the request (never a standing grant: a cookie stolen inside a
+ *  sign-in's five minutes must not replace a credential). */
 export type ChangePasswordOutcome =
   /** `setCookie`: THIS browser's fresh session (same family); `signedOut`: the other devices that were signed in. */
   | { kind: "ok"; setCookie: string; principalId: string; sessionId: string; signedOut: number }
   | { kind: "not-authenticated" }
   | { kind: "profile-required" }
-  /** A profile made before accounts: it sets a username and password instead (`establishCredentials`). */
-  | { kind: "no-password" }
   | { kind: "bad-password"; problem: PasswordProblem }
-  /** The current password or recovery key is wrong (one answer for both, and for a key of another profile). */
+  /** The current password is wrong. */
   | { kind: "invalid" }
   | { kind: "busy" }
   | { kind: "unavailable" };
 
-export type ResetPasswordOutcome =
+/** "Forgot password?" by the Authorization Wallet. */
+export type RecoverAccountOutcome =
   /** This browser is signed in to the recovered account on a fresh session; `signedOut`: devices that were signed in. */
   | { kind: "ok"; name: string; setCookie: string; principalId: string; sessionId: string; signedOut: number }
   | { kind: "not-authenticated" }
   | { kind: "already-profiled" }
   | { kind: "has-tables" }
   | { kind: "bad-password"; problem: PasswordProblem }
-  /** One answer for every wrong, malformed, unknown, retired or disabled key: nothing says which (no enumeration). */
+  /** ONE answer for: the signature does not verify; the wallet is not that account's Authorization Wallet; the account
+   *  does not exist, is disabled or legacy; the operation is unknown, expired or another browser's. Nothing says which. */
   | { kind: "invalid" }
-  /** A VALID key of a profile made before accounts (no password to reset): it signs in with the key and sets one. */
-  | { kind: "no-password" }
+  | { kind: "authorization-used" }
   | { kind: "busy" }
   | { kind: "unavailable" };
 
-/** How a sensitive-auth grant was made. P3-ACCT POLICY: only an explicit "Confirm it's you" (`confirmed`) authorizes
- *  REPLACING a credential (a recovery key, a legacy profile's first password); the automatic grant of a sign-in
- *  (`sign-in`) still covers the other sensitive actions. Only a `confirmed` grant is written durably (OD-5-4 is about
- *  re-authentications): a sign-in's grant lives in this process's memory only, so every grant a restart reloads is a
- *  `confirmed` one -- honoured exactly as before, and the durable grant item's shape is unchanged. */
+/** "Change Authorization Wallet". */
+export type ReplaceWalletOutcome =
+  | { kind: "ok"; authorizationWallet: { address: string; since: number } }
+  | { kind: "not-authenticated" }
+  | { kind: "profile-required" }
+  | { kind: "reauth-required" }
+  | { kind: AuthorizationProblem }
+  /** The account's Authorization Wallet changed meanwhile (another replacement won). */
+  | { kind: "stale" }
+  | { kind: "unavailable" };
+
+/** How a sensitive-auth grant was made. P3-ACCT POLICY: only an explicit "Confirm it's you" (`confirmed`) authorizes the
+ *  highest-authority actions (PHASE 3 FINAL: beginning an Authorization Wallet replacement); the automatic grant of a
+ *  sign-in (`sign-in`) still covers the other sensitive actions. Only a `confirmed` grant is written durably (OD-5-4 is
+ *  about re-authentications): a sign-in's grant lives in this process's memory only, so every grant a restart reloads is
+ *  a `confirmed` one -- honoured exactly as before, and the durable grant item's shape is unchanged. */
 type GrantHow = "sign-in" | "confirmed";
-
-export type WalletAssociation = "associated" | "unchanged" | "no-profile" | "stale" | "unavailable";
-
-/** P3-ACCT (re-review N-3): what authorized the link whose wallet is being persisted -- the caller's security context
- *  and the profile wallet it saw. Server-side only; none of these ids leaves the server. */
-export interface WalletAssociationContext {
-  readonly principalId: string;
-  readonly familyId: string;
-  readonly recoverySelector: string;
-  /** The profile's wallet when the link was authorized (null: none). */
-  readonly seen: string | null;
-}
-
-/* A digest that matches nothing (no preimage is known): an unknown recovery selector is compared against it, so a
-   wrong selector costs the same constant-time comparison as a wrong secret. */
-const NO_PROFILE_HASH = createHash("sha256").update("gs-no-such-recovery-key").digest("hex");
-
-/** ESCROW-3A: a creation receipt is 32 random bytes in lowercase hex, made by the creating page and held only in its
- *  memory (`frontend/src/utils/profileApi.ts` `mintCreationReceipt`). Anything else is no receipt. */
-export const CREATION_RECEIPT_PATTERN = /^[0-9a-f]{64}$/;
-const isCreationReceipt = (value: unknown): value is string => typeof value === "string" && CREATION_RECEIPT_PATTERN.test(value);
-/** What the rescue keeps of a receipt: a domain-separated digest, never the receipt. */
-const receiptDigest = (receipt: string): Buffer => createHash("sha256").update(`18COSMOS/CREATION-RECEIPT/v1\n${receipt}`).digest();
-/** Constant-time comparison of an offered receipt with a kept digest (anything that is not a receipt matches nothing). */
-const receiptMatches = (offered: unknown, kept: string): boolean =>
-  timingSafeEqual(receiptDigest(isCreationReceipt(offered) ? offered : "-"), Buffer.from(kept, "hex")) && isCreationReceipt(offered);
 
 /** P3-ACCT: a password as a LOGIN sends it: text of bounded size, NFKC (the creation-time minimum length is not applied
  *  here -- a sign-in never re-judges a password the account already has). `null`: not one. */
@@ -348,10 +299,10 @@ export interface IdentityHooks {
   /** Sessions that just ended for a SECURITY reason (logout, eviction, operator, principal disabled): their sockets
    *  close 4401. Called after the change is committed. */
   onSessionsEnded?: (sessionIds: readonly string[], principalId: string) => void;
-  /** ESCROW-3A (F-2): a security event committed -- a family revoked (sign-out, sign-out-others, replacement, a disabled
-   *  principal) or the recovery key rotated. Financial credentials DERIVE their standing from identity
+  /** ESCROW-3A (F-2): a security event committed -- a family revoked (sign-out, sign-out-others, a password change or
+   *  recovery, a replacement, a disabled principal). Financial credentials DERIVE their standing from identity
    *  (`securityStanding`), so nothing is lost if this is not observed; it lets their ledger record the revocation. */
-  onSecurityEvent?: (event: { readonly kind: "family-revoked" | "recovery-key-rotated" | "principal-disabled"; readonly principalId: string; readonly familyIds: readonly string[] }) => void;
+  onSecurityEvent?: (event: { readonly kind: "family-revoked" | "principal-disabled"; readonly principalId: string; readonly familyIds: readonly string[] }) => void;
   /** A durable write could not be made (definite or unknown) -- surfaced to the window by the caller as well. */
   onStoreFailure?: (what: string, error: unknown) => void;
 }
@@ -368,28 +319,24 @@ export interface IdentityStats {
   writeBehindWrites: number;
   sessionsCollected: number;
   profilesCreated: number;
-  recoveries: number;
-  links: number;
-  linkCodesIssued: number;
-  recoveryRotations: number;
   credentialFailures: number;
   familiesRevoked: number;
   reauths: number;
   reauthFailures: number;
-  /** ESCROW-3A: lost-create-response rescues used, and initial key deliveries acknowledged. */
-  creationRescues: number;
-  keyDeliveriesAcknowledged: number;
   reauthRequired: number;
   /** P3-ACCT */
   accountsCreated: number;
   logins: number;
   loginFailures: number;
-  credentialsEstablished: number;
-  walletsAssociated: number;
   kdfBusy: number;
   /** P3-ACCT POLICY */
   passwordChanges: number;
-  passwordResets: number;
+  /** PHASE 3 FINAL: recoveries by the Authorization Wallet, Authorization Wallet replacements, refused proofs. */
+  accountRecoveries: number;
+  authorizationReplacements: number;
+  authorizationFailures: number;
+  /** PHASE 3 FINAL: sign-ins refused because the account is legacy (made before Authorization Wallets). */
+  legacyRefusals: number;
 }
 
 /* ==================================================================
@@ -426,6 +373,8 @@ export interface IdentityServiceOptions {
   policy?: Partial<IdentityPolicy>;
   random?: RandomSource;
   hooks?: IdentityHooks;
+  /** PHASE 3 FINAL: the app's display name, written into the Authorization Wallet texts (default: the build's). */
+  appName?: string;
   /** LIVE-5 L5-4: the durable security substrate. Absent: exactly the pre-LIVE-5 behaviour. */
   security?: IdentitySecuritySubstrate;
 }
@@ -453,12 +402,12 @@ export class IdentityService {
   private readonly profileOfLogin = new Map<string, string>();
   /** P3-ACCT: the bound on concurrent password KDF computations. */
   private readonly kdf: KdfGate;
-  /** LIVE-2E: link codes by digest (durable; kept until they expire, used or not). */
+  /** LIVE-2E: link codes by digest. PHASE 3 FINAL: no code is issued or redeemed any more ("Link another device" is
+   *  retired with the recovery key); stored ones are still read, dropped with the account's security actions and swept
+   *  when they expire. */
   private readonly links = new Map<string, LinkCredential>();
-  /** LIVE-2E: the order codes were issued in this process -- breaks a same-millisecond tie when the oldest unused
-   *  code is retired (a restart falls back to the digest, which only matters for codes issued in one millisecond). */
-  private readonly linkIssueOrder = new Map<string, number>();
-  private linkIssues = 0;
+  /** PHASE 3 FINAL: the open Authorization Wallet operations (memory only; `authorizationWallet.ts`). */
+  private readonly authorizations: AuthorizationBook;
   private queue: Promise<unknown> = Promise.resolve();
   readonly stats: IdentityStats = {
     guestsCreated: 0,
@@ -472,38 +421,28 @@ export class IdentityService {
     writeBehindWrites: 0,
     sessionsCollected: 0,
     profilesCreated: 0,
-    recoveries: 0,
-    links: 0,
-    linkCodesIssued: 0,
-    recoveryRotations: 0,
     credentialFailures: 0,
     familiesRevoked: 0,
     reauths: 0,
-    creationRescues: 0,
-    keyDeliveriesAcknowledged: 0,
     reauthFailures: 0,
     reauthRequired: 0,
     accountsCreated: 0,
     logins: 0,
     loginFailures: 0,
-    credentialsEstablished: 0,
-    walletsAssociated: 0,
     kdfBusy: 0,
     passwordChanges: 0,
-    passwordResets: 0,
+    accountRecoveries: 0,
+    authorizationReplacements: 0,
+    authorizationFailures: 0,
+    legacyRefusals: 0,
   };
   /** ESCROW-3A (IR-03): the session families (durable ones mirror the store; a provisional principal's live here). */
   private readonly families = new Map<string, SessionFamily>();
   /** ESCROW-3A (brief §10B): recent re-authentications, by SESSION. MEMORY ONLY, never persisted, never a secret: the
-   *  grant names the family and the recovery selector it was made under, and lapses after `sensitiveAuthMs`. A restart
-   *  forgets it (the player re-enters the key). LIVE-5: an item keyed by session with a TTL, checked in the same
+   *  grant names the family and the credential epoch it was made under, and lapses after `sensitiveAuthMs`. A restart
+   *  forgets it (the player confirms again). LIVE-5: an item keyed by session with a TTL, checked in the same
    *  transaction as the action. */
   private readonly grants = new Map<string, { family_id: string; selector: string; expires_at: number; how: GrantHow }>();
-  /** ESCROW-3A (owner review): the ONE-TIME creation rescue, by PROFILE -- open only while the profile's first key may
-   *  not have reached the page that created it. MEMORY ONLY (a restart closes every one: fail closed), never a secret:
-   *  it names the creating SESSION (not its family's successors), the family, the selector of the key that was issued,
-   *  and the digest of the random creation receipt the creating page sent and holds in memory. See `createProfile`. */
-  private readonly creationDeliveries = new Map<string, { session_id: string; family_id: string; selector: string; receipt_hash: string; expires_at: number }>();
   /** LIVE-5 L5-4: the security events this process has journaled. An event id is this count (32 bits) then 96 random
    *  bits, so the journal's order -- by time, then by id -- is this writer's own causal order even within one
    *  millisecond (the serial queue appends them in order). */
@@ -517,8 +456,10 @@ export class IdentityService {
     private readonly random: RandomSource,
     private readonly hooks: IdentityHooks,
     private readonly security: IdentitySecuritySubstrate,
+    appName: string,
   ) {
     this.kdf = new KdfGate(policy.kdfConcurrency);
+    this.authorizations = createAuthorizationBook({ appName, random: (size) => random(size) });
     /* Review N1: the unknown-username dummy hash is made now, not on the first such login. */
     void warmPasswordKdf(policy.passwordKdf);
   }
@@ -547,6 +488,7 @@ export class IdentityService {
       options.random ?? cryptoRandom,
       { ...(options.hooks ?? {}) },
       { ...(options.security ?? {}) },
+      options.appName ?? APP_NAME,
     );
     for (const principal of snapshot.principals) service.principals.set(principal.principal_id, principal);
     for (const session of snapshot.sessions) service.index(session);
@@ -798,6 +740,9 @@ export class IdentityService {
     const principal = this.principals.get(session.principal_id);
     if (principal === undefined) return { kind: "ended", reason: "unreadable" };
     if (principal.status === "disabled") return { kind: "ended", reason: "principal-disabled" };
+    /* PHASE 3 FINAL: a legacy profile (no Authorization Wallet) is retired -- its sessions end; its owner makes a new
+       account (the explicit "Continue" bootstraps a fresh, signed-out session). */
+    if (this.retired(principal)) return { kind: "ended", reason: "retired" };
     /* ESCROW-3A (IR-03): a member of a revoked family has ended, whatever its own record says -- a grace successor minted
        from it would be minted into a family a committed sign-out has closed. */
     const family = this.families.get(session.family_id);
@@ -973,7 +918,7 @@ export class IdentityService {
     const session = this.sessions.get(read.sessionId);
     if (session === undefined || !secretMatches(read.secret, session.secret_hash)) return { kind: "refused", why: "unknown" };
     const principal = this.principals.get(session.principal_id);
-    if (principal === undefined || principal.status !== "active") return { kind: "refused", why: "ended" };
+    if (principal === undefined || principal.status !== "active" || this.retired(principal)) return { kind: "refused", why: "ended" };
     if (session.revoked_at !== null || now >= session.expires_at) return { kind: "refused", why: "ended" };
     if (this.familyRevoked(session)) return { kind: "refused", why: "ended" };
     this.touch(session, now);
@@ -1135,21 +1080,34 @@ export class IdentityService {
   }
 
   /* ==================================================================
-      LIVE-2E: PROFILES -- MANDATORY, ONE PER PRINCIPAL, RECOVERED BY THE SAME PRINCIPAL
+      THE ACCOUNT: ONE PROFILE PER PRINCIPAL, SIGNED IN BY USERNAME + PASSWORD, OWNED BY ITS AUTHORIZATION WALLET
      ==================================================================
-     A profile binds the principal that created it, for good. Recovery and device linking authenticate the PROFILE
-     and issue a fresh, ordinary session for ITS principal -- the principal every seat already names -- so a new
-     device has the same seats with nothing copied, transferred or reassigned. The browser's temporary unprofiled
-     session is revoked `replaced` in the same durable commit (session fixation: whatever that cookie was, it opens
-     nothing now). Every change is written before it is applied; a store failure answers `unavailable` and changes
-     nothing. Secrets are compared in constant time; codes are found by digest; neither is kept in the clear. */
+     PHASE 3 FINAL (owner ruling 2026-10-06): THE PROFILE / ACCOUNT IS THE PLAYER. A profile binds the principal that
+     created it, for good; every seat names that principal; a wallet never names, selects or switches either one.
+     Sign-in authenticates the PROFILE and issues a fresh, ordinary session for ITS principal -- the principal every
+     seat already names -- so another device has the same seats with nothing copied, transferred or reassigned. The
+     browser's temporary session is revoked `replaced` in the same durable commit (session fixation: whatever that cookie
+     was, it opens nothing now). Every change is written before it is applied; a store failure answers `unavailable` and
+     changes nothing.
+     THE RECOVERY KEY IS GONE (it was LIVE-2E's sign-in and caad745's account-recovery credential): no account gets one,
+     shows one, saves one or uses one. "Link another device" codes are gone with it (a second device logs in). A LEGACY
+     profile -- schema 1 or 2, made before Authorization Wallets -- is RETIRED: it is not signed in, its sessions end
+     (`retired`), and its owner makes a new account (owner ruling: legacy profiles were disposable test profiles; no
+     migration). */
 
-  /** The profile a principal belongs to, when it has one and both are active. */
+  /** PHASE 3 FINAL: a principal bound to a LEGACY profile (one without an Authorization Wallet): retired. */
+  private retired(principal: Principal): boolean {
+    if (principal.kind !== "profile") return false;
+    const profile = this.profiles.get(principal.account_link as string);
+    return profile !== undefined && profile.schema !== 3;
+  }
+
+  /** The profile a principal belongs to, when it has one, both are active, and it is an Authorization Wallet account. */
   private activeProfileOf(principalId: string): Profile | null {
     const principal = this.principals.get(principalId);
     if (principal === undefined || principal.status !== "active" || principal.kind !== "profile") return null;
     const profile = this.profiles.get(principal.account_link as string);
-    return profile !== undefined && profile.status === "active" ? profile : null;
+    return profile !== undefined && profile.status === "active" && profile.schema === 3 ? profile : null;
   }
 
   /** LIVE-2E: may this principal use the hosted game at all? Only a profiled, active one. (A development principal
@@ -1168,183 +1126,36 @@ export class IdentityService {
     const profile = this.activeProfileOf(principalId);
     if (profile === null) return null;
     const otherSessions = this.activeSessions(principalId, now).filter((session) => session.session_id !== sessionId).length;
-    return { name: profile.display_name, otherSessions };
+    return { name: profile.display_name, otherSessions, username: loginOf(profile)?.name ?? "" };
   }
 
-  /** P3-ACCT: the account's own details (its username, how it signs in, its persisted wallet, when it was made). */
+  /** The account's own details (its username, its Authorization Wallet, when it was made). */
   accountDetails(read: SessionCookieRead, now: number): AccountDetails | null {
     const who = this.profiledCurrent(read, now);
     if (typeof who === "string") return null;
     const view = this.accountView(who.session.principal_id, who.session.session_id, now) as AccountView;
-    return { ...view, username: loginOf(who.profile)?.name ?? null, recoveryKey: hasRecoveryKey(who.profile), wallet: walletOf(who.profile), memberSince: who.profile.created_at };
+    const login = loginOf(who.profile);
+    const authority = authorizationWalletOf(who.profile);
+    if (login === null || authority === null) return null; // never: a schema-3 profile holds both
+    return { ...view, authorizationWallet: { address: authority.address, since: authority.since }, memberSince: who.profile.created_at };
   }
 
-  /** The current session a profile request authenticates with (never a rotated or ended one), without touching. */
+  /** The current session a profile request authenticates with (never a rotated, ended or retired one), without touching. */
   private currentOf(read: SessionCookieRead, now: number): Session | null {
     if (read.kind !== "session") return null;
     const session = this.sessions.get(read.sessionId);
     if (session === undefined || !secretMatches(read.secret, session.secret_hash)) return null;
     const principal = this.principals.get(session.principal_id);
-    if (principal === undefined || principal.status !== "active") return null;
+    if (principal === undefined || principal.status !== "active" || this.retired(principal)) return null;
     if (session.revoked_at !== null || now >= session.expires_at) return null;
     if (this.familyRevoked(session)) return null;
     return session;
   }
 
-  /** Create the profile of THIS browser's principal. Idempotent in effect: a second attempt (a retry, a race, a second
-   *  tab) finds the principal already profiled and answers `already-profiled` -- never a second profile. */
-  createProfile(read: SessionCookieRead, displayName: string, now: number, creationReceipt?: unknown): Promise<CreateProfileOutcome> {
-    return this.serial(async () => {
-      if (!this.policy.legacyProfileCreation) return { kind: "retired" as const };
-      const session = this.currentOf(read, now);
-      if (session === null) return { kind: "not-authenticated" as const };
-      const principal = this.principals.get(session.principal_id) as Principal;
-      if (principal.kind === "profile") {
-        return { kind: "already-profiled" as const, name: this.profiles.get(principal.account_link as string)?.display_name ?? "" };
-      }
-      if (!isDisplayName(displayName)) return { kind: "bad-name" as const };
-      const profileId = mintUnique(() => mintProfileId(this.random), (id) => this.profiles.has(id));
-      let key = mintRecoveryKey(this.random);
-      for (let attempt = 0; this.profileOfSelector.has(key.selector); attempt += 1) {
-        if (attempt >= 4) throw new Error("identity: 5 consecutive recovery-selector collisions -- the random source is not random");
-        key = mintRecoveryKey(this.random);
-      }
-      const profile: Profile = {
-        profile_id: profileId,
-        principal_id: principal.principal_id,
-        display_name: displayName,
-        created_at: now,
-        status: "active",
-        recovery_selector: key.selector,
-        recovery_hash: secretHash(key.secret),
-        recovery_rotated_at: now,
-        schema: 1,
-      };
-      const bound: Principal = {
-        ...principal,
-        kind: "profile",
-        account_link: profileId,
-        activated_at: principal.activated_at ?? now,
-        last_seen_at: now,
-      };
-      /* ONE commit: the profile, the principal bound to it, and (if it was provisional) every session of it. A crash
-         leaves all of it or none of it; `checkSnapshot` refuses a half-bound pair at load. */
-      const sessions = this.isDurable(principal.principal_id)
-        ? []
-        : [...(this.byPrincipal.get(principal.principal_id) ?? [])].map((id) => this.sessions.get(id) as Session);
-      /* ESCROW-3A: a provisional browser's families become durable with its sessions. */
-      const families = sessions.length === 0 ? [] : this.familiesOfPrincipal(principal.principal_id);
-      try {
-        await this.commit(
-          {
-            /* LIVE-3C: CREATE-IF-ABSENT -- the profile, its selector, and (for a provisional browser) the principal and
-               its sessions; a durable principal must still be unprofiled. */
-            expect: [
-              this.isDurable(principal.principal_id)
-                ? { kind: "principal-unprofiled" as const, principal_id: principal.principal_id }
-                : { kind: "principal-absent" as const, principal_id: principal.principal_id },
-              { kind: "profile-absent", profile_id: profileId },
-              { kind: "selector-unused", recovery_selector: key.selector },
-              ...sessions.map((session) => ({ kind: "session-absent" as const, session_id: session.session_id })),
-              ...families.map((family) => ({ kind: "family-absent" as const, family_id: family.family_id })),
-            ],
-            principals: [bound],
-            sessions,
-            profiles: [profile],
-            families,
-          },
-          "creating a profile",
-          { kind: "profile-created", at: now, principal_id: bound.principal_id, principal: bound, profile },
-        );
-      } catch {
-        return { kind: "unavailable" as const };
-      }
-      this.principals.set(bound.principal_id, bound);
-      this.indexProfile(profile);
-      this.provisional.delete(bound.principal_id);
-      this.stats.profilesCreated += 1;
-      /* ESCROW-3A: the response carrying the key may still be lost. If the creating page sent a creation receipt (random,
-         held only in that page's memory), THIS session -- presenting that receipt -- may rotate the unseen key ONCE,
-         until the page acknowledges the key or `creationRescueMs` passes. Only its digest is kept. */
-      if (isCreationReceipt(creationReceipt)) {
-        this.creationDeliveries.set(profileId, {
-          session_id: session.session_id,
-          family_id: session.family_id,
-          selector: key.selector,
-          receipt_hash: receiptDigest(creationReceipt).toString("hex"),
-          expires_at: now + this.policy.creationRescueMs,
-        });
-      }
-      return { kind: "ok" as const, name: displayName, recoveryKey: key.key };
-    });
-  }
-
-  /** Recovery: the key authenticates a PROFILE; this browser gets a fresh session for that profile's principal, and
-   *  its own temporary session is revoked `replaced`. Other devices' sessions are untouched. */
-  recover(read: SessionCookieRead, rawKey: unknown, now: number): Promise<CredentialOutcome> {
-    return this.serial(async () => {
-      const current = this.currentOf(read, now);
-      if (current === null) return { kind: "not-authenticated" as const };
-      if ((this.principals.get(current.principal_id) as Principal).kind === "profile") return { kind: "already-profiled" as const };
-      if (this.isDurable(current.principal_id)) return { kind: "has-tables" as const };
-      const parsed = parseRecoveryKey(rawKey);
-      if (parsed === null) {
-        this.stats.credentialFailures += 1;
-        return { kind: "invalid" as const };
-      }
-      const profileId = this.profileOfSelector.get(parsed.selector);
-      const profile = profileId === undefined ? undefined : this.profiles.get(profileId);
-      /* Constant time either way: an unknown selector is compared against a digest nothing matches. */
-      const matches = secretMatches(parsed.secret, profile?.recovery_hash ?? NO_PROFILE_HASH);
-      if (!matches || profile === undefined || this.activeProfileOf(profile.principal_id) === null) {
-        this.stats.credentialFailures += 1;
-        return { kind: "invalid" as const };
-      }
-      /* P3-ACCT POLICY: an account with a password signs in with its password; its recovery key only RECOVERS it
-         (`resetPassword`) -- it is never an ordinary sign-in. Only a holder of this valid key hears this answer. */
-      if (loginOf(profile) !== null) return { kind: "password-account" as const };
-      const issued = await this.issueFor(profile, current, now, {}, "recovery");
-      if (issued.kind === "ok") this.stats.recoveries += 1;
-      return issued;
-    });
-  }
-
-  /** Redeem a "Link another device" code: consumed ATOMICALLY with the session it issues (one commit), so a crash
-   *  leaves either both or neither, and a replay -- before or after a restart -- finds it used or gone: `invalid`. */
-  redeemLink(read: SessionCookieRead, rawCode: unknown, now: number): Promise<CredentialOutcome> {
-    return this.serial(async () => {
-      const current = this.currentOf(read, now);
-      if (current === null) return { kind: "not-authenticated" as const };
-      if ((this.principals.get(current.principal_id) as Principal).kind === "profile") return { kind: "already-profiled" as const };
-      if (this.isDurable(current.principal_id)) return { kind: "has-tables" as const };
-      const canonical = canonicalLinkCode(rawCode);
-      const link = canonical === null ? undefined : this.links.get(linkCodeHash(canonical));
-      const profile = link === undefined ? undefined : this.profiles.get(link.profile_id);
-      if (
-        link === undefined ||
-        link.consumed_at !== null ||
-        now >= link.expires_at ||
-        profile === undefined ||
-        this.activeProfileOf(profile.principal_id) === null
-      ) {
-        this.stats.credentialFailures += 1;
-        return { kind: "invalid" as const };
-      }
-      const consumed: LinkCredential = { ...link, consumed_at: now };
-      /* LIVE-3C: SINGLE USE -- consumed only if still unconsumed and unexpired, in the same write as the session. */
-      const issued = await this.issueFor(profile, current, now, { expect: [{ kind: "link-unconsumed", link_hash: link.link_hash, at: now }], links: [consumed] }, "link");
-      if (issued.kind === "ok") {
-        this.links.set(consumed.link_hash, consumed);
-        this.stats.links += 1;
-      }
-      return issued;
-    });
-  }
-
   /** A fresh session for `profile`'s principal, replacing `old` (this browser's temporary session). Inside the queue. */
-  private async issueFor(profile: Profile, old: Session, now: number, extra: IdentityChange, origin: "recovery" | "link" | "login"): Promise<CredentialOutcome> {
+  private async issueFor(profile: Profile, old: Session, now: number, extra: IdentityChange, origin: "recovery" | "login"): Promise<CredentialOutcome> {
     const principalId = profile.principal_id;
-    /* A recovered or linked browser FOUNDS a family: it is a new cookie jar, not a successor of any other device. */
+    /* A signed-in or recovered browser FOUNDS a family: it is a new cookie jar, not a successor of any other device. */
     const { session: fresh, secret, founded } = this.mintSession(principalId, now, null, origin);
     const active = this.activeSessions(principalId, now);
     const overflow = active.length + 1 - this.policy.maxActiveSessions;
@@ -1404,18 +1215,14 @@ export class IdentityService {
     return { kind: "ok", name: profile.display_name, setCookie: sessionSetCookie(fresh.session_id, secret), principalId, sessionId: fresh.session_id };
   }
 
-  /** LIVE-2E adversarial review (H1): every link code of a profile, used or not -- retired together whenever the
-   *  account is being secured (a sign-out, "Sign out other devices", a key rotation), so a code minted by a device
-   *  that has just been thrown out cannot let it straight back in. */
+  /** LIVE-2E adversarial review (H1): every link code of a profile, used or not -- dropped whenever the account is being
+   *  secured. PHASE 3 FINAL: no code is issued any more; a stored one is still dropped here. */
   private linkHashesOf(profileId: string): string[] {
     return [...this.links.values()].filter((link) => link.profile_id === profileId).map((link) => link.link_hash);
   }
 
   private forgetLinks(hashes: readonly string[]): void {
-    for (const hash of hashes) {
-      this.links.delete(hash);
-      this.linkIssueOrder.delete(hash);
-    }
+    for (const hash of hashes) this.links.delete(hash);
   }
 
   /** A principal's rotated sessions still inside their grace (other than `except`). */
@@ -1433,118 +1240,8 @@ export class IdentityService {
     return profile === null ? "profile-required" : { session, profile };
   }
 
-  /** "Link another device": a new single-use code, valid for `linkCodeTtlMs`. The oldest unused codes beyond the
-   *  profile's allowance are retired in the same commit. */
-  createLinkCode(read: SessionCookieRead, now: number): Promise<ProfileActionOutcome<{ code: string; expiresAt: number }>> {
-    return this.serial(async () => {
-      const who = this.profiledCurrent(read, now);
-      if (typeof who === "string") return { kind: who };
-      let minted = mintLinkCode(this.random);
-      for (let attempt = 0; this.links.has(linkCodeHash(minted.canonical)); attempt += 1) {
-        if (attempt >= 4) throw new Error("identity: 5 consecutive link-code collisions -- the random source is not random");
-        minted = mintLinkCode(this.random);
-      }
-      const record: LinkCredential = {
-        link_hash: linkCodeHash(minted.canonical),
-        profile_id: who.profile.profile_id,
-        created_at: now,
-        expires_at: now + this.policy.linkCodeTtlMs,
-        consumed_at: null,
-      };
-      const mine = [...this.links.values()].filter((link) => link.profile_id === who.profile.profile_id);
-      const stale = mine.filter((link) => link.consumed_at !== null || now >= link.expires_at);
-      const order = (link: LinkCredential) => this.linkIssueOrder.get(link.link_hash) ?? -1;
-      const open = mine
-        .filter((link) => link.consumed_at === null && now < link.expires_at)
-        .sort((a, b) => a.created_at - b.created_at || order(a) - order(b) || (a.link_hash < b.link_hash ? -1 : 1));
-      const retired = open.slice(0, Math.max(0, open.length + 1 - this.policy.maxOutstandingLinkCodes));
-      const drop = [...stale, ...retired].map((link) => link.link_hash);
-      try {
-        await this.commit({ expect: [{ kind: "link-absent", link_hash: record.link_hash }], links: [record], dropLinks: drop }, "issuing a device-link code");
-      } catch {
-        return { kind: "unavailable" as const };
-      }
-      for (const hash of drop) {
-        this.links.delete(hash);
-        this.linkIssueOrder.delete(hash);
-      }
-      this.links.set(record.link_hash, record);
-      this.linkIssueOrder.set(record.link_hash, (this.linkIssues += 1));
-      this.stats.linkCodesIssued += 1;
-      return { kind: "ok" as const, code: minted.display, expiresAt: record.expires_at };
-    });
-  }
-
-  /** "Rotate recovery key": the old key stops working in the same commit that stores the new one's digest. */
-  rotateRecoveryKey(read: SessionCookieRead, now: number, creationReceipt?: unknown): Promise<ProfileActionOutcome<{ recoveryKey: string }>> {
-    return this.serial(async () => {
-      const who = this.profiledCurrent(read, now);
-      if (typeof who === "string") return { kind: who };
-      /* P3-ACCT POLICY (owner ruling 2026-10-05, superseding 343fac2's review H1): every account may hold ONE recovery key,
-         an ACCOUNT-RECOVERY credential -- so a username/password account makes (or replaces) its key here too; a sealed
-         343fac2 account makes its first one. H1's concern -- a key minted by a short-lived grant, outside the password
-         budgets -- is answered by WHICH grant counts: only an explicit "Confirm it's you" (the password, or a legacy
-         profile's key) made by THIS session; the automatic grant of a sign-in never replaces a credential.
-         ESCROW-3A (brief §10B, owner review): a live session alone NEVER rotates the key. A recent re-authentication by
-         THIS session does -- or, once, the lost-create-response rescue: the creating session presenting the creating
-         page's receipt, before that page acknowledged the key (a LIVE-2E create only; retired in production). */
-      const granted = this.sensitiveAuthOf(who.session, who.profile, now, "confirmed");
-      const rescue = !granted && this.creationRescueOf(who.session, who.profile, creationReceipt, now);
-      if (!granted && !rescue) {
-        this.stats.reauthRequired += 1;
-        return { kind: "reauth-required" as const };
-      }
-      let key = mintRecoveryKey(this.random);
-      for (let attempt = 0; this.profileOfSelector.has(key.selector); attempt += 1) {
-        if (attempt >= 4) throw new Error("identity: 5 consecutive recovery-selector collisions -- the random source is not random");
-        key = mintRecoveryKey(this.random);
-      }
-      /* P3-ACCT (money review M1): a new credential epoch forgets the persisted wallet -- a wallet made the account's own
-         under the old key (by whoever held it) never authorizes a link without the password again. */
-      const rotated: Profile = { ...withoutWallet(who.profile), recovery_selector: key.selector, recovery_hash: secretHash(key.secret), recovery_rotated_at: now };
-      const dropLinks = this.linkHashesOf(who.profile.profile_id);
-      try {
-        await this.commit(
-          {
-            /* LIVE-3C: COMPARE-AND-SWAP -- the old key dies in the same write that stores the new one, and only if it is
-               still the profile's key. */
-            expect: [
-              { kind: "profile-selector", profile_id: who.profile.profile_id, recovery_selector: who.profile.recovery_selector },
-              { kind: "selector-unused", recovery_selector: key.selector },
-            ],
-            profiles: [rotated],
-            dropLinks,
-          },
-          "rotating a recovery key",
-          {
-            kind: "recovery-key-rotated",
-            at: now,
-            principal_id: who.profile.principal_id,
-            profile_id: who.profile.profile_id,
-            from_selector: who.profile.recovery_selector,
-            to_selector: rotated.recovery_selector,
-            recovery_hash: rotated.recovery_hash,
-            rotated_at: rotated.recovery_rotated_at,
-          },
-        );
-      } catch {
-        return { kind: "unavailable" as const };
-      }
-      this.forgetLinks(dropLinks);
-      this.indexProfile(rotated);
-      /* The rescue is one-time, and any rotation ends it (the key it would replace is gone). */
-      this.creationDeliveries.delete(who.profile.profile_id);
-      if (rescue) this.stats.creationRescues += 1;
-      /* Every grant made under the old key is stale now (a grant names the selector it was made under). */
-      for (const [sessionId, grant] of this.grants) if (grant.selector === who.profile.recovery_selector) this.grants.delete(sessionId);
-      this.stats.recoveryRotations += 1;
-      this.hooks.onSecurityEvent?.({ kind: "recovery-key-rotated", principalId: who.profile.principal_id, familyIds: [] });
-      return { kind: "ok" as const, recoveryKey: key.key };
-    });
-  }
-
   /** "Sign out other devices": every other session of this principal ends `signed-out-remotely` (their sockets close
-   *  4401); this one stays. Nothing about the profile or its seats changes. */
+   *  4401); this one stays. Nothing about the profile, its Authorization Wallet or its seats changes. */
   signOutOthers(read: SessionCookieRead, now: number): Promise<ProfileActionOutcome<{ signedOut: number }>> {
     return this.serial(async () => {
       const who = this.profiledCurrent(read, now);
@@ -1569,10 +1266,6 @@ export class IdentityService {
       );
       if (others.length === 0 && dropLinks.length === 0 && families.length === 0) return { kind: "ok" as const, signedOut: 0 };
       const ended = others.map((session) => ({ ...session, revoked_at: now, revoke_reason: "signed-out-remotely" as const }));
-      /* P3-ACCT (money review M1): ending the other devices ends what they may have set up too -- the persisted wallet
-         is forgotten, so the next link of ANY wallet asks this device to confirm it's you once. */
-      const wallet = walletOf(who.profile);
-      const cleared = wallet !== null && (ended.length > 0 || families.length > 0) ? withoutWallet(who.profile) : null;
       try {
         await this.commit(
           {
@@ -1581,12 +1274,10 @@ export class IdentityService {
               ...families.map((family) => ({ kind: "family-open" as const, family_id: family.family_id })),
               /* The caller's own family must still be open (its sign-out may have committed while this waited). */
               { kind: "family-open" as const, family_id: who.session.family_id },
-              ...(cleared !== null && wallet !== null ? [{ kind: "profile-wallet" as const, profile_id: who.profile.profile_id, wallet_address: wallet.address }] : []),
             ],
             sessions: ended,
             families,
             dropLinks,
-            ...(cleared !== null ? { profiles: [cleared] } : {}),
           },
           "signing out other devices",
           { kind: "signed-out-others", at: now, principal_id: principalId, kept_family_id: who.session.family_id, family_ids: familyList(families.map((family) => family.family_id)) },
@@ -1595,7 +1286,6 @@ export class IdentityService {
         return { kind: "unavailable" as const };
       }
       this.forgetLinks(dropLinks);
-      if (cleared !== null) this.indexProfile(cleared);
       for (const session of ended) {
         this.index(session);
         this.dirty.delete(session.session_id);
@@ -1613,26 +1303,108 @@ export class IdentityService {
   }
 
   /* ==================================================================
-      P3-ACCT: USERNAME + PASSWORD ACCOUNTS
+      PHASE 3 FINAL: THE AUTHORIZATION WALLET'S OPERATIONS (`authorizationWallet.ts`)
      ==================================================================
-     CREATE ACCOUNT binds THIS browser's principal (exactly as `createProfile` does: a browser that played before
-     profiles keeps its tables) to a new schema-2 profile carrying the username, the scrypt hash and (P3-ACCT POLICY) ONE
-     recovery key -- account recovery only, answered once -- and -- unlike the LIVE-2E create (§13 L1) -- signs the browser
-     in on a FRESH session in a new family, revoking the temporary one `replaced` in the same commit: whatever cookie the
-     browser held before (a fixated one included) opens nothing of the account.
-     LOG IN works exactly like a recovery: the username and password authenticate the PROFILE, and this browser gets a
-     fresh session for its principal (`issueFor`), its temporary one `replaced`. Every wrong, unknown, disabled or
-     malformed credential is one answer (`invalid`), after the same KDF work.
-     Both make the new session's sensitive-auth grant at once (the player has just typed the password: a recent sign-in
-     IS a recent authentication), so a first wallet link right after signing in asks for nothing more.
-     ESTABLISH CREDENTIALS is the LEGACY migration: a signed-in recovery-key profile sets its username and password,
-     under a recent "Confirm it's you" with its recovery key (a stolen cookie alone must never be able to attach a
-     durable credential to someone else's profile). P3-ACCT POLICY: its recovery key is kept, as the account's recovery key
-     -- from then on it resets the password; it no longer signs in or confirms.
+     MINT. A text is minted for THIS browser session: CREATE and RECOVER for a signed-out browser (its temporary
+     session), REPLACE for a signed-in one under an explicit "Confirm it's you". RECOVER looks nothing up (the server says
+     nothing about a username to a browser that has not yet proven the matching wallet); CREATE says "username taken"
+     before Keplr signs (account creation necessarily says so; budgeted as every creation is).
+     USE. The operation is taken whole (single use), the signature verified against the exact text minted, by the text's
+     own signer; then the action is decided inside the identity queue against the state it names. */
+
+  /** The browser session an Authorization Wallet operation of a SIGNED-OUT browser is bound to (and why not). */
+  private signedOutSession(read: SessionCookieRead, now: number): Session | "not-authenticated" | "already-profiled" | "has-tables" {
+    const current = this.currentOf(read, now);
+    if (current === null) return "not-authenticated";
+    if ((this.principals.get(current.principal_id) as Principal).kind === "profile") return "already-profiled";
+    if (this.isDurable(current.principal_id)) return "has-tables";
+    return current;
+  }
+
+  /** CREATE / RECOVER: mint the text the wallet signs. `wallet` is the wallet Keplr is on (CREATE: the one to designate;
+   *  RECOVER: the one claimed to be the account's). */
+  mintAuthorization(read: SessionCookieRead, input: { purpose: "create" | "recover"; username: unknown; wallet: unknown; site: string }, now: number): MintOutcome {
+    const current = this.signedOutSession(read, now);
+    /* A durable unprofiled browser may still CREATE (its tables come with it, as ever); it may not sign in to another
+       profile (LIVE-2E review M2). */
+    if (current === "has-tables" && input.purpose === "recover") return { kind: "has-tables" };
+    if (current === "not-authenticated" || current === "already-profiled") return { kind: current };
+    const session = current === "has-tables" ? (this.currentOf(read, now) as Session) : current;
+    const name = cleanLoginName(input.username);
+    if (name === null) return { kind: "bad-username" };
+    const wallet = typeof input.wallet === "string" && JUNO_WALLET_PATTERN.test(input.wallet) ? input.wallet : null;
+    if (wallet === null) return { kind: "bad-wallet" };
+    const loginKey = loginKeyOf(name);
+    if (input.purpose === "create" && this.profileOfLogin.has(loginKey)) return { kind: "username-taken" };
+    const op = this.authorizations.mint(
+      { kind: input.purpose, binding: { sessionId: session.session_id, familyId: session.family_id, loginKey, profileId: null, epoch: null }, site: input.site, account: name, wallet, replaces: null },
+      now,
+    );
+    return { kind: "ok", operation: op.operation, texts: op.texts.map(({ purpose, signer, text }) => ({ purpose, signer, text })), expiresAt: op.expiresAt };
+  }
+
+  /** REPLACE: mint the two texts (the current wallet approves, the new one accepts) for this signed-in account. Needs an
+   *  explicit "Confirm it's you" (the password) made by this session: a sign-in's automatic grant is not enough, and the
+   *  password alone is not enough either -- both wallets must sign. */
+  mintReplacement(read: SessionCookieRead, input: { newWallet: unknown; site: string }, now: number): MintOutcome {
+    const who = this.profiledCurrent(read, now);
+    if (typeof who === "string") return { kind: who };
+    if (!this.sensitiveAuthOf(who.session, who.profile, now, "confirmed")) {
+      this.stats.reauthRequired += 1;
+      return { kind: "reauth-required" };
+    }
+    const wallet = typeof input.newWallet === "string" && JUNO_WALLET_PATTERN.test(input.newWallet) ? input.newWallet : null;
+    if (wallet === null) return { kind: "bad-wallet" };
+    const current = authorizationWalletOf(who.profile);
+    const login = loginOf(who.profile);
+    if (current === null || login === null) return { kind: "profile-required" };
+    if (current.address === wallet) return { kind: "same-wallet" };
+    const grant = this.grants.get(who.session.session_id);
+    const op = this.authorizations.mint(
+      {
+        kind: "replace",
+        binding: { sessionId: who.session.session_id, familyId: who.session.family_id, loginKey: login.key, profileId: who.profile.profile_id, epoch: who.profile.recovery_selector },
+        site: input.site,
+        account: login.name,
+        wallet,
+        replaces: current.address,
+        notAfter: grant?.expires_at,
+      },
+      now,
+    );
+    return { kind: "ok", operation: op.operation, texts: op.texts.map(({ purpose, signer, text }) => ({ purpose, signer, text })), expiresAt: op.expiresAt };
+  }
+
+  /** Every text of `op` verified with the signature given for it (in order). Counted when refused. */
+  private verified(op: AuthorizationOperation, signed: readonly AuthorizationSignature[], now: number): boolean {
+    if (signed.length !== op.texts.length) return false;
+    const ok = op.texts.every((text, at) => verifyAuthorization(text, signed[at], now).ok);
+    if (!ok) this.stats.authorizationFailures += 1;
+    return ok;
+  }
+
+  /* ==================================================================
+      CREATE ACCOUNT, LOG IN
+     ==================================================================
+     CREATE ACCOUNT binds THIS browser's principal (a browser that played before profiles keeps its tables) to a new
+     schema-3 profile: the username, the scrypt hash, its AUTHORIZATION WALLET (the CREATE text's signer, proven by its
+     signature over the text minted for this session and this username) and a fresh internal credential epoch -- in ONE
+     commit, so no account ever exists without its Authorization Wallet. It signs the browser in on a FRESH session in a
+     new family, revoking the temporary one `replaced` in the same commit. No recovery key is made, shown or kept.
+     LOG IN: the username and password authenticate the PROFILE; this browser gets a fresh session for its principal
+     (`issueFor`). Every wrong, unknown, disabled or malformed credential is one answer (`invalid`), after the same KDF
+     work. A legacy account's RIGHT password is told `legacy-account` (only a holder of that password hears it).
+     Both make the new session's sensitive-auth grant at once (the player has just typed the password: a recent sign-in IS
+     a recent authentication). Neither ever asks for a wallet: Keplr is not part of signing in.
      The KDF always runs OUTSIDE the identity queue (bounded by `KdfGate`); everything it was checked against is checked
      again inside the queue before anything is written. */
 
-  async createAccount(read: SessionCookieRead, input: { username: unknown; password: unknown; displayName: string }, now: number, options: { client?: string } = {}): Promise<CreateAccountOutcome> {
+  async createAccount(
+    read: SessionCookieRead,
+    input: { username: unknown; password: unknown; displayName: string; authorization: { operation: unknown } & AuthorizationSignature },
+    now: number,
+    options: { client?: string } = {},
+  ): Promise<CreateAccountOutcome> {
     const name = cleanLoginName(input.username);
     if (name === null) return { kind: "bad-username" };
     const password = cleanPassword(input.password);
@@ -1645,42 +1417,50 @@ export class IdentityService {
     const earlyPrincipal = this.principals.get(early.principal_id) as Principal;
     if (earlyPrincipal.kind === "profile") return { kind: "already-profiled", name: this.profiles.get(earlyPrincipal.account_link as string)?.display_name ?? "" };
     if (this.profileOfLogin.has(key)) return { kind: "username-taken" };
+    /* THE AUTHORIZATION WALLET: this session's CREATE operation, for THIS username, signed by its wallet. Taken (single
+       use) before any KDF work; released only on a transient failure. */
+    const taken = this.authorizations.take(input.authorization.operation, "create", { sessionId: early.session_id, familyId: early.family_id }, now);
+    if (taken.kind !== "open") {
+      this.stats.authorizationFailures += 1;
+      return { kind: taken.kind === "used" ? "authorization-used" : "authorization-invalid" };
+    }
+    const op = taken.op;
+    if (op.binding.loginKey !== key || !this.verified(op, [input.authorization], now)) {
+      this.authorizations.spend(op.operation);
+      if (op.binding.loginKey !== key) this.stats.authorizationFailures += 1;
+      return { kind: "authorization-invalid" };
+    }
     const hashed = await this.kdf.run(() => hashPassword(password.password, this.policy.passwordKdf, this.random), { client: options.client });
     if (hashed.kind === "busy") {
+      this.authorizations.release(op.operation);
       this.stats.kdfBusy += 1;
       return { kind: "busy" };
     }
-    return this.serial(async () => {
+    const outcome = await this.serial(async (): Promise<CreateAccountOutcome> => {
       const current = this.currentOf(read, now);
-      if (current === null) return { kind: "not-authenticated" as const };
+      if (current === null || current.session_id !== op.binding.sessionId) return { kind: "not-authenticated" as const };
       const principal = this.principals.get(current.principal_id) as Principal;
       if (principal.kind === "profile") return { kind: "already-profiled" as const, name: this.profiles.get(principal.account_link as string)?.display_name ?? "" };
       if (this.profileOfLogin.has(key)) return { kind: "username-taken" as const };
       const profileId = mintUnique(() => mintProfileId(this.random), (id) => this.profiles.has(id));
-      /* P3-ACCT POLICY (owner ruling 2026-10-05): ONE recovery key, made here and answered ONCE (the account dialog's
-         one-time reveal); only its selector and the SHA-256 of its secret are kept. */
-      let recovery = mintRecoveryKey(this.random);
-      for (let attempt = 0; this.profileOfSelector.has(recovery.selector); attempt += 1) {
-        if (attempt >= 4) throw new Error("identity: 5 consecutive recovery-selector collisions -- the random source is not random");
-        recovery = mintRecoveryKey(this.random);
-      }
-      const selector = recovery.selector;
+      /* The internal credential epoch: random, never shown, never a credential (no recovery key exists to match it). */
+      const epoch = mintUnique(() => mintRecoverySelector(this.random), (selector) => this.profileOfSelector.has(selector));
       const profile: Profile = {
         profile_id: profileId,
         principal_id: principal.principal_id,
         display_name: input.displayName,
         created_at: now,
         status: "active",
-        recovery_selector: selector,
-        recovery_hash: secretHash(recovery.secret),
+        recovery_selector: epoch,
+        recovery_hash: sealedRecoveryDigest(epoch),
         recovery_rotated_at: now,
-        schema: 2,
+        schema: 3,
         login_key: key,
         login_name: name,
         password_hash: hashed.value,
         password_set_at: now,
-        wallet_address: null,
-        wallet_verified_at: null,
+        wallet_address: op.wallet,
+        wallet_verified_at: now,
       };
       const bound: Principal = { ...principal, kind: "profile", account_link: profileId, activated_at: principal.activated_at ?? now, last_seen_at: now };
       const durable = this.isDurable(principal.principal_id);
@@ -1695,7 +1475,6 @@ export class IdentityService {
       const elsewhere = durable ? this.activeSessions(principal.principal_id, now).filter((session) => session.session_id !== current.session_id && !graced.some((gone) => gone.session_id === session.session_id)) : [];
       const replaced: Session[] = [current, ...graced, ...elsewhere].map((session) => ({ ...session, revoked_at: now, revoke_reason: "replaced" as const }));
       const replacedFamilies = this.revokedFamilies([...new Set([...replaced.map((session) => session.family_id), ...this.familiesOfPrincipal(principal.principal_id).map((family) => family.family_id)])], "replaced", now);
-      const evicted: Session[] = [];
       const newFamilies = founded === null ? [] : [founded];
       try {
         await this.commit(
@@ -1703,15 +1482,15 @@ export class IdentityService {
             expect: [
               durable ? { kind: "principal-unprofiled" as const, principal_id: principal.principal_id } : { kind: "principal-absent" as const, principal_id: principal.principal_id },
               { kind: "profile-absent", profile_id: profileId },
-              { kind: "selector-unused", recovery_selector: selector },
+              { kind: "selector-unused", recovery_selector: epoch },
               { kind: "login-unused", login_key: key },
               { kind: "session-absent", session_id: fresh.session_id },
               ...newFamilies.map((family) => ({ kind: "family-absent" as const, family_id: family.family_id })),
-              ...(durable ? [...replaced, ...evicted].map((session) => ({ kind: "session-open" as const, session_id: session.session_id })) : []),
+              ...(durable ? replaced.map((session) => ({ kind: "session-open" as const, session_id: session.session_id })) : []),
             ],
             principals: [bound],
             profiles: [profile],
-            sessions: [fresh, ...(durable ? [...replaced, ...evicted] : [])],
+            sessions: [fresh, ...(durable ? replaced : [])],
             families: [...newFamilies, ...(durable ? replacedFamilies : [])],
           },
           "creating an account",
@@ -1725,22 +1504,24 @@ export class IdentityService {
       this.provisional.delete(bound.principal_id);
       this.index(fresh);
       this.applyFamilies([...newFamilies, ...replacedFamilies]);
-      for (const session of [...replaced, ...evicted]) {
+      for (const session of replaced) {
         this.index(session);
         this.dirty.delete(session.session_id);
         this.grants.delete(session.session_id);
       }
       this.stats.profilesCreated += 1;
       this.stats.accountsCreated += 1;
-      this.stats.revocations += replaced.length + evicted.length;
-      this.stats.evictions += evicted.length;
+      this.stats.revocations += replaced.length;
       this.hooks.onSessionsEnded?.(
-        [...replaced, ...evicted].map((session) => session.session_id),
+        replaced.map((session) => session.session_id),
         principal.principal_id,
       );
       await this.recordGrant(fresh, profile, now, "sign-in");
-      return { kind: "ok" as const, name: input.displayName, username: name, recoveryKey: recovery.key, setCookie: sessionSetCookie(fresh.session_id, secret), principalId: bound.principal_id, sessionId: fresh.session_id };
+      return { kind: "ok" as const, name: input.displayName, username: name, setCookie: sessionSetCookie(fresh.session_id, secret), principalId: bound.principal_id, sessionId: fresh.session_id };
     });
+    if (outcome.kind === "unavailable") this.authorizations.release(op.operation);
+    else this.authorizations.spend(op.operation);
+    return outcome;
   }
 
   async login(read: SessionCookieRead, input: { username: unknown; password: unknown }, now: number, options: { client?: string } = {}): Promise<LoginOutcome> {
@@ -1766,7 +1547,13 @@ export class IdentityService {
       if ((this.principals.get(current.principal_id) as Principal).kind === "profile") return { kind: "already-profiled" as const };
       if (this.isDurable(current.principal_id)) return { kind: "has-tables" as const };
       const profile = profileId === undefined ? undefined : this.profiles.get(profileId);
-      const ok = checked.value && password !== null && stored !== null && profile !== undefined && loginOf(profile)?.hash === stored && this.activeProfileOf(profile.principal_id) !== null;
+      const right = checked.value && password !== null && stored !== null && profile !== undefined && loginOf(profile)?.hash === stored;
+      /* PHASE 3 FINAL: the right password of a LEGACY account -- said only to its holder; nothing is signed in. */
+      if (right && profile !== undefined && profile.schema !== 3 && profile.status === "active" && this.principals.get(profile.principal_id)?.status === "active") {
+        this.stats.legacyRefusals += 1;
+        return { kind: "legacy-account" as const };
+      }
+      const ok = right && profile !== undefined && this.activeProfileOf(profile.principal_id) !== null;
       if (!ok) {
         this.stats.credentialFailures += 1;
         this.stats.loginFailures += 1;
@@ -1782,117 +1569,48 @@ export class IdentityService {
     });
   }
 
-  async establishCredentials(read: SessionCookieRead, input: { username: unknown; password: unknown }, now: number, options: { client?: string } = {}): Promise<EstablishCredentialsOutcome> {
+  /* ==================================================================
+      CHANGE PASSWORD, FORGOT PASSWORD (BY THE AUTHORIZATION WALLET), REPLACE THE AUTHORIZATION WALLET
+     ==================================================================
+     THE CREDENTIAL FENCES. A password's GENERATION is its stored hash (scrypt with a fresh random salt every time, so no
+     two generations share one); the Authorization Wallet's is its address and designation time; the credential epoch
+     (ESCROW-3A's, to which every wallet ticket and sensitive grant is bound) is the profile's `recovery_selector` --
+     unchanged by every action here: none of them is about a game's financial credentials. Every write carries the
+     compare-and-swaps of what it was decided against -- `profile-password`, `profile-wallet`, `profile-selector` -- so a
+     change decided against a superseded credential (a racing change, recovery or replacement; a second writer) is refused
+     by the store itself, in the same step as the write. The KDF runs OUTSIDE the identity queue (bounded by `KdfGate`);
+     everything it was checked against is checked again inside the queue.
+     SESSIONS. CHANGE: every session that predates it and is not the changer's own ends `signed-out-remotely` (their
+       families closed; their sockets 4401; their wallet tickets stop standing: ESCROW-3A F-2 reads the family); this
+       browser keeps going on a FRESH session minted into ITS OWN family (the seats' pre-freeze wallet links made here
+       keep standing), every other member of that family ends `replaced`.
+     RECOVER (signed out, "Forgot password?"): EVERY session and family of the account ends, and this browser gets a fresh
+       session in a NEW family (exactly like a sign-in).
+     REPLACE: no session ends (the owner is signed in, has confirmed with the password, and both wallets signed).
+     WHAT NONE OF THEM TOUCHES: the profile and its principal (every seat), its username, its trust history, the credential
+       epoch -- and every game's financial wallet binding (the ticket ledger, the frozen roster, the chain's deposits: a
+       seat's wallet never changes here, and a funded seat's never changes at all). RECOVER and CHANGE keep the
+       Authorization Wallet (it is the recovery authority); only REPLACE changes it, and only with both wallets' signatures.
+     Every one is journaled first (`password-replaced`, `authorization-wallet-replaced`), so an identity restore never
+     re-installs a retired password or wallet (`securityReplay.ts`). */
+
+  /** "Change password" (signed in): the CURRENT password, in the request, and the new password. */
+  async changePassword(read: SessionCookieRead, input: { currentPassword: unknown; newPassword: unknown }, now: number, options: { client?: string } = {}): Promise<ChangePasswordOutcome> {
     const before = this.profiledCurrent(read, now);
     if (typeof before === "string") return { kind: before };
-    if (loginOf(before.profile) !== null) return { kind: "credentials-exist" };
-    if (!this.sensitiveAuthOf(before.session, before.profile, now, "confirmed")) {
-      this.stats.reauthRequired += 1;
-      return { kind: "reauth-required" };
-    }
-    const name = cleanLoginName(input.username);
-    if (name === null) return { kind: "bad-username" };
-    const password = cleanPassword(input.password);
-    if (!password.ok) return { kind: "bad-password", problem: password.problem };
-    const key = loginKeyOf(name);
-    if (this.profileOfLogin.has(key)) return { kind: "username-taken" };
-    const hashed = await this.kdf.run(() => hashPassword(password.password, this.policy.passwordKdf, this.random), { client: options.client, authenticated: true });
-    if (hashed.kind === "busy") {
+    const held = loginOf(before.profile) as { key: string; name: string; hash: string };
+    const next = cleanPassword(input.newPassword);
+    if (!next.ok) return { kind: "bad-password", problem: next.problem };
+    /* The current password, checked before any new hash is made (a wrong one costs the attacker the KDF, not us). */
+    const typed = loginPasswordOf(input.currentPassword);
+    const checked = await this.kdf.run(() => verifyPassword(typed ?? "", held.hash, this.policy.passwordKdf), { client: options.client, authenticated: true });
+    if (checked.kind === "busy") {
       this.stats.kdfBusy += 1;
       return { kind: "busy" };
     }
-    return this.serial(async () => {
-      const who = this.profiledCurrent(read, now);
-      if (typeof who === "string") return { kind: who };
-      if (loginOf(who.profile) !== null) return { kind: "credentials-exist" as const };
-      if (!this.sensitiveAuthOf(who.session, who.profile, now, "confirmed")) {
-        this.stats.reauthRequired += 1;
-        return { kind: "reauth-required" as const };
-      }
-      if (this.profileOfLogin.has(key)) return { kind: "username-taken" as const };
-      const updated: Profile = { ...asSchema2(who.profile), login_key: key, login_name: name, password_hash: hashed.value, password_set_at: now };
-      try {
-        await this.commit(
-          { expect: [{ kind: "profile-no-login", profile_id: updated.profile_id }, { kind: "login-unused", login_key: key }], profiles: [updated] },
-          "setting a username and password",
-          { kind: "credentials-established", at: now, principal_id: updated.principal_id, profile_id: updated.profile_id, login_key: key, login_name: name, password_hash: hashed.value, set_at: now },
-        );
-      } catch {
-        return { kind: "unavailable" as const };
-      }
-      this.indexProfile(updated);
-      this.stats.credentialsEstablished += 1;
-      return { kind: "ok" as const, username: name };
-    });
-  }
-
-  /* ==================================================================
-      P3-ACCT POLICY FOLLOW-UP (owner rulings 2026-10-05): CHANGE PASSWORD AND FORGOT PASSWORD
-     ==================================================================
-     THE CREDENTIAL FENCES. A password's GENERATION is its stored hash (scrypt with a fresh random salt every time, so no
-     two generations share one); the recovery key's is its selector (ESCROW-3A's credential epoch, to which every wallet
-     ticket and sensitive grant is bound -- unchanged here: a password change is not a key rotation). Every write that
-     replaces the password carries `profile-password` (the generation it replaces) AND `profile-selector` (the key it was
-     decided under), so a change decided against a superseded credential -- a racing change, a reset, a key rotation, a
-     second writer -- is refused by the store itself, in the same step as the write. The KDF runs OUTSIDE the identity
-     queue (bounded by `KdfGate`); everything it was checked against is checked again inside the queue.
-     SESSIONS. Every session that predates the change and is not the changer's own ends -- security-revoked
-     `signed-out-remotely`, their families closed (their sockets close 4401; their wallet tickets stop standing:
-     ESCROW-3A F-2 reads the family) -- so a stolen session or a stolen old password cannot outlive it.
-       CHANGE (signed in): this browser keeps going on a FRESH session minted into ITS OWN family (the family stays
-         open -- the seats' pre-freeze wallet links made here keep standing), and every other member of that family (the
-         session it held, its rotated predecessors still in their grace) ends `replaced`: a copy of this browser's old
-         cookie opens nothing.
-       RESET (signed out, "Forgot password?"): EVERY session of the account ends, and this browser gets a fresh session
-         in a NEW family (exactly like a sign-in: its temporary session is `replaced`).
-     WHAT A CREDENTIAL CHANGE DOES NOT TOUCH: the profile and its principal (every seat), its username, its trust history.
-     THE VERIFIED WALLET (reviewed, as the brief asks):
-       CHANGE keeps it (the owner's ruling: an ordinary password change is not proof the wallet is wrong). The persisted
-         wallet authorizes a link only for this account's own sessions AND only with that wallet's own fresh ADR-036
-         signature (`escrow/moneyTables.ts` `linkAuthority`), and every session that predates the change other than the
-         changer's is ended by it. Residual (security review M2, recorded for the owner): a wallet a thief's session
-         persisted stays the account's until the owner forgets it -- the menu shows it right after the change with
-         "Not yours? Forget this wallet".
-       RESET clears it (security review M2: "Forgot password?" is the account-recovery path, the one taken after a
-         credential may have been in someone else's hands; money review M1's rule -- a wallet made the account's own
-         under a credential that may be compromised never authorizes a link without a fresh confirmation again -- applies
-         exactly as it does to a key rotation and to "Sign out other devices"). Under the `profile-wallet` CAS.
-     THE RECOVERY KEY IS KEPT BY A RESET (not rotated automatically): rotating it would make the reset's caller -- maybe a
-       thief with a stolen key -- the holder of the only key, at once and without another step. Kept, the owner's saved
-       key can reset the account back. This is a race, not a guarantee (security review NIT 7): a thief who reset with a
-       stolen key knows the password they chose, so a "Confirm it's you" and "Make a new recovery key" retire the
-       owner's key too; the owner's remedy then is the operator. Both journaled first (`password-replaced`), so an
-       identity restore never brings an old password back (`securityReplay.ts`). */
-
-  /** "Change password" (signed in): the CURRENT password or the recovery key, in the request, and the new password. */
-  async changePassword(read: SessionCookieRead, input: { current: CurrentCredential; newPassword: unknown }, now: number, options: { client?: string } = {}): Promise<ChangePasswordOutcome> {
-    const before = this.profiledCurrent(read, now);
-    if (typeof before === "string") return { kind: before };
-    const held = loginOf(before.profile);
-    if (held === null) return { kind: "no-password" };
-    const next = cleanPassword(input.newPassword);
-    if (!next.ok) return { kind: "bad-password", problem: next.problem };
-    /* The current credential, checked before any new hash is made (a wrong one costs the attacker the KDF, not us). */
-    const byKey = "recoveryKey" in input.current;
-    if (byKey) {
-      const parsed = parseRecoveryKey((input.current as { recoveryKey: unknown }).recoveryKey);
-      const selectorMatches = parsed !== null && parsed.selector === before.profile.recovery_selector;
-      const secretOk = parsed !== null && secretMatches(parsed.secret, selectorMatches ? before.profile.recovery_hash : NO_PROFILE_HASH);
-      if (!selectorMatches || !secretOk || !hasRecoveryKey(before.profile)) {
-        this.stats.credentialFailures += 1;
-        return { kind: "invalid" };
-      }
-    } else {
-      const typed = loginPasswordOf((input.current as { password: unknown }).password);
-      const checked = await this.kdf.run(() => verifyPassword(typed ?? "", held.hash, this.policy.passwordKdf), { client: options.client, authenticated: true });
-      if (checked.kind === "busy") {
-        this.stats.kdfBusy += 1;
-        return { kind: "busy" };
-      }
-      if (!checked.value || typed === null) {
-        this.stats.credentialFailures += 1;
-        return { kind: "invalid" };
-      }
+    if (!checked.value || typed === null) {
+      this.stats.credentialFailures += 1;
+      return { kind: "invalid" };
     }
     const hashed = await this.kdf.run(() => hashPassword(next.password, this.policy.passwordKdf, this.random), { client: options.client, authenticated: true });
     if (hashed.kind === "busy") {
@@ -1902,9 +1620,9 @@ export class IdentityService {
     return this.serial(async () => {
       const who = this.profiledCurrent(read, now);
       if (typeof who === "string") return { kind: who };
-      /* The very session, password generation and recovery key the credential was checked against (a change, reset or
-         rotation that landed meanwhile wins: the credential this request proved is no longer the account's). */
-      if (who.session.session_id !== before.session.session_id || loginOf(who.profile)?.hash !== held.hash || who.profile.recovery_selector !== before.profile.recovery_selector || who.profile.recovery_hash !== before.profile.recovery_hash) {
+      /* The very session and password generation the credential was checked against (a change or recovery that landed
+         meanwhile wins: the password this request proved is no longer the account's). */
+      if (who.session.session_id !== before.session.session_id || loginOf(who.profile)?.hash !== held.hash) {
         this.stats.credentialFailures += 1;
         return { kind: "invalid" as const };
       }
@@ -1950,7 +1668,7 @@ export class IdentityService {
             from_hash: held.hash,
             to_hash: hashed.value,
             set_at: now,
-            via: byKey ? "recovery-key" : "password",
+            via: "password",
             kept_family_id: kept,
             family_ids: familyList(families.map((family) => family.family_id)),
           },
@@ -1967,7 +1685,6 @@ export class IdentityService {
         this.grants.delete(session.session_id);
       }
       this.applyFamilies(families);
-      this.creationDeliveries.delete(updated.profile_id);
       this.stats.passwordChanges += 1;
       this.stats.revocations += mine.length + ended.length;
       /* Every session that ended -- this browser's old one too: its sockets close 4401 and reopen on the fresh cookie. */
@@ -1981,50 +1698,52 @@ export class IdentityService {
     });
   }
 
-  /** "Forgot password?" (signed out): the recovery key and a new password. No username: the key's selector names the
-   *  account, and no answer says whether any other account exists. */
-  async resetPassword(read: SessionCookieRead, input: { recoveryKey: unknown; newPassword: unknown }, now: number, options: { client?: string } = {}): Promise<ResetPasswordOutcome> {
-    /* About THIS browser only (never about the key): answered before any credential work. */
-    const early = this.currentOf(read, now);
-    if (early === null) return { kind: "not-authenticated" };
-    if ((this.principals.get(early.principal_id) as Principal).kind === "profile") return { kind: "already-profiled" };
-    if (this.isDurable(early.principal_id)) return { kind: "has-tables" };
+  /** "Forgot password?" (signed out): this session's RECOVER operation (a username and the wallet Keplr signed with),
+   *  its signature, and the new password. ONE answer (`invalid`) for every reason it is refused -- a signature that does
+   *  not verify, a wallet that is not the account's Authorization Wallet (a previously used GAME wallet included), an
+   *  account that does not exist, is disabled or legacy -- so the answer says nothing about any username to a browser
+   *  that has not proven its Authorization Wallet. */
+  async recoverAccount(read: SessionCookieRead, input: { operation: unknown; newPassword: unknown } & AuthorizationSignature, now: number, options: { client?: string } = {}): Promise<RecoverAccountOutcome> {
+    /* About THIS browser only (never about the account): answered before any proof work. */
+    const early = this.signedOutSession(read, now);
+    if (typeof early === "string") return { kind: early };
     const next = cleanPassword(input.newPassword);
     if (!next.ok) return { kind: "bad-password", problem: next.problem };
-    const parsed = parseRecoveryKey(input.recoveryKey);
-    if (parsed === null) {
-      this.stats.credentialFailures += 1;
-      return { kind: "invalid" };
+    const taken = this.authorizations.take(input.operation, "recover", { sessionId: early.session_id, familyId: early.family_id }, now);
+    if (taken.kind !== "open") {
+      this.stats.authorizationFailures += 1;
+      return taken.kind === "used" ? { kind: "authorization-used" } : { kind: "invalid" };
     }
-    const profileId = this.profileOfSelector.get(parsed.selector);
+    const op = taken.op;
+    const profileId = this.profileOfLogin.get(op.binding.loginKey);
     const found = profileId === undefined ? undefined : this.profiles.get(profileId);
-    /* Constant time either way: an unknown selector is compared against a digest nothing matches. */
-    const matches = secretMatches(parsed.secret, found?.recovery_hash ?? NO_PROFILE_HASH);
-    if (!matches || found === undefined || this.activeProfileOf(found.principal_id) === null) {
+    const authority = found === undefined ? null : authorizationWalletOf(found);
+    /* The signature first (by the operation's own signer, over its exact text), then the account: is THAT wallet this
+       account's Authorization Wallet, and is the account active? */
+    const signed = this.verified(op, [input], now);
+    if (!signed || found === undefined || authority === null || authority.address !== op.wallet || this.activeProfileOf(found.principal_id) === null) {
+      this.authorizations.spend(op.operation);
+      if (signed) this.stats.authorizationFailures += 1;
       this.stats.credentialFailures += 1;
       return { kind: "invalid" };
     }
-    const held = loginOf(found);
-    if (held === null) return { kind: "no-password" };
+    const held = loginOf(found) as { key: string; name: string; hash: string };
     const hashed = await this.kdf.run(() => hashPassword(next.password, this.policy.passwordKdf, this.random), { client: options.client });
     if (hashed.kind === "busy") {
+      this.authorizations.release(op.operation);
       this.stats.kdfBusy += 1;
       return { kind: "busy" };
     }
-    return this.serial(async () => {
+    const outcome = await this.serial(async (): Promise<RecoverAccountOutcome> => {
       const current = this.currentOf(read, now);
-      if (current === null) return { kind: "not-authenticated" as const };
+      if (current === null || current.session_id !== op.binding.sessionId) return { kind: "not-authenticated" as const };
       if ((this.principals.get(current.principal_id) as Principal).kind === "profile") return { kind: "already-profiled" as const };
       if (this.isDurable(current.principal_id)) return { kind: "has-tables" as const };
-      /* The key and the password generation exactly as checked (a rotation, change or reset that landed meanwhile wins). */
+      /* The wallet and the password generation exactly as checked (a replacement, change or recovery that landed
+         meanwhile wins; a replacement also purged this operation). */
       const profile = this.profiles.get(found.profile_id);
-      if (
-        profile === undefined ||
-        this.activeProfileOf(profile.principal_id) === null ||
-        profile.recovery_selector !== parsed.selector ||
-        !secretMatches(parsed.secret, profile.recovery_hash) ||
-        loginOf(profile)?.hash !== held.hash
-      ) {
+      const standingAuthority = profile === undefined ? null : authorizationWalletOf(profile);
+      if (profile === undefined || this.activeProfileOf(profile.principal_id) === null || standingAuthority === null || standingAuthority.address !== op.wallet || standingAuthority.since !== authority.since || loginOf(profile)?.hash !== held.hash) {
         this.stats.credentialFailures += 1;
         return { kind: "invalid" as const };
       }
@@ -2045,16 +1764,15 @@ export class IdentityService {
       const replacedFamilies = this.revokedFamilies([current.family_id], "replaced", now);
       const newFamilies = founded === null ? [] : [founded];
       const dropLinks = this.linkHashesOf(profile.profile_id);
-      /* Security review M2: a reset forgets the persisted wallet (see the block above), under its compare-and-swap. */
-      const wallet = walletOf(profile);
-      const updated: Profile = { ...withoutWallet(profile), password_hash: hashed.value, password_set_at: now };
+      /* The Authorization Wallet is KEPT (it is the recovery authority); the credential epoch is unchanged. */
+      const updated: Profile = { ...profile, password_hash: hashed.value, password_set_at: now };
       try {
         await this.commit(
           {
             expect: [
               { kind: "profile-password", profile_id: updated.profile_id, password_hash: held.hash },
-              { kind: "profile-selector", profile_id: updated.profile_id, recovery_selector: parsed.selector },
-              { kind: "profile-wallet", profile_id: updated.profile_id, wallet_address: wallet?.address ?? null },
+              { kind: "profile-selector", profile_id: updated.profile_id, recovery_selector: profile.recovery_selector },
+              { kind: "profile-wallet", profile_id: updated.profile_id, wallet_address: op.wallet },
               { kind: "session-absent", session_id: fresh.session_id },
               ...newFamilies.map((family) => ({ kind: "family-absent" as const, family_id: family.family_id })),
               ...ended.map((session) => ({ kind: "session-open" as const, session_id: session.session_id })),
@@ -2065,7 +1783,7 @@ export class IdentityService {
             families: [...newFamilies, ...families],
             dropLinks,
           },
-          "resetting a password",
+          "recovering an account",
           {
             kind: "password-replaced",
             at: now,
@@ -2074,7 +1792,7 @@ export class IdentityService {
             from_hash: held.hash,
             to_hash: hashed.value,
             set_at: now,
-            via: "recovery-key",
+            via: "authorization-wallet",
             kept_family_id: null,
             family_ids: familyList(families.map((family) => family.family_id)),
           },
@@ -2091,8 +1809,7 @@ export class IdentityService {
         this.dirty.delete(session.session_id);
         this.grants.delete(session.session_id);
       }
-      this.creationDeliveries.delete(updated.profile_id);
-      this.stats.passwordResets += 1;
+      this.stats.accountRecoveries += 1;
       this.stats.revocations += ended.length + replaced.length;
       this.hooks.onSessionsEnded?.(
         replaced.map((session) => session.session_id),
@@ -2108,81 +1825,89 @@ export class IdentityService {
       await this.recordGrant(fresh, updated, now, "sign-in");
       return { kind: "ok" as const, name: updated.display_name, setCookie: sessionSetCookie(fresh.session_id, secret), principalId, sessionId: fresh.session_id, signedOut };
     });
+    if (outcome.kind === "unavailable") this.authorizations.release(op.operation);
+    else this.authorizations.spend(op.operation);
+    return outcome;
   }
 
-  /* ==================================================================
-      P3-ACCT: THE PROFILE'S PERSISTED, VERIFIED WALLET
-     ==================================================================
-     Set ONLY by the money layer, after the server itself verified an ADR-036 proof of that wallet for one of this
-     principal's seats AND the link was authorized by a standing sensitive authentication (a recent sign-in, the
-     password, or the legacy recovery key) -- never on a browser's claim. From then on a fresh proof BY THAT SAME WALLET
-     authorizes its links without asking for the password again (the wallet's own signature is the second factor); a
-     different wallet is a replacement and needs the sensitive authentication again (and W2-M's disclosure at the seat).
-     Not journaled: an identity restore clears it (fail safe). */
-
-  /** P3-ACCT (review L2): whether the LIVE-2E create-a-recovery-key-profile route is still served. */
-  get legacyProfileCreation(): boolean {
-    return this.policy.legacyProfileCreation;
-  }
-
-  /** P3-ACCT (trust indicators): what the public facts read of a principal's profile -- times only, never an id. */
-  trustProfileFacts(principalId: string): { createdAt: number; walletVerifiedAt: number | null } | null {
-    const profile = this.activeProfileOf(principalId);
-    return profile === null ? null : { createdAt: profile.created_at, walletVerifiedAt: walletOf(profile)?.verifiedAt ?? null };
-  }
-
-  /** The profile's persisted wallet (for the money routes and the account's own view). */
-  profileWallet(principalId: string): { address: string; verifiedAt: number } | null {
-    const profile = this.activeProfileOf(principalId);
-    return profile === null ? null : walletOf(profile);
-  }
-
-  /** Persist `wallet` as the profile's verified wallet (`verifiedAt`: when the server verified its proof).
-   *
-   *  Re-review N-3: decided INSIDE the identity queue against the context that authorized the link -- its family still
-   *  open, the credential epoch unrotated, and the profile's wallet still the one the caller saw. A key rotation, a
-   *  sign-out of other devices or a "Forget this wallet" that committed while the link was in flight therefore wins:
-   *  the link stands for its table, but its wallet is NOT written back onto the cleaned profile ("stale"). */
-  associateWallet(context: WalletAssociationContext, wallet: string, verifiedAt: number): Promise<WalletAssociation> {
-    return this.serial(async () => {
-      const profile = this.activeProfileOf(context.principalId);
-      if (profile === null) return "no-profile" as const;
-      if (!JUNO_WALLET_PATTERN.test(wallet) || !Number.isSafeInteger(verifiedAt) || verifiedAt < 0) return "unavailable" as const;
-      const current = walletOf(profile);
-      if (current?.address === wallet) return "unchanged" as const;
-      if (this.securityStanding(context).kind !== "standing" || (current?.address ?? null) !== context.seen) return "stale" as const;
-      const updated: Profile = { ...asSchema2(profile), wallet_address: wallet, wallet_verified_at: verifiedAt };
-      try {
-        await this.commit({ expect: [{ kind: "profile-wallet", profile_id: profile.profile_id, wallet_address: current?.address ?? null }], profiles: [updated] }, "persisting a verified wallet");
-      } catch {
-        return "unavailable" as const;
-      }
-      this.indexProfile(updated);
-      this.stats.walletsAssociated += 1;
-      return "associated" as const;
-    });
-  }
-
-  /** "Forget this wallet" (sensitive): the profile keeps no persisted wallet; the next money action proves one again. */
-  forgetWallet(read: SessionCookieRead, now: number): Promise<ProfileActionOutcome<{ forgot: boolean }>> {
-    return this.serial(async () => {
+  /** "Change Authorization Wallet" (signed in): this session's REPLACE operation, with the CURRENT Authorization
+   *  Wallet's approval and the NEW one's acceptance. The password alone is never enough (it only opened the operation):
+   *  both signatures, over the two texts of this one operation, by exactly the two wallets it names. */
+  async replaceAuthorizationWallet(read: SessionCookieRead, input: { operation: unknown; approve: AuthorizationSignature; accept: AuthorizationSignature }, now: number): Promise<ReplaceWalletOutcome> {
+    const before = this.profiledCurrent(read, now);
+    if (typeof before === "string") return { kind: before };
+    const taken = this.authorizations.take(input.operation, "replace", { sessionId: before.session.session_id, familyId: before.session.family_id }, now);
+    if (taken.kind !== "open") {
+      this.stats.authorizationFailures += 1;
+      return { kind: taken.kind === "used" ? "authorization-used" : "authorization-invalid" };
+    }
+    const op = taken.op;
+    if (op.binding.profileId !== before.profile.profile_id || !this.verified(op, [input.approve, input.accept], now)) {
+      this.authorizations.spend(op.operation);
+      return { kind: "authorization-invalid" };
+    }
+    const outcome = await this.serial(async (): Promise<ReplaceWalletOutcome> => {
       const who = this.profiledCurrent(read, now);
       if (typeof who === "string") return { kind: who };
-      if (!this.sensitiveAuthOf(who.session, who.profile, now)) {
-        this.stats.reauthRequired += 1;
-        return { kind: "reauth-required" as const };
-      }
-      const current = walletOf(who.profile);
-      if (current === null) return { kind: "ok" as const, forgot: false };
-      const updated: Profile = { ...asSchema2(who.profile), wallet_address: null, wallet_verified_at: null };
+      if (who.session.session_id !== op.binding.sessionId || who.profile.profile_id !== op.binding.profileId) return { kind: "authorization-invalid" as const };
+      const current = authorizationWalletOf(who.profile);
+      /* Decided against the designation and epoch the operation was minted under (a replacement that landed meanwhile
+         wins -- and purged this operation). */
+      if (current === null || current.address !== op.replaces || who.profile.recovery_selector !== op.binding.epoch) return { kind: "stale" as const };
+      const since = Math.max(now, current.since + 1);
+      const updated: Profile = { ...who.profile, wallet_address: op.wallet, wallet_verified_at: since };
       try {
-        await this.commit({ expect: [{ kind: "profile-wallet", profile_id: updated.profile_id, wallet_address: current.address }], profiles: [updated] }, "forgetting a verified wallet");
+        await this.commit(
+          {
+            expect: [
+              { kind: "profile-wallet", profile_id: updated.profile_id, wallet_address: current.address },
+              { kind: "profile-selector", profile_id: updated.profile_id, recovery_selector: who.profile.recovery_selector },
+              { kind: "family-open", family_id: who.session.family_id },
+            ],
+            profiles: [updated],
+          },
+          "replacing an Authorization Wallet",
+          {
+            kind: "authorization-wallet-replaced",
+            at: now,
+            principal_id: who.profile.principal_id,
+            profile_id: updated.profile_id,
+            from_wallet: current.address,
+            from_since: current.since,
+            to_wallet: op.wallet,
+            to_since: since,
+          },
+        );
       } catch {
         return { kind: "unavailable" as const };
       }
       this.indexProfile(updated);
-      return { kind: "ok" as const, forgot: true };
+      /* Every open operation issued under the old designation dies NOW: a RECOVER naming this account (it would be
+         refused anyway -- the wallet no longer matches) and any other replacement of this profile. */
+      this.authorizations.purgeAccount(loginOf(updated)?.key ?? "", updated.profile_id);
+      this.stats.authorizationReplacements += 1;
+      return { kind: "ok" as const, authorizationWallet: { address: op.wallet, since } };
     });
+    if (outcome.kind === "unavailable") this.authorizations.release(op.operation);
+    else this.authorizations.spend(op.operation);
+    return outcome;
+  }
+
+  /* ==================================================================
+      WHAT OTHER LAYERS READ OF THE ACCOUNT
+     ================================================================== */
+
+  /** Trust indicators: what the public facts read of a principal's profile -- times only, never an id or an address. */
+  trustProfileFacts(principalId: string): { createdAt: number; authorizationWalletSince: number | null } | null {
+    const profile = this.activeProfileOf(principalId);
+    return profile === null ? null : { createdAt: profile.created_at, authorizationWalletSince: authorizationWalletOf(profile)?.since ?? null };
+  }
+
+  /** The profile's Authorization Wallet (the money routes: a fresh proof BY THAT wallet authorizes its own seat link
+   *  without "Confirm it's you" -- it is a stronger authority than the password). Never inferred from any other wallet. */
+  authorizationWallet(principalId: string): { address: string; since: number } | null {
+    const profile = this.activeProfileOf(principalId);
+    return profile === null ? null : authorizationWalletOf(profile);
   }
 
   /* ==================================================================
@@ -2244,10 +1969,7 @@ export class IdentityService {
       if (durableCollect.length > 0 || writeBehind.length > 0 || expiredLinks.length > 0) {
         try {
           await this.commit({ sessions: writeBehind, principals, dropSessions: durableCollect, dropLinks: expiredLinks }, "the identity write-behind");
-          for (const hash of expiredLinks) {
-            this.links.delete(hash);
-            this.linkIssueOrder.delete(hash);
-          }
+          for (const hash of expiredLinks) this.links.delete(hash);
           this.stats.writeBehindWrites += writeBehind.length;
           for (const session of writeBehind) this.dirty.delete(session.session_id);
         } catch {
@@ -2289,40 +2011,17 @@ export class IdentityService {
   /* ==================================================================
       ESCROW-3A (brief §10B): RE-AUTHENTICATION FOR SENSITIVE ACTIONS
      ==================================================================
-     A stolen live session is not, by itself, enough to rotate the recovery key, sign out the owner's other devices or
-     (ESCROW-4) change a wallet binding: each asks for a RECENT re-authentication by the same session, made by presenting
-     the profile's current recovery key again (`POST /gs/api/profile/reauth`). The grant is server-side and in memory
-     only; it names the session, its family and the recovery selector it was made under, and lapses after
-     `sensitiveAuthMs`. It cannot be borrowed: another session, another family, or the same session after the key was
-     rotated (by anyone) finds no grant. No secret is kept -- the key is compared in constant time and dropped. */
-
-  /** Re-authenticate THIS session with its own profile's recovery key. Constant time whatever is wrong. */
-  reauthenticate(read: SessionCookieRead, rawKey: unknown, now: number): Promise<ReauthOutcome> {
-    return this.serial(async () => {
-      const who = this.profiledCurrent(read, now);
-      if (typeof who === "string") return { kind: who };
-      const parsed = parseRecoveryKey(rawKey);
-      const selectorMatches = parsed !== null && parsed.selector === who.profile.recovery_selector;
-      /* Compared against this profile's digest when the selector is its own, and against a digest nothing matches
-         otherwise: the same work either way, and another profile's (valid) key is `invalid` here. */
-      const secretOk = parsed !== null && secretMatches(parsed.secret, selectorMatches ? who.profile.recovery_hash : NO_PROFILE_HASH);
-      /* P3-ACCT POLICY: an account with a password confirms with its PASSWORD. Its recovery key only replaces a
-         credential (a reset, a password change, its own replacement) -- it never makes a standing grant. */
-      if (!selectorMatches || !secretOk || loginOf(who.profile) !== null) {
-        this.stats.reauthFailures += 1;
-        return { kind: "invalid" as const };
-      }
-      const expiresAt = await this.recordGrant(who.session, who.profile, now, "confirmed");
-      /* Whoever presents the key has it: the initial delivery is resolved. */
-      this.creationDeliveries.delete(who.profile.profile_id);
-      this.stats.reauths += 1;
-      return { kind: "ok" as const, expiresAt };
-    });
-  }
+     A stolen live session is not, by itself, enough to sign out the owner's other devices, (ESCROW-4) link a wallet to
+     a seat or (PHASE 3 FINAL) begin replacing the Authorization Wallet: each asks for a RECENT re-authentication by the
+     same session -- "Confirm it's you" with the account's PASSWORD (`POST /gs/api/profile/reauth`), or a sign-in in the
+     last few minutes for the ordinary sensitive actions. The grant is server-side; it names the session, its family and
+     the credential epoch it was made under, and lapses after `sensitiveAuthMs`. It cannot be borrowed: another session,
+     another family, or the same session after the epoch moved finds no grant. No secret is kept. The Authorization
+     Wallet is never asked for here: ordinary play never prompts for it. */
 
   /** A sensitive-auth grant for THIS session (inside the queue): memory, and durable too when configured -- best effort
    *  (the grant is honoured here either way; see `IdentitySecuritySubstrate`). Bound to the session, its family and the
-   *  profile's current credential epoch (the recovery selector). Returns when it lapses. */
+   *  profile's credential epoch. Returns when it lapses. */
   private async recordGrant(session: Session, profile: Profile, now: number, how: GrantHow): Promise<number> {
     const expiresAt = now + this.policy.sensitiveAuthMs;
     const durable = this.security.grants;
@@ -2339,9 +2038,9 @@ export class IdentityService {
     return expiresAt;
   }
 
-  /** P3-ACCT "Confirm it's you" with the PASSWORD (a username/password account; a migrated legacy one may use either).
-   *  The KDF runs outside the identity queue (it is slow on purpose); the grant is then made inside it, only if the
-   *  profile still holds the very hash that was checked. One answer, `invalid`, for every wrong or missing password. */
+  /** "Confirm it's you" with the PASSWORD. The KDF runs outside the identity queue (it is slow on purpose); the grant is
+   *  then made inside it, only if the profile still holds the very hash that was checked. One answer, `invalid`, for
+   *  every wrong or missing password. */
   async reauthenticateWithPassword(read: SessionCookieRead, rawPassword: unknown, now: number, options: { client?: string } = {}): Promise<ReauthOutcome | { kind: "busy" }> {
     const before = this.profiledCurrent(read, now);
     if (typeof before === "string") return { kind: before };
@@ -2367,8 +2066,8 @@ export class IdentityService {
     });
   }
 
-  /** Whether THIS session holds a live re-authentication under the profile's CURRENT key. P3-ACCT POLICY: `need`
-   *  "confirmed" (replacing a credential) accepts only an explicit "Confirm it's you", never a sign-in's grant. */
+  /** Whether THIS session holds a live re-authentication under the profile's CURRENT epoch. P3-ACCT POLICY: `need`
+   *  "confirmed" accepts only an explicit "Confirm it's you", never a sign-in's grant. */
   private sensitiveAuthOf(session: Session, profile: Profile, now: number, need: GrantHow = "sign-in"): boolean {
     const grant = this.grants.get(session.session_id);
     if (grant === undefined) return false;
@@ -2379,51 +2078,6 @@ export class IdentityService {
     return need === "sign-in" || grant.how === "confirmed";
   }
 
-  /** ESCROW-3A (owner review): the lost-create-response rescue. Open only when ALL hold:
-   *    - the profile's creation left a delivery record (the creating page sent a receipt) that nothing has closed:
-   *      not acknowledged, not re-authenticated with the key, not rotated, not expired, not forgotten by a restart;
-   *    - the caller IS the creating session -- the same session id and family: a linked or recovered device, another
-   *      tab's later session, a rotation or grace successor never qualifies;
-   *    - the key is still the one issued at creation (never rotated since);
-   *    - the caller presents the creating page's receipt (compared by digest, in constant time).
-   *  A stolen cookie alone therefore never qualifies: the receipt lives only in the creating page's memory, and once
-   *  that page has the key it acknowledges it and the record is gone. Checking it consumes nothing; the rotation it
-   *  permits deletes it. */
-  private creationRescueOf(session: Session, profile: Profile, receipt: unknown, now: number): boolean {
-    const pending = this.creationDeliveries.get(profile.profile_id);
-    if (pending === undefined) return false;
-    if (now >= pending.expires_at || pending.selector !== profile.recovery_selector || profile.recovery_rotated_at !== profile.created_at) {
-      this.creationDeliveries.delete(profile.profile_id);
-      return false;
-    }
-    const matches = receiptMatches(receipt, pending.receipt_hash);
-    return matches && pending.session_id === session.session_id && pending.family_id === session.family_id && !this.familyRevoked(session);
-  }
-
-  /** ESCROW-3A: the creating page received its key -- the initial delivery is resolved and the rescue closes for good.
-   *  Only the creating session with its receipt closes it (anyone else's call changes nothing); the answer is the same
-   *  either way. */
-  acknowledgeKeyDelivery(read: SessionCookieRead, receipt: unknown, now: number): Promise<{ kind: "ok" } | { kind: "not-authenticated" | "profile-required" }> {
-    return this.serial(async () => {
-      const who = this.profiledCurrent(read, now);
-      if (typeof who === "string") return { kind: who };
-      const pending = this.creationDeliveries.get(who.profile.profile_id);
-      if (pending !== undefined && pending.session_id === who.session.session_id && receiptMatches(receipt, pending.receipt_hash)) {
-        this.creationDeliveries.delete(who.profile.profile_id);
-        this.stats.keyDeliveriesAcknowledged += 1;
-      }
-      return { kind: "ok" as const };
-    });
-  }
-
-  /** Whether a lost-create-response rescue is open for the profile of the session `read` names (tests; operators). */
-  hasOpenCreationRescue(read: SessionCookieRead, now: number): boolean {
-    const who = this.profiledCurrent(read, now);
-    if (typeof who === "string") return false;
-    const pending = this.creationDeliveries.get(who.profile.profile_id);
-    return pending !== undefined && now < pending.expires_at;
-  }
-
   /** Whether the session a request authenticates with holds a live re-authentication (ESCROW-4's wallet binding asks). */
   hasSensitiveAuth(read: SessionCookieRead, now: number): boolean {
     const who = this.profiledCurrent(read, now);
@@ -2432,7 +2086,14 @@ export class IdentityService {
 
   /* ==================================================================
       ESCROW-3A (F-2): WHAT A FINANCIAL CREDENTIAL IS ISSUED UNDER, AND WHETHER IT STILL STANDS
-     ================================================================== */
+     ==================================================================
+     PHASE 3 FINAL (the credential-epoch audit): `recoverySelector` here is the profile's INTERNAL CREDENTIAL EPOCH -- the
+     stored `recovery_selector`, now random, never shown and never a credential. Its format (`rk_` + 128 bits) and its
+     semantics (an opaque value compared for equality with the profile's current one) are exactly ESCROW-3A's, so every
+     stored wallet ticket (`issued_under.recovery_selector`), durable grant and in-memory challenge context reads as it
+     always did; nothing signed, nothing on the wire and nothing on chain ever carried it. No action of this build moves
+     it (the recovery-key rotation that did is gone; a password change or recovery never moved it): a game's financial
+     credentials depend on the session family and the seat, never on the Authorization Wallet. */
 
   /** The security context of the session a request authenticates with -- for issuing a credential bound to it.
    *  Server-side only: none of these ids leaves the server. */
@@ -2441,9 +2102,9 @@ export class IdentityService {
     return typeof who === "string" ? null : { principalId: who.session.principal_id, familyId: who.session.family_id, recoverySelector: who.profile.recovery_selector };
   }
 
-  /** Whether a credential issued under (principal, family, recovery selector) still stands: the principal and its
+  /** Whether a credential issued under (principal, family, credential epoch) still stands: the principal and its
    *  profile active, the family open (no sign-out of that device, no sign-out-others, no replacement, no disable), the
-   *  recovery key unrotated. Synchronous against committed state. */
+   *  epoch unchanged. Synchronous against committed state. */
   securityStanding(context: { principalId: string; familyId: string; recoverySelector: string }): SecurityStanding {
     const principal = this.principals.get(context.principalId);
     if (principal === undefined || principal.status !== "active") return { kind: "ended", why: "principal" };
@@ -2460,7 +2121,7 @@ export class IdentityService {
     return this.families.get(familyId);
   }
 
-  /** Test support: a profile's stored shape (the tests assert no plaintext key is in it). */
+  /** Test support: a profile's stored shape. */
   peekProfileOf(principalId: string): Readonly<Profile> | undefined {
     const id = this.profileOfPrincipal.get(principalId);
     return id === undefined ? undefined : this.profiles.get(id);
@@ -2479,6 +2140,11 @@ export class IdentityService {
 
   peekPrincipal(principalId: string): Readonly<Principal> | undefined {
     return this.principals.get(principalId);
+  }
+
+  /** Test support (PHASE 3 FINAL): how many Authorization Wallet operations are held. */
+  peekAuthorizations(): number {
+    return this.authorizations.size();
   }
 }
 

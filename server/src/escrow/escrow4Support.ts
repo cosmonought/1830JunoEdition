@@ -255,7 +255,7 @@ export async function moneyServer(options: MoneyServerOptions = {}): Promise<Mon
     void started.server.lifecycle.reviewContinuation().catch(() => undefined);
   });
   const money = createMoneyTables(
-    { enabled: options.enabled ?? true, service, pin: options.pin ?? PIN, symbol: "JUNOX", rest: chain, tickets: ledger, financial, appName: "Project 18XX", now: () => clock.now, warn: (line) => warnings.push(line), ops, manualObserver: true, associateWallet: (context, wallet, verifiedAt) => identity.associateWallet(context, wallet, verifiedAt) },
+    { enabled: options.enabled ?? true, service, pin: options.pin ?? PIN, symbol: "JUNOX", rest: chain, tickets: ledger, financial, appName: "Project 18XX", now: () => clock.now, warn: (line) => warnings.push(line), ops, manualObserver: true },
     started.server.rooms.moneyPort,
   );
   refs.money = money;
@@ -331,7 +331,7 @@ export async function accountPlayer(world: MoneyServer, name: string, password =
   const account = await accountBrowser(world.port, name, password);
   const client = await Client.openWithCookie(world.port, account.cookie, name);
   return {
-    browser: { cookie: account.cookie, recoveryKey: "", name: account.name },
+    browser: { cookie: account.cookie, name: account.name, username: account.username, password: account.password, wallet: account.wallet },
     client,
     name,
     api: (route, body = {}) => apiRequest(world.port, `/gs/api/money/${route}`, { cookie: account.cookie, body }),
@@ -342,6 +342,8 @@ export async function accountPlayer(world: MoneyServer, name: string, password =
   };
 }
 
+/** A player: an account (username, password, Authorization Wallet) on its own browser. "Confirm it's you" is its
+ *  password (PHASE 3 FINAL: no recovery key exists). */
 export async function player(world: MoneyServer, name: string): Promise<Player> {
   const browser = await profiledBrowser(world.port, name);
   const client = await Client.openWithCookie(world.port, browser.cookie, name);
@@ -351,7 +353,7 @@ export async function player(world: MoneyServer, name: string): Promise<Player> 
     name,
     api: (route, body = {}) => apiRequest(world.port, `/gs/api/money/${route}`, { cookie: browser.cookie, body }),
     async confirm() {
-      const answer = await apiRequest(world.port, "/gs/api/profile/reauth", { cookie: browser.cookie, body: { recoveryKey: browser.recoveryKey } });
+      const answer = await apiRequest(world.port, "/gs/api/profile/reauth", { cookie: browser.cookie, body: { password: browser.password } });
       if (answer.status !== 200) throw new Error(`reauth: ${answer.status} ${answer.text}`);
     },
   };

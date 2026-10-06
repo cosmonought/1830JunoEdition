@@ -13,7 +13,10 @@
 //                         each counted once. P3-ACCT POLICY (owner ruling 2026-10-05): a profile is established once it
 //                         has completed at least one real-money game (cancelled, annulled and free games never count).
 //                         The server derives the number; a null (an older server) reads "not counted".
-//   Identity assurance    whether the account has PROVED control of a wallet, and since when (no address).
+//   Identity assurance    PHASE 3 FINAL: since when the account's current AUTHORIZATION WALLET has been designated (no
+//                         address). It is the account's own authority (it recovers it), proven by a signature -- not a
+//                         payout wallet (each table pays the wallet anted there) and not whatever wallet a browser has
+//                         connected.
 //
 // None of these proves who controls an account, and the panel says so. No id, username, address, IP or device signal
 // is ever shown -- the server never sends one (`utils/trustApi.ts` reads the answer strictly).
@@ -49,7 +52,9 @@ export function TrustFactsList({ facts, testId = "trust-facts" }: { facts: Trust
         {facts.establishedOpponents === null ? "Established opponents aren't counted by this server." : `${plural(facts.establishedOpponents, "established opponent")} (completed real-money games together)`}
       </dd>
       <dt style={trustStyles.group}>Identity assurance</dt>
-      <dd style={trustStyles.fact}>{facts.walletVerified ? `Wallet verified${facts.walletVerifiedSince === null ? "" : ` since ${facts.walletVerifiedSince}`}` : "No verified wallet"}</dd>
+      <dd style={trustStyles.fact} data-testid={`${testId}-authorization`}>
+        {facts.authorizationWalletSince === null ? "Authorization Wallet: not shown by this server" : `Account secured by an Authorization Wallet since ${facts.authorizationWalletSince}`}
+      </dd>
     </dl>
   );
 }

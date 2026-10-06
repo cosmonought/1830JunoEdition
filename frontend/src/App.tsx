@@ -195,6 +195,10 @@ import { DEV_IDENTITY_BUILD } from "./utils/devIdentity";
 import { profileNickname } from "./utils/profileApi";
 /* P3-ACCT (public first): the shell's own Host, Join and "Take a seat" ask for an account first, then carry on. */
 import { requireAccount } from "./utils/accountPrompt";
+/* PHASE 3 FINAL (§9): an open table never becomes somebody else silently. */
+import { ACCOUNT_CHANGED_NO_SEND, useTableAccountGuard, type TableAccountChange } from "./utils/tableAccountGuard";
+import { useSession } from "./utils/useSession";
+import { TableAccountNotice } from "./components/TableAccountNotice";
 import {
   JOIN_CODE_EXAMPLE,
   holdNoticeFor,
@@ -1243,6 +1247,17 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
    *  without it. Terminal; the shell says so and offers the lobby. */
   const [roomLost, setRoomLost] = useState<RoomLoss | null>(null);
   const localId = sandboxRoomDoc?.you.playerId ?? "";
+  /* ==================================================================
+      PHASE 3 FINAL (§9 / §12): WHO THIS TAB PLAYS AS IS THE SESSION'S ACCOUNT -- AND A CHANGE OF IT IS ASKED ABOUT
+     ==================================================================
+     The seat above is the server's answer for this browser's session; no wallet answers it (switching Keplr changes
+     nothing here). The one thing that can change it under an open table is the BROWSER's account -- another tab signing
+     in, out or recovering -- and then the table says so and asks (`utils/tableAccountGuard.ts`) instead of silently
+     showing the new account's seat. A Watch tab has no seat to lose, so it is not asked. */
+  const sessionView = useSession();
+  const tableAccount = useTableAccountGuard(sessionView, sandbox && sandboxRoomCode !== null && !watchOnly);
+  const tableAccountChangeRef = useRef<TableAccountChange | null>(null);
+  tableAccountChangeRef.current = tableAccount.change;
 
   /* In a room this browser is one person with one id, which makes every existing turn/president gate correct at once.
      See docs/ai_architecture/session_keys_wallet.md - App.tsx #534 */
@@ -13411,7 +13426,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
       log: sandboxLogRef.current,
       catchingUpNotice: CATCHING_UP_BANNER,
     });
-  boardSendRefusalRef.current = () => boardSendRefusal({ watchOnly, currency: syncBoardCurrency() });
+  /* PHASE 3 FINAL (§9): while the browser's account changed under this table and the player has not chosen, nothing is
+     sent -- not as the old account (the server would not take it) and not as the new one (the player hasn't agreed). */
+  boardSendRefusalRef.current = () => (tableAccountChangeRef.current !== null ? ACCOUNT_CHANGED_NO_SEND : boardSendRefusal({ watchOnly, currency: syncBoardCurrency() }));
   /* The settle point writes its verdict into `divergenceReportedAtRef` (R5) inside the drain's pass, and the pass's own
      state updates render; this mirrors the standing verdict into state after that render, so the surfaces follow it.
      EVERY RENDER ON PURPOSE: a ref cannot be a dependency, and the functional update returns `current` unchanged when
@@ -14157,6 +14174,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
   if (sandbox && sandboxRoomCode && sandboxRoom?.lifecycle === "waiting") {
     const seated = localId !== "";
     return (
+      <>
+      {/* PHASE 3 FINAL (§9): the waiting room is where a seat antes -- an account change under it is asked about too. */}
+      <TableAccountNotice change={tableAccount.change} onContinue={tableAccount.accept} onLeave={handleLeaveTableToLobby} />
       <SandboxWaitingRoom
         roomCode={sandboxRoom.code ?? "Private game"}
         room={sandboxRoom}
@@ -14189,6 +14209,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
           onLeaveGame();
         }}
       />
+      </>
     );
   }
 
@@ -16391,6 +16412,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
 
       {/* PHASE 3 W3-J (AUD-25.16, OD-19): a board that is not the room's is never offered as live -- a forced notice
           (a native modal: everything behind it is inert) whose remedy is a reload. */}
+      {/* PHASE 3 FINAL (§9): the browser's account changed under this table -- asked, never assumed. */}
+      <TableAccountNotice change={tableAccount.change} onContinue={tableAccount.accept} onLeave={handleLeaveTableToLobby} />
       <BoardBehindNotice
         notice={sandbox && sandboxRoomCode && !boardCurrency.current ? boardCurrency.notice : null}
         onReload={() => window.location.reload()}

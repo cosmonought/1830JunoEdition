@@ -1,36 +1,37 @@
 // frontend/src/components/ProfileMenu.tsx
 //
 // ==================================================================
-//  LIVE-2E / P3-ACCT: THE ACCOUNT CORNER -- "LOG IN" AND "CREATE ACCOUNT", OR THE ACCOUNT'S OWN MENU
+//  THE ACCOUNT CORNER -- "LOG IN" AND "CREATE ACCOUNT", OR THE ACCOUNT'S OWN MENU
 // ==================================================================
 //
-// In the lobby's account corner and in the table's top bar. SIGNED OUT (a visitor, P3-ACCT public first): two buttons,
-// Log in and Create account, opening the account dialog (`AccountDialog.tsx`). SIGNED IN: a chip with the account's
-// name; its menu shows
+// In the lobby's account corner and in the table's top bar. SIGNED OUT (a visitor, public first): two buttons, Log in and
+// Create account, opening the account dialog (`AccountDialog.tsx`). SIGNED IN: a chip with the account's name; its menu
+// shows
 //
 //   who            the name, the username (this account's own sessions only) and the day it was made
-//   wallet         the payout wallet this account PROVED it controls (P3-ACCT: kept across games, so another game
-//                  asks Keplr to sign, never the password), with "Forget this wallet" (sensitive)
+//   Authorization  PHASE 3 FINAL (owner ruling 2026-10-06): the account's ONE designated Authorization Wallet (shortened)
+//   Wallet         and since when -- the wallet that recovers the account ("Forgot password?") and approves its own
+//                  replacement. It is NOT a game wallet: each table binds the wallet its ante came from, and the wallet
+//                  Keplr happens to have selected is neither. "Change Authorization Wallet" asks "Confirm it's you" (the
+//                  password, always), then the NEW wallet accepts and the CURRENT one approves -- two Keplr signatures.
 //   facts          what other players see about this account (`TrustFacts.tsx`: facts, never a score)
-//   password &     P3-ACCT POLICY (owner rulings 2026-10-05): "Change password" -- the current password, or the
-//   recovery key   recovery key, in the request itself, and the new one (12+ characters); every other device is
-//                  signed out and this one stays signed in. "Make a new recovery key" -- for every account: it asks
-//                  "Confirm it's you" (the password; a legacy profile's key) even right after signing in, shows the
-//                  new key once, and the old key stops working at once.
-//   sign out       other devices (asked first, with how many), or this one (asked first; the account and its
-//                  seats are kept)
-//   older options  for a profile made before accounts only: set a username and password (sensitive: its recovery
-//                  key confirms it), link another device with a code -- collapsed, so the old ceremony never leads
+//   password       "Change password" -- the current password and the new one (12+ characters); every other device is
+//                  signed out and this one stays signed in. (Forgot it? Sign out, then "Forgot password?" with the
+//                  Authorization Wallet.)
+//   sign out       other devices (asked first, with how many), or this one (asked first; the account and its seats are
+//                  kept)
+//
+// There is NO recovery key and NO "link another device" code: a second device logs in.
 //
 // SENSITIVE actions (ESCROW-3A §10B) answer 403 `reauth-required`; the menu shows the shared "Confirm it's you"
-// (`ConfirmItsYou`: the password, or a legacy profile's recovery key) and runs the chosen action again at once.
+// (`ConfirmItsYou`: the password) and runs the chosen action again at once.
 //
 // ESCROW-4 (F-3, preflight OD-4-6): "Sign out this device" says so when this browser holds real-money signing keys, and
 // removes them by default (a box, ticked) -- deposits and payouts don't depend on them.
 //
-// A development-identity build has no credentials to manage: the chip says "Development profile (this tab)" and
-// offers nothing. Codes, keys and passwords live in this component's state while their view is up; closing the menu
-// drops them. Nothing is logged, stored or put in a URL.
+// A development-identity build has no credentials to manage: the chip says "Development profile (this tab)" and offers
+// nothing. Passwords live in this component's state while their view is up; closing the menu drops them. Nothing is
+// logged, stored or put in a URL.
 
 import { forgetActiveTable } from "../utils/activeGame";
 import React, { useCallback, useEffect, useRef, useState } from "react";
@@ -39,118 +40,53 @@ import { sessionPort, type SessionPort } from "../utils/sessionBootstrap";
 import { useSession } from "../utils/useSession";
 import { useDialogDismissal } from "../utils/useDialogDismissal";
 import {
-  LINK_CODE_LIFETIME_MS,
   PASSWORD_MIN_LENGTH,
-  USERNAME_MAX,
   accountDetails,
   changePassword,
-  createLinkCode,
-  establishCredentials,
-  forgetWallet,
   profileErrorSentence,
-  rotateRecoveryKey,
+  replaceAuthorizationWallet,
+  replacementChallenge,
   signOutOtherDevices,
   signOutThisDevice,
   type AccountDetails,
+  type AuthorizationSignature,
+  type MintedAuthorization,
 } from "../utils/profileApi";
+import { keplrAccountNow, shortWallet, signAuthorization } from "../utils/authorizationWalletFlow";
 import { openAccountDialog } from "../utils/accountPrompt";
 import { renewRoomLinks } from "../utils/roomLink";
-import { RecoveryKeyReveal } from "./RecoveryKeyReveal";
 import { ConfirmItsYou } from "./ConfirmItsYou";
+import { KeplrMark } from "./money/KeplrMark";
 import { MyTrustFacts } from "./TrustFacts";
 import { browserConsentKeys } from "../money/consentKeys";
 import { disabledLook, profileStyles as styles } from "./profileStyles";
 import { SANDBOX_INK, SANDBOX_RAISED, SANDBOX_RULE_STRONG, SANDBOX_TEXT } from "../styles/palette";
 import { CONTROL_PADDING, FONT_FAMILY, FONT_SIZE, RADIUS } from "../styles/typography";
 
-type Then = "rotate" | "others" | "credentials" | "forget-wallet";
+type Then = "others" | "replace";
+
+/** "Change Authorization Wallet", step by step (after "Confirm it's you"). */
+type Replace =
+  /** Switch Keplr to the NEW wallet and use it. */
+  | { step: "new"; candidate: string | null }
+  /** The NEW wallet signed its acceptance; switch Keplr to the CURRENT one and approve. */
+  | { step: "approve"; minted: MintedAuthorization; next: string; accept: AuthorizationSignature }
+  | { step: "done"; wallet: string };
 
 type View =
   | { kind: "menu" }
-  | { kind: "link"; code: string | null; deadline: number }
-  | { kind: "rotate-confirm" }
   | { kind: "others-confirm" }
   | { kind: "others-done"; signedOut: number }
   | { kind: "signout-confirm" }
-  /** P3-ACCT: a legacy profile chooses a username and password. */
-  | { kind: "credentials" }
-  | { kind: "credentials-done"; username: string }
-  /** P3-ACCT: forget the verified wallet (asked first). */
-  | { kind: "forget-wallet-confirm" }
-  /** P3-ACCT POLICY: change the password (the current password or the recovery key, and the new one). */
+  /** Change the password (the current password and the new one). */
   | { kind: "password" }
   | { kind: "password-done"; signedOut: number }
+  /** PHASE 3 FINAL: change the Authorization Wallet. */
+  | { kind: "replace"; state: Replace }
   /** ESCROW-3A: the server asked this session to confirm it's you before `then` runs. */
   | { kind: "reauth"; then: Then };
 
 const devices = (count: number) => `${count} other device${count === 1 ? "" : "s"}`;
-
-/** When the code stops working, on THIS device's clock: the server's instant when the two clocks roughly agree, the
- *  full lifetime from now when they do not (a countdown that starts expired would be worse than a slightly long one). */
-export function linkCodeDeadline(expiresAt: number, receivedAt: number): number {
-  const left = expiresAt - receivedAt;
-  return left > 0 && left <= LINK_CODE_LIFETIME_MS ? expiresAt : receivedAt + LINK_CODE_LIFETIME_MS;
-}
-
-/** `m:ss`. */
-export function countdownText(ms: number): string {
-  const seconds = Math.max(0, Math.ceil(ms / 1000));
-  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
-}
-
-function LinkCodeView({ code, deadline, onNew, busy }: { code: string; deadline: number; onNew: () => void; busy: boolean }): JSX.Element {
-  const [now, setNow] = useState(() => Date.now());
-  const [said, setSaid] = useState<string | null>(null);
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, []);
-  const left = deadline - now;
-  const expired = left <= 0;
-  const copy = async () => {
-    try {
-      if (!navigator.clipboard?.writeText) throw new Error("no clipboard");
-      await navigator.clipboard.writeText(code);
-      setSaid("Copied.");
-    } catch {
-      setSaid("This browser would not copy it. Type it on the other device instead.");
-    }
-  };
-  return (
-    <>
-      <p style={styles.text}>On the other device, press Log in, then “Made a profile before accounts? Other ways to sign in” → “Code from a signed-in device”, and enter this code. It works once, for 10 minutes.</p>
-      {expired ? (
-        <p role="alert" style={styles.notice}>
-          This code has expired.
-        </p>
-      ) : (
-        <>
-          <code style={styles.code} data-testid="link-code-value">
-            {code}
-          </code>
-          <p style={styles.label} data-testid="link-code-countdown" aria-live="off">
-            Expires in {countdownText(left)}
-          </p>
-        </>
-      )}
-      <div style={styles.row}>
-        {expired ? null : (
-          <button type="button" style={styles.secondary} onClick={() => void copy()}>
-            Copy
-          </button>
-        )}
-        <button type="button" style={disabledLook(styles.secondary, busy)} disabled={busy} onClick={onNew}>
-          Make a new code
-        </button>
-        {said ? (
-          <span role="status" style={styles.label}>
-            {said}
-          </span>
-        ) : null}
-      </div>
-    </>
-  );
-}
 
 const dayOf = (ms: number): string => {
   try {
@@ -159,25 +95,20 @@ const dayOf = (ms: number): string => {
     return "";
   }
 };
-const shortAddress = (address: string): string => (address.length > 16 ? `${address.slice(0, 10)}…${address.slice(-4)}` : address);
 
 function MenuPanel({ port, name, otherSessions, onClose }: { port: SessionPort; name: string; otherSessions: number; onClose: () => void }): JSX.Element {
   const [view, setView] = useState<View>({ kind: "menu" });
-  const [reveal, setReveal] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  /* P3-ACCT: the account as its own session reads it (username, wallet, member since); null until it answers. */
+  /* The account as its own session reads it (username, Authorization Wallet, member since); null until it answers. */
   const [details, setDetails] = useState<AccountDetails | null>(null);
-  /* P3-ACCT: a legacy profile's chosen username and password -- this view's state only, the password cleared on send. */
-  const [newUsername, setNewUsername] = useState("");
+  /* "Change password": the current password and the new one -- this view's state only, cleared on send. */
+  const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
-  /* P3-ACCT POLICY "Change password": the current secret (password, or the recovery key) -- cleared on send. */
-  const [currentSecret, setCurrentSecret] = useState("");
-  const [usingKey, setUsingKey] = useState(false);
   /* ESCROW-4: how many real-money signing keys this browser holds, and whether signing out removes them (default). */
   const [signingKeys, setSigningKeys] = useState(0);
   const [removeKeys, setRemoveKeys] = useState(true);
-  useDialogDismissal({ onDismiss: onClose, dismissible: !busy && reveal === null });
+  useDialogDismissal({ onDismiss: onClose, dismissible: !busy });
 
   const refresh = useCallback(() => {
     void accountDetails(port).then((answer) => setDetails(answer.ok ? answer.account : null));
@@ -195,33 +126,6 @@ function MenuPanel({ port, name, otherSessions, onClose }: { port: SessionPort; 
         .count()
         .then(setSigningKeys, () => setSigningKeys(0));
     }
-  };
-
-  const makeCode = useCallback(async () => {
-    setBusy(true);
-    setError(null);
-    const result = await createLinkCode(port);
-    setBusy(false);
-    if (!result.ok) {
-      setError(profileErrorSentence(result));
-      setView({ kind: "menu" });
-      return;
-    }
-    setView({ kind: "link", code: result.code, deadline: linkCodeDeadline(result.expiresAt, Date.now()) });
-  }, [port]);
-
-  const rotate = async () => {
-    setBusy(true);
-    setError(null);
-    const result = await rotateRecoveryKey(port);
-    setBusy(false);
-    if (!result.ok) {
-      if (result.error === "reauth-required") return go({ kind: "reauth", then: "rotate" });
-      setError(profileErrorSentence(result));
-      return;
-    }
-    setView({ kind: "menu" });
-    setReveal(result.recoveryKey);
   };
 
   const confirmOthers = () => {
@@ -243,66 +147,109 @@ function MenuPanel({ port, name, otherSessions, onClose }: { port: SessionPort; 
     setView({ kind: "others-done", signedOut: result.signedOut });
   };
 
-  /* P3-ACCT: a legacy profile sets a username and password (its recovery key confirms it). */
-  const saveCredentials = async () => {
-    const typed = newPassword;
-    setNewPassword("");
-    setBusy(true);
-    setError(null);
-    const result = await establishCredentials({ username: newUsername, password: typed }, port);
-    setBusy(false);
-    if (!result.ok) {
-      if (result.error === "reauth-required") {
-        /* Keep the password only for the immediate retry after "Confirm it's you" (still this view's state). */
-        setNewPassword(typed);
-        return go({ kind: "reauth", then: "credentials" });
-      }
-      setError(profileErrorSentence(result, "account"));
-      return;
-    }
-    setNewUsername("");
-    setView({ kind: "credentials-done", username: result.username });
-    refresh();
-  };
-
-  /* P3-ACCT POLICY: change the password -- the credential travels in the request; this browser gets a fresh session
-     (the port re-bootstraps before the call resolves) and its sockets move to it. */
+  /* "Change password": the credential travels in the request; this browser gets a fresh session (the port re-bootstraps
+     before the call resolves) and its sockets move to it. */
   const savePassword = async () => {
     /* Review NIT 8: a too-short password is said before anything is cleared. */
     if (Array.from(newPassword).length < PASSWORD_MIN_LENGTH) {
       setError(profileErrorSentence({ ok: false, error: "bad-password", problem: "too-short" }));
       return;
     }
-    const current = currentSecret;
+    const current = currentPassword;
     const chosen = newPassword;
-    setCurrentSecret("");
+    setCurrentPassword("");
     setNewPassword("");
     setBusy(true);
     setError(null);
-    const result = await changePassword({ current: usingKey ? { recoveryKey: current } : { password: current }, newPassword: chosen }, port);
+    const result = await changePassword({ currentPassword: current, newPassword: chosen }, port);
     setBusy(false);
     if (!result.ok) {
       setError(profileErrorSentence(result, "change"));
       return;
     }
     renewRoomLinks();
-    setUsingKey(false);
     setView({ kind: "password-done", signedOut: result.signedOut });
     refresh();
   };
 
-  const forget = async () => {
+  /* ---------------- "Change Authorization Wallet" ---------------- */
+
+  /** Read the wallet Keplr is on now (connecting on the first press). */
+  const readKeplr = async (): Promise<string | null> => {
+    const now = await keplrAccountNow(true);
+    if (!now.ok) {
+      setError(now.reason);
+      return null;
+    }
+    return now.address;
+  };
+
+  /** Step 1: the NEW wallet (Keplr is on it): mint the two texts, and the new wallet signs its acceptance at once. */
+  const useNewWallet = async () => {
+    if (details === null) return;
     setBusy(true);
     setError(null);
-    const result = await forgetWallet(port);
-    setBusy(false);
-    if (!result.ok) {
-      if (result.error === "reauth-required") return go({ kind: "reauth", then: "forget-wallet" });
-      setError(profileErrorSentence(result));
-      return;
+    try {
+      const next = await readKeplr();
+      if (next === null) return;
+      if (next === details.authorizationWallet.address) {
+        setView({ kind: "replace", state: { step: "new", candidate: next } });
+        return setError(profileErrorSentence({ ok: false, error: "same-wallet" }));
+      }
+      const minted = await replacementChallenge(next, port);
+      if (!minted.ok) {
+        if (minted.error === "reauth-required") return go({ kind: "reauth", then: "replace" });
+        return setError(profileErrorSentence(minted, "replace"));
+      }
+      const accept = minted.minted.texts[1];
+      const signed = await signAuthorization(accept.text, {
+        purpose: "REPLACE-ACCEPT",
+        account: details.username,
+        signer: next,
+        authorizationWallet: next,
+        replaces: details.authorizationWallet.address,
+        operation: minted.minted.operation,
+      });
+      if (!signed.ok) {
+        setView({ kind: "replace", state: { step: "new", candidate: next } });
+        return setError(signed.reason);
+      }
+      setView({ kind: "replace", state: { step: "approve", minted: minted.minted, next, accept: signed.signed } });
+    } finally {
+      setBusy(false);
     }
-    setView({ kind: "menu" });
-    refresh();
+  };
+
+  /** Step 2: the CURRENT Authorization Wallet approves; then the replacement is sent with both signatures. */
+  const approveWithCurrent = async (state: Extract<Replace, { step: "approve" }>) => {
+    if (details === null) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const current = details.authorizationWallet.address;
+      const on = await readKeplr();
+      if (on === null) return;
+      if (on !== current) return setError(`Keplr is on ${shortWallet(on)}. Switch Keplr to your current Authorization Wallet, ${shortWallet(current)}, to approve.`);
+      const approve = state.minted.texts[0];
+      const signed = await signAuthorization(approve.text, {
+        purpose: "REPLACE-APPROVE",
+        account: details.username,
+        signer: current,
+        authorizationWallet: state.next,
+        replaces: current,
+        operation: state.minted.operation,
+      });
+      if (!signed.ok) return setError(signed.reason);
+      const replaced = await replaceAuthorizationWallet({ operation: state.minted.operation, approve: signed.signed, accept: state.accept }, port);
+      if (!replaced.ok) {
+        setView({ kind: "replace", state: { step: "new", candidate: null } });
+        return setError(profileErrorSentence(replaced, "replace"));
+      }
+      setView({ kind: "replace", state: { step: "done", wallet: replaced.authorizationWallet.address } });
+      refresh();
+    } finally {
+      setBusy(false);
+    }
   };
 
   const signOut = async () => {
@@ -320,26 +267,6 @@ function MenuPanel({ port, name, otherSessions, onClose }: { port: SessionPort; 
     setError(profileErrorSentence(result));
   };
 
-  if (reveal !== null) {
-    return (
-      <div style={styles.overlay}>
-        <div style={{ ...styles.card, maxHeight: "90vh", overflowY: "auto" }}>
-          <RecoveryKeyReveal
-            recoveryKey={reveal}
-            heading="Your new recovery key"
-            notice="Your old recovery key no longer works."
-            purpose={details !== null && details.username === null ? "legacy" : "account"}
-            continueLabel="Done"
-            onContinue={() => {
-              setReveal(null);
-              onClose();
-            }}
-          />
-        </div>
-      </div>
-    );
-  }
-
   const back = (
     <button
       type="button"
@@ -347,7 +274,7 @@ function MenuPanel({ port, name, otherSessions, onClose }: { port: SessionPort; 
       disabled={busy}
       onClick={() => {
         /* Review NIT 11: typed secrets do not outlive the view. */
-        setCurrentSecret("");
+        setCurrentPassword("");
         setNewPassword("");
         go({ kind: "menu" });
       }}
@@ -355,13 +282,11 @@ function MenuPanel({ port, name, otherSessions, onClose }: { port: SessionPort; 
       Back
     </button>
   );
-  const legacy = details !== null && details.username === null;
   const reauthPurpose: Record<Then, string> = {
-    rotate: "To make a new recovery key",
     others: "To sign out your other devices",
-    credentials: "To set a username and password",
-    "forget-wallet": "To forget your verified wallet",
+    replace: "To change your Authorization Wallet",
   };
+  const replace = view.kind === "replace" ? view.state : null;
 
   return (
     <div role="dialog" aria-labelledby="profile-menu-title" style={menuStyles.panel} data-testid="profile-menu-panel">
@@ -370,62 +295,40 @@ function MenuPanel({ port, name, otherSessions, onClose }: { port: SessionPort; 
       </h2>
       {details !== null ? (
         <p style={menuStyles.facts} data-testid="profile-menu-account">
-          {details.username !== null ? `Username ${details.username} · ` : ""}Member since {dayOf(details.memberSince)}
+          Username {details.username} · Member since {dayOf(details.memberSince)}
         </p>
       ) : null}
       {view.kind === "menu" ? (
         <div style={menuStyles.list}>
           {details !== null ? (
-            <div style={menuStyles.section} data-testid="profile-menu-wallet">
-              <p style={menuStyles.sectionLabel}>Payout wallet</p>
-              {details.wallet !== null ? (
-                <>
-                  <p style={menuStyles.facts}>
-                    {shortAddress(details.wallet.address)} · verified {dayOf(details.wallet.verifiedAt)}. Your next real-money table asks Keplr to sign for it — never your password.
-                  </p>
-                  <button type="button" style={disabledLook(styles.secondary, busy)} disabled={busy} onClick={() => go({ kind: "forget-wallet-confirm" })} data-testid="profile-menu-forget-wallet">
-                    Forget this wallet
-                  </button>
-                </>
-              ) : (
-                <p style={menuStyles.facts}>None yet. Your first real-money ante verifies the wallet you deposit from.</p>
-              )}
+            <div style={menuStyles.section} data-testid="profile-menu-authorization">
+              <p style={menuStyles.sectionLabel}>Authorization Wallet</p>
+              <p style={menuStyles.facts} data-testid="profile-menu-authorization-wallet">
+                <span title={details.authorizationWallet.address}>{shortWallet(details.authorizationWallet.address)}</span> · since {dayOf(details.authorizationWallet.since)}
+              </p>
+              <p style={menuStyles.facts} data-testid="profile-menu-authorization-note">
+                It recovers this account if you forget your password. It isn't a game wallet: each table pays out to the wallet you anted with there, and the wallet Keplr has selected never changes who you are.
+              </p>
+              <button type="button" style={disabledLook(styles.secondary, busy)} disabled={busy} onClick={() => go({ kind: "reauth", then: "replace" })} data-testid="profile-menu-replace-wallet">
+                <KeplrMark />
+                Change Authorization Wallet
+              </button>
             </div>
           ) : null}
           <MyTrustFacts port={port} />
-          {legacy ? (
-            <button type="button" style={styles.primary} onClick={() => go({ kind: "credentials" })} data-testid="profile-menu-credentials">
-              Set a username and password
-            </button>
-          ) : null}
-          {details !== null && !legacy ? (
+          {details !== null ? (
             <button
               type="button"
               style={styles.secondary}
               onClick={() => {
-                setCurrentSecret("");
+                setCurrentPassword("");
                 setNewPassword("");
-                setUsingKey(false);
                 go({ kind: "password" });
               }}
               data-testid="profile-menu-password"
             >
               Change password
             </button>
-          ) : null}
-          {details !== null ? (
-            <>
-              <button type="button" style={styles.secondary} onClick={() => go({ kind: "rotate-confirm" })} data-testid="profile-menu-rotate">
-                Make a new recovery key
-              </button>
-              <p style={styles.label} data-testid="profile-menu-key-note">
-                {legacy
-                  ? "Your recovery key signs this profile in on another device."
-                  : details.recoveryKey
-                    ? "Your recovery key lets you choose a new password if you forget yours. You never need it to log in or play. Lost it, or never saved it? Make a new one."
-                    : "This account has no recovery key yet. Make one so a forgotten password can be reset."}
-              </p>
-            </>
           ) : null}
           <button type="button" style={styles.secondary} onClick={confirmOthers} data-testid="profile-menu-others">
             Sign out other devices
@@ -436,37 +339,7 @@ function MenuPanel({ port, name, otherSessions, onClose }: { port: SessionPort; 
           <button type="button" style={styles.secondary} onClick={() => go({ kind: "signout-confirm" })} data-testid="profile-menu-signout">
             Sign out this device
           </button>
-          {legacy ? (
-            <details style={menuStyles.older} data-testid="profile-menu-older">
-              <summary style={menuStyles.summary}>Older sign-in options</summary>
-              <div style={{ ...menuStyles.list, marginTop: "8px" }}>
-                <button type="button" style={disabledLook(styles.secondary, busy)} disabled={busy} onClick={() => void makeCode()} data-testid="profile-menu-link">
-                  {busy ? "Making a code…" : "Link another device"}
-                </button>
-              </div>
-            </details>
-          ) : null}
         </div>
-      ) : null}
-      {view.kind === "link" && view.code !== null ? (
-        <>
-          <p style={styles.subheading}>Link another device</p>
-          <LinkCodeView code={view.code} deadline={view.deadline} busy={busy} onNew={() => void makeCode()} />
-          <div style={styles.row}>{back}</div>
-        </>
-      ) : null}
-      {view.kind === "rotate-confirm" ? (
-        <>
-          <p style={styles.text}>
-            Make a new recovery key? Your current recovery key stops working immediately, and the new one is shown once. Your verified payout wallet is forgotten too, and a wallet linked at a real-money table that hasn't started has to be linked again (one Keplr signature).{legacy ? "" : " You'll confirm with your password first."}
-          </p>
-          <div style={styles.row}>
-            <button type="button" style={disabledLook(styles.primary, busy)} disabled={busy} onClick={() => void rotate()} data-testid="profile-rotate-confirm">
-              {busy ? "Making a key…" : "Make a new recovery key"}
-            </button>
-            {back}
-          </div>
-        </>
       ) : null}
       {view.kind === "others-confirm" ? (
         <>
@@ -492,41 +365,6 @@ function MenuPanel({ port, name, otherSessions, onClose }: { port: SessionPort; 
           <div style={styles.row}>{back}</div>
         </>
       ) : null}
-      {view.kind === "credentials" ? (
-        <form
-          method="post"
-          style={styles.form}
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (!busy) void saveCredentials();
-          }}
-          data-testid="profile-credentials-form"
-        >
-          <p style={styles.text}>Choose a username and password to log in with from now on. Your recovery key keeps working too.</p>
-          <label style={styles.label} htmlFor="profile-new-username">
-            Username
-          </label>
-          <input id="profile-new-username" name="username" autoComplete="username" autoCapitalize="off" autoCorrect="off" spellCheck={false} maxLength={USERNAME_MAX * 2} style={styles.input} value={newUsername} onChange={(event) => setNewUsername(event.target.value)} data-testid="profile-new-username" />
-          <label style={styles.label} htmlFor="profile-new-password">
-            Password (at least {PASSWORD_MIN_LENGTH} characters)
-          </label>
-          <input id="profile-new-password" name="password" type="password" autoComplete="new-password" style={styles.input} value={newPassword} onChange={(event) => setNewPassword(event.target.value)} data-testid="profile-new-password" />
-          <div style={styles.row}>
-            <button type="submit" style={disabledLook(styles.primary, busy)} disabled={busy} data-testid="profile-credentials-save">
-              {busy ? "Saving…" : "Save"}
-            </button>
-            {back}
-          </div>
-        </form>
-      ) : null}
-      {view.kind === "credentials-done" ? (
-        <>
-          <p style={styles.text} role="status" data-testid="profile-credentials-done">
-            Done. Log in as {view.username} with your new password from now on.
-          </p>
-          <div style={styles.row}>{back}</div>
-        </>
-      ) : null}
       {view.kind === "password" ? (
         <form
           method="post"
@@ -539,34 +377,21 @@ function MenuPanel({ port, name, otherSessions, onClose }: { port: SessionPort; 
         >
           <p style={styles.text}>Every other device signed in to this account is signed out. This one stays signed in.</p>
           <label style={styles.label} htmlFor="profile-current-secret">
-            {usingKey ? "Your recovery key" : "Current password"}
+            Current password
           </label>
           <input
             id="profile-current-secret"
-            name={usingKey ? "recovery-key" : "current-password"}
+            name="current-password"
             type="password"
-            autoComplete={usingKey ? "off" : "current-password"}
+            autoComplete="current-password"
             autoCapitalize="off"
             autoCorrect="off"
             spellCheck={false}
-            style={usingKey ? styles.monoInput : styles.input}
-            value={currentSecret}
-            onChange={(event) => setCurrentSecret(event.target.value)}
+            style={styles.input}
+            value={currentPassword}
+            onChange={(event) => setCurrentPassword(event.target.value)}
             data-testid="profile-current-secret"
           />
-          <button
-            type="button"
-            style={disabledLook(menuStyles.link, busy)}
-            disabled={busy}
-            onClick={() => {
-              setCurrentSecret("");
-              setError(null);
-              setUsingKey(!usingKey);
-            }}
-            data-testid="profile-password-use-key"
-          >
-            {usingKey ? "Use your current password instead" : "Forgot it? Use your recovery key instead"}
-          </button>
           <label style={styles.label} htmlFor="profile-changed-password">
             New password (at least {PASSWORD_MIN_LENGTH} characters)
           </label>
@@ -586,6 +411,9 @@ function MenuPanel({ port, name, otherSessions, onClose }: { port: SessionPort; 
             </button>
             {back}
           </div>
+          <p style={styles.label} data-testid="profile-password-forgot-note">
+            Forgot your current password? Sign out, then use “Forgot password?” with your Authorization Wallet.
+          </p>
         </form>
       ) : null}
       {view.kind === "password-done" ? (
@@ -593,57 +421,67 @@ function MenuPanel({ port, name, otherSessions, onClose }: { port: SessionPort; 
           <p style={styles.text} role="status" data-testid="profile-password-done">
             Password changed. {view.signedOut === 0 ? "No other devices were signed in." : `Signed out ${devices(view.signedOut)}.`} This device stays signed in.
           </p>
-          {details !== null && details.wallet !== null ? (
-            /* Security review M2 (residual): the verified wallet is kept by a password change -- shown here, so a wallet the
-               player doesn't recognise is forgotten at once. */
-            <p style={styles.label} data-testid="profile-password-wallet">
-              Your verified payout wallet is still {shortAddress(details.wallet.address)}. Not yours?{" "}
-              <button type="button" style={disabledLook(menuStyles.link, busy)} disabled={busy} onClick={() => go({ kind: "forget-wallet-confirm" })} data-testid="profile-password-forget-wallet">
-                Forget this wallet
-              </button>
-            </p>
-          ) : null}
           <div style={styles.row}>{back}</div>
         </>
       ) : null}
-      {view.kind === "forget-wallet-confirm" ? (
-        <>
-          <p style={styles.text} data-testid="profile-forget-wallet-summary">
-            Forget your verified wallet? Seats already linked keep their wallet. Your next real-money table asks you to confirm it's you before a wallet is verified again.
-          </p>
-          <div style={styles.row}>
-            <button type="button" style={disabledLook(styles.primary, busy)} disabled={busy} onClick={() => void forget()} data-testid="profile-forget-wallet-confirm">
-              {busy ? "Forgetting…" : "Forget this wallet"}
-            </button>
-            {back}
-          </div>
-        </>
+      {replace !== null && details !== null ? (
+        <div data-testid="profile-replace-wallet">
+          <p style={styles.subheading}>Change Authorization Wallet</p>
+          {replace.step === "new" ? (
+            <>
+              <p style={styles.text} data-testid="profile-replace-step-new">
+                1. In Keplr, switch to the wallet you want as your new Authorization Wallet, then press the button. It signs once to accept (free: not a transaction). Your current one, {shortWallet(details.authorizationWallet.address)}, approves next.
+              </p>
+              <div style={styles.row}>
+                <button type="button" style={disabledLook(styles.primary, busy)} disabled={busy} onClick={() => void useNewWallet()} data-testid="profile-replace-use-new">
+                  <KeplrMark />
+                  {busy ? "Waiting for Keplr…" : "Use the wallet Keplr is on now"}
+                </button>
+                {back}
+              </div>
+            </>
+          ) : null}
+          {replace.step === "approve" ? (
+            <>
+              <p style={styles.text} data-testid="profile-replace-step-approve">
+                2. The new wallet, {shortWallet(replace.next)}, accepted. Now switch Keplr back to your current Authorization Wallet, {shortWallet(details.authorizationWallet.address)}, and approve the change.
+              </p>
+              <div style={styles.row}>
+                <button type="button" style={disabledLook(styles.primary, busy)} disabled={busy} onClick={() => void approveWithCurrent(replace)} data-testid="profile-replace-approve">
+                  <KeplrMark />
+                  {busy ? "Waiting for Keplr…" : "Approve with the current wallet"}
+                </button>
+                {back}
+              </div>
+            </>
+          ) : null}
+          {replace.step === "done" ? (
+            <>
+              <p style={styles.text} role="status" data-testid="profile-replace-done">
+                Your Authorization Wallet is now {shortWallet(replace.wallet)}. The old one can no longer recover this account. Your tables, seats and game wallets haven't changed.
+              </p>
+              <div style={styles.row}>{back}</div>
+            </>
+          ) : null}
+        </div>
       ) : null}
       {view.kind === "reauth" ? (
-        /* ESCROW-4: the shared "Confirm it's you"; the action the player chose runs again once it is granted. Setting a
-           username is a legacy profile's own step, so its recovery key confirms it. */
+        /* ESCROW-4: the shared "Confirm it's you" (the password); the action the player chose runs once it is granted. */
         <ConfirmItsYou
           purpose={reauthPurpose[view.then]}
           port={port}
           busy={busy}
           onBusyChange={setBusy}
-          {...(view.then === "credentials" || (view.then === "rotate" && legacy) ? { method: "recovery-key" as const } : view.then === "rotate" ? { method: "password" as const } : {})}
           onConfirmed={() => {
-            switch (view.then) {
-              case "rotate":
-                return rotate();
-              case "others":
-                return signOutOthers();
-              case "credentials":
-                setView({ kind: "credentials" });
-                return saveCredentials();
-              default:
-                return forget();
+            if (view.then === "replace") {
+              setView({ kind: "replace", state: { step: "new", candidate: null } });
+              return undefined;
             }
+            return signOutOthers();
           }}
           onCancel={() => {
             setNewPassword("");
-            setCurrentSecret("");
+            setCurrentPassword("");
             go({ kind: "menu" });
           }}
         />
@@ -655,7 +493,7 @@ function MenuPanel({ port, name, otherSessions, onClose }: { port: SessionPort; 
             <>
               <p style={styles.notice} data-testid="profile-signout-keys">
                 This browser holds the signing key{signingKeys === 1 ? "" : "s"} for {signingKeys} real-money seat{signingKeys === 1 ? "" : "s"}. Signing out ends the wallet links made here for
-                tables that haven't started (relink them free from another device). Your deposits stay yours: payouts still arrive through each table's
+                tables that haven't started (relink them free from another device, with the same wallet). Your deposits stay yours: payouts still arrive through each table's
                 challenge window, and another device can take over signing (“Use this device for signing”).
               </p>
               <label style={styles.check}>
@@ -692,7 +530,7 @@ export function ProfileMenu({ port = sessionPort() }: { port?: SessionPort }): J
   const anchor = useRef<HTMLSpanElement | null>(null);
   const close = useCallback(() => setOpen(false), []);
 
-  /* A click anywhere outside the chip and its panel closes it (the reveal overlay is inside the anchor). */
+  /* A click anywhere outside the chip and its panel closes it. */
   useEffect(() => {
     if (!open) return undefined;
     const onDown = (event: MouseEvent) => {
@@ -742,7 +580,7 @@ export function ProfileMenu({ port = sessionPort() }: { port?: SessionPort }): J
   );
 }
 
-const menuStyles: Record<"anchor" | "chip" | "create" | "panel" | "list" | "footer" | "facts" | "section" | "sectionLabel" | "older" | "summary" | "link", React.CSSProperties> = {
+const menuStyles: Record<"anchor" | "chip" | "create" | "panel" | "list" | "footer" | "facts" | "section" | "sectionLabel", React.CSSProperties> = {
   anchor: { position: "relative", display: "inline-flex", flexWrap: "wrap", gap: "8px" },
   chip: {
     fontSize: FONT_SIZE.small,
@@ -793,7 +631,4 @@ const menuStyles: Record<"anchor" | "chip" | "create" | "panel" | "list" | "foot
   facts: { margin: "0 0 4px", fontSize: FONT_SIZE.small, color: SANDBOX_TEXT, lineHeight: 1.4 },
   section: { display: "flex", flexDirection: "column", gap: "4px", padding: "8px 0", borderTop: `1px solid ${SANDBOX_RULE_STRONG}`, borderBottom: `1px solid ${SANDBOX_RULE_STRONG}` },
   sectionLabel: { margin: 0, fontSize: FONT_SIZE.small, fontWeight: 700, color: SANDBOX_INK },
-  older: { marginTop: "4px", fontSize: FONT_SIZE.small, color: SANDBOX_TEXT },
-  summary: { cursor: "pointer" },
-  link: { alignSelf: "flex-start", background: "none", border: "none", padding: "2px 0", color: SANDBOX_TEXT, textDecoration: "underline", cursor: "pointer", fontSize: FONT_SIZE.small, fontFamily: FONT_FAMILY },
 };

@@ -178,6 +178,11 @@ export interface RoomHostDeps {
   /** ESCROW-4: the real-money table layer (`escrow/moneyTables.ts`), bound late (it needs this host's port). Absent or
    *  null: no money table can be created, and an existing one is shown by its terms only, its seats locked. */
   money?: () => MoneyTables | null;
+  /** PHASE 3 FINAL (owner ruling 2026-10-06: PLAYER GAMES ARE ANTED GAMES): whether a table WITHOUT an ante may be
+   *  created, joined with a seat or started. `false` in every production entry point (`start.ts` in production mode,
+   *  `awsRuntime.ts`): the player product has no free game. Absent / true: the internal machinery -- development mode,
+   *  the deterministic suites and historical fixtures -- keeps its free tables. Watching is never affected. */
+  freeTables?: boolean;
   /** LIVE-3C: whether a session's board has ended or closed (the reducer's `GameEnd` / `room_closed`; a test seam
    *  may say so of a game that has not -- a stored game that reaches GameEnd needs a whole game played). */
   boardFacts?: (gameId: string, session: RoomSession) => { ended: boolean; closed: boolean };
@@ -1076,6 +1081,10 @@ export function createRoomHost(deps: RoomHostDeps) {
     }
   }
 
+  /** PHASE 3 FINAL: a table without an ante, where this server serves no free game (watching it stays open). */
+  const ANTE_REQUIRED = { ok: false as const, code: "ante-required", reason: "Every game here is a real-money game with an ante. This table has no ante, so it can be watched but not joined or started." };
+  const freeTableRefused = (record: GameRecord | null): boolean => deps.freeTables === false && record !== null && record.money === null;
+
   async function handleCreate(socket: WebSocket, ctx: ConnectionContext, requestId: string, op: Record<string, unknown>): Promise<void> {
     await indexReady;
     const ip = deps.ipOf(socket);
@@ -1091,6 +1100,10 @@ export function createRoomHost(deps: RoomHostDeps) {
       const prepared = await money.prepareCreate({ stake: stakeRaw, exactPlayers: op.exactPlayers, variants: resolveVariants(op.variants as never) });
       if (!prepared.ok) return ack(socket, requestId, { ok: false, code: prepared.code, reason: prepared.reason });
       moneyTerms = prepared.terms;
+    }
+    /* PHASE 3 FINAL: no free game in the player product -- a table is created with an ante, or not at all. */
+    if (moneyTerms === null && deps.freeTables === false) {
+      return ack(socket, requestId, { ok: false, code: "ante-required", reason: "Every game here is a real-money game: set an ante to host a table." });
     }
     const waits = [createsPrincipal.peek(ctx.principalId), ip ? createsIp.peek(ip) : 0, createsGlobal.peek("global")];
     if (waits.some((wait) => wait > 0)) {
@@ -1203,6 +1216,8 @@ export function createRoomHost(deps: RoomHostDeps) {
     /* The code must still be THIS record's (an orphan, rotated or released entry is never authoritative), and a
        private room past its deal admits nobody new -- all answered alike. */
     if (record.join_code !== code || !authorizeNow(game, ctx.principalId, "join").ok) return failed();
+    /* PHASE 3 FINAL: no seat at a table without an ante (a valid code is not a failed one: nothing is charged). */
+    if (op.takeSeat === true && seatOf(record, ctx.principalId) === null && freeTableRefused(record)) return ack(socket, requestId, ANTE_REQUIRED);
     if (op.takeSeat === true && seatOf(record, ctx.principalId) === null && capsOf(ctx.principalId).seated >= rooms.maxSeatedGames) {
       return ack(socket, requestId, { ok: false, code: "limit-reached", reason: `You already sit at ${rooms.maxSeatedGames} open tables.` });
     }
@@ -1254,6 +1269,8 @@ export function createRoomHost(deps: RoomHostDeps) {
     }
     if (game === null) return ack(socket, requestId, { ok: false, code: "not-found", reason: "There is no such game." });
     if (type === "start-game") return ack(socket, requestId, await startGame(game, ctx.principalId));
+    /* PHASE 3 FINAL: no new seat at a table without an ante. */
+    if (type === "take-seat" && freeTableRefused(game.view.record) && seatOf(game.view.record as GameRecord, ctx.principalId) === null) return ack(socket, requestId, ANTE_REQUIRED);
     const opName = OP_NAMES[type] ?? null;
     let claimingSeat = false;
     if (type === "take-seat") {
@@ -1368,6 +1385,8 @@ export function createRoomHost(deps: RoomHostDeps) {
       if (!verdict.ok && verdict.code === "not-found") return { ok: false, code: verdict.code, reason: verdict.reason };
       /* LIVE-3C: a held table is not dealt, whatever the host presses. */
       if (maintenance) return { ok: false, code: "held", reason: HELD_PLAYER_SENTENCE };
+      /* PHASE 3 FINAL: a table without an ante is never dealt where this server serves no free game. */
+      if (!facts.dealt && freeTableRefused(record)) return ANTE_REQUIRED;
       /* ESCROW-4: at a real-money table a funded non-host may start after the host's grace (OD-4-7): the money layer
          decides who, from the chain. Every other refusal of the table's own rules stands. */
       const moneyNonHost = record.money !== null && !verdict.ok && verdict.code === "forbidden" && seat !== null;

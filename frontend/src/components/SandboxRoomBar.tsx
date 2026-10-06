@@ -207,8 +207,8 @@ export function SandboxRoomBar({
         </button>
       )}
       {/* LIVE-2D: the seat PINs are gone. A seat is its principal's (the same browser rejoins it by simply opening
-          the table again). LIVE-2E: a seat belongs to the PROFILE, so another device reaches it by linking to the
-          profile ("Link another device") -- there is no per-seat code. */}
+          the table again). LIVE-2E: a seat belongs to the PROFILE, so another device reaches it by logging in to
+          the account -- there is no per-seat code. */}
       {error && <span style={styles.error}>{error}</span>}
     </div>
   );

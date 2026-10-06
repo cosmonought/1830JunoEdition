@@ -301,6 +301,9 @@ export interface GameServerOptions {
   escrow?: EscrowGameplaySeam;
   /** ESCROW-4: the real-money table layer, bound late (it is built on this server's room port). Absent or null: no
    *  money table can be created, and `/gs/api/money/*` answers 404. */
+  /** PHASE 3 FINAL: whether tables without an ante may be created, seated or started (`roomHost.ts` `freeTables`).
+   *  Production passes `false`; absent: allowed (the internal machinery and the deterministic suites). */
+  freeTables?: boolean;
   money?: () => MoneyTables | null;
   /** LIVE-3C: more for the status snapshot -- `start.ts` adds the identity store's health. */
   statusExtras?: () => Record<string, unknown>;
@@ -1414,6 +1417,7 @@ export function createGameServer(options: GameServerOptions): {
     moneyFacts: options.moneyFacts ?? NO_MONEY_FACTS,
     ...(options.escrow !== undefined ? { escrow: options.escrow } : {}),
     ...(options.money !== undefined ? { money: options.money } : {}),
+    ...(options.freeTables !== undefined ? { freeTables: options.freeTables } : {}),
     boardFacts,
     /* LIVE-4 (L4-3): the room channel's client check. A game this pool does not continue is shown as such by its view
        (`holdKind: "incompatible"`, with its reason), so only a `reload` refuses a room socket. */

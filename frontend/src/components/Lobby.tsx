@@ -20,10 +20,9 @@
 
 import React, { useCallback, useEffect, useState } from "react";
 
-import { useWallet } from "../context/WalletContext";
-import { ConnectWalletButton } from "./ConnectWalletButton";
 import { UiScalePicker } from "./UiScalePicker";
-import { NATIVE_DENOM_DISPLAY, chainConfigError, formatNativeAmount } from "../config";
+import { chainConfigError } from "../config";
+import { FREE_TABLES_OFFERED } from "../utils/tablePolicy"; // PHASE 3 FINAL (§13)
 import { isBackendConfigured, backendConfigError } from "../config/backend";
 import { preloadWaitingRoomScene } from "./SandboxWaitingRoom";
 import {
@@ -62,7 +61,7 @@ import { LobbyRoomList } from "./LobbyRoomList";
 import { roomLinkAvailable } from "../utils/roomLink";
 import { JOIN_CODE_EXAMPLE, parseJoinCode, refusalMessage, supportRefOf } from "../utils/roomProtocol";
 import { CONTROL_PADDING, FONT_FAMILY, FONT_FAMILY_MONO, FONT_SIZE, LINE_HEIGHT, RADIUS } from "../styles/typography";
-import { truncateAddress, useMyTables, usePublicRooms } from "../utils/lobby";
+import { useMyTables, usePublicRooms } from "../utils/lobby";
 import { MyTablesList } from "./MyTablesList";
 import type { GameVariants } from "../gameEngine/gameVariants";
 
@@ -80,17 +79,6 @@ import type { GameVariants } from "../gameEngine/gameVariants";
 // guessing which of four preconditions they missed, while an enabled button that says "Connect a wallet first
 // -- the room is stored under your address as host" answers the question they actually have. The precondition
 // is still enforced in the handler; the only change is that refusing now explains itself.
-
-/** Visibly greys out a disabled control -- design note #3, rule 1. `pointerEvents` is deliberately NOT `none`:
- *  the click must still reach React so a genuinely disabled (busy) control can be distinguished from a dead one
- *  during debugging, and so the `title` still appears on hover. `cursor: not-allowed` is what communicates it. */
-function disabledButtonStyle(
-  base: React.CSSProperties,
-  disabled: boolean,
-): React.CSSProperties {
-  if (!disabled) return base;
-  return { ...base, opacity: 0.4, cursor: "not-allowed" };
-}
 
 export interface LobbyProps {
   /** LIVE-2D: enter a server-owned table by its `gameId` -- after Host (the server seated the host), Join (the server
@@ -353,8 +341,6 @@ export function Lobby({ onEnterSandbox, onWatchSandbox }: LobbyProps) {
     [handleJoinListedRoom],
   );
 
-  const wallet = useWallet();
-  const address = wallet.address;
   const chainError = chainConfigError();
   const backendError = backendConfigError();
 
@@ -418,46 +404,18 @@ export function Lobby({ onEnterSandbox, onWatchSandbox }: LobbyProps) {
         <button type="button" style={styles.rulesButton} onClick={() => openInfoPage("rules")} data-testid="lobby-rules">
           Rules
         </button>
-        {/* LIVE-2E: who this browser plays as -- the profile chip, first in the account corner. Its menu links another
-            device, rotates the recovery key and signs devices out. P3-ACCT: signed out, Log in and Create account. */}
+        {/* LIVE-2E: who this browser plays as -- the account chip, first in the account corner. Its menu changes the
+            password or the Authorization Wallet and signs devices out. Signed out: Log in and Create account. */}
         <ProfileMenu />
         {/* Design note #1336: the text-size control, on the first screen a player sees. The same component
             as the bars'; the scale it writes is the one every later screen reads. */}
         <UiScalePicker />
         {/* Design note #1133: the lobby's Display Name field served only the parked Web3 staging lobby, and went with
-            it (LIVE-2D). A seat's name is set in the waiting room. */}
-        <div style={styles.headerControls}>
-          {address ? (
-            <>
-              <span style={styles.addressBadge} title={address}>
-                {truncateAddress(address)}
-              </span>
-              {wallet.nativeBalance && (
-                <span style={styles.balanceBadge}>
-                  {formatNativeAmount(wallet.nativeBalance.amount)} {NATIVE_DENOM_DISPLAY}
-                </span>
-              )}
-              <button type="button" style={styles.secondaryButton} onClick={wallet.disconnect}>
-                Disconnect
-              </button>
-            </>
-          ) : (
-            // The burner-wallet security recommendation ships with the button (`ConnectWalletButton.tsx #0`), so the
-            // lobby's connect path shows it just like the in-game top bar's does. Calling `wallet.connect()` directly here
-            // is exactly the omission that component exists to make impossible.
-            /* Design note #1133: "most websites just have the Keplr logo with Connect in a button." The mark
-               is the logo -- Keplr's own is a licensed asset this project does not ship, so the word does the
-               naming and the button does the shrinking. `primaryButton`'s paper slab is the lobby's loudest
-               control and was sized for a call to action; this is account furniture in a corner. */
-            <ConnectWalletButton
-              label="Connect"
-              buttonStyle={disabledButtonStyle(
-                styles.connectButton,
-                wallet.status === "connecting",
-              )}
-            />
-          )}
-        </div>
+            it (LIVE-2D). A seat's name is set in the waiting room.
+            PHASE 3 FINAL (§12): the parked on-chain mode's Connect / address / balance / Disconnect chip is gone from this
+            corner too. A connected Keplr address beside the account chip answered "who am I" -- the question the owner
+            ruled only the PROFILE answers. Keplr is reached where it signs: a seat's money panel, the account's
+            Authorization Wallet steps. */}
         </div>
       </div>
 
@@ -625,6 +583,8 @@ export function Lobby({ onEnterSandbox, onWatchSandbox }: LobbyProps) {
            PHASE 3 W3-J (OD-19): its OWN door, so "never given one" holds for a principal who IS seated there too --
            the shell opens a read-only spectator view. "Your tables" above stays the way back to a seat. */
         onWatch={(gameId) => (onWatchSandbox ?? onEnterSandbox)(gameId)}
+        /* PHASE 3 FINAL (§13): every player game is anted -- a no-ante table is Watch only (`utils/tablePolicy.ts`). */
+        noAnteSeats={FREE_TABLES_OFFERED}
       />
 
       {/* Honest, specific banners -- never a silently empty screen. Each
@@ -642,7 +602,7 @@ export function Lobby({ onEnterSandbox, onWatchSandbox }: LobbyProps) {
           AND IT IS NOT AMBER. #1094 freed amber to mean "heads up, nothing is broken", and this is one step
           quieter than that: nothing here is wrong, the app is doing exactly what an unconfigured build
           should. The neutral chip is the same one `CHIP_INERT` uses for a genuinely inert fact. */}
-      {wallet.error && <Banner tone="error" text={wallet.error} />}
+      {/* PHASE 3 FINAL (§12): the parked on-chain mode's wallet-error banner went with its Connect chip. */}
 
 
       {/* The escape hatch (`App.tsx #24`), placed OUTSIDE the room-browser branch so it is reachable in every state

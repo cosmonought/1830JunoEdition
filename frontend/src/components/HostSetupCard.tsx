@@ -44,6 +44,8 @@ import { zoomAwareVh } from "../utils/uiScale";
 import { useUiScale } from "../utils/useUiScale";
 /* ESCROW-4: the stake, when the server opens real-money tables on this build's escrow. */
 import { HostStakeSection, stakeChoice, useMoneyTableOffer } from "./money/HostStakeSection";
+/* PHASE 3 FINAL (§13): every player game is anted. */
+import { ANTE_UNAVAILABLE_SENTENCE, FREE_TABLES_OFFERED } from "../utils/tablePolicy";
 
 /** The type boxes' sentences, as asked. `GAME_TYPE_COPY`'s blurbs are the waiting room's and the Lobby's older
  *  form's; these are the host's first screen, which reads them side by side. */
@@ -127,8 +129,18 @@ export function HostSetupCard({ busy, error, onClose, onCreate }: HostSetupCardP
   const moneyOffer = useMoneyTableOffer();
   const [stakeOn, setStakeOn] = useState(false);
   const [stakeText, setStakeText] = useState("");
-  const stake = stakeChoice(moneyOffer, stakeOn, stakeText, playerCount);
-  const stakeBlocks = stakeOn && moneyOffer !== null && stake.problem !== null;
+  /* PHASE 3 FINAL (§13): every player game is anted -- the stake is REQUIRED (no "play for fun" choice), and with no
+     real-money tables on this server nothing can be hosted. Only the internal development-identity build keeps the
+     no-ante choice, for fixtures (`utils/tablePolicy.ts`); the server refuses a no-ante table outside development. */
+  const anteRequired = !FREE_TABLES_OFFERED;
+  const stakeActive = anteRequired || stakeOn;
+  const anteUnavailable = anteRequired && moneyOffer === null;
+  const stake = stakeChoice(moneyOffer, stakeActive, stakeText, playerCount);
+  const stakeBlocks = anteUnavailable || (stakeActive && moneyOffer !== null && stake.problem !== null);
+  /* A real-money table needs an exact count: default to two seats once the stake is required. */
+  useEffect(() => {
+    if (anteRequired && moneyOffer !== null) setPlayerCount((current) => current ?? MIN_PLAYERS);
+  }, [anteRequired, moneyOffer]);
   /* #1447: a card whose artwork cannot be fetched or decoded falls back to the text-only box this step
      used before -- an empty black well would read as a broken card. */
   const [artFailed, setArtFailed] = useState<Partial<Record<GameType, boolean>>>({});
@@ -274,7 +286,7 @@ export function HostSetupCard({ busy, error, onClose, onCreate }: HostSetupCardP
 
   const create = () => {
     if (stakeBlocks) return;
-    onCreate({ ...variants, mode }, { visibility, playerCount, anteUjuno: stakeOn && moneyOffer !== null && stake.base !== null ? stake.base : DEFAULT_ROOM_SETUP.anteUjuno });
+    onCreate({ ...variants, mode }, { visibility, playerCount, anteUjuno: stakeActive && moneyOffer !== null && stake.base !== null ? stake.base : DEFAULT_ROOM_SETUP.anteUjuno });
   };
 
   return (
@@ -446,7 +458,8 @@ export function HostSetupCard({ busy, error, onClose, onCreate }: HostSetupCardP
               {moneyOffer !== null ? (
                 <HostStakeSection
                   offer={moneyOffer}
-                  on={stakeOn}
+                  required={anteRequired}
+                  on={stakeActive}
                   onToggle={(on) => {
                     setStakeOn(on);
                     /* A real-money table needs an exact count: default to two seats rather than leave it "any". */
@@ -456,6 +469,10 @@ export function HostSetupCard({ busy, error, onClose, onCreate }: HostSetupCardP
                   onType={setStakeText}
                   choice={stake}
                 />
+              ) : anteUnavailable ? (
+                <p style={styles.warning} role="status" data-testid="host-ante-unavailable">
+                  {ANTE_UNAVAILABLE_SENTENCE}
+                </p>
               ) : (
                 <>
                   <div style={styles.row}>

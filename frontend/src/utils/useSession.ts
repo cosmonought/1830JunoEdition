@@ -15,7 +15,7 @@ export interface SessionView {
 }
 
 const snapshotOf = (port: SessionPort): string =>
-  JSON.stringify([port.state, port.endedReason, port.account?.name ?? null, port.account?.otherSessions ?? null, port.account?.development === true]);
+  JSON.stringify([port.state, port.endedReason, port.account?.name ?? null, port.account?.otherSessions ?? null, port.account?.development === true, port.account?.username ?? null]);
 
 export function useSession(port: SessionPort = sessionPort()): SessionView {
   const subscribe = useCallback((notify: () => void) => port.subscribe(notify), [port]);

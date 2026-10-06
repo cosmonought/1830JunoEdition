@@ -223,8 +223,8 @@ async function main(): Promise<void> {
       onRestartRequired: (detail) => failFast("the identity store", detail),
       onCompacted: (info) => ops.audit("identity.compacted", { seq: info.seq, records: info.records, bytes: info.bytes }),
     });
-    /* P3-ACCT (review L2): this server makes no new recovery-key profiles (accounts have a username and password). */
-    identity = await IdentityService.open(identityStore, { policy: { legacyProfileCreation: false } });
+    /* PHASE 3 FINAL: accounts are username + password + an Authorization Wallet; no recovery key exists anywhere. */
+    identity = await IdentityService.open(identityStore);
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error(`Refusing to start: the identity store in ${dataDir} cannot be read -- ${error instanceof Error ? error.message : String(error)}`);
@@ -398,6 +398,9 @@ async function main(): Promise<void> {
             : Promise.resolve({ refusal: "wrong-state" as const, code: "wrong-state" as const, reason: "This server has no Juno escrow configured." }),
     },
     money: () => moneyRef.current,
+    /* PHASE 3 FINAL (owner ruling: PLAYER GAMES ARE ANTED GAMES): the player product has no free game. Development mode
+       (loopback-only, never a playtest) keeps free tables as internal engine tooling. */
+    freeTables: config.mode === "development",
     ...(escrow !== null ? { escrow: { onGameplayCommitted: (input) => escrow?.service.onGameplayCommitted(input), isRosterFrozen: (gameId) => escrow?.service.isRosterFrozen(gameId) ?? false } } : {}),
     /* LIVE-4 (L4-2): the pool's capability, and the settlement index's money facts -- judged for every money table at
        every rebuild, whatever build dealt it (ESCROW-3A's build-keyed `continuationPolicyOf` is retired). */
@@ -473,8 +476,6 @@ async function main(): Promise<void> {
         // eslint-disable-next-line no-console
         warn: (line) => console.warn(line),
         ops,
-        /* P3-ACCT: a grant-authorized link's wallet is persisted to the profile. */
-        associateWallet: (context, wallet, verifiedAt) => server.identity.associateWallet(context, wallet, verifiedAt),
       },
       server.rooms.moneyPort,
     );

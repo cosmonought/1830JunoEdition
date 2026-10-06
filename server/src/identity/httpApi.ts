@@ -490,7 +490,7 @@ async function serveProfile(
       const redeemWait = api.limiter.credentialRedeemsPerSession.peek(sessionId);
       if (redeemWait > 0) return tooMany(response, api, "credential-session", redeemWait);
     }
-    const minted = api.identity.mintAuthorization(read, { purpose: fields.purpose, username: fields.username, wallet: fields.wallet, site: origin }, now);
+    const minted = api.identity.mintAuthorization(read, { purpose: fields.purpose, username: fields.username, wallet: fields.wallet, site: origin }, now, { client: ip });
     /* Security review (M1): "username taken" tells whoever asks that an account exists. That answer is CHARGED to the
        address's account-creation budget (5, then 10 an hour), so a stranger learns no more existing usernames than the
        accounts it could create -- and once the budget is spent every CREATE mint from the address answers 429 above. */

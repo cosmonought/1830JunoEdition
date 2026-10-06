@@ -269,8 +269,8 @@ export type IdentityPrecondition =
   | { readonly kind: "login-unused"; readonly login_key: string }
   /** P3-ACCT: the profile is stored and has no username login yet (a legacy profile establishing one). */
   | { readonly kind: "profile-no-login"; readonly profile_id: string }
-  /** P3-ACCT: COMPARE-AND-SWAP of the profile's persisted wallet -- the profile is stored and holds exactly this wallet
-   *  (`null`: none). */
+  /** P3-ACCT: COMPARE-AND-SWAP of a LEGACY profile's persisted wallet -- the profile is stored, is not an Authorization
+   *  Wallet account (schema 3 uses `profile-authorization-wallet`), and holds exactly this wallet (`null`: none). */
   | { readonly kind: "profile-wallet"; readonly profile_id: string; readonly wallet_address: string | null }
   /** PHASE 3 FINAL (security review L3): COMPARE-AND-SWAP of the AUTHORIZATION WALLET'S DESIGNATION -- the profile is
    *  stored and holds exactly this wallet, designated at exactly this time. The address alone could be fooled by A -> B
@@ -733,8 +733,10 @@ export function preconditionFailure(lookups: IdentityLookups, expect: readonly I
           return profile === undefined || loginOf(profile) !== null;
         }
         case "profile-wallet": {
+          /* LEGACY ONLY (review NEW-2): an Authorization Wallet account's designation is compared by
+             `profile-authorization-wallet` (address AND since); this address-only form never holds for one. */
           const profile = lookups.profile(condition.profile_id);
-          return profile === undefined || storedWalletOf(profile) !== condition.wallet_address;
+          return profile === undefined || profile.schema === 3 || storedWalletOf(profile) !== condition.wallet_address;
         }
         case "profile-authorization-wallet": {
           const profile = lookups.profile(condition.profile_id);

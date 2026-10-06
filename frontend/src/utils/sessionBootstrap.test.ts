@@ -340,3 +340,38 @@ describe("public first (P3-ACCT; LIVE-2E's mandatory profiles superseded)", () =
     }
   });
 });
+
+describe("PHASE 3 FINAL (§9, re-review NEW-1): the account changes THIS page made, and the account each was for", () => {
+  it("records the username a sign-in carried (never whatever the next bootstrap says); RECOVER's username; the current account for a password change; 'visitor' for a sign-out; nothing for a refusal", async () => {
+    const answers: Array<{ status: number; body?: unknown }> = [];
+    const session = httpSessionPort({
+      endpoint: "https://play.example/gs/api/session",
+      fetch: async () => {
+        const next = answers.shift() ?? { status: 500 };
+        return { status: next.status, json: async () => next.body ?? null };
+      },
+    });
+    expect(session.localAccount).toEqual({ changes: 0, key: null });
+    answers.push({ status: 403, body: { error: "invalid-credential" } });
+    await session.api("account/login", { username: "Brad.Player", password: "wrong one" });
+    expect(session.localAccount).toEqual({ changes: 0, key: null });
+    answers.push({ status: 200, body: { ok: true, profile: { name: "Brad" } } });
+    await session.api("account/login", { username: "  BRAD.player ", password: "the right one" });
+    expect(session.localAccount).toEqual({ changes: 1, key: "account:brad.player" });
+    /* The page re-reads its account. */
+    answers.push({ status: 200, body: { ok: true, profile: { name: "Brad", otherSessions: 0, username: "Brad.Player" } } });
+    await session.ensure(true);
+    answers.push({ status: 200, body: { ok: true, signedOut: 1 } });
+    await session.api("account/password", { currentPassword: "the right one", newPassword: "another right one" });
+    expect(session.localAccount).toEqual({ changes: 2, key: "account:brad.player" });
+    answers.push({ status: 204 });
+    await session.api("session/revoke", {});
+    expect(session.localAccount).toEqual({ changes: 3, key: "visitor" });
+    answers.push({ status: 200, body: { ok: true, operation: "0".repeat(32), texts: [], expiresAt: 1 } });
+    await session.api("account/authorization", { purpose: "recover", username: "Ann.Player", wallet: "juno1x" });
+    expect(session.localAccount.changes).toBe(3);
+    answers.push({ status: 200, body: { ok: true, profile: { name: "Ann" }, signedOut: 0 } });
+    await session.api("account/recover", { operation: "0".repeat(32), pubKey: "k", signature: "s", newPassword: "a brand new password" });
+    expect(session.localAccount).toEqual({ changes: 4, key: "account:ann.player" });
+  });
+});

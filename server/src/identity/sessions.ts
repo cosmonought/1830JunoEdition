@@ -44,7 +44,7 @@ import {
   type PasswordKdfParams,
   type PasswordProblem,
 } from "./accountCredentials";
-import { createAuthorizationBook, verifyAuthorization, type AuthorizationBook, type AuthorizationOperation, type AuthorizationSignature } from "./authorizationWallet";
+import { createAuthorizationBook, verifyAuthorization, type AuthorizationBook, type AuthorizationClient, type AuthorizationOperation, type AuthorizationSignature } from "./authorizationWallet";
 import { sessionSetCookie, type SessionCookieRead } from "./cookies";
 import type { SensitiveAuthGrantStore } from "./grants";
 import {
@@ -941,9 +941,9 @@ export class IdentityService {
     if (session !== undefined && (isSecurityRevocation(session.revoke_reason) || this.familyRevoked(session))) return "revoked";
     const principal = this.principals.get(ctx.principalId);
     if (principal !== undefined && principal.status !== "active") return "revoked";
-    /* PHASE 3 FINAL: a retired (legacy) account's socket -- unreachable (the upgrade refuses it), kept equal to the
-       verifier's re-check. */
-    if (principal !== undefined && this.retired(principal)) return "revoked";
+    /* PHASE 3 FINAL: no `retired` rule here on purpose -- a retired (legacy) account's socket cannot exist (its upgrade is
+       refused, `authenticate`), and this per-frame check stays the session's security state alone. The non-primary
+       verifier's re-check is stricter (it reads the profile anyway) -- stricter, never looser. */
     return "ok";
   }
 
@@ -1328,7 +1328,7 @@ export class IdentityService {
 
   /** CREATE / RECOVER: mint the text the wallet signs. `wallet` is the wallet Keplr is on (CREATE: the one to designate;
    *  RECOVER: the one claimed to be the account's). */
-  mintAuthorization(read: SessionCookieRead, input: { purpose: "create" | "recover"; username: unknown; wallet: unknown; site: string }, now: number): MintOutcome {
+  mintAuthorization(read: SessionCookieRead, input: { purpose: "create" | "recover"; username: unknown; wallet: unknown; site: string }, now: number, options: { client?: AuthorizationClient } = {}): MintOutcome {
     const current = this.signedOutSession(read, now);
     /* A durable unprofiled browser may still CREATE (its tables come with it, as ever); it may not sign in to another
        profile (LIVE-2E review M2). */
@@ -1342,7 +1342,7 @@ export class IdentityService {
     const loginKey = loginKeyOf(name);
     if (input.purpose === "create" && this.profileOfLogin.has(loginKey)) return { kind: "username-taken" };
     const op = this.authorizations.mint(
-      { kind: input.purpose, binding: { sessionId: session.session_id, familyId: session.family_id, loginKey, profileId: null, epoch: null }, site: input.site, account: name, wallet, replaces: null },
+      { kind: input.purpose, binding: { sessionId: session.session_id, familyId: session.family_id, loginKey, profileId: null, epoch: null }, site: input.site, account: name, wallet, replaces: null, ...(options.client !== undefined ? { client: options.client } : {}) },
       now,
     );
     if (op === null) return { kind: "busy" };

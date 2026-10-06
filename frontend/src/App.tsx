@@ -1257,7 +1257,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
      in, out or recovering -- and then the table says so and asks (`utils/tableAccountGuard.ts`) instead of silently
      showing the new account's seat. A Watch tab has no seat to lose, so it is not asked. */
   const sessionView = useSession();
-  const tableAccount = useTableAccountGuard(sessionView, sandbox && sandboxRoomCode !== null && !watchOnly, { gameId: sandboxRoomCode, localChanges: sessionPort().localChanges });
+  const tableAccount = useTableAccountGuard(sessionView, sandbox && sandboxRoomCode !== null && !watchOnly, { gameId: sandboxRoomCode, local: sessionPort().localAccount });
   const tableAccountChangeRef = useRef<TableAccountChange | null>(null);
   tableAccountChangeRef.current = tableAccount.change;
 

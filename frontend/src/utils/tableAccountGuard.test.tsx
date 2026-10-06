@@ -91,11 +91,12 @@ describe("tableAccountKey: which account a session view is", () => {
 /* ------------------------------------------------------------------ */
 
 let guard: TableAccountGuard | null = null;
-function Probe({ view, active, context }: { view: View; active: boolean; context?: { gameId?: string | null; localChanges?: number } }) {
+type Ctx = { gameId?: string | null; local?: { changes: number; key: string | null } };
+function Probe({ view, active, context }: { view: View; active: boolean; context?: Ctx }) {
   guard = useTableAccountGuard(view, active, context);
   return null;
 }
-const show = (view: View, active = true, context?: { gameId?: string | null; localChanges?: number }) => act(() => root.render(<Probe view={view} active={active} context={context} />));
+const show = (view: View, active = true, context?: Ctx) => act(() => root.render(<Probe view={view} active={active} context={context} />));
 const change = (): TableAccountChange | null => guard?.change ?? null;
 
 describe("useTableAccountGuard: the account the table was opened as, and a change of it", () => {
@@ -104,31 +105,46 @@ describe("useTableAccountGuard: the account the table was opened as, and a chang
     window.sessionStorage.clear();
   });
 
-  it("security review L2: a change THIS tab made itself (its own Log in at the table) is taken at once; another tab's is still asked", () => {
-    show(VISITOR, true, { localChanges: 0 });
-    show(ready(BRAD), true, { localChanges: 1 });
+  it("security review L2 / NEW-1: a change THIS page made to exactly the account it now holds is taken at once; another tab's is still asked", () => {
+    show(VISITOR, true, { local: { changes: 0, key: null } });
+    show(ready(BRAD), true, { local: { changes: 1, key: "account:brad.player" } });
     expect(change()).toBeNull();
-    show(ready(ANN), true, { localChanges: 1 });
+    show(ready(ANN), true, { local: { changes: 1, key: "account:brad.player" } });
+    expect(change()).toEqual({ from: "Brad", to: "Ann" });
+  });
+
+  it("re-review NEW-1 (a): a same-account change of this page's own (a password change) never lets a later other-tab sign-in through", () => {
+    show(ready(BRAD), true, { local: { changes: 0, key: null } });
+    show(ready(BRAD), true, { local: { changes: 1, key: "account:brad.player" } });
+    expect(change()).toBeNull();
+    show(ready(ANN), true, { local: { changes: 1, key: "account:brad.player" } });
+    expect(change()).toEqual({ from: "Brad", to: "Ann" });
+  });
+
+  it("re-review NEW-1 (b): another tab's sign-in landing while this page's own sign-in is on the wire is asked about", () => {
+    show(ready(BRAD), true, { local: { changes: 0, key: null } });
+    /* This page signed in as Cy; the browser holds Ann (her cookie landed last). */
+    show(ready(ANN), true, { local: { changes: 1, key: "account:cy" } });
     expect(change()).toEqual({ from: "Brad", to: "Ann" });
   });
 
   it("security review L2: the baseline survives a reload of the table -- a reload after another tab switched account still asks", () => {
-    show(ready(BRAD), true, { gameId: "g_table_one", localChanges: 0 });
+    show(ready(BRAD), true, { gameId: "g_table_one", local: { changes: 0, key: null } });
     expect(change()).toBeNull();
     act(() => root.unmount());
     root = createRoot(container);
     guard = null;
     /* The reload: a fresh page (its own count starts again), the browser now Ann. */
-    show(ready(ANN), true, { gameId: "g_table_one", localChanges: 0 });
+    show(ready(ANN), true, { gameId: "g_table_one", local: { changes: 0, key: null } });
     expect(change()).toEqual({ from: "Brad", to: "Ann" });
     act(() => guard?.accept());
     expect(change()).toBeNull();
     act(() => root.unmount());
     root = createRoot(container);
-    show(ready(ANN), true, { gameId: "g_table_one", localChanges: 0 });
+    show(ready(ANN), true, { gameId: "g_table_one", local: { changes: 0, key: null } });
     expect(change()).toBeNull();
     /* Another table is its own question. */
-    show(ready(ANN), true, { gameId: "g_table_two", localChanges: 0 });
+    show(ready(ANN), true, { gameId: "g_table_two", local: { changes: 0, key: null } });
     expect(change()).toBeNull();
   });
 
@@ -351,7 +367,7 @@ describe("the shell asks at the waiting room and the table -- never in a Watch t
   it("is wired to the session, active only for a seat-holding table, shown twice, and gates every send", () => {
     const shell = readShell();
     expect(shell).toContain("const sessionView = useSession();");
-    expect(shell).toContain("useTableAccountGuard(sessionView, sandbox && sandboxRoomCode !== null && !watchOnly, { gameId: sandboxRoomCode, localChanges: sessionPort().localChanges })");
+    expect(shell).toContain("useTableAccountGuard(sessionView, sandbox && sandboxRoomCode !== null && !watchOnly, { gameId: sandboxRoomCode, local: sessionPort().localAccount })");
     expect(occurrences(shell, "<TableAccountNotice change={tableAccount.change} onContinue={tableAccount.accept} onLeave={handleLeaveTableToLobby} />")).toHaveLength(2);
     expect(shell).toMatch(/boardSendRefusalRef\.current = \(\) => \(tableAccountChangeRef\.current !== null \? ACCOUNT_CHANGED_NO_SEND :/);
     expect(ACCOUNT_CHANGED_NO_SEND).toBe("This browser's account changed in another tab. Choose how to continue before you play.");

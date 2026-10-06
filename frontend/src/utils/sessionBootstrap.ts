@@ -56,6 +56,15 @@ export interface SessionAccount {
   readonly username?: string;
 }
 
+/** PHASE 3 FINAL (§9): see `SessionPort.localAccount`. */
+export interface LocalAccountChange {
+  readonly changes: number;
+  readonly key: string | null;
+}
+
+/** The account key of a username, as an open table compares accounts (`tableAccountGuard.tableAccountKey`). */
+export const accountKeyOfUsername = (username: string): string => `account:${username.trim().normalize("NFKC").toLowerCase()}`;
+
 /** LIVE-2E: the `/gs/api/*` routes a page may post to besides the bootstrap -- a closed list, so no caller can put a
  *  credential (or anything else) in a URL. */
 export type SessionApiPath =
@@ -116,10 +125,12 @@ export interface SessionPort {
    *  visitor on the public homepage). */
   startFresh(): Promise<SessionState>;
   subscribe(listener: () => void): () => void;
-  /** PHASE 3 FINAL (§9): how many account changes THIS PAGE made itself (a create, log-in, recovery, password change or
-   *  sign-out it sent and the server accepted). An open table compares it to tell its own tab's sign-in from another
-   *  tab's (`utils/tableAccountGuard.ts`). Absent on the always-ready port. */
-  readonly localChanges?: number;
+  /** PHASE 3 FINAL (§9): the account changes THIS PAGE made itself -- how many (a create, log-in, recovery, password
+   *  change or sign-out it sent and the server accepted), and the account the LAST one was for (`account:<username>`,
+   *  "visitor" for a sign-out, null when the page could not tell). An open table adopts a new account only when it is the
+   *  one this page itself signed in to; any other change is asked about (`utils/tableAccountGuard.ts`). Absent on the
+   *  always-ready port. */
+  readonly localAccount?: LocalAccountChange;
   /** LIVE-2E: POST a closed JSON body to one of the profile routes, on the bootstrap's origin and terms. */
   api(path: SessionApiPath, body: SessionApiBody): Promise<SessionApiAnswer>;
 }
@@ -203,8 +214,10 @@ export function httpSessionPort(options: HttpSessionOptions): SessionPort {
   let queued: Promise<SessionState> | null = null;
   /* P3-ACCT: a sign-in on the wire (it replaces the session): bootstraps wait for its answer. */
   let replacing: Promise<unknown> | null = null;
-  /* PHASE 3 FINAL (§9): account changes this page made itself. */
-  let localChanges = 0;
+  /* PHASE 3 FINAL (§9): account changes this page made itself, and the account a "Forgot password?" is for (its
+     RECOVER text names it; the recovery request itself carries no username). */
+  let localAccount: LocalAccountChange = { changes: 0, key: null };
+  let recovering: string | null = null;
   const replacedRetryMs = options.replacedRetryMs ?? 750;
   const signInTimeoutMs = options.signInTimeoutMs ?? SIGN_IN_TIMEOUT_MS;
   const listeners = new Set<() => void>();
@@ -356,12 +369,25 @@ export function httpSessionPort(options: HttpSessionOptions): SessionPort {
           /* the status says enough */
         }
       }
-      /* Counted BEFORE the caller's bootstrap re-reads the account, so a table reading the new account already sees it. */
-      if ((replaces || path === "session/revoke") && response.status >= 200 && response.status < 300) localChanges += 1;
+      /* Recorded BEFORE the caller's bootstrap re-reads the account, so a table reading the new account already sees it --
+         with the account THIS request was for (the username it carried), never "whatever the next bootstrap says". */
+      const typed = typeof body.username === "string" ? accountKeyOfUsername(body.username) : null;
+      if (path === "account/authorization" && body.purpose === "recover" && response.status === 200) recovering = typed;
+      if ((replaces || path === "session/revoke") && response.status >= 200 && response.status < 300) {
+        const key =
+          path === "session/revoke"
+            ? "visitor"
+            : path === "account/recover"
+              ? recovering
+              : path === "account/password"
+                ? (account?.username ? accountKeyOfUsername(account.username) : null)
+                : typed;
+        localAccount = { changes: localAccount.changes + 1, key };
+      }
       return { kind: "answered", status: response.status, body: parsed };
     },
-    get localChanges() {
-      return localChanges;
+    get localAccount() {
+      return localAccount;
     },
   };
 }

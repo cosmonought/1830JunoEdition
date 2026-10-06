@@ -30,7 +30,8 @@ export function tableAccountKey(state: SessionState, account: SessionAccount | n
   if (state === "unprofiled") return "visitor";
   if (state !== "ready" || account === null) return null;
   const username = account.username ?? "";
-  return username !== "" ? `account:${username.normalize("NFKC").toLowerCase()}` : `name:${account.name}`;
+  /* The same normalization as `sessionBootstrap.accountKeyOfUsername` (the key a page's own sign-in records). */
+  return username !== "" ? `account:${username.trim().normalize("NFKC").toLowerCase()}` : `name:${account.name}`;
 }
 
 /** The browser's account changed under the open table: who it was opened as, and who the browser is now. */
@@ -53,7 +54,7 @@ export interface TableAccountGuard {
 interface Baseline {
   readonly key: string;
   readonly name: string | null;
-  /** The page's own account changes when this baseline was set (`SessionPort.localChanges`). */
+  /** The page's own account changes when this baseline was set (`SessionPort.localAccount.changes`). */
   readonly local: number;
 }
 
@@ -93,22 +94,28 @@ function storeBaseline(gameId: string | null, baseline: { key: string; name: str
   }
 }
 
+/** This page's own latest account change (after `since`) is to the account the browser holds now. */
+function ownChange(changes: number, localKey: string | null, key: string | null, since: number): boolean {
+  return changes > since && localKey !== null && key === localKey;
+}
+
 /** The guard for one open table. `active` is false for a Watch tab (nobody plays there) and before a table is open.
- *  `context.gameId` keys the persisted baseline; `context.localChanges` is the session port's count of account changes
- *  THIS PAGE made -- a change it made itself (a sign-in through this tab's own "Log in" at this table) is the player's
- *  own choice and is taken at once; only a change from ANOTHER tab is asked about. */
+ *  `context.gameId` keys the persisted baseline; `context.local` is the session port's record of the account changes
+ *  THIS PAGE made (`SessionPort.localAccount`): a change to exactly the account this page itself signed in to (its own
+ *  "Log in" at this table) is the player's own choice and is taken at once; a same-account change of its own (a password
+ *  change) only moves the record on; any OTHER change -- another tab's, or one that lands while this page's own sign-in
+ *  is on the wire -- is asked about (security re-review NEW-1). */
 export function useTableAccountGuard(
   view: { state: SessionState; account: SessionAccount | null },
   active: boolean,
-  context: { readonly gameId?: string | null; readonly localChanges?: number } = {},
+  context: { readonly gameId?: string | null; readonly local?: { readonly changes: number; readonly key: string | null } } = {},
 ): TableAccountGuard {
   const key = tableAccountKey(view.state, view.account);
   const name = view.state === "ready" && view.account !== null ? view.account.name : null;
   const gameId = context.gameId ?? null;
-  const local = context.localChanges ?? 0;
+  const changes = context.local?.changes ?? 0;
+  const localKey = context.local?.key ?? null;
   const [baseline, setBaseline] = useState<Baseline | null>(null);
-  /* The first answer while the table is open is the account it was opened as -- unless this tab already opened this
-     table as someone (a reload): then that is the baseline. A change this page made itself is taken at once. */
   useEffect(() => {
     if (!active) {
       setBaseline(null);
@@ -116,24 +123,30 @@ export function useTableAccountGuard(
     }
     if (key === null) return;
     if (baseline === null) {
+      /* The first answer while the table is open is the account it was opened as -- unless this tab already opened this
+         table as someone (a reload, or back from the lobby): then that is the baseline, unless this page itself has since
+         signed in to the account it holds now. */
       const stored = storedBaseline(gameId);
-      const next = stored !== null ? { ...stored, local } : { key, name, local };
+      const next = stored !== null && !(stored.key !== key && ownChange(changes, localKey, key, 0)) ? { ...stored, local: changes } : { key, name, local: changes };
       setBaseline(next);
-      if (stored === null) storeBaseline(gameId, next);
+      if (stored === null || next.key !== stored.key) storeBaseline(gameId, next);
       return;
     }
-    if (key !== baseline.key && local > baseline.local) {
-      const next = { key, name, local };
-      setBaseline(next);
-      storeBaseline(gameId, next);
+    if (changes > baseline.local) {
+      if (key === baseline.key) setBaseline({ ...baseline, local: changes });
+      else if (ownChange(changes, localKey, key, baseline.local)) {
+        const next = { key, name, local: changes };
+        setBaseline(next);
+        storeBaseline(gameId, next);
+      }
     }
-  }, [active, key, name, baseline, gameId, local]);
+  }, [active, key, name, baseline, gameId, changes, localKey]);
   const accept = useCallback(() => {
     if (key === null) return;
-    const next = { key, name, local };
+    const next = { key, name, local: changes };
     setBaseline(next);
     storeBaseline(gameId, next);
-  }, [key, name, gameId, local]);
-  const change = active && baseline !== null && key !== null && key !== baseline.key && !(local > baseline.local) ? { from: baseline.name, to: name } : null;
+  }, [key, name, gameId, changes]);
+  const change = active && baseline !== null && key !== null && key !== baseline.key && !ownChange(changes, localKey, key, baseline.local) ? { from: baseline.name, to: name } : null;
   return { change, accept };
 }

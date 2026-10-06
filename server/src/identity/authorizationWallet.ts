@@ -82,7 +82,23 @@ export interface AuthorizationOperation {
 interface Entry {
   readonly op: AuthorizationOperation;
   state: "open" | "in-use" | "spent";
+  /** Who asked (security review NEW-1): the requesting address's bucket key (an IPv4 address or an IPv6 /64) and its
+   *  aggregate (the IPv6 /48; the address itself for IPv4). "local" when the caller named none (tests, tools). */
+  readonly client: string;
+  readonly group: string;
 }
+
+/** The requesting address of a mint (the HTTP layer's `IpKey`). */
+export interface AuthorizationClient {
+  readonly key: string;
+  readonly aggregate: string | null;
+}
+
+/** Live (open or in-use) CREATE / RECOVER operations one address may hold, and one IPv6 /48 (security review NEW-1). A
+ *  household's browsers fit easily; a flood from one place is refused at its own door. REPLACE is not counted: it needs
+ *  an explicitly confirmed signed-in session, one operation each. */
+export const LIVE_OPERATIONS_PER_CLIENT = 16;
+export const LIVE_OPERATIONS_PER_GROUP = 128;
 
 export type TakeOutcome = { readonly kind: "open"; readonly op: AuthorizationOperation } | { readonly kind: "unknown" } | { readonly kind: "used" };
 
@@ -110,16 +126,57 @@ export function createAuthorizationBook(options: { readonly appName: string; rea
     for (const [operation, entry] of byOperation) if (entry.op.expiresAt <= now) drop(operation);
   }
 
-  /** Room for one more operation? Expired ones are gone (`prune`); then SPENT ones go, oldest first (they only answer a
-   *  replay "used"). An operation still OPEN or IN USE is never evicted to make room for someone else's (security review
-   *  L2: a flood of mints must not make another player's signed operation fail) -- the new mint is refused instead. */
-  function room(): boolean {
-    if (byOperation.size < max) return true;
-    for (const [operation, entry] of byOperation) {
-      if (byOperation.size < max) break;
-      if (entry.state === "spent") drop(operation);
+  /** The bounded part of the book: every operation but REPLACE (see `LIVE_OPERATIONS_PER_CLIENT`). */
+  const bounded = (entry: Entry): boolean => entry.op.kind !== "replace";
+  const boundedSize = (): number => {
+    let size = 0;
+    for (const entry of byOperation.values()) if (bounded(entry)) size += 1;
+    return size;
+  };
+
+  /** Room for one more CREATE / RECOVER operation from `who`?
+   *  1. Per address and per /48: a client already holding its share of LIVE operations is refused (only itself).
+   *  2. The whole book: expired ones are gone (`prune`); then SPENT ones go, oldest first (they only answer a replay
+   *     "used"); then -- fair share -- the oldest OPEN (never IN-USE: its signature is being checked) operation of the
+   *     /48 holding the MOST live operations goes, if that is a bigger holder than the asker's own. So a flood fills only
+   *     its own share, a newcomer from elsewhere always gets in, and no in-flight operation is ever dropped (review L2,
+   *     NEW-1). Otherwise the mint is refused. */
+  function room(who: { client: string; group: string }): boolean {
+    const liveByGroup = new Map<string, number>();
+    let liveOfClient = 0;
+    for (const entry of byOperation.values()) {
+      if (!bounded(entry) || entry.state === "spent") continue;
+      liveByGroup.set(entry.group, (liveByGroup.get(entry.group) ?? 0) + 1);
+      if (entry.client === who.client) liveOfClient += 1;
     }
-    return byOperation.size < max;
+    if (liveOfClient >= LIVE_OPERATIONS_PER_CLIENT || (liveByGroup.get(who.group) ?? 0) >= LIVE_OPERATIONS_PER_GROUP) return false;
+    let size = boundedSize();
+    if (size < max) return true;
+    for (const [operation, entry] of byOperation) {
+      if (size < max) break;
+      if (bounded(entry) && entry.state === "spent") {
+        drop(operation);
+        size -= 1;
+      }
+    }
+    while (size >= max) {
+      let biggest: string | null = null;
+      for (const [group, count] of liveByGroup) if (biggest === null || count > (liveByGroup.get(biggest) ?? 0)) biggest = group;
+      if (biggest === null || biggest === who.group || (liveByGroup.get(biggest) ?? 0) <= (liveByGroup.get(who.group) ?? 0)) return false;
+      let evicted = false;
+      for (const [operation, entry] of byOperation) {
+        if (bounded(entry) && entry.group === biggest && entry.state === "open") {
+          drop(operation);
+          evicted = true;
+          break;
+        }
+      }
+      /* Every one of the biggest holder's operations is in use: nothing of anyone's is dropped. */
+      if (!evicted) return false;
+      liveByGroup.set(biggest, (liveByGroup.get(biggest) ?? 1) - 1);
+      size -= 1;
+    }
+    return true;
   }
 
   const hex = (): string => random(16).toString("hex");
@@ -137,12 +194,15 @@ export function createAuthorizationBook(options: { readonly appName: string; rea
       readonly replaces: string | null;
       /** An upper bound on the expiry (REPLACE: the "Confirm it's you" grant it is minted under). */
       readonly notAfter?: number;
+      /** The requesting address (security review NEW-1); absent: "local". */
+      readonly client?: AuthorizationClient;
     }, now: number): AuthorizationOperation | null {
       prune(now);
       /* This session's own open operation of this kind is replaced below: it never counts against the bound. */
       const own = openBySession.get(slot(input.binding.sessionId, input.kind));
       if (own !== undefined && byOperation.get(own)?.state === "open") drop(own);
-      if (!room()) return null;
+      const who = { client: input.client?.key ?? "local", group: input.client?.aggregate ?? input.client?.key ?? "local" };
+      if (input.kind !== "replace" && !room(who)) return null;
       const expiresAt = Math.min(now + PROFILE_AUTHORIZATION_TTL_MS, input.notAfter ?? Number.MAX_SAFE_INTEGER);
       const operation = hex();
       const purposes: Array<{ readonly purpose: ProfileAuthorizationPurpose; readonly signer: string }> =
@@ -174,7 +234,7 @@ export function createAuthorizationBook(options: { readonly appName: string; rea
       const key = slot(input.binding.sessionId, input.kind);
       const previous = openBySession.get(key);
       if (previous !== undefined && byOperation.get(previous)?.state === "open") drop(previous);
-      byOperation.set(operation, { op, state: "open" });
+      byOperation.set(operation, { op, state: "open", client: who.client, group: who.group });
       openBySession.set(key, operation);
       return op;
     },

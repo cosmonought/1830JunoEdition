@@ -314,7 +314,8 @@ function preconditionTarget(condition: IdentityPrecondition): { key: ItemKey; cl
       return {
         key: keys.profile(condition.profile_id),
         cls: "profile",
-        clause: cl.and(cl.exists(), condition.wallet_address === null ? cl.or(cl.attrAbsent("wallet_address"), cl.isNull("wallet_address")) : cl.eqS("wallet_address", condition.wallet_address)),
+        /* Legacy only (review NEW-2): never holds for a schema-3 (Authorization Wallet) profile. */
+        clause: cl.and(cl.exists(), cl.ltN("schema", 3), condition.wallet_address === null ? cl.or(cl.attrAbsent("wallet_address"), cl.isNull("wallet_address")) : cl.eqS("wallet_address", condition.wallet_address)),
       };
     case "profile-authorization-wallet":
       /* PHASE 3 FINAL (review L3): the Authorization Wallet's designation -- address AND since -- exactly as the

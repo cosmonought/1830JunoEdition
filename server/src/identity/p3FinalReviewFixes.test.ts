@@ -6,8 +6,10 @@
 //
 //   M1  "username taken" from the CREATE mint is charged to the address's account-creation budget: a stranger learns no
 //       more existing usernames than the accounts it could create, and then every CREATE mint from the address is 429.
-//   L2  the operation book never evicts another player's OPEN or IN-USE operation to make room: spent ones go first, and
-//       a mint past the bound is refused (503 busy) instead.
+//   L2  the operation book never evicts an IN-USE operation, and spent ones go first.
+//   NEW-1 (re-review) and no flood can refuse everyone: live CREATE / RECOVER operations are capped per address and per
+//       IPv6 /48, and when the book is full a newcomer evicts the biggest holder's oldest OPEN operation; REPLACE (an
+//       explicitly confirmed signed-in session) is never bounded by the flood. A mint that still finds no room: 503 busy.
 //   L3  (the store conformance, ID-23) the Authorization Wallet's compare-and-swap pins the designation (address AND
 //       since) -- see persistence/conformance/identityJournal.conformance.ts.
 //   INFO a recovery ends every other open RECOVER of the account (one the wallet already signed elsewhere is dead).
@@ -16,7 +18,7 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 
-import { createAuthorizationBook } from "./authorizationWallet";
+import { createAuthorizationBook, LIVE_OPERATIONS_PER_CLIENT, LIVE_OPERATIONS_PER_GROUP } from "./authorizationWallet";
 import { IdentityService } from "./sessions";
 import { createMemoryIdentityStore } from "./store";
 import { TEST_PASSWORD_KDF, player, moneyServer } from "../escrow/escrow4Support";
@@ -52,6 +54,43 @@ describe("PHASE 3 FINAL review L2: the operation book never evicts a live operat
     assert.ok(mintFor(book, "third", now), "re-minting its own slot replaces it");
     /* Expiry frees the rest. */
     assert.ok(mintFor(book, "later", now + 5 * 60 * 1000 + 1));
+  });
+
+  test("review NEW-1: a flood fills only its own share -- one address is capped, and a newcomer from elsewhere evicts the biggest holder's oldest OPEN operation (never an in-use one)", () => {
+    const now = 2_000_000;
+    const at = (client: string, aggregate: string | null) => ({ key: client, aggregate });
+    const mintAt = (book: ReturnType<typeof createAuthorizationBook>, sessionId: string, client: { key: string; aggregate: string | null }) =>
+      book.mint({ kind: "recover", binding: binding(sessionId), site: PROD_ORIGIN, account: "someone", wallet: keplrAccount(`book/${sessionId}`).address, replaces: null, client }, now);
+    /* Per address: LIVE_OPERATIONS_PER_CLIENT, then that address alone is refused. */
+    const capped = createAuthorizationBook({ appName: "Project 18XX" });
+    for (let k = 0; k < LIVE_OPERATIONS_PER_CLIENT; k += 1) assert.ok(mintAt(capped, `one-${k}`, at("v4:203.0.113.9", null)));
+    assert.equal(mintAt(capped, "one-over", at("v4:203.0.113.9", null)), null);
+    assert.ok(mintAt(capped, "elsewhere", at("v4:198.51.100.7", null)), "another address is not affected");
+    /* Per /48: LIVE_OPERATIONS_PER_GROUP across its /64s. */
+    const grouped = createAuthorizationBook({ appName: "Project 18XX" });
+    for (let k = 0; k < LIVE_OPERATIONS_PER_GROUP; k += 1) assert.ok(mintAt(grouped, `g-${k}`, at(`v6:2001:db8:1:${k.toString(16)}/64`, "v6:2001:db8:1/48")));
+    assert.equal(mintAt(grouped, "g-over", at("v6:2001:db8:1:ffff/64", "v6:2001:db8:1/48")), null);
+    /* Fair share when the book is full. */
+    const book = createAuthorizationBook({ appName: "Project 18XX", max: 4 });
+    const flood = [0, 1, 2].map((k) => mintAt(book, `flood-${k}`, at(`v6:2001:db8:2:${k}/64`, "v6:2001:db8:2/48")));
+    assert.ok(flood.every((op) => op !== null));
+    const victim = mintAt(book, "victim", at("v4:192.0.2.1", null));
+    assert.ok(victim);
+    assert.equal(book.take(victim.operation, "recover", { sessionId: "victim", familyId: "sf_victim" }, now).kind, "open", "the victim's operation is now IN USE");
+    /* The flood can't grow (it is the biggest holder: its own mint is refused) ... */
+    assert.equal(mintAt(book, "flood-more", at("v6:2001:db8:2:9/64", "v6:2001:db8:2/48")), null);
+    /* ... and a newcomer from elsewhere gets in by evicting the flood's OLDEST open operation. */
+    const newcomer = mintAt(book, "newcomer", at("v4:192.0.2.2", null));
+    assert.ok(newcomer);
+    assert.equal(book.take((flood[0] as { operation: string }).operation, "recover", { sessionId: "flood-0", familyId: "sf_flood-0" }, now).kind, "unknown", "the flood's oldest went");
+    assert.equal(book.size(), 4);
+    /* The in-use victim operation was never a candidate. */
+    book.spend(victim.operation);
+    assert.equal(book.take(victim.operation, "recover", { sessionId: "victim", familyId: "sf_victim" }, now).kind, "used");
+    /* REPLACE is never refused by the bound (an explicitly confirmed signed-in session, one each). */
+    const full = createAuthorizationBook({ appName: "Project 18XX", max: 1 });
+    assert.ok(mintAt(full, "fill", at("v4:192.0.2.3", null)));
+    assert.ok(full.mint({ kind: "replace", binding: { ...binding("signed-in"), profileId: "pf_x", epoch: "e" }, site: PROD_ORIGIN, account: "someone", wallet: keplrAccount("book/new").address, replaces: keplrAccount("book/old").address, client: at("v4:192.0.2.3", null) }, now));
   });
 
   test("the service and the HTTP route answer a full book 'busy' (503), never by evicting", async () => {

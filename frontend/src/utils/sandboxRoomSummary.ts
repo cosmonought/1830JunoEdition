@@ -18,6 +18,12 @@ export interface RoomSetup {
   /** The stake each seat would make, as a digit string. LIVE-2 opens no-money tables only: anything but "0" is refused
    *  by the server (`money-games-disabled`). */
   anteUjuno: string;
+  /** Phase 3 final clocks: an Async table's action deadline (a pace in seconds, or No-deadline); absent on a Live
+   *  table (always the Live action clock). */
+  deadline?: "async-pace" | "no-deadline";
+  paceSecs?: number | null;
+  /** A No-deadline table with stakes: the host acknowledged the owner's disclosure. */
+  noDeadlineAck?: boolean;
 }
 
 export const DEFAULT_ROOM_SETUP: RoomSetup = { visibility: "public", playerCount: null, anteUjuno: "0" };

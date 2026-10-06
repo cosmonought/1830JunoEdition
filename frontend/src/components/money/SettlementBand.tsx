@@ -23,7 +23,7 @@ import { formatAmount, shortWallet } from "../../utils/moneyProtocol";
 import type { RoomView } from "../../utils/roomProtocol";
 import type { SessionPort } from "../../utils/sessionBootstrap";
 import { ConfirmItsYou } from "../ConfirmItsYou";
-import { disputeConfirmSentence, disputeRecordLines, type SettlementActionKind } from "../../money/moneyFlow";
+import { disputeConfirmSentence, disputeRecordLines, reviewSentence, type SettlementActionKind } from "../../money/moneyFlow";
 import type { MoneyServices } from "../../money/moneySession";
 import { useMoneyTable } from "../../money/useMoneyTable";
 import { buttonStyle, moneyStyles as styles } from "./moneyStyles";
@@ -71,6 +71,9 @@ export function SettlementBand({ room, log = null, board = null, compact = false
         return "Release the payout recorded on Juno to every seat's wallet? Keplr pays the network fee.";
       case "move-signing-key":
         return "Make a signing key on this device and move your seat's key to it on Juno (Keplr approves the change)? The key on your other device stops counting, and an approval already given with it no longer counts.";
+      case "request-review":
+        /* Phase 3 final clocks: the exceptional review, told apart from every other ending (`moneyFlow.ts`). */
+        return reviewSentence(money.exit?.policy);
       default:
         return "";
     }

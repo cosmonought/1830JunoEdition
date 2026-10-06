@@ -408,7 +408,7 @@ export function seatFlow(input: FlowInput): SeatFlow {
     AFTER THE DEAL: THE FINANCIAL BAND (the game result is final before any of this)
    ================================================================== */
 
-export type SettlementActionKind = "approve-payout" | "challenge" | "release-payout" | "liveness-settle" | "annul" | "move-signing-key";
+export type SettlementActionKind = "approve-payout" | "challenge" | "release-payout" | "liveness-settle" | "annul" | "move-signing-key" | "request-review";
 
 export interface SettlementFlow {
   /** One status line (never "pending result": the result is final). */
@@ -431,7 +431,27 @@ export interface SettlementInput {
 }
 
 /** What Keplr sends (the seat's wallet); approving and agreeing to cancel are signed by this device's key instead. */
-const NEEDS_KEPLR: ReadonlySet<SettlementActionKind> = new Set<SettlementActionKind>(["move-signing-key", "challenge", "release-payout", "liveness-settle"]);
+const NEEDS_KEPLR: ReadonlySet<SettlementActionKind> = new Set<SettlementActionKind>(["move-signing-key", "challenge", "release-payout", "liveness-settle", "request-review"]);
+
+/* ==================================================================
+    PHASE 3 FINAL CLOCKS: THE EXCEPTIONAL REVIEW (escrow 2.1.0), TOLD APART FROM EVERY OTHER ENDING
+   ==================================================================
+   Not the unanimous "Annul game", not the N-1 remedy of an overdue, not the automatic Live timeout annulment, not
+   foreclosure: a request to the escrow's resolver, who may -- no sooner than 7 days later -- only ANNUL the game
+   neutrally (every seat's own stake back). The resolver can never foreclose, pick a winner or move money between
+   players. No-deadline tables: a HIGH BAR -- mere inactivity does not justify it. Timed / Live tables: it may serve a
+   catastrophic infrastructure recovery. Nothing here judges evidence; the resolver does. */
+export const REVIEW_LABEL = "Request exceptional review";
+export function reviewSentence(policy: string | null | undefined): string {
+  const base =
+    "Asks the escrow's resolver to review this game. No sooner than 7 days later the resolver may annul it neutrally — every player gets their own stake back (minus the fee). The resolver can never foreclose, pick a winner or move money between players, and may decline.";
+  return policy === "no_deadline"
+    ? `${base} This table has no deadline: a game simply going quiet is not enough. This is a last resort for a game that can never finish.`
+    : `${base} It is meant for a catastrophic failure (for example, the game can't be recovered); ordinary lateness is handled by the action clock.`;
+}
+export function reviewPendingSentence(requestedAt: number, now: number): string {
+  return `An exceptional review was requested ${formatMoneyTime(requestedAt, { now })}. The resolver may decide no sooner than 7 days after it; play continues meanwhile.`;
+}
 
 /** On a device without Keplr (a phone's browser, say): only what this device's own key signs is offered, and the
  *  band says where the rest is done (review R-M3). */
@@ -462,7 +482,9 @@ function settlementFlowFor(input: SettlementInput): SettlementFlow {
   if (s === null) {
     if (legal("liveness-settle")) acts.push({ kind: "liveness-settle", label: "Close and pay from the last recorded round", tone: "secondary", title: "The table has been quiet past Juno's inactivity window: close it and pay from the last recorded standings." });
     if (legal("annul")) acts.push({ kind: "annul", label: "Agree to cancel this game", tone: "secondary", title: "If every player signs, the game is annulled and every deposit comes back (minus the fee)." });
-    return { headline: "Standings are recorded on Juno every round.", detail: "Nothing is needed from you while the game is played.", actions: acts, paid };
+    if (legal("request-review")) acts.push({ kind: "request-review", label: REVIEW_LABEL, tone: "secondary", title: reviewSentence(view.exit?.policy) });
+    const review = view.exit?.review ?? null;
+    return { headline: "Standings are recorded on Juno every round.", detail: review !== null ? reviewPendingSentence(review.requestedAt, now) : "Nothing is needed from you while the game is played.", actions: acts, paid };
   }
   if (legal("move-signing-key") && !holdsChainKey && (s.status === "recorded" || s.status === "none" || s.status === "preparing" || s.status === "submitted")) {
     acts.push({ kind: "move-signing-key", label: "Use this device for signing", tone: "secondary", title: "Makes a signing key on this device and moves your seat's key to it on Juno (Keplr approves it). An approval already given with the old key stops counting." });
@@ -472,10 +494,12 @@ function settlementFlowFor(input: SettlementInput): SettlementFlow {
       /* The game is being played: nothing is asked of anyone. What the chain holds is said, and the inactivity exit. */
       if (legal("liveness-settle")) acts.push({ kind: "liveness-settle", label: "Close and pay from the last recorded round", tone: "secondary", title: "The table has been quiet past Juno's inactivity window: close it and pay from the last recorded standings." });
       if (legal("annul")) acts.push({ kind: "annul", label: "Agree to cancel this game", tone: "secondary", title: "If every player signs, the game is annulled and every deposit comes back (minus the fee)." });
+      if (legal("request-review")) acts.push({ kind: "request-review", label: REVIEW_LABEL, tone: "secondary", title: reviewSentence(view.exit?.policy) });
       const checkpoint = s.lastCheckpoint;
       const recorded = checkpoint === null ? "Standings are recorded on Juno every round." : `Standings last recorded on Juno at ${checkpoint.roundKey}${checkpoint.confirmed ? "" : " (being confirmed)"}.`;
       const exit = s.livenessAvailableAt !== null && input.now < s.livenessAvailableAt ? ` If no round finishes by ${formatMoneyTime(s.livenessAvailableAt, { now })}, any player may close the table on Juno and be paid from the last recorded standings.` : "";
-      return { headline: recorded, detail: `Nothing is needed from you while the game is played; closing the browser changes nothing about your deposit.${exit}`, actions: acts, paid };
+      const review = view.exit?.review ?? null;
+      return { headline: recorded, detail: `Nothing is needed from you while the game is played; closing the browser changes nothing about your deposit.${exit}${review !== null ? ` ${reviewPendingSentence(review.requestedAt, now)}` : ""}`, actions: acts, paid };
     }
     case "preparing":
       return { headline: "Result final. Preparing the settlement on Juno…", detail: null, actions: acts, paid };

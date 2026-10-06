@@ -54,6 +54,10 @@ import { ANTE_SUBSIDY_NOTE, VISIBILITY_COPY } from "./HostSetupCard";
 import { anteBreakdown, formatJuno } from "../utils/anteMath";
 import { SEAT_COLORS, SEAT_COLOR_NAMES, resolveSeatColors } from "../utils/playerLabels";
 import { MoneyPanel, StakeStrip, bpsText } from "./money/MoneyPanel";
+/* Phase 3 final clocks: the table's action deadline, said with the terms (and the host's choice on a free Async table). */
+import { CLOCK_ASYNC_PACES_SECS, CLOCK_OPS, type RoomClockView } from "../utils/clockProtocol";
+import { ASYNC_DEADLINE_NOTE, LIVE_DEADLINE_NOTE, NO_DEADLINE_NOTE, deadlineLabel, paceLabel } from "../utils/gameClockView";
+import { roomOp } from "../utils/roomLink";
 import { amountText, fundingTag } from "../money/moneyFlow";
 import { type AudioControlsProps } from "./AudioControls";
 /* Design note #1138: the shell's own bar, mounted here so the audio controls stop moving between the
@@ -878,6 +882,14 @@ export function SandboxWaitingRoom({
                       roster's heading already carries "3 of 6 seats" / "4 of 4 seats (exactly)" -- a second
                       copy of either is the duplication #1444 was removing, one level up. */}
                   <TermRow label="Pace" value={GAME_MODE_COPY[variants.mode].label} note={GAME_MODE_COPY[variants.mode].blurb} />
+                  {/* Phase 3 final clocks: the action deadline (Live: 20:00 per required action; Async: the host's
+                      pace or No deadline, fixed once play begins -- a table with stakes fixed it with its escrow). */}
+                  <TermRow
+                    label="Deadline"
+                    value={room?.clock ? deadlineLabel(room.clock) : variants.mode === "live" ? "Live · 20:00 per action" : "No deadline"}
+                    note={room?.clock?.deadline === "no-deadline" || (room?.clock == null && variants.mode === "async") ? NO_DEADLINE_NOTE : variants.mode === "live" ? LIVE_DEADLINE_NOTE : ASYNC_DEADLINE_NOTE}
+                  />
+                  {isHost && money === null && variants.mode === "async" && room?.status === "waiting" ? <DeadlineChooser gameId={room.gameId} clock={room.clock ?? null} /> : null}
                   {/* #1444: the visibility's explanation lives HERE and nowhere else. It used to sit beside
                       the room code as well, which is where a reader met "Public room — listed on the Lobby"
                       and then met "Visibility · Public" a column later. */}
@@ -1017,6 +1029,44 @@ export function SandboxWaitingRoomHold({
 /** #1415: one term of the table, read-only -- a label, its value, and the sentence that explains it.
  *  #1443: a real definition pair inside a `<dl>`, separated from its neighbours by a hairline rather than
  *  gathered into a card. The label and the value are the scannable line; the prose sits under both. */
+/** Phase 3 final clocks: the host of a free Async table may change its action deadline until play begins. */
+function DeadlineChooser({ gameId, clock, sendOp = roomOp }: { gameId: string; clock: RoomClockView | null; sendOp?: typeof roomOp }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const value = clock === null || clock.deadline === "no-deadline" ? "none" : String(clock.paceSecs ?? "none");
+  return (
+    <div style={styles.term}>
+      <label style={styles.variantNote}>
+        Change the deadline:{" "}
+        <select
+          value={value}
+          disabled={busy}
+          aria-label="Action deadline"
+          data-testid="wr-deadline"
+          onChange={(event) => {
+            const next = event.target.value;
+            setBusy(true);
+            setError(null);
+            const op = next === "none" ? { type: CLOCK_OPS.policy, deadline: "no-deadline" as const } : { type: CLOCK_OPS.policy, deadline: "async-pace" as const, paceSecs: Number(next) };
+            void sendOp(op, gameId).then((answer) => {
+              setBusy(false);
+              if (!answer.ok) setError(answer.reason);
+            });
+          }}
+        >
+          {CLOCK_ASYNC_PACES_SECS.map((secs) => (
+            <option key={secs} value={String(secs)}>
+              {paceLabel(secs)} per action
+            </option>
+          ))}
+          <option value="none">No deadline</option>
+        </select>
+      </label>
+      {error !== null ? <p style={styles.variantNote} role="alert">{error}</p> : null}
+    </div>
+  );
+}
+
 function TermRow({ label, value, tag, note }: { label: string; value: string; tag?: string; note?: string }) {
   return (
     <div style={styles.term}>

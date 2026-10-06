@@ -268,7 +268,7 @@ export function disabledStake(record: GameRecord): RoomStakeSummary | null {
   return { anteGross: terms.ante_gross, symbol: terms.symbol, exponent: terms.exponent, networkClass: terms.network_class, funded: 0, seats: record.exact_players ?? record.seats.length };
 }
 
-const HINT_KINDS: readonly MoneyHintKind[] = ["create", "join", "withdraw", "cancel", "set-consent-key", "challenge", "liveness-settle", "finalize"];
+const HINT_KINDS: readonly MoneyHintKind[] = ["create", "join", "withdraw", "cancel", "set-consent-key", "challenge", "liveness-settle", "finalize", "request-review"];
 const CONSENT_KEY = /^0[23][0-9a-f]{64}$/;
 /* PHASE 3 W2-K (U-44, owner OD-9(a)): a player reads money times in their own local time with its zone -- which only
    the browser knows. These refusal sentences go to one player at the moment of the refusal, so they say how long
@@ -875,6 +875,9 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
       if (liveness !== null && now >= liveness) out.push("liveness-settle");
       if (!held) out.push("annul");
     }
+    /* Escrow 2.1.0: any seated wallet may ask the resolver for the EXCEPTIONAL review of an in-progress 2.1.0 game (once;
+       Juno records the first request). Juno's own route: offered even while this server holds the table. */
+    if (g !== null && g.state === "IN_PROGRESS" && claim.chainSeatIndex !== null && (g.policy === "timed_remedy_v1" || g.policy === "no_deadline") && (g.review_request ?? null) === null) out.push("request-review");
     return [...new Set(out)];
   }
 
@@ -976,6 +979,15 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
       start,
       settlement,
       you,
+      /* Escrow 2.1.0: the exit policy Juno froze and a pending exceptional review request (additive, optional). */
+      ...(g !== null && (g.policy ?? null) !== null
+        ? {
+            exit: {
+              policy: g.policy ?? null,
+              review: g.review_request === null || g.review_request === undefined ? null : { seatIndex: g.review_request.seat_index, requestedAt: Number(g.review_request.requested_at_secs) * 1000 },
+            },
+          }
+        : {}),
       held: fin?.phase === "held",
     };
   }

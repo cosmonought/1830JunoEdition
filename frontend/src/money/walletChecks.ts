@@ -28,7 +28,8 @@ import { Secp256k1, Secp256k1Signature } from "@cosmjs/crypto";
 import { fromHex } from "@cosmjs/encoding";
 
 import { parseWalletLinkChallenge, WALLET_LINK_TAG_V1, type WalletLinkChallengeFields } from "../gameEngine/escrow/walletLinkChallengeV1";
-import { WALLET_EXECUTE, WALLET_MESSAGE_FUNDS, JunoAbiError, type WalletMessageKind } from "../gameEngine/escrow/junoWalletMessages";
+import { WALLET_EXECUTE, WALLET_MESSAGE_FUNDS, JUNO_ASYNC_PACES_SECS, JunoAbiError, type JunoDeadlineChoice, type WalletMessageKind } from "../gameEngine/escrow/junoWalletMessages";
+import { NO_DEADLINE_DISCLOSURE } from "../utils/clockProtocol";
 import { joinAdmissionDigestV1 } from "../gameEngine/escrow/junoJoinAdmissionV1";
 import { variantsDigestV1 } from "../gameEngine/escrow/variantsDigest";
 import { SUPPORTED_RULES_ENGINE_VERSIONS } from "../gameEngine/rulesVersion";
@@ -128,6 +129,7 @@ const HINT_OF: Readonly<Record<WalletMessageKind, MoneyHintKind>> = Object.freez
   challenge: "challenge",
   livenessSettle: "liveness-settle",
   finalize: "finalize",
+  requestReview: "request-review",
 });
 
 function message(kind: WalletMessageKind, msgJson: string, pin: PinnedEscrowDeployment, amounts: { ante?: string; bond?: string | null }, chainGameId: string | null, consentKey: string | null): Checked<WalletMessage> {
@@ -153,8 +155,29 @@ const guard = <T>(build: () => T): Checked<T> => {
   }
 };
 
+/** Phase 3 final clocks: the table's deadline as the server's clock records it, and this seat's No-deadline
+ *  acknowledgement. */
+export interface TableDeadline {
+  readonly deadline: "live" | "async-pace" | "no-deadline";
+  readonly paceSecs: number | null;
+  /** This seat acknowledged the No-deadline disclosure (irrelevant otherwise). */
+  readonly acknowledged: boolean;
+}
+
+/** What a deposit funds the escrow under, from the table's mode and its recorded deadline -- or why nothing is signed. */
+export function deadlineChoiceFor(mode: "live" | "async", deadline: TableDeadline | null): Checked<JunoDeadlineChoice> {
+  if (mode === "live") return deadline === null || deadline.deadline === "live" ? yes({ kind: "live_action_clock" }) : no("This table's deadline doesn't match its pace, so nothing was signed.");
+  if (deadline === null) return no("This async table's deadline (its pace, or no deadline) isn't known to this page yet, so nothing was signed.");
+  if (deadline.deadline === "no-deadline") {
+    if (!deadline.acknowledged) return no(`${NO_DEADLINE_DISCLOSURE} Acknowledge this before your deposit.`);
+    return yes({ kind: "no_deadline" });
+  }
+  if (deadline.deadline === "async-pace" && deadline.paceSecs !== null && JUNO_ASYNC_PACES_SECS.includes(deadline.paceSecs)) return yes({ kind: "async_pace", allowanceSecs: deadline.paceSecs });
+  return no("This async table's deadline isn't one this page can sign for, so nothing was signed.");
+}
+
 /** The host's CreateGame: the host's own deposit opens the table's escrow (the host is chain seat 0). */
-export function createGameMessage(pin: PinnedEscrowDeployment, view: RoomMoneyView, variants: GameVariants, consentKey: string): Checked<WalletMessage> {
+export function createGameMessage(pin: PinnedEscrowDeployment, view: RoomMoneyView, variants: GameVariants, consentKey: string, deadline: TableDeadline | null = null): Checked<WalletMessage> {
   const table = tableSigningProblem(pin, view);
   if (table !== null) return no(table);
   const link = view.you?.link ?? null;
@@ -169,11 +192,13 @@ export function createGameMessage(pin: PinnedEscrowDeployment, view: RoomMoneyVi
     return no("This table's rules can't be committed to an escrow, so nothing was signed.");
   }
   /* FP4 (escrow 2.1.0): CreateGame names the table's deadline class, and the contract never picks one by default. A
-     live table's is the 20-minute action clock; an async table's pace (12 h .. 7 d) or no-deadline is the host's choice,
-     which this page is not told yet -- so it signs nothing for an async table rather than guess (server clock lane). */
-  if (view.terms.mode !== "live") return no("This async table's deadline (its pace, or no deadline) isn't set for the escrow yet, so nothing was signed.");
+     live table's is the 20-minute action clock; an async table's is the pace (12 h .. 7 d) or No-deadline the host fixed
+     when the table was created (the server's clock records it) -- and a No-deadline table's only after this seat
+     acknowledged that its funds may stay locked. */
+  const choice = deadlineChoiceFor(view.terms.mode, deadline);
+  if (!choice.ok) return choice;
   const json = guard(() =>
-    WALLET_EXECUTE.createGame({ maxPlayers: view.terms.seats, mode: 0, rulesEngineVersion: rules.value, variantsDigest: digest, consentPubkey: consentKey, joinTicket: link.ticket, deadline: { kind: "live_action_clock" } }),
+    WALLET_EXECUTE.createGame({ maxPlayers: view.terms.seats, mode: view.terms.mode === "live" ? 0 : 1, rulesEngineVersion: rules.value, variantsDigest: digest, consentPubkey: consentKey, joinTicket: link.ticket, deadline: choice.value }),
   );
   if (!json.ok) return json;
   return message("createGame", json.value, pin, { ante: view.terms.anteGross }, null, consentKey);
@@ -269,6 +294,13 @@ export function finalizeMessage(pin: PinnedEscrowDeployment, chainGameId: string
   const id = chainGame(chainGameId);
   if (!id.ok) return id;
   return message("finalize", WALLET_EXECUTE.finalize(id.value), pin, {}, id.value, null);
+}
+
+/** Escrow 2.1.0: the seat's request for the exceptional review (no funds; Juno records the first request only). */
+export function requestReviewMessage(pin: PinnedEscrowDeployment, chainGameId: string | null): Checked<WalletMessage> {
+  const id = chainGame(chainGameId);
+  if (!id.ok) return id;
+  return message("requestReview", WALLET_EXECUTE.requestReview(id.value), pin, {}, id.value, null);
 }
 
 /* ==================================================================
@@ -414,15 +446,23 @@ export function challengeProblem(view: RoomMoneyView, facts: ChainGameFacts, now
 }
 
 /** Why a Join must not be sent into this chain game (null: it matches the table exactly and is taking deposits). */
-export function chainGameProblemForJoin(pin: PinnedEscrowDeployment, view: RoomMoneyView, variants: GameVariants, facts: ChainGameFacts, wallet: string, now: number): string | null {
+export function chainGameProblemForJoin(pin: PinnedEscrowDeployment, view: RoomMoneyView, variants: GameVariants, facts: ChainGameFacts, wallet: string, now: number, deadline: TableDeadline | null = null): string | null {
   if (facts.state !== "FUNDING") return "The table's escrow on Juno isn't taking deposits right now, so nothing was sent.";
   if (facts.paused) return "Deposits are paused on Juno right now, so nothing was sent. Try again later.";
   if (facts.fundingDeadlineMs !== null && facts.fundingDeadlineMs <= now) return "Funding for this table has closed on Juno, so nothing was sent.";
   if (facts.denom !== pin.denom || facts.anteGross !== view.terms.anteGross) return "The escrow on Juno asks for a different deposit than this table shows, so nothing was sent.";
   if (facts.maxPlayers !== view.terms.seats || facts.mode !== view.terms.mode) return "The escrow on Juno is for a different table (seats or pace), so nothing was sent.";
-  /* FP4 (escrow 2.1.0): a deposit funds a game under its exit policy. This page signs for a Live table on the 20-minute
-     action clock only (as its own CreateGame does); an async table's pace or no-deadline is not shown to it yet. */
-  if (facts.mode !== "live" || facts.policy !== "timed_remedy_v1" || facts.allowanceSecs !== 1200) return "The escrow on Juno doesn't use the deadline terms this page can show you, so nothing was sent.";
+  /* FP4 (escrow 2.1.0): a deposit funds a game under its exit policy -- exactly the table's deadline as this page shows
+     it (Live: the 20-minute action clock; Async: the host's pace, or No-deadline, acknowledged by this seat first). */
+  const choice = deadlineChoiceFor(facts.mode, deadline);
+  if (!choice.ok) return choice.reason;
+  const policyOk =
+    choice.value.kind === "live_action_clock"
+      ? facts.policy === "timed_remedy_v1" && facts.allowanceSecs === 1200
+      : choice.value.kind === "async_pace"
+        ? facts.policy === "timed_remedy_v1" && facts.allowanceSecs === choice.value.allowanceSecs
+        : facts.policy === "no_deadline";
+  if (!policyOk) return "The escrow on Juno doesn't use this table's deadline terms, so nothing was sent.";
   if (view.terms.rulesEngineVersion === null || facts.rulesEngineVersion !== view.terms.rulesEngineVersion) return "The escrow on Juno commits to a different rules version than this table, so nothing was sent.";
   let digest: string;
   try {

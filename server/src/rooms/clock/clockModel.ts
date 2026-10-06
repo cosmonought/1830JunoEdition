@@ -1144,6 +1144,8 @@ export function clockViewOf(record: GameClockRecord, now: number): RoomClockView
             strike: od.strike,
             epoch: od.epoch,
             overdueAt: od.at,
+            logLen: od.log_len,
+            logHash: od.log_hash,
             finality: timerView(od.cure),
             outcomeIfUncured: od.cure === null ? null : proposal !== null && proposal.kind === "foreclose" && proposal.complete_at !== null ? "foreclosure" : "timeout-annul",
             cure: od.decision_kind,

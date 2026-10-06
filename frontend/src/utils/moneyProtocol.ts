@@ -165,7 +165,7 @@ export interface MoneyYouView {
   actions: MoneyAction[];
 }
 
-export type MoneyHintKind = "create" | "join" | "withdraw" | "cancel" | "set-consent-key" | "challenge" | "liveness-settle" | "finalize";
+export type MoneyHintKind = "create" | "join" | "withdraw" | "cancel" | "set-consent-key" | "challenge" | "liveness-settle" | "finalize" | "request-review";
 
 export type MoneyAction =
   | "link-wallet"
@@ -181,7 +181,9 @@ export type MoneyAction =
   | "challenge"
   | "release-payout"
   | "liveness-settle"
-  | "annul";
+  | "annul"
+  /** Escrow 2.1.0: ask the resolver for the exceptional review (a last resort; neutral annulment only, after 7 days). */
+  | "request-review";
 
 export interface RoomMoneyView {
   deployment: MoneyDeploymentView;
@@ -220,6 +222,9 @@ export interface RoomMoneyView {
   start: MoneyStartView;
   settlement: MoneySettlementView | null;
   you: MoneyYouView | null;
+  /** Escrow 2.1.0 (additive, optional): the game's exit policy as Juno froze it (`timed_remedy_v1` / `no_deadline`), and
+   *  a pending EXCEPTIONAL review request -- who asked (chain seat) and when (server ms) -- or absent. */
+  exit?: { policy: string | null; review: { seatIndex: number; requestedAt: number } | null };
   /** The money is held for an operator: this server starts, pays and refunds nothing for the table until reviewed
    *  (Juno's own exits -- withdraw, cancel, dispute, the inactivity exit -- still work). */
   held: boolean;

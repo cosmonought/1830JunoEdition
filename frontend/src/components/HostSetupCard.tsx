@@ -44,6 +44,9 @@ import { zoomAwareVh } from "../utils/uiScale";
 import { useUiScale } from "../utils/useUiScale";
 /* ESCROW-4: the stake, when the server opens real-money tables on this build's escrow. */
 import { HostStakeSection, stakeChoice, useMoneyTableOffer } from "./money/HostStakeSection";
+/* Phase 3 final clocks: the Async action deadline and the No-deadline disclosure. */
+import { CLOCK_ASYNC_PACES_SECS, NO_DEADLINE_DISCLOSURE } from "../utils/clockProtocol";
+import { ASYNC_DEADLINE_NOTE, LIVE_DEADLINE_NOTE, NO_DEADLINE_NOTE, paceLabel } from "../utils/gameClockView";
 
 /** The type boxes' sentences, as asked. `GAME_TYPE_COPY`'s blurbs are the waiting room's and the Lobby's older
  *  form's; these are the host's first screen, which reads them side by side. */
@@ -129,6 +132,14 @@ export function HostSetupCard({ busy, error, onClose, onCreate }: HostSetupCardP
   const [stakeText, setStakeText] = useState("");
   const stake = stakeChoice(moneyOffer, stakeOn, stakeText, playerCount);
   const stakeBlocks = stakeOn && moneyOffer !== null && stake.problem !== null;
+  /* Phase 3 final clocks: an Async table's action deadline -- the host's pace (12 h .. 7 d) or No deadline, fixed once
+     play begins (a table with stakes: fixed with its escrow). A No-deadline table with stakes needs the host's
+     acknowledgement of the owner's disclosure before it can be opened. */
+  const [deadline, setDeadline] = useState<"async-pace" | "no-deadline">("async-pace");
+  const [paceSecs, setPaceSecs] = useState<number>(86_400);
+  const [noDeadlineAck, setNoDeadlineAck] = useState(false);
+  const moneyTable = stakeOn && moneyOffer !== null;
+  const deadlineBlocks = mode === "async" && deadline === "no-deadline" && moneyTable && !noDeadlineAck;
   /* #1447: a card whose artwork cannot be fetched or decoded falls back to the text-only box this step
      used before -- an empty black well would read as a broken card. */
   const [artFailed, setArtFailed] = useState<Partial<Record<GameType, boolean>>>({});
@@ -273,8 +284,16 @@ export function HostSetupCard({ busy, error, onClose, onCreate }: HostSetupCardP
   };
 
   const create = () => {
-    if (stakeBlocks) return;
-    onCreate({ ...variants, mode }, { visibility, playerCount, anteUjuno: stakeOn && moneyOffer !== null && stake.base !== null ? stake.base : DEFAULT_ROOM_SETUP.anteUjuno });
+    if (stakeBlocks || deadlineBlocks) return;
+    onCreate(
+      { ...variants, mode },
+      {
+        visibility,
+        playerCount,
+        anteUjuno: stakeOn && moneyOffer !== null && stake.base !== null ? stake.base : DEFAULT_ROOM_SETUP.anteUjuno,
+        ...(mode === "async" ? { deadline, paceSecs: deadline === "async-pace" ? paceSecs : null, ...(deadline === "no-deadline" && moneyTable ? { noDeadlineAck } : {}) } : {}),
+      },
+    );
   };
 
   return (
@@ -475,6 +494,47 @@ export function HostSetupCard({ busy, error, onClose, onCreate }: HostSetupCardP
               )}
             </Section>
 
+            <Section title="Action Deadline">
+              {mode === "live" ? (
+                <p style={styles.note} data-testid="host-deadline-live">
+                  {LIVE_DEADLINE_NOTE}
+                </p>
+              ) : (
+                <>
+                  <select
+                    style={styles.select}
+                    aria-label="Action deadline"
+                    aria-describedby={`${noteId}-deadline`}
+                    value={deadline === "no-deadline" ? "none" : String(paceSecs)}
+                    onChange={(event) => {
+                      if (event.target.value === "none") setDeadline("no-deadline");
+                      else {
+                        setDeadline("async-pace");
+                        setPaceSecs(Number(event.target.value));
+                      }
+                    }}
+                    data-testid="host-deadline"
+                  >
+                    {CLOCK_ASYNC_PACES_SECS.map((secs) => (
+                      <option key={secs} value={secs}>
+                        {paceLabel(secs)} per action
+                      </option>
+                    ))}
+                    <option value="none">No deadline</option>
+                  </select>
+                  <p style={styles.note} id={`${noteId}-deadline`}>
+                    {deadline === "no-deadline" ? NO_DEADLINE_NOTE : ASYNC_DEADLINE_NOTE}
+                  </p>
+                  {deadline === "no-deadline" && moneyTable ? (
+                    <label style={{ ...styles.note, display: "flex", gap: "8px", alignItems: "flex-start", fontWeight: 700, color: "#e3c27a" }} data-testid="host-no-deadline-disclosure">
+                      <input type="checkbox" checked={noDeadlineAck} onChange={(event) => setNoDeadlineAck(event.target.checked)} data-testid="host-no-deadline-ack" />
+                      <span>{NO_DEADLINE_DISCLOSURE}</span>
+                    </label>
+                  ) : null}
+                </>
+              )}
+            </Section>
+
             <Section title="Player Count">
               <select
                 style={styles.select}
@@ -565,9 +625,9 @@ export function HostSetupCard({ busy, error, onClose, onCreate }: HostSetupCardP
               </button>
               <button
                 type="button"
-                style={{ ...styles.primaryButton, ...(busy || stakeBlocks ? styles.disabled : {}) }}
+                style={{ ...styles.primaryButton, ...(busy || stakeBlocks || deadlineBlocks ? styles.disabled : {}) }}
                 onClick={create}
-                disabled={busy || stakeBlocks}
+                disabled={busy || stakeBlocks || deadlineBlocks}
                 data-testid="host-create-room"
               >
                 {busy ? "Opening…" : "Create Room"}

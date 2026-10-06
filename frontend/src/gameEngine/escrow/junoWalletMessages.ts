@@ -119,6 +119,9 @@ export const WALLET_EXECUTE = Object.freeze({
   /** ESCROW-4: "Release payout" -- permissionless once the challenge window has closed; the very JSON the relayer's
    *  `finalize` sends (a player whose relayer is down pays the gas and releases everyone's payout). */
   finalize: (chainGameId: string) => junoExecuteJson("finalize", u64Json(chainGameId, "chain_game_id"), {}),
+  /** Escrow 2.1.0 (`RequestReview`): a seated wallet asks the game's resolver for the EXCEPTIONAL review of an
+   *  IN_PROGRESS 2.1.0 game. Moves no funds; the resolver may, after 7 days, only annul neutrally (`ReviewAnnul`). */
+  requestReview: (chainGameId: string) => junoExecuteJson("request_review", u64Json(chainGameId, "chain_game_id"), {}),
 });
 
 /** The wallet messages a browser may build, by name (the client's closed list: nothing outside it is ever signed). */
@@ -136,4 +139,5 @@ export const WALLET_MESSAGE_FUNDS: Readonly<Record<WalletMessageKind, "ante" | "
   challenge: "bond",
   livenessSettle: "none",
   finalize: "none",
+  requestReview: "none",
 });

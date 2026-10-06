@@ -230,6 +230,9 @@ export async function createHostedGame(
     variants: terms as GameVariants,
     nickname,
     ...(stake !== undefined ? { stake } : {}),
+    /* Phase 3 final clocks: an Async table's deadline, named at the create (a table with stakes must). */
+    ...(variants.mode === "async" && setup.deadline !== undefined ? { deadline: setup.deadline, ...(setup.deadline === "async-pace" ? { paceSecs: setup.paceSecs ?? null } : {}) } : {}),
+    ...(setup.noDeadlineAck === true ? { noDeadlineAck: true } : {}),
   });
 }
 

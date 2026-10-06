@@ -95,6 +95,9 @@ export interface ClockOverdueView {
   readonly strike: number;
   readonly epoch: number;
   readonly overdueAt: number;
+  /** The stalled log position and its hash (what an N-1 REMEDY-APPROVE binds, with the epoch and the overdue moment). */
+  readonly logLen: number;
+  readonly logHash: string;
   /** Live strikes 1-2: the time left to the minute-30 finality (frozen while paused). Absent for Async (no automatic
    *  outcome) and for a third strike (no cure window). */
   readonly finality: ClockTimerView | null;

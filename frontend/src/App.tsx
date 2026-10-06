@@ -30,6 +30,9 @@ import { connectServerLink, type ServerLink } from "./utils/serverLink";
 import { linkQueueView, useLinkQueue } from "./utils/useLinkQueue";
 import { useActionLatch } from "./utils/actionLatch"; // Phase 3 W3-B (AUD-25.01)
 import { DelayedAuctionStatusChip } from "./components/DelayedAuctionStatusChip"; // Phase 3 W2-I (AUD-02.08)
+import { GameClockChip } from "./components/GameClockChip"; // Phase 3 final clocks
+import { declinesBlock } from "./utils/gameClockView"; // Phase 3 final clocks: the Live two-decline rule
+import { clockApprovalSigner } from "./money/clockApproval"; // Phase 3 final clocks (FP4: a money YES's REMEDY-APPROVE)
 import { delayedAuctionStatus } from "./utils/delayedAuctionStatus"; // Phase 3 W3-J (AUD-25.10 (e))
 import { rollBackIfRefused, submissionRefused } from "./utils/submissionAnswer"; // Phase 3 W3-C (P3-N020)
 import {
@@ -4265,8 +4268,15 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
     [offerAuthority],
   );
   const trainOfferRefusalFor = useCallback(
-    (offer: TrainOfferIntent) => trainOfferRefusal(offerAuthority, offer),
-    [offerAuthority],
+    (offer: TrainOfferIntent) => {
+      /* Phase 3 final clocks: the Live two-decline rule -- two declines (rejections or unanswered expiries) from the same
+         recipient in this Operating Round and the proposer may not offer that recipient another train until the next
+         one. Said with the owner's sentence (never as misconduct); the server refuses it anyway (`trade-declines`). */
+      const seller = gameState?.public_companies.find((company) => company.company_id === offer.sellerProtocolId)?.president ?? null;
+      const blocked = declinesBlock(sandboxRoom?.clock, viewerAddress === "" ? null : viewerAddress, seller, seller === null ? "" : (sandboxPlayerLabel(seller) ?? truncateAddress(seller)));
+      return blocked ?? trainOfferRefusal(offerAuthority, offer);
+    },
+    [offerAuthority, gameState, sandboxRoom, viewerAddress],
   );
   const privateTradeProposalRefusalFor = useCallback(
     (intent: { privateId: number; seller: string; buyer: string; price: number }) =>
@@ -14687,6 +14697,21 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
                (D-55) -- read off the shown board (`delayedAuctionStatus`), on hosted, sandbox and legacy tables alike.
                Silent outside the variant, during the auction itself (its dashboard says so) and at GameEnd. */}
             <DelayedAuctionStatusChip board={gameState} />
+            {/* Phase 3 final clocks: the table clock -- the deadline, who owes the next required decision, the server's one
+               figure, and on demand what the state means and what this seat may do (pause / resume votes, the system
+               pause's resume, the N-1 remedy vote, a free table's "Annul game"). The server decides every one; a tab
+               that is not current (a connection notice standing, a board that is not the room's, a held table) shows no
+               countdown. */}
+            {sandboxRoomCode && sandboxRoom?.clock !== undefined && sandboxRoom?.clock !== null && (
+              <GameClockChip
+                gameId={sandboxRoomCode}
+                clock={sandboxRoom.clock}
+                players={sandboxRoom.players}
+                viewerPlayerId={localId === "" ? null : localId}
+                current={roomNotices.connections.length === 0 && boardCurrency.current && sandboxRoom.holdKind === null}
+                signApproval={clockApprovalSigner(sandboxRoom)}
+              />
+            )}
             {chatError && <span style={styles.roomStripError}>{chatError}</span>}
             {/* Design note #1083: the room's own error moved here with the room's name. It reports the same
                KIND of fact `chatError` does -- this room's connection is unhappy -- and the bar that used to

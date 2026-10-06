@@ -16,6 +16,7 @@ import type { GameStateResponse } from "../gameEngine/gameState";
 import type { GameVariants } from "../gameEngine/gameVariants";
 import type { HashableLogEntry } from "../gameEngine/logHash";
 import type { RoomMoneyView } from "../utils/moneyProtocol";
+import type { RoomClockView } from "../utils/clockProtocol";
 import type { SessionPort } from "../utils/sessionBootstrap";
 import {
   agreeToAnnul,
@@ -57,6 +58,9 @@ export interface MoneyTableInput {
   readonly onStart?: () => void;
   /** W2-M: read Juno's dispute record for this surface (the result's band); false where it is never shown (the bar). */
   readonly disputeRecord?: boolean;
+  /** Phase 3 final clocks: the table clock (`RoomView.clock`): the deadline a deposit funds the escrow under, and this
+   *  seat's No-deadline acknowledgement. */
+  readonly clock?: RoomClockView | null;
 }
 
 export interface MoneyTable {
@@ -305,7 +309,10 @@ export function useMoneyTable(input: MoneyTableInput): MoneyTable {
   const context = (): TableContext | null => {
     const current = latest.current;
     if (current.view === null) return null;
-    return { gameId: current.gameId, view: current.view, variants: current.variants, isHost: current.isHost, port: current.port, services };
+    const clock = current.clock ?? null;
+    const me = current.view.you?.playerId ?? null;
+    const deadline = clock === null ? null : { deadline: clock.deadline, paceSecs: clock.paceSecs, acknowledged: me !== null && clock.noDeadlineAcks.includes(me) };
+    return { gameId: current.gameId, view: current.view, variants: current.variants, isHost: current.isHost, port: current.port, services, deadline };
   };
 
   const perform = useCallback(
@@ -370,6 +377,7 @@ export function useMoneyTable(input: MoneyTableInput): MoneyTable {
         case "challenge":
         case "release-payout":
         case "liveness-settle":
+        case "request-review":
           return settlementTx(ctx, kind, { log: latest.current.log ?? null, board: latest.current.board ?? null });
         default:
           return { ok: false, reason: "That isn't something this panel can do." };

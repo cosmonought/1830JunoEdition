@@ -29,6 +29,9 @@ import { formatMoneyTime } from "../../money/moneyTime";
 import { useMoneyTable, type MoneyActionKind } from "../../money/useMoneyTable";
 import { KeplrMark } from "./KeplrMark";
 import { buttonStyle, moneyStyles as styles } from "./moneyStyles";
+import { CLOCK_OPS, NO_DEADLINE_DISCLOSURE, type RoomClockView } from "../../utils/clockProtocol";
+import { deadlineLabel } from "../../utils/gameClockView";
+import { roomOp } from "../../utils/roomLink";
 
 export interface MoneyPanelProps {
   room: RoomView;
@@ -66,8 +69,55 @@ export function StakeStrip({ money, now }: { money: RoomMoneyView; now?: number 
   );
 }
 
+/** Phase 3 final clocks: a No-deadline table's disclosure, conspicuous BEFORE any ante -- the owner's words, verbatim --
+ *  with this seat's acknowledgement (persisted by the server per player per table; no deposit is approved without it). */
+export function NoDeadlineNotice({ gameId, clock, playerId, sendOp = roomOp }: { gameId: string; clock: RoomClockView | null | undefined; playerId: string | null; sendOp?: typeof roomOp }): JSX.Element | null {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  if (clock === null || clock === undefined || clock.deadline !== "no-deadline" || playerId === null) return null;
+  const acknowledged = clock.noDeadlineAcks.includes(playerId);
+  if (acknowledged) {
+    return (
+      <p style={styles.faint} data-testid="no-deadline-acknowledged">
+        You acknowledged: {NO_DEADLINE_DISCLOSURE}
+      </p>
+    );
+  }
+  return (
+    <div role="alert" data-testid="no-deadline-notice" style={{ ...styles.confirm, borderColor: "#8a6a1c", backgroundColor: "rgba(138,106,28,0.14)" }}>
+      <p style={{ ...styles.detail, fontWeight: 700 }} data-testid="no-deadline-disclosure">
+        {NO_DEADLINE_DISCLOSURE}
+      </p>
+      <div style={styles.row}>
+        <button
+          type="button"
+          className="wr-touch"
+          style={buttonStyle("primary", busy)}
+          disabled={busy}
+          onClick={() => {
+            setBusy(true);
+            setError(null);
+            void sendOp({ type: CLOCK_OPS.ackNoDeadline }, gameId).then((answer) => {
+              setBusy(false);
+              if (!answer.ok) setError(answer.reason);
+            });
+          }}
+          data-testid="no-deadline-ack"
+        >
+          I understand
+        </button>
+      </div>
+      {error !== null ? (
+        <p style={styles.error} role="alert">
+          {error}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 /** The deposit's terms, in full, before "Approve in Keplr" (brief §14's list). */
-function ReviewCard({ money, isHost, wallet, now }: { money: RoomMoneyView; isHost: boolean; wallet: string; now: number }): JSX.Element {
+function ReviewCard({ money, isHost, wallet, now, clock }: { money: RoomMoneyView; isHost: boolean; wallet: string; now: number; clock?: RoomClockView | null }): JSX.Element {
   const exponent = money.deployment.exponent;
   const symbol = money.deployment.symbol;
   const fmt = (base: string | null) => formatAmount(base, exponent, symbol);
@@ -106,6 +156,10 @@ function ReviewCard({ money, isHost, wallet, now }: { money: RoomMoneyView; isHo
         </dd>
         <dt style={styles.termLabel}>Winnings go to</dt>
         <dd style={styles.termValue}>{shortWallet(wallet)} — the depositing wallet; it can't change once the game starts</dd>
+        <dt style={styles.termLabel}>Deadline</dt>
+        <dd style={styles.termValue} data-testid="money-review-deadline">
+          {clock === null || clock === undefined ? (money.terms.mode === "live" ? "Live · 20:00 per action" : "—") : deadlineLabel(clock)}
+        </dd>
         <dt style={styles.termLabel}>Funding closes</dt>
         <dd style={styles.termValue}>{money.escrow.fundingDeadline === null ? (isHost ? "set by Juno when you open the table" : "—") : formatMoneyTime(money.escrow.fundingDeadline, { now })}</dd>
       </dl>
@@ -151,7 +205,7 @@ const MONEY_PANEL_CSS = `
 export function MoneyPanel({ room, onStart, busy = false, port, services }: MoneyPanelProps): JSX.Element | null {
   const money = room.money ?? null;
   const svc = services ?? moneyServices();
-  const table = useMoneyTable({ gameId: room.gameId, view: money, variants: room.variants, isHost: room.you.role === "host", port, services: svc, onStart });
+  const table = useMoneyTable({ gameId: room.gameId, view: money, variants: room.variants, isHost: room.you.role === "host", port, services: svc, onStart, clock: room.clock ?? null });
   const [asking, setAsking] = useState<AskedKind | null>(null);
   if (money === null || table.flow === null) return null;
   const flow = table.flow;
@@ -229,7 +283,8 @@ export function MoneyPanel({ room, onStart, busy = false, port, services }: Mone
         </div>
       ) : null}
 
-      {table.reviewing && flow.step === "review" && money.you?.link ? <ReviewCard money={money} isHost={room.you.role === "host"} wallet={money.you.link.wallet} now={table.now} /> : null}
+      {flow.stage === "funding" ? <NoDeadlineNotice gameId={room.gameId} clock={room.clock} playerId={room.you.playerId ?? null} /> : null}
+      {table.reviewing && flow.step === "review" && money.you?.link ? <ReviewCard money={money} isHost={room.you.role === "host"} wallet={money.you.link.wallet} now={table.now} clock={room.clock ?? null} /> : null}
 
       {asking !== null ? (
         <div style={styles.confirm} role="group" aria-label="Confirm" data-testid="money-exit-confirm">

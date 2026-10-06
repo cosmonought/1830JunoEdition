@@ -58,12 +58,16 @@ import {
   finalizeMessage,
   joinMessage,
   livenessSettleMessage,
+  requestReviewMessage,
   setConsentKeyMessage,
   tableSigningProblem,
   withdrawMessage,
   type ChainGameFacts,
+  type TableDeadline,
   type WalletMessage,
 } from "./walletChecks";
+import { remedyApproveDigestV1, type RemedyKindByte } from "../gameEngine/escrow/junoRemedyV1";
+import type { ClockOverdueView } from "../utils/clockProtocol";
 
 /** The step a refusal asks for before the action can run again. W2-M adds `reprove`: the server refused a deposit's
  *  approval for want of a fresh wallet proof (AUD-20.02). */
@@ -98,6 +102,10 @@ export interface TableContext {
   readonly view: RoomMoneyView;
   readonly variants: GameVariants;
   readonly isHost: boolean;
+  /** Phase 3 final clocks: the table's deadline as the server's clock records it (what a deposit funds the escrow
+   *  under), and whether THIS seat acknowledged a No-deadline table's disclosure. `null`/absent: not known (an Async
+   *  table's deposit is then refused -- nothing is signed under a deadline this page cannot show). */
+  readonly deadline?: TableDeadline | null;
   readonly port?: SessionPort;
   readonly services?: MoneyServices;
   /** This page's origin (the challenge's `Site:`); `window.location.origin` when absent. */
@@ -434,7 +442,7 @@ export async function approveDeposit(ctx: TableContext): Promise<ActionOutcome> 
     if (!config.ok) return refuse(config.reason);
     if (config.value.paused) return refuse("Juno's escrow is paused right now, so a table can't open on it. Try again later.");
     if (config.value.minAnte !== null && BigInt(view.terms.anteGross) < BigInt(config.value.minAnte)) return refuse("This table's stake is below what Juno's escrow accepts, so nothing was sent.");
-    const message = createGameMessage(pin, view, ctx.variants, key.pubkey);
+    const message = createGameMessage(pin, view, ctx.variants, key.pubkey, ctx.deadline ?? null);
     if (!message.ok) return refuse(message.reason);
     return signKeepSend(services, pin, target, message.value, ctx.port);
   }
@@ -448,7 +456,7 @@ export async function approveDeposit(ctx: TableContext): Promise<ActionOutcome> 
   if (problem !== null) return refuse(problem);
   const facts = await services.wallet.chainGame(pin, asked.value.chain_game_id);
   if (!facts.ok) return refuse(facts.reason);
-  const mismatch = chainGameProblemForJoin(pin, view, ctx.variants, facts.value, you.link.wallet, services.now());
+  const mismatch = chainGameProblemForJoin(pin, view, ctx.variants, facts.value, you.link.wallet, services.now(), ctx.deadline ?? null);
   if (mismatch !== null) return refuse(mismatch);
   const message = joinMessage(pin, view, asked.value, key.pubkey);
   if (!message.ok) return refuse(message.reason);
@@ -659,8 +667,75 @@ export async function agreeToAnnul(ctx: TableContext): Promise<ActionOutcome> {
   return done(answer.value.submitted ? "Every player agreed: the cancellation is on its way to Juno." : `Your agreement is recorded (${answer.value.collected.length} of ${answer.value.needed}). The game is cancelled only if every player agrees.`);
 }
 
-/** A wallet transaction on the table's escrow after the deal (dispute, release, the inactivity exit). */
-export async function settlementTx(ctx: TableContext, kind: "challenge" | "release-payout" | "liveness-settle", evidence: { readonly log: readonly HashableLogEntry[] | null; readonly board: GameStateResponse | null } = { log: null, board: null }): Promise<ActionOutcome> {
+/* ==================================================================
+    PHASE 3 FINAL CLOCKS (FP4): THIS SEAT'S REMEDY-APPROVE FOR ONE OVERDUE INSTANCE
+   ==================================================================
+   A money table's N-1 YES (Live foreclosure; Async neutral annulment or foreclosure) carries the seat's own consent-key
+   signature over escrow 2.1.0's REMEDY-APPROVE digest. Everything it binds is checked HERE from facts this browser reads
+   itself where it can: the domain and this seat's chain position from Juno through the pinned endpoint (the seat that
+   carries a key this browser made), the defaulting player's chain seat from the frozen roster, and the overdue instance
+   (strike, epoch, stalled position, its hash, the overdue moment) from the clock. The server verifies it against the
+   seat's CURRENT key by quorum before it counts; the contract verifies it again. No amount is computed anywhere. */
+
+/** Live: an approval reaches as far as the contract allows past the overdue (six hours, a minute short) -- a pause
+ *  that outlasts it lapses the approval and the outcome falls back to the neutral annulment. Async: seven days. */
+export const LIVE_APPROVAL_REACH_SECS = 6 * 3600 - 60;
+export const ASYNC_APPROVAL_REACH_SECS = 7 * 86_400;
+
+export async function signRemedyApproval(
+  ctx: TableContext,
+  input: { readonly remedy: 2 | 4 | 5; readonly overdue: Pick<ClockOverdueView, "seat" | "strike" | "epoch" | "overdueAt" | "logLen" | "logHash">; readonly live: boolean },
+): Promise<{ readonly ok: true; readonly approveUntil: number; readonly signature: string } | { readonly ok: false; readonly outcome: ActionOutcome }> {
+  const services = ctx.services ?? moneyServices();
+  const pinned = pinOf(services);
+  if (!pinned.ok) return { ok: false, outcome: pinned.outcome };
+  const you = ctx.view.you;
+  const chainGameId = ctx.view.escrow.chainGameId;
+  if (you === null) return { ok: false, outcome: refuse("You don't have a seat at this table.") };
+  if (chainGameId === null) return { ok: false, outcome: refuse("This table isn't open on Juno.") };
+  if (!/^[0-9a-f]{64}$/.test(input.overdue.logHash) || !Number.isSafeInteger(input.overdue.logLen) || !Number.isSafeInteger(input.overdue.overdueAt)) return { ok: false, outcome: refuse("The overdue this vote is about isn't shown completely yet, so nothing was signed.") };
+  const facts = await services.wallet.chainGame(pinned.pin, chainGameId);
+  if (!facts.ok) return { ok: false, outcome: refuse(facts.reason) };
+  if (facts.value.state !== "IN_PROGRESS" || facts.value.domain === null) return { ok: false, outcome: refuse("Juno's escrow isn't in play, so there is nothing to approve.") };
+  const own = await ownSeatOn(facts.value, ctx.gameId, you.playerId, pinned.pin, services);
+  if (own === null) return { ok: false, outcome: refuse("This device doesn't hold your seat's signing key. Use this device for signing first.") };
+  const details = await escrowDetails(ctx.gameId, ctx.port);
+  if (!details.ok) return { ok: false, outcome: fromApi(details, services) };
+  const defaulting = details.value.roster?.find((seat) => seat.playerId === input.overdue.seat)?.chainSeatIndex ?? null;
+  if (defaulting === null) return { ok: false, outcome: refuse("The overdue player's seat on Juno isn't known, so nothing was signed.") };
+  if (defaulting === own.index) return { ok: false, outcome: refuse("You can't approve a remedy against your own seat.") };
+  /* Whole seconds, rounded UP (as the server and the contract read the overdue moment). Integers only. */
+  const overdueAtSecs = Math.floor((input.overdue.overdueAt + 999) / 1000);
+  const nowSecs = Math.floor(services.now() / 1000);
+  const approveUntil = input.live ? overdueAtSecs + LIVE_APPROVAL_REACH_SECS : nowSecs + ASYNC_APPROVAL_REACH_SECS;
+  let digest: string;
+  try {
+    digest = remedyApproveDigestV1(
+      {
+        domain: facts.value.domain,
+        chain_game_id: BigInt(chainGameId),
+        remedy: input.remedy as RemedyKindByte,
+        defaulting_seat: defaulting,
+        strike: input.overdue.strike,
+        overdue_epoch: BigInt(input.overdue.epoch),
+        log_len: BigInt(input.overdue.logLen),
+        log_hash: input.overdue.logHash,
+        overdue_at: BigInt(overdueAtSecs),
+      },
+      BigInt(approveUntil),
+      own.index,
+    );
+  } catch {
+    return { ok: false, outcome: refuse("The approval couldn't be built, so nothing was signed.") };
+  }
+  const signature = await services.keys.signDigest(own.key, digest);
+  if (signature === null) return { ok: false, outcome: refuse("This device couldn't sign with the seat's key.") };
+  return { ok: true, approveUntil, signature };
+}
+
+/** A wallet transaction on the table's escrow after the deal (dispute, release, the inactivity exit, the exceptional
+ *  review request). */
+export async function settlementTx(ctx: TableContext, kind: "challenge" | "release-payout" | "liveness-settle" | "request-review", evidence: { readonly log: readonly HashableLogEntry[] | null; readonly board: GameStateResponse | null } = { log: null, board: null }): Promise<ActionOutcome> {
   const services = ctx.services ?? moneyServices();
   const pinned = pinOf(services);
   if (!pinned.ok) return pinned.outcome;
@@ -675,6 +750,14 @@ export async function settlementTx(ctx: TableContext, kind: "challenge" | "relea
     message = finalizeMessage(pin, chainGameId);
   } else if (kind === "liveness-settle") {
     message = livenessSettleMessage(pin, chainGameId);
+  } else if (kind === "request-review") {
+    /* Escrow 2.1.0: Juno itself, re-read through the pinned endpoint -- an in-progress 2.1.0 game (an exit policy), no
+       request recorded yet. The request moves no funds; the resolver may only annul neutrally, after 7 days. */
+    if (chainGameId === null) return refuse("This table isn't open on Juno.");
+    const facts = await services.wallet.chainGame(pin, chainGameId);
+    if (!facts.ok) return refuse(facts.reason);
+    if (facts.value.state !== "IN_PROGRESS" || facts.value.policy === null) return refuse("Juno's escrow can't take a review request now (the game isn't in play under escrow 2.1), so nothing was sent.");
+    message = requestReviewMessage(pin, chainGameId);
   } else {
     /* The evidence a dispute records: this device's own board commitment when it has one, else its history's. */
     let evidenceHash = "";

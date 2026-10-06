@@ -107,6 +107,10 @@ interface Channel {
   rooms: Set<{ onRooms: (rooms: RoomSummary[]) => void; onError?: (message: string) => void }>;
   chats: Set<{ onChat: (messages: RoomChatEntry[]) => void; onError?: (code: string, reason: string) => void }>;
   presences: Set<(entries: PresenceState[], serverNow?: number) => void>;
+  /** Phase 3 lane A (AUD-11.04): who wants to know whether this channel's socket is open (the clock's currency). */
+  links: Set<(open: boolean) => void>;
+  /** Phase 3 lane A: when (monotonic ms) the last `room` frame arrived -- a replayed view is as old as its frame. */
+  lastViewAt?: number;
   last: { view?: RoomView; rooms?: RoomSummary[]; chat?: RoomChatEntry[]; presence?: { entries: PresenceState[]; now?: number } };
   /** Terminal: this tab may not read this game any more. */
   lost: RoomLoss | null;
@@ -183,11 +187,15 @@ function clientAnswerFor(gameId: string | undefined): string | null {
 const NO_SOCKET_YET: SocketLike = { send: () => undefined, close: () => undefined, onopen: null, onmessage: null, onclose: null, onerror: null };
 
 function listening(channel: Channel): boolean {
-  return channel.views.size + channel.rooms.size + channel.chats.size + channel.presences.size + channel.pending.size > 0;
+  return channel.views.size + channel.rooms.size + channel.chats.size + channel.presences.size + channel.links.size + channel.pending.size > 0;
 }
 
 function retire(channel: Channel, pendingReason = "The connection to the game server closed."): void {
   channel.retired = true;
+  if (channel.open) {
+    channel.open = false;
+    notifyLink(channel);
+  }
   if (channel.reconnect !== null) clearTimeout(channel.reconnect);
   if (channel.idle !== null) clearTimeout(channel.idle);
   channel.reconnect = null;
@@ -353,6 +361,7 @@ function attachNow(channel: Channel): void {
     channel.attempts = 0;
     channel.standing.forEach((text) => socket.send(text));
     for (const queued of channel.backlog.splice(0)) socket.send(queued.text);
+    notifyLink(channel);
   };
 
   socket.onmessage = (event) => {
@@ -377,6 +386,7 @@ function attachNow(channel: Channel): void {
         const view = (frame as unknown as RoomFrame).view;
         if (!view || (frame as unknown as RoomFrame).gameId !== channel.key) return;
         channel.last.view = view;
+        channel.lastViewAt = monotonicNow();
         channel.views.forEach((listener) => listener.onView(view));
         return;
       }
@@ -443,7 +453,9 @@ function attachNow(channel: Channel): void {
 
   socket.onclose = (event) => {
     if (channel.socket !== socket) return;
+    const wasOpen = channel.open;
     channel.open = false;
+    if (wasOpen) notifyLink(channel);
     const code = (event as { code?: unknown } | null)?.code;
     /* LIVE-4 (L4-3): this channel closed its own socket to follow a route to another path -- re-attach there now,
        re-stating its standing subscriptions. */
@@ -485,6 +497,17 @@ function attachNow(channel: Channel): void {
   };
 }
 
+/** Phase 3 lane A: tell the channel's link listeners whether its socket is open now. A throwing listener is skipped. */
+function notifyLink(channel: Channel): void {
+  channel.links.forEach((listener) => {
+    try {
+      listener(channel.open);
+    } catch {
+      /* a listener's own failure is not the link's */
+    }
+  });
+}
+
 function channelFor(key: string): Channel {
   const existing = channels.get(key);
   if (existing && !existing.retired) {
@@ -505,6 +528,7 @@ function channelFor(key: string): Channel {
     rooms: new Set(),
     chats: new Set(),
     presences: new Set(),
+    links: new Set(),
     last: {},
     lost: null,
     lastErrorCode: null,
@@ -616,6 +640,36 @@ export function watchRoom(gameId: string, listener: ViewListener): () => void {
   if (channel.last.view !== undefined) listener.onView(channel.last.view);
   return () => {
     channel.views.delete(listener);
+    releaseIfIdle(channel);
+  };
+}
+
+/** Phase 3 lane A: the page's monotonic clock (never the wall clock). */
+function monotonicNow(): number {
+  return typeof performance !== "undefined" && typeof performance.now === "function" ? performance.now() : Date.now();
+}
+
+/** Phase 3 lane A (AUD-11.04): when (monotonic ms, `performance.now`) this game's newest room view ARRIVED, or `null`. A
+ *  view handed to a late subscriber from the channel's cache is as old as this -- the clock counts on from here, not from
+ *  when a component happened to mount. */
+export function roomViewReceivedAt(gameId: string): number | null {
+  const channel = channels.get(gameId);
+  return channel === undefined || channel.retired ? null : (channel.lastViewAt ?? null);
+}
+
+/** Phase 3 lane A (AUD-11.04): whether this game's room channel is connected -- now, and on every change. The clock is
+ *  presented as current only while it is (a closed channel receives no clock changes). A table this tab lost, or was
+ *  told it cannot talk about, is never connected. Returns the unsubscribe. */
+export function watchRoomLink(gameId: string, listener: (open: boolean) => void): () => void {
+  if (lostGames.has(gameId) || clientAnswerFor(gameId) !== null) {
+    listener(false);
+    return () => undefined;
+  }
+  const channel = channelFor(gameId);
+  channel.links.add(listener);
+  listener(channel.open);
+  return () => {
+    channel.links.delete(listener);
     releaseIfIdle(channel);
   };
 }

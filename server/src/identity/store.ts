@@ -272,6 +272,10 @@ export type IdentityPrecondition =
   /** P3-ACCT: COMPARE-AND-SWAP of the profile's persisted wallet -- the profile is stored and holds exactly this wallet
    *  (`null`: none). */
   | { readonly kind: "profile-wallet"; readonly profile_id: string; readonly wallet_address: string | null }
+  /** PHASE 3 FINAL (security review L3): COMPARE-AND-SWAP of the AUTHORIZATION WALLET'S DESIGNATION -- the profile is
+   *  stored and holds exactly this wallet, designated at exactly this time. The address alone could be fooled by A -> B
+   *  -> A under a second writer; (address, since) cannot, since every designation's `since` strictly increases. */
+  | { readonly kind: "profile-authorization-wallet"; readonly profile_id: string; readonly wallet_address: string; readonly wallet_since: number }
   /** P3-ACCT POLICY: COMPARE-AND-SWAP of the PASSWORD GENERATION -- the profile is stored and its username login holds
    *  exactly this password hash. Every password hash is made with a fresh random salt, so the hash IS the generation:
    *  a change decided against a superseded password (a second writer, a racing change or reset) is refused by every
@@ -732,6 +736,11 @@ export function preconditionFailure(lookups: IdentityLookups, expect: readonly I
           const profile = lookups.profile(condition.profile_id);
           return profile === undefined || storedWalletOf(profile) !== condition.wallet_address;
         }
+        case "profile-authorization-wallet": {
+          const profile = lookups.profile(condition.profile_id);
+          const held = profile === undefined ? null : authorizationWalletOf(profile);
+          return held === null || held.address !== condition.wallet_address || held.since !== condition.wallet_since;
+        }
         case "profile-password": {
           const profile = lookups.profile(condition.profile_id);
           return profile === undefined || loginOf(profile)?.hash !== condition.password_hash;
@@ -780,6 +789,11 @@ const PRECONDITION_SHAPES: Readonly<Record<IdentityPrecondition["kind"], readonl
   "profile-wallet": [
     ["profile_id", PROFILE_ID_PATTERN],
     ["wallet_address", walletOrNull],
+  ],
+  "profile-authorization-wallet": [
+    ["profile_id", PROFILE_ID_PATTERN],
+    ["wallet_address", (value: unknown) => typeof value === "string" && JUNO_WALLET_PATTERN.test(value)],
+    ["wallet_since", "time"],
   ],
   "profile-password": [
     ["profile_id", PROFILE_ID_PATTERN],

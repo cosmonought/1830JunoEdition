@@ -36,8 +36,10 @@
 // text says so in plain words because a player reads it in Keplr's own window. Nothing here is a secret.
 //
 // The browser PARSES the text before asking Keplr to sign and refuses one that does not name its own site, the account it
-// is acting for, the purpose it asked for and the wallet Keplr is on as the signer (a compromised server cannot get a
-// different account action signed through this page).
+// is acting for, the purpose it asked for and the wallet Keplr is on as the signer -- so a server cannot get a different
+// KIND of account action, for another site or another signer, signed through this page. (For a replacement, the account
+// and the wallet being replaced are the account's own details as the server reports them to its own session; the
+// purpose, the site, the signer and the new wallet are this page's own.)
 
 export const PROFILE_AUTHORIZATION_TAG_V1 = "18COSMOS/PROFILE-AUTHORIZATION/v1";
 /** How long a minted authorization text may be answered. */

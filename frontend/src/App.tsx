@@ -198,6 +198,8 @@ import { requireAccount } from "./utils/accountPrompt";
 /* PHASE 3 FINAL (§9): an open table never becomes somebody else silently. */
 import { ACCOUNT_CHANGED_NO_SEND, useTableAccountGuard, type TableAccountChange } from "./utils/tableAccountGuard";
 import { useSession } from "./utils/useSession";
+import { sessionPort } from "./utils/sessionBootstrap";
+import { FREE_TABLES_OFFERED } from "./utils/tablePolicy";
 import { TableAccountNotice } from "./components/TableAccountNotice";
 import {
   JOIN_CODE_EXAMPLE,
@@ -1255,13 +1257,16 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
      in, out or recovering -- and then the table says so and asks (`utils/tableAccountGuard.ts`) instead of silently
      showing the new account's seat. A Watch tab has no seat to lose, so it is not asked. */
   const sessionView = useSession();
-  const tableAccount = useTableAccountGuard(sessionView, sandbox && sandboxRoomCode !== null && !watchOnly);
+  const tableAccount = useTableAccountGuard(sessionView, sandbox && sandboxRoomCode !== null && !watchOnly, { gameId: sandboxRoomCode, localChanges: sessionPort().localChanges });
   const tableAccountChangeRef = useRef<TableAccountChange | null>(null);
   tableAccountChangeRef.current = tableAccount.change;
 
   /* In a room this browser is one person with one id, which makes every existing turn/president gate correct at once.
      See docs/ai_architecture/session_keys_wallet.md - App.tsx #534 */
-  const viewerAddress = sandbox ? localId : wallet.address;
+  /* PHASE 3 FINAL (§12): who this tab is at the table is the SERVER's answer for the session (`localId`), never a wallet
+     address -- the parked on-chain branch that read `wallet.address` here is gone, so no path can derive a viewer from
+     the Keplr account this browser has selected. */
+  const viewerAddress = localId;
   /** LIVE-2D: the seat id, for callbacks that must not rebuild when the view does. */
   const localIdRef = useRef(localId);
   localIdRef.current = localId;
@@ -3366,7 +3371,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
   } = useRoomChat(
     sandbox ? sandboxRoomCode : roomId,
     /* LIVE-2D: the seat decides only whether Send is offered (a spectator may not chat); the server signs the line. */
-    sandbox ? (localId || null) : wallet.address,
+    localId || null, // PHASE 3 FINAL (§12): the session's seat, never a wallet address
     // Design note #765: the roster nickname in a sandbox room, the lobby name outside one.
     sandboxChatName,
   );
@@ -14121,7 +14126,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
             available={isBackendConfigured()}
             error={sandboxRoomError}
             busy={sandboxRoomBusy}
-            onHost={() => void requireAccount(() => void handleHostSandboxRoom(), "Log in or create an account to host a game.")}
+            /* PHASE 3 FINAL (§13): this gate's Host makes a NO-ANTE room, which the product does not offer -- a game is
+               hosted from the Lobby's host card, with its ante. The internal development-identity build keeps it. */
+            onHost={FREE_TABLES_OFFERED ? () => void requireAccount(() => void handleHostSandboxRoom(), "Log in or create an account to host a game.") : undefined}
             onJoin={(raw) => void requireAccount(() => void handleJoinSandboxRoom(raw), "Log in or create an account to join a game.")}
           />
           <button type="button" style={styles.sandboxGateQuiet} onClick={onLeaveGame}>

@@ -502,7 +502,7 @@ export function planSecurityReplay(input: ReplayInput): ReplayPlan {
     }
     /* ---- PHASE 3 FINAL: the Authorization Wallet's chain of replacements (the header's rule) ---- */
     const walletSteps = events.filter((event): event is WalletReplacement => event.kind === "authorization-wallet-replaced");
-    let authorizationFrom: string | null = null;
+    let authorizationFrom: { address: string; since: number } | null = null;
     if (walletSteps.length > 0) {
       if (profile === undefined) throw new SecurityReplayError(`wallet replacement ${walletSteps[0].event_id} names a profile this principal does not have`);
       const profileId = profile.profile_id;
@@ -528,7 +528,7 @@ export function planSecurityReplay(input: ReplayInput): ReplayPlan {
         since = step.to_since;
       }
       if (node(wallet, since) !== tableNode) {
-        authorizationFrom = profile.wallet_address;
+        authorizationFrom = { address: profile.wallet_address as string, since: profile.wallet_verified_at as number };
         profile = { ...profile, wallet_address: wallet, wallet_verified_at: since };
       }
     }
@@ -598,7 +598,8 @@ export function planSecurityReplay(input: ReplayInput): ReplayPlan {
     if (passwordFrom !== null) counters.passwords += 1;
     /* PHASE 3 FINAL: the Authorization Wallet the table holds is pinned (a profile created here is pinned by its creation). */
     if (authorizationFrom !== null && !created && profile !== undefined) {
-      expect.push({ kind: "profile-wallet", profile_id: profile.profile_id, wallet_address: authorizationFrom });
+      /* Review L3: the designation (address AND since) the table holds. */
+      expect.push({ kind: "profile-authorization-wallet", profile_id: profile.profile_id, wallet_address: authorizationFrom.address, wallet_since: authorizationFrom.since });
       counters.authorizationWallets += 1;
     }
     if (credentialsInstalled !== null) counters.credentials += 1;

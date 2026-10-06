@@ -116,6 +116,10 @@ export interface SessionPort {
    *  visitor on the public homepage). */
   startFresh(): Promise<SessionState>;
   subscribe(listener: () => void): () => void;
+  /** PHASE 3 FINAL (§9): how many account changes THIS PAGE made itself (a create, log-in, recovery, password change or
+   *  sign-out it sent and the server accepted). An open table compares it to tell its own tab's sign-in from another
+   *  tab's (`utils/tableAccountGuard.ts`). Absent on the always-ready port. */
+  readonly localChanges?: number;
   /** LIVE-2E: POST a closed JSON body to one of the profile routes, on the bootstrap's origin and terms. */
   api(path: SessionApiPath, body: SessionApiBody): Promise<SessionApiAnswer>;
 }
@@ -199,6 +203,8 @@ export function httpSessionPort(options: HttpSessionOptions): SessionPort {
   let queued: Promise<SessionState> | null = null;
   /* P3-ACCT: a sign-in on the wire (it replaces the session): bootstraps wait for its answer. */
   let replacing: Promise<unknown> | null = null;
+  /* PHASE 3 FINAL (§9): account changes this page made itself. */
+  let localChanges = 0;
   const replacedRetryMs = options.replacedRetryMs ?? 750;
   const signInTimeoutMs = options.signInTimeoutMs ?? SIGN_IN_TIMEOUT_MS;
   const listeners = new Set<() => void>();
@@ -350,7 +356,12 @@ export function httpSessionPort(options: HttpSessionOptions): SessionPort {
           /* the status says enough */
         }
       }
+      /* Counted BEFORE the caller's bootstrap re-reads the account, so a table reading the new account already sees it. */
+      if ((replaces || path === "session/revoke") && response.status >= 200 && response.status < 300) localChanges += 1;
       return { kind: "answered", status: response.status, body: parsed };
+    },
+    get localChanges() {
+      return localChanges;
     },
   };
 }

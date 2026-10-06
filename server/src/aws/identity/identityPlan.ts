@@ -118,6 +118,7 @@ export const cl = Object.freeze({
   absent: (): Clause => ({ op: "absent" }),
   exists: (): Clause => ({ op: "exists" }),
   eqS: (attr: string, value: string): Clause => ({ op: "eq", attr, value: S(value) }),
+  eqN: (attr: string, value: number): Clause => ({ op: "eq", attr, value: N(value) }),
   isNull: (attr: string): Clause => ({ op: "null", attr }),
   notNull: (attr: string): Clause => ({ op: "not-null", attr }),
   attrAbsent: (attr: string): Clause => ({ op: "attr-absent", attr }),
@@ -314,6 +315,14 @@ function preconditionTarget(condition: IdentityPrecondition): { key: ItemKey; cl
         key: keys.profile(condition.profile_id),
         cls: "profile",
         clause: cl.and(cl.exists(), condition.wallet_address === null ? cl.or(cl.attrAbsent("wallet_address"), cl.isNull("wallet_address")) : cl.eqS("wallet_address", condition.wallet_address)),
+      };
+    case "profile-authorization-wallet":
+      /* PHASE 3 FINAL (review L3): the Authorization Wallet's designation -- address AND since -- exactly as the
+         memory store compares it. */
+      return {
+        key: keys.profile(condition.profile_id),
+        cls: "profile",
+        clause: cl.and(cl.exists(), cl.eqN("schema", 3), cl.eqS("wallet_address", condition.wallet_address), cl.eqN("wallet_verified_at", condition.wallet_since)),
       };
     case "profile-password":
       /* P3-ACCT POLICY: the password generation's compare-and-swap (the hash carries a fresh salt every time). */

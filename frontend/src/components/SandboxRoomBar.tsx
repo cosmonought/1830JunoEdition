@@ -30,7 +30,8 @@ export interface SandboxRoomBarProps {
    *  strip carries it, beside `chatError` (#1083). */
   error: string | null;
   busy: boolean;
-  onHost: () => void;
+  /** PHASE 3 FINAL (§13): absent -> no Host button (a surface that would make a no-ante room in the product). */
+  onHost?: () => void;
   onJoin: (code: string) => void;
   /** ==================================================================
    *   DESIGN NOTE 1137: THE ERROR HAD NO WAY TO BE WRONG ABOUT ITSELF
@@ -140,15 +141,17 @@ export function SandboxRoomBar({
           `:active` NEEDS A STYLESHEET, which is #46's standing exception. The class is applied only in bare
           mode, so the in-game bar keeps its own look untouched. */}
       <style>{zoomAwareMediaCss(BARE_BUTTON_CSS, uiScale)}</style>
-      <button
-        type="button"
-        className={bare ? "sandbox-bare-btn" : undefined}
-        style={bare ? styles.bareButton : styles.buttonPrimary}
-        onClick={onHost}
-        disabled={busy}
-      >
-        Host game
-      </button>
+      {onHost !== undefined ? (
+        <button
+          type="button"
+          className={bare ? "sandbox-bare-btn" : undefined}
+          style={bare ? styles.bareButton : styles.buttonPrimary}
+          onClick={onHost}
+          disabled={busy}
+        >
+          Host game
+        </button>
+      ) : null}
       {joining ? (
         <form
           style={styles.joinRow}

@@ -39,7 +39,8 @@ import {
 import { RULES_ENGINE_VERSION } from "../../../frontend/src/gameEngine/rulesVersion";
 import { parseClientFrame } from "../../../frontend/src/gameEngine/messageSchema";
 import type { ServerLogEntry } from "../../../frontend/src/utils/roomSession";
-import { apiRequest, BUILD, BUY, Client, controlledStore, devIdentity, probeSession, quietConsole, sleep, startServer, stopServer, until, type Frame } from "./testSupport";
+import { apiRequest, BUILD, BUY, Client, controlledStore, cookieFromAnswer, createAuthorization, devIdentity, probeSession, quietConsole, sleep, startServer, stopServer, until, type Frame } from "./testSupport";
+import { keplrAccount } from "../testSupport/authorizationWallets";
 import {
   GAME_ID_PATTERN,
   JOIN_CODE_ALPHABET,
@@ -750,24 +751,29 @@ describe("LIVE-2C create, join and seats", () => {
        let alone its first record. A failed creation writes nothing and opens nothing; the room-side activation is then
        a no-op, and a failed record write still leaves no record. */
     const identityStore = createMemoryIdentityStore();
-    const service = IdentityService.fromSnapshot(identityStore, { principals: [], sessions: [] });
+    const service = IdentityService.fromSnapshot(identityStore, { principals: [], sessions: [] }, { policy: { passwordKdf: { logN: 10, r: 1, p: 1 } } });
     const records = createMemoryRecordStore();
     const { server, port } = await serve({ records, identity: { mode: "production", allowedOrigins: [PROD_ORIGIN], trustedProxyHops: 0, service } });
     try {
-      const cookie = await prodCookie(port);
+      const temporary = await prodCookie(port);
       assert.equal(identityStore.snapshot().principals.length, 0, "a fresh guest is provisional: nothing durable yet");
       /* P3-ACCT (owner, 2026-10-05: public first): a signed-out browser MAY open a socket -- the public, read-only
          surface -- and doing so writes nothing durable; a room op on it is refused before any record is touched. */
-      const visitor = await prodSocket(port, cookie);
+      const visitor = await prodSocket(port, temporary);
       const refused = await visitor.op(CREATE());
       assert.equal(refused.code, "profile-required", "no table before a profile");
       assert.equal(identityStore.snapshot().principals.length, 0, "a visitor's socket activates nothing");
       assert.equal(records.records.size, 0);
       visitor.close();
+      /* PHASE 3 FINAL: an account is created with its Authorization Wallet's signature over this browser's CREATE text. */
+      const proof = await createAuthorization(port, temporary, "hana", keplrAccount("live2c/hana"), PROD_ORIGIN);
+      const createBody = { username: "hana", password: "correct horse battery", name: "Hana", ...proof };
       identityStore.failNext.push("definite");
-      assert.equal((await apiRequest(port, "/gs/api/profile", { cookie, body: { name: "Hana" }, origin: PROD_ORIGIN })).status, 503);
+      assert.equal((await apiRequest(port, "/gs/api/account/create", { cookie: temporary, body: createBody, origin: PROD_ORIGIN })).status, 503);
       assert.deepEqual(identityStore.snapshot(), { principals: [], sessions: [], profiles: [], links: [], families: [] }, "a refused creation writes nothing");
-      assert.equal((await apiRequest(port, "/gs/api/profile", { cookie, body: { name: "Hana" }, origin: PROD_ORIGIN })).status, 201);
+      const created = await apiRequest(port, "/gs/api/account/create", { cookie: temporary, body: createBody, origin: PROD_ORIGIN });
+      assert.equal(created.status, 201, created.text);
+      const cookie = cookieFromAnswer(created) as string;
       const afterCreate = identityStore.snapshot();
       assert.equal(afterCreate.principals.length, 1, "the profile made the principal durable");
       assert.ok(afterCreate.principals[0].activated_at !== null && afterCreate.principals[0].kind === "profile");

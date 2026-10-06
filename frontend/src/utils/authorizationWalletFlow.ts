@@ -45,7 +45,8 @@ function sentenceOf(failure: WalletFailure, doing: "connect" | "sign"): string {
     case "no-account":
       return "Keplr has no account for this network. Add one in Keplr, then try again.";
     default:
-      return failure.reason;
+      /* The adapter's own words are about LINKING a seat's wallet; an account action says what it is (review INFO). */
+      return doing === "sign" ? "Keplr couldn't sign the message. Nothing was changed — try again." : failure.reason;
   }
 }
 

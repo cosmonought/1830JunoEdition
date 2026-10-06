@@ -53,24 +53,87 @@ export interface TableAccountGuard {
 interface Baseline {
   readonly key: string;
   readonly name: string | null;
+  /** The page's own account changes when this baseline was set (`SessionPort.localChanges`). */
+  readonly local: number;
 }
 
-/** The guard for one open table. `active` is false for a Watch tab (nobody plays there) and before a table is open. */
-export function useTableAccountGuard(view: { state: SessionState; account: SessionAccount | null }, active: boolean): TableAccountGuard {
+/* Security review (L2): the baseline survives a reload of the table (a reload while the question is up, or after
+   another tab switched account, must still ask) -- per game, in this tab's sessionStorage (`1830juno.` namespace: a
+   stored key, not a label). Only the account KEY and its display name are kept; failures just mean "not kept". */
+const BASELINE_STORAGE_KEY = "1830juno.table_account.v1";
+const MAX_STORED_TABLES = 20;
+/** This tab's sessionStorage, where the page may use it (never `localStorage`: a baseline is this tab's). */
+const tabStorage = (): Storage | null => (typeof sessionStorage === "undefined" ? null : sessionStorage);
+
+function storedBaselines(): Record<string, { key: string; name: string | null }> {
+  try {
+    const raw = tabStorage()?.getItem(BASELINE_STORAGE_KEY) ?? null;
+    const parsed: unknown = raw === null ? null : JSON.parse(raw);
+    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, { key: string; name: string | null }>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function storedBaseline(gameId: string | null): { key: string; name: string | null } | null {
+  if (gameId === null) return null;
+  const entry = storedBaselines()[gameId];
+  return entry !== undefined && typeof entry.key === "string" && (entry.name === null || typeof entry.name === "string") ? entry : null;
+}
+
+function storeBaseline(gameId: string | null, baseline: { key: string; name: string | null }): void {
+  if (gameId === null) return;
+  try {
+    const all = storedBaselines();
+    delete all[gameId];
+    const kept = Object.entries(all).slice(-(MAX_STORED_TABLES - 1));
+    tabStorage()?.setItem(BASELINE_STORAGE_KEY, JSON.stringify(Object.fromEntries([...kept, [gameId, { key: baseline.key, name: baseline.name }]])));
+  } catch {
+    /* private browsing: the guard still works for this page's life */
+  }
+}
+
+/** The guard for one open table. `active` is false for a Watch tab (nobody plays there) and before a table is open.
+ *  `context.gameId` keys the persisted baseline; `context.localChanges` is the session port's count of account changes
+ *  THIS PAGE made -- a change it made itself (a sign-in through this tab's own "Log in" at this table) is the player's
+ *  own choice and is taken at once; only a change from ANOTHER tab is asked about. */
+export function useTableAccountGuard(
+  view: { state: SessionState; account: SessionAccount | null },
+  active: boolean,
+  context: { readonly gameId?: string | null; readonly localChanges?: number } = {},
+): TableAccountGuard {
   const key = tableAccountKey(view.state, view.account);
   const name = view.state === "ready" && view.account !== null ? view.account.name : null;
+  const gameId = context.gameId ?? null;
+  const local = context.localChanges ?? 0;
   const [baseline, setBaseline] = useState<Baseline | null>(null);
-  /* The first answer while the table is open is the account it was opened as. */
+  /* The first answer while the table is open is the account it was opened as -- unless this tab already opened this
+     table as someone (a reload): then that is the baseline. A change this page made itself is taken at once. */
   useEffect(() => {
     if (!active) {
       setBaseline(null);
       return;
     }
-    if (key !== null && baseline === null) setBaseline({ key, name });
-  }, [active, key, name, baseline]);
+    if (key === null) return;
+    if (baseline === null) {
+      const stored = storedBaseline(gameId);
+      const next = stored !== null ? { ...stored, local } : { key, name, local };
+      setBaseline(next);
+      if (stored === null) storeBaseline(gameId, next);
+      return;
+    }
+    if (key !== baseline.key && local > baseline.local) {
+      const next = { key, name, local };
+      setBaseline(next);
+      storeBaseline(gameId, next);
+    }
+  }, [active, key, name, baseline, gameId, local]);
   const accept = useCallback(() => {
-    if (key !== null) setBaseline({ key, name });
-  }, [key, name]);
-  const change = active && baseline !== null && key !== null && key !== baseline.key ? { from: baseline.name, to: name } : null;
+    if (key === null) return;
+    const next = { key, name, local };
+    setBaseline(next);
+    storeBaseline(gameId, next);
+  }, [key, name, gameId, local]);
+  const change = active && baseline !== null && key !== null && key !== baseline.key && !(local > baseline.local) ? { from: baseline.name, to: name } : null;
   return { change, accept };
 }

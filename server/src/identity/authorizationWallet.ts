@@ -108,11 +108,18 @@ export function createAuthorizationBook(options: { readonly appName: string; rea
 
   function prune(now: number): void {
     for (const [operation, entry] of byOperation) if (entry.op.expiresAt <= now) drop(operation);
-    /* Over the bound: the oldest go first (insertion order). */
-    for (const operation of [...byOperation.keys()]) {
-      if (byOperation.size <= max) break;
-      drop(operation);
+  }
+
+  /** Room for one more operation? Expired ones are gone (`prune`); then SPENT ones go, oldest first (they only answer a
+   *  replay "used"). An operation still OPEN or IN USE is never evicted to make room for someone else's (security review
+   *  L2: a flood of mints must not make another player's signed operation fail) -- the new mint is refused instead. */
+  function room(): boolean {
+    if (byOperation.size < max) return true;
+    for (const [operation, entry] of byOperation) {
+      if (byOperation.size < max) break;
+      if (entry.state === "spent") drop(operation);
     }
+    return byOperation.size < max;
   }
 
   const hex = (): string => random(16).toString("hex");
@@ -130,8 +137,12 @@ export function createAuthorizationBook(options: { readonly appName: string; rea
       readonly replaces: string | null;
       /** An upper bound on the expiry (REPLACE: the "Confirm it's you" grant it is minted under). */
       readonly notAfter?: number;
-    }, now: number): AuthorizationOperation {
+    }, now: number): AuthorizationOperation | null {
       prune(now);
+      /* This session's own open operation of this kind is replaced below: it never counts against the bound. */
+      const own = openBySession.get(slot(input.binding.sessionId, input.kind));
+      if (own !== undefined && byOperation.get(own)?.state === "open") drop(own);
+      if (!room()) return null;
       const expiresAt = Math.min(now + PROFILE_AUTHORIZATION_TTL_MS, input.notAfter ?? Number.MAX_SAFE_INTEGER);
       const operation = hex();
       const purposes: Array<{ readonly purpose: ProfileAuthorizationPurpose; readonly signer: string }> =
@@ -196,9 +207,11 @@ export function createAuthorizationBook(options: { readonly appName: string; rea
 
     /** A replacement committed: every open RECOVER naming this account, and every open replacement of this profile,
      *  dies now (issued under the old designation). Returns how many. */
-    purgeAccount(loginKey: string, profileId: string): number {
+    purgeAccount(loginKey: string, profileId: string, except?: string): number {
       let purged = 0;
       for (const [operation, entry] of [...byOperation]) {
+        /* The operation that caused the purge is spent by its caller (a replay of it then reads "used"). */
+        if (operation === except) continue;
         const recover = entry.op.kind === "recover" && entry.op.binding.loginKey === loginKey;
         const replace = entry.op.kind === "replace" && entry.op.binding.profileId === profileId;
         if ((recover || replace) && entry.state !== "spent") {

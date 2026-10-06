@@ -237,7 +237,9 @@ export type MintOutcome =
   | { kind: "bad-wallet" }
   | { kind: "username-taken" }
   /** REPLACE: the new wallet is the current one. */
-  | { kind: "same-wallet" };
+  | { kind: "same-wallet" }
+  /** Security review L2: the server holds as many live operations as it may; nobody's is evicted for this one. */
+  | { kind: "busy" };
 
 /** "Change password" (signed in): the CURRENT password, in the request (never a standing grant: a cookie stolen inside a
  *  sign-in's five minutes must not replace a credential). */
@@ -1343,6 +1345,7 @@ export class IdentityService {
       { kind: input.purpose, binding: { sessionId: session.session_id, familyId: session.family_id, loginKey, profileId: null, epoch: null }, site: input.site, account: name, wallet, replaces: null },
       now,
     );
+    if (op === null) return { kind: "busy" };
     return { kind: "ok", operation: op.operation, texts: op.texts.map(({ purpose, signer, text }) => ({ purpose, signer, text })), expiresAt: op.expiresAt };
   }
 
@@ -1375,6 +1378,7 @@ export class IdentityService {
       },
       now,
     );
+    if (op === null) return { kind: "busy" };
     return { kind: "ok", operation: op.operation, texts: op.texts.map(({ purpose, signer, text }) => ({ purpose, signer, text })), expiresAt: op.expiresAt };
   }
 
@@ -1775,7 +1779,7 @@ export class IdentityService {
             expect: [
               { kind: "profile-password", profile_id: updated.profile_id, password_hash: held.hash },
               { kind: "profile-selector", profile_id: updated.profile_id, recovery_selector: profile.recovery_selector },
-              { kind: "profile-wallet", profile_id: updated.profile_id, wallet_address: op.wallet },
+              { kind: "profile-authorization-wallet", profile_id: updated.profile_id, wallet_address: op.wallet, wallet_since: authority.since },
               { kind: "session-absent", session_id: fresh.session_id },
               ...newFamilies.map((family) => ({ kind: "family-absent" as const, family_id: family.family_id })),
               ...ended.map((session) => ({ kind: "session-open" as const, session_id: session.session_id })),
@@ -1830,6 +1834,9 @@ export class IdentityService {
     });
     if (outcome.kind === "unavailable") this.authorizations.release(op.operation);
     else this.authorizations.spend(op.operation);
+    /* Security review (INFO): a recovery ends every other open RECOVER of the account -- one the wallet already signed
+       elsewhere can no longer be answered after the password it would replace is gone. */
+    if (outcome.kind === "ok") this.authorizations.purgeAccount(op.binding.loginKey, found.profile_id, op.operation);
     return outcome;
   }
 
@@ -1863,7 +1870,7 @@ export class IdentityService {
         await this.commit(
           {
             expect: [
-              { kind: "profile-wallet", profile_id: updated.profile_id, wallet_address: current.address },
+              { kind: "profile-authorization-wallet", profile_id: updated.profile_id, wallet_address: current.address, wallet_since: current.since },
               { kind: "profile-selector", profile_id: updated.profile_id, recovery_selector: who.profile.recovery_selector },
               { kind: "family-open", family_id: who.session.family_id },
             ],
@@ -1887,7 +1894,7 @@ export class IdentityService {
       this.indexProfile(updated);
       /* Every open operation issued under the old designation dies NOW: a RECOVER naming this account (it would be
          refused anyway -- the wallet no longer matches) and any other replacement of this profile. */
-      this.authorizations.purgeAccount(loginOf(updated)?.key ?? "", updated.profile_id);
+      this.authorizations.purgeAccount(loginOf(updated)?.key ?? "", updated.profile_id, op.operation);
       this.stats.authorizationReplacements += 1;
       return { kind: "ok" as const, authorizationWallet: { address: op.wallet, since } };
     });

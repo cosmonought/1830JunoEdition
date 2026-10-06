@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import type { IdentityChange, IdentityPrecondition, IdentityStore, Profile } from "../../identity/store";
 import type { InspectableSigningJournal } from "../../escrow/signingJournal";
 import type { Gate } from "./faults";
-import { accountProfile, anotherSession, FIXTURE_PASSWORD_HASH, FIXTURE_PASSWORD_HASH_2, FIXTURE_WALLET, FIXTURE_WALLET_2, identitySet, type IdentitySet } from "./fixtures";
+import { accountProfile, anotherSession, authorizationProfile, FIXTURE_PASSWORD_HASH, FIXTURE_PASSWORD_HASH_2, FIXTURE_WALLET, FIXTURE_WALLET_2, identitySet, type IdentitySet } from "./fixtures";
 import { T0, hook, rejection, stalledAt, type CaseContext, type ConformanceCase, type SubjectBase } from "./harness";
 
 /* ================================================================== */
@@ -438,6 +438,36 @@ export const IDENTITY_CASES: readonly ConformanceCase<IdentitySubject>[] = [
       const reopened = await (await subject.open(ctx)).load();
       assert.deepEqual(reopened.profiles.find((profile) => profile.profile_id === b.profile.profile_id), replaced, "a restart loads the replaced wallet and the username");
       assert.deepEqual(reopened.profiles.find((profile) => profile.profile_id === a.profile.profile_id), accountA);
+    },
+  },
+  {
+    id: "ID-23",
+    title: "PHASE 3 FINAL: a schema-3 (Authorization Wallet) account loads back exactly; it never moves to or from the legacy schemas and never exists without its wallet; profile-authorization-wallet pins the designation (address AND since), so A -> B -> A cannot fool a stale replacement",
+    needs: ["validates-shape"],
+    async run(subject, ctx) {
+      const store = await subject.open(ctx);
+      await store.load();
+      const a = identitySet(41);
+      const accountA = authorizationProfile(a, { login: "Ana.Wallet", wallet: FIXTURE_WALLET, since: T0 });
+      await store.commit({ ...profileCreation(a), expect: [...(profileCreation(a).expect ?? []), { kind: "login-unused", login_key: "ana.wallet" }], profiles: [accountA] });
+      assert.deepEqual((await store.load()).profiles, [accountA], "the schema-3 record loads back field for field");
+      /* Never back to a legacy schema; never a legacy profile made into one; never one without its wallet. */
+      await refused(subject, ctx, store, { profiles: [accountProfile(a, { login: "Ana.Wallet", wallet: FIXTURE_WALLET })] }, "a schema-3 profile returned to schema 2");
+      const b = identitySet(42);
+      await store.commit(profileCreation(b));
+      await refused(subject, ctx, store, { profiles: [authorizationProfile(b, { login: "Legacy.Upgrade", wallet: FIXTURE_WALLET_2, since: T0 })] }, "a legacy profile given an Authorization Wallet");
+      await refused(subject, ctx, store, { profiles: [{ ...accountA, wallet_address: null, wallet_verified_at: null }] }, "a schema-3 profile without its wallet");
+      /* The designation's compare-and-swap. */
+      const toB = authorizationProfile(a, { login: "Ana.Wallet", wallet: FIXTURE_WALLET_2, since: T0 + 1 });
+      await refused(subject, ctx, store, { expect: [{ kind: "profile-authorization-wallet", profile_id: a.profile.profile_id, wallet_address: FIXTURE_WALLET, wallet_since: T0 + 7 }], profiles: [toB] }, "profile-authorization-wallet (the right wallet, another designation time)");
+      await refused(subject, ctx, store, { expect: [{ kind: "profile-authorization-wallet", profile_id: b.profile.profile_id, wallet_address: FIXTURE_WALLET, wallet_since: T0 }], profiles: [toB] }, "profile-authorization-wallet (a legacy profile holds no Authorization Wallet)");
+      await store.commit({ expect: [{ kind: "profile-authorization-wallet", profile_id: a.profile.profile_id, wallet_address: FIXTURE_WALLET, wallet_since: T0 }], profiles: [toB] });
+      const backToA = authorizationProfile(a, { login: "Ana.Wallet", wallet: FIXTURE_WALLET, since: T0 + 2 });
+      await store.commit({ expect: [{ kind: "profile-authorization-wallet", profile_id: a.profile.profile_id, wallet_address: FIXTURE_WALLET_2, wallet_since: T0 + 1 }], profiles: [backToA] });
+      /* A -> B -> A: a replacement decided against the FIRST designation of A is stale, though the address matches. */
+      await refused(subject, ctx, store, { expect: [{ kind: "profile-authorization-wallet", profile_id: a.profile.profile_id, wallet_address: FIXTURE_WALLET, wallet_since: T0 }], profiles: [authorizationProfile(a, { login: "Ana.Wallet", wallet: FIXTURE_WALLET_2, since: T0 + 1 })] }, "profile-authorization-wallet (A -> B -> A: a stale designation)");
+      const reopened = await (await subject.open(ctx)).load();
+      assert.deepEqual(reopened.profiles.find((profile) => profile.profile_id === a.profile.profile_id), backToA, "a restart loads the current designation");
     },
   },
   {

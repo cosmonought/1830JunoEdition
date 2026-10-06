@@ -17,6 +17,7 @@ import type { LinkCredential, Principal, Profile, Session, SessionFamily } from 
 import { createHash } from "crypto";
 
 import { familyIdOf, mintPrincipalId, mintProfileId, mintRecoveryKey, mintSecret, mintSessionId, secretHash } from "../../identity/ids";
+import { sealedRecoveryDigest } from "../../identity/accountCredentials";
 import { T0 } from "./harness";
 
 const B32 = "0123456789abcdefghjkmnpqrstvwxyz";
@@ -184,6 +185,22 @@ export interface IdentitySet {
   readonly session: Session;
   readonly family: SessionFamily;
   readonly link: LinkCredential;
+}
+
+/** PHASE 3 FINAL: the set's profile as an AUTHORIZATION WALLET account (schema 3): a username, a password hash, its
+ *  designated wallet and when it was designated, and the SEALED digest (the internal credential epoch; no key exists). */
+export function authorizationProfile(set: IdentitySet, over: { readonly login: string; readonly wallet: string; readonly since: number; readonly passwordHash?: string }): Profile {
+  return {
+    ...set.profile,
+    schema: 3,
+    recovery_hash: sealedRecoveryDigest(set.profile.recovery_selector),
+    login_key: over.login.normalize("NFKC").toLowerCase().normalize("NFKC"),
+    login_name: over.login,
+    password_hash: over.passwordHash ?? FIXTURE_PASSWORD_HASH,
+    password_set_at: T0,
+    wallet_address: over.wallet,
+    wallet_verified_at: over.since,
+  };
 }
 
 export function identitySet(n: number): IdentitySet {

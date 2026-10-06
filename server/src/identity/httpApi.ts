@@ -436,6 +436,9 @@ function answerMint(response: ServerResponse, minted: MintOutcome): void {
     case "profile-required":
       json(response, 403, { error: minted.kind });
       return;
+    case "busy":
+      json(response, 503, { error: "busy" }, retryAfter(5_000));
+      return;
     default:
       json(response, 401, { error: "not-authenticated" });
       return;
@@ -473,8 +476,8 @@ async function serveProfile(
   }
 
   /* PHASE 3 FINAL: the text a signed-out browser's wallet signs (CREATE / RECOVER). Minting writes nothing; a CREATE
-     says "username taken" before Keplr signs (account creation necessarily says so, under the creation budget it is
-     about to spend); a RECOVER looks nothing up. */
+     says "username taken" before Keplr signs (account creation necessarily says so) -- and that answer spends the
+     address's creation budget; a RECOVER looks nothing up. */
   if (pathname === ACCOUNT_AUTHORIZATION_PATH) {
     if (fields.purpose !== "create" && fields.purpose !== "recover") {
       json(response, 400, { error: "bad-request" });
@@ -487,7 +490,12 @@ async function serveProfile(
       const redeemWait = api.limiter.credentialRedeemsPerSession.peek(sessionId);
       if (redeemWait > 0) return tooMany(response, api, "credential-session", redeemWait);
     }
-    answerMint(response, api.identity.mintAuthorization(read, { purpose: fields.purpose, username: fields.username, wallet: fields.wallet, site: origin }, now));
+    const minted = api.identity.mintAuthorization(read, { purpose: fields.purpose, username: fields.username, wallet: fields.wallet, site: origin }, now);
+    /* Security review (M1): "username taken" tells whoever asks that an account exists. That answer is CHARGED to the
+       address's account-creation budget (5, then 10 an hour), so a stranger learns no more existing usernames than the
+       accounts it could create -- and once the budget is spent every CREATE mint from the address answers 429 above. */
+    if (fields.purpose === "create" && minted.kind === "username-taken") api.limiter.profileCreates.take(ip);
+    answerMint(response, minted);
     return;
   }
 

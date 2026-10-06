@@ -23,6 +23,8 @@ import { readSessionCookie, type SessionCookieRead } from "./cookies";
 import { IdentityService } from "./sessions";
 import { createMemoryIdentityStore, type Principal, type Profile, type Session, type SessionFamily } from "./store";
 import { createSessionVerifier, IdentityRecordUnreadableError, snapshotRecordReader, type IdentityRecordReader } from "./verifier";
+import { TEST_PASSWORD_KDF } from "../escrow/escrow4Support";
+import { createAccountWith, keplrAccount } from "../testSupport/authorizationWallets";
 
 const DAY = 24 * 60 * 60 * 1000;
 const T0 = 1_760_000_000_000;
@@ -46,18 +48,22 @@ function liveReader(store: ReturnType<typeof createMemoryIdentityStore>) {
 
 async function world() {
   const store = createMemoryIdentityStore();
-  const writer = await IdentityService.open(store);
+  const writer = await IdentityService.open(store, { policy: { passwordKdf: TEST_PASSWORD_KDF } });
   const { reader, reads } = liveReader(store);
   return { store, writer, verifier: createSessionVerifier(reader), reads };
 }
 
-async function profiled(writer: IdentityService, now: number, name = "Ann"): Promise<{ read: SessionCookieRead; key: string }> {
+/** PHASE 3 FINAL: an account (username, password, Authorization Wallet) -- `read` is the FRESH session the create signed
+ *  this browser in on. */
+async function profiled(writer: IdentityService, now: number, name = "Ann"): Promise<{ read: SessionCookieRead; username: string; password: string }> {
   const boot = await writer.bootstrap({ kind: "none" }, false, now);
   assert.equal(boot.kind, "ok");
-  const read = readOf((boot as { setCookie: string | null }).setCookie);
-  const created = await writer.createProfile(read, name, now);
+  const temporary = readOf((boot as { setCookie: string | null }).setCookie);
+  const username = name.toLowerCase();
+  const password = `${name} correct horse battery`;
+  const created = await createAccountWith(writer, temporary, { username, password, displayName: name, wallet: keplrAccount(`l6_1/${username}`) }, now);
   assert.equal(created.kind, "ok");
-  return { read, key: (created as { recoveryKey: string }).recoveryKey };
+  return { read: readOf((created as { setCookie: string }).setCookie), username, password };
 }
 
 /** The writer's answer to an upgrade (step 5 + 5b), in the verifier's terms. */
@@ -74,10 +80,10 @@ describe("L6-1 identity verifier: the writer's answers, from the durable records
     const bob = await profiled(writer, T0 + 1, "Bob");
     const cat = await profiled(writer, T0 + 2, "Cat");
     const dan = await profiled(writer, T0 + 3, "Dan");
-    /* Ann's phone: a second device by the recovery key (its own family). */
+    /* Ann's phone: a second device by logging in (its own family). PHASE 3 FINAL: the recovery key is gone. */
     const phoneBoot = await writer.bootstrap({ kind: "none" }, false, T0 + 4);
     const phoneTemp = readOf((phoneBoot as { setCookie: string }).setCookie);
-    const phone = readOf(((await writer.recover(phoneTemp, ann.key, T0 + 4)) as { setCookie: string }).setCookie);
+    const phone = readOf(((await writer.login(phoneTemp, { username: ann.username, password: ann.password }, T0 + 4)) as { setCookie: string }).setCookie);
     /* Bob's tab rotates after a week: the old cookie is rotated (grace for a day), the successor is current. */
     const bobRotatedAt = T0 + 8 * DAY;
     const bobNext = readOf(((await writer.bootstrap(bob.read, false, bobRotatedAt)) as { setCookie: string }).setCookie);
@@ -85,7 +91,7 @@ describe("L6-1 identity verifier: the writer's answers, from the durable records
     const catSession = cat.read.kind === "session" ? cat.read.sessionId : "";
     assert.equal(await writer.revoke(catSession, "logout", T0 + 9 * DAY), true);
     /* Ann signs out her other devices from her first browser: the phone's family is revoked. */
-    const reauth = await writer.reauthenticate(ann.read, ann.key, T0 + 9 * DAY);
+    const reauth = await writer.reauthenticateWithPassword(ann.read, ann.password, T0 + 9 * DAY);
     assert.equal(reauth.kind, "ok");
     const others = await writer.signOutOthers(ann.read, T0 + 9 * DAY);
     assert.equal(others.kind, "ok");

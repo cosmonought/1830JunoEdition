@@ -42,6 +42,8 @@ import { resolveServerConfig } from "./mode";
 import { isLoopbackHostHeader, originAllowed, parseAllowedOrigins } from "./origins";
 import { IdentityService } from "./sessions";
 import { createMemoryIdentityStore, IdentityStoreCorruptError } from "./store";
+import { createAccountWith, keplrAccount } from "../testSupport/authorizationWallets";
+import { TEST_PASSWORD_KDF } from "../escrow/escrow4Support";
 
 const DAY = 24 * 60 * 60 * 1000;
 const T0 = 1_750_000_000_000;
@@ -387,28 +389,38 @@ describe("LIVE-2B sessions (the service, on a stepped clock)", () => {
     assert.equal(identity.sizes().sessions, 0, "collected after the cookie's 180 days");
   });
 
-  test("LIVE-2E: createProfile binds THIS principal -- principal, sessions and profile in one commit; a refused commit changes nothing", async () => {
-    const { identity, store } = await service();
+  test("PHASE 3 FINAL: createAccount binds THIS principal -- principal, profile (with its Authorization Wallet) and a fresh session in one commit; a refused commit changes nothing", async () => {
+    /* LIVE-2E's `createProfile` (a display name only) is gone: an account is a username, a password and an
+       Authorization Wallet proven by a CREATE signature (testSupport/authorizationWallets.ts). */
+    const { identity, store } = await service({ passwordKdf: TEST_PASSWORD_KDF });
     const created = await identity.bootstrap({ kind: "none" }, false, T0);
     const read = readOf(created.kind === "ok" ? created.setCookie : null);
     const principalId = (identity.authenticate(read, T0) as { principalId: string }).principalId;
-    assert.deepEqual(await identity.createProfile(read, " padded", T0), { kind: "bad-name" }, "the service takes only a cleaned name");
+    const wallet = keplrAccount("identityUnits/ann");
+    const input = { username: "ann", password: "correct horse battery", wallet };
+    assert.deepEqual(await createAccountWith(identity, read, { ...input, displayName: " padded" }, T0), { kind: "bad-name" }, "the service takes only a cleaned name");
     store.failNext.push("definite");
-    assert.deepEqual(await identity.createProfile(read, "Ann", T0), { kind: "unavailable" });
+    assert.deepEqual(await createAccountWith(identity, read, { ...input, displayName: "Ann" }, T0), { kind: "unavailable" });
     assert.equal(identity.isProvisional(principalId), true, "still provisional");
     assert.equal(identity.isProfiled(principalId), false);
     assert.equal(store.stats.commits, 0);
-    assert.equal((await identity.createProfile(read, "Ann", T0 + 1)).kind, "ok");
+    const made = await createAccountWith(identity, read, { ...input, displayName: "Ann" }, T0 + 1);
+    assert.equal(made.kind, "ok");
     assert.equal(store.stats.commits, 1, "ONE commit");
     const snapshot = store.snapshot();
-    assert.deepEqual([snapshot.principals.length, snapshot.sessions.length, snapshot.profiles.length], [1, 1, 1]);
+    assert.deepEqual([snapshot.principals.length, snapshot.sessions.length, snapshot.profiles?.length], [1, 1, 1], "the provisional session was never written; the fresh one is");
     assert.equal(snapshot.principals[0].principal_id, principalId, "the browser's own principal -- never a new one");
     assert.equal(snapshot.principals[0].activated_at, T0 + 1);
+    assert.equal(snapshot.profiles?.[0].wallet_address, wallet.address, "the account is never written without its Authorization Wallet");
     assert.equal(identity.isProvisional(principalId), false);
     assert.equal(identity.profileName(principalId), "Ann");
-    assert.deepEqual(identity.accountView(principalId, read.kind === "session" ? read.sessionId : "", T0 + 1), { name: "Ann", otherSessions: 0 });
-    assert.deepEqual(await identity.createProfile(read, "Other", T0 + 2), { kind: "already-profiled", name: "Ann" });
-    assert.deepEqual(await identity.createProfile({ kind: "none" }, "Ann", T0), { kind: "not-authenticated" });
+    const fresh = made.kind === "ok" ? readOf(made.setCookie) : read;
+    assert.ok(fresh.kind === "session" && read.kind === "session" && fresh.sessionId !== read.sessionId, "a FRESH session (the temporary one is replaced)");
+    assert.equal(identity.currentSession(read, T0 + 1), null, "the temporary session opens nothing now");
+    assert.deepEqual(identity.accountView(principalId, fresh.kind === "session" ? fresh.sessionId : "", T0 + 1), { name: "Ann", otherSessions: 0, username: "ann" });
+    const unsigned = { operation: "0".repeat(32), pubKey: "", signature: "" };
+    assert.deepEqual(await identity.createAccount(fresh, { username: "other", password: "correct horse battery", displayName: "Other", authorization: unsigned }, T0 + 2), { kind: "already-profiled", name: "Ann" });
+    assert.deepEqual(await identity.createAccount({ kind: "none" }, { username: "other", password: "correct horse battery", displayName: "Ann", authorization: unsigned }, T0), { kind: "not-authenticated" });
     assert.equal(store.stats.commits, 1);
   });
 });

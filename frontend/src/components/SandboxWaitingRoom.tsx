@@ -47,7 +47,7 @@ import {
   waitingRoomBlock,
   waitingRoomNotice,
 } from "../utils/sandboxRoom";
-import type { RoomView, RoomVisibility } from "../utils/roomProtocol";
+import type { RoomOpResult, RoomView, RoomVisibility } from "../utils/roomProtocol";
 import { MIN_PLAYERS, certLimitForPlayers, startingCashForPlayers } from "../gameEngine/gameSetup";
 // #1415: the ante's figures and the subsidy line, the same ones the host's setup card showed.
 import { ANTE_SUBSIDY_NOTE, VISIBILITY_COPY } from "./HostSetupCard";
@@ -55,6 +55,8 @@ import { anteBreakdown, formatJuno } from "../utils/anteMath";
 import { SEAT_COLORS, SEAT_COLOR_NAMES, resolveSeatColors } from "../utils/playerLabels";
 import { MoneyPanel, StakeStrip, bpsText } from "./money/MoneyPanel";
 import { TableTrustFacts } from "./TrustFacts";
+import { ReportPlayerControl } from "./ReportPlayerControl";
+import type { ReportPlayerBody } from "../utils/conductApi";
 import { TermsLink } from "./InfoPages";
 import { amountText, fundingTag } from "../money/moneyFlow";
 import { type AudioControlsProps } from "./AudioControls";
@@ -143,6 +145,9 @@ export interface SandboxWaitingRoomProps {
   onTransferHost?: (playerId: string) => void;
   /** LIVE-2D, host only: close the table for everybody (`cancel-room`). */
   onCancelRoom?: () => void;
+  /** Phase 3 (P3-N032): a seated player reports another seat's conduct (`room-op report-player`). Absent: no control
+   *  (a Watch tab, a sandbox). The control itself shows only to a seated viewer with someone to report. */
+  onReport?: (body: ReportPlayerBody) => Promise<RoomOpResult>;
   /** ==================================================================
    *   DESIGN NOTE 1101: THE RADIO WAS ALREADY PLAYING HERE, WITH NOTHING TO PRESS
    *  ==================================================================
@@ -187,6 +192,7 @@ export function SandboxWaitingRoom({
   onRotateCode,
   onTransferHost,
   onCancelRoom,
+  onReport,
   audio,
 }: SandboxWaitingRoomProps) {
   /* Design note #1294: the chrome scale, live. */
@@ -924,6 +930,12 @@ export function SandboxWaitingRoom({
                   </p>
                 ) : null}
                 {money !== null && room !== null ? <TableTrustFacts gameId={room.gameId} players={players} /> : null}
+                {/* Phase 3 (P3-N032): report a player's conduct to the operator's review (seated viewers only). */}
+                {onReport !== undefined ? (
+                  <p style={{ margin: "4px 0 0", fontSize: "12px" }}>
+                    <ReportPlayerControl room={room} onReport={onReport} />
+                  </p>
+                ) : null}
 
                 {/* #1445: with no optional rules there is no right region at all -- an empty rail and a
                     divider around the word "None" is half a surface reserved for an absence. The fact is

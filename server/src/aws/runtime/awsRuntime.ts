@@ -144,6 +144,7 @@ import { thisDeploymentCapability } from "../../deploymentCapability";
 import type { OpsRecorder } from "../../persistence/opsRecorder";
 import { seatOf } from "../../rooms/gameRecord";
 import type { HoldStore } from "../../rooms/holdStore";
+import type { ConductCaseStore } from "../../conduct/conductStore";
 import type { RecordStore } from "../../rooms/recordStore";
 import { NoMoneyRosterSource } from "../../rooms/roomService";
 import type { WriterFence } from "../game/gameTable";
@@ -216,6 +217,9 @@ export interface AwsGameStores {
   readonly readLogFormat: (gameId: string) => Promise<FormatFact>;
   readonly records: RecordStore;
   readonly holds: HoldStore;
+  /** Phase 3 (P3-N032): conduct reports' durable review cases (`CONDUCT#<case>` items, pool-fenced). Optional: a substrate
+   *  without one refuses every report `unavailable` (never keeps them in memory only). */
+  readonly conduct?: ConductCaseStore;
   /** LIVE-6 L6-7: `openMoneyGameIds` -- every OPEN money game (FINKEYS -> FINIDX#, strict): what the escrow load and its
    *  chain sweep visit, instead of every money game ever made. */
   readonly financial: FinancialGameStore & OpenMoneyGames & { openMoneyGameIds(): Promise<string[]> };
@@ -321,6 +325,8 @@ export interface AwsRuntimeInput<W extends PoolWriterPort, L extends Inspectable
   readonly bindHost: string;
   /** `ESCROW_MONEY_TABLES` (as in PROCESS mode). */
   readonly moneySwitch: string | undefined;
+  /** Phase 3 (P3-N032): the canonical login keys of the accounts that may review conduct reports (`GS_CONDUCT_REVIEWERS`). */
+  readonly conductReviewers?: ReadonlySet<string>;
   /** LIVE-6 L6-6: mount `/gs/diag/edge` (`GS_EDGE_DIAGNOSTIC=staging`, checked by `awsMain.ts`; never beside a mainnet
    *  escrow configuration). Absent or false: no such route. */
   readonly edgeDiagnostic?: boolean;
@@ -1129,6 +1135,8 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
       legacyLogs: "refuse",
       onRestartRequired: (room, detail) => failFast(room, detail, "game"),
       holds: stores.holds,
+      /* Phase 3 (P3-N032): conduct reports, in the game table, pool-fenced (`aws/game/dynamoConductStore.ts`). */
+      conduct: { store: stores.conduct ?? null, reviewers: input.conductReviewers ?? new Set<string>() },
       ops: input.ops,
       statusExtras,
       ownership,

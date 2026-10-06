@@ -44,7 +44,8 @@ export type RoomOp =
   | "presence"
   | "kick"
   | "transfer-host"
-  | "cancel-room";
+  | "cancel-room"
+  | "report";
 
 export interface AuthzContext {
   /** `null`: no such game. */
@@ -101,6 +102,10 @@ export const AUTHZ_TABLE: Readonly<Record<RoomOp, { stages: Partial<Record<Stage
   kick: { stages: { W: R("H") }, denial: "forbidden" },
   /* #24 transfer host: the host, waiting or active (held included: it never interprets the log). */
   "transfer-host": { stages: { W: R("H"), A: R("H"), Hd: R("H") }, denial: "forbidden" },
+  /* Phase 3 (P3-N032): report another seat's conduct to the operator's review -- seated only (a watcher, a visitor,
+     an outsider or a kicked principal holds no seat and references no one at the table), in every stage a seat exists:
+     waiting (the anteroom's chat), active, completed and held. Gone tables are `gone`, as for every op. */
+  report: { stages: { W: R("S", "H"), A: R("S", "H"), C: R("S", "H"), Hd: R("S", "H") }, denial: "forbidden" },
 });
 
 /** The caller's role in this game, from the record alone. */

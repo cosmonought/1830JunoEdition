@@ -24,7 +24,9 @@ import { runCase, type Capability, type ConformanceCase, type SubjectBase } from
 import { IDENTITY_CASES, JOURNAL_CASES } from "./identityJournal.conformance";
 import { LOG_CASES } from "./logStore.conformance";
 import { HOLD_CASES, RECORD_CASES } from "./roomStores.conformance";
+import { CONDUCT_CASES } from "./conductStore.conformance";
 import {
+  fileConductSubject,
   fileFinancialSubject,
   fileHoldSubject,
   fileIntentSubject,
@@ -89,4 +91,12 @@ describe("L5-2: the condition inside the write (create-if-absent / CAS / next in
   pin("financial record (create)", fileFinancialSubject, FINANCIAL_CASES, "FIN-19", "cas-in-write");
   pin("chain intent (create)", fileIntentSubject, INTENT_CASES, "INT-16", "cas-in-write");
   pin("wallet ticket (first ledger)", fileTicketSubject, TICKET_CASES, "TKT-14", "cas-in-write");
+});
+
+/* Phase 3 (P3-N032): the conduct-case port -- both of its fence-inside-the-write operations, and its CAS races. */
+describe("Phase 3 (P3-N032): the conduct-case port, pinned against its file store", () => {
+  pin("conduct case (decision)", fileConductSubject, CONDUCT_CASES, "CND-13");
+  pin("conduct case (create)", fileConductSubject, CONDUCT_CASES, "CND-13-create");
+  pin("conduct case (two reviewers)", fileConductSubject, CONDUCT_CASES, "CND-15", "cas-in-write");
+  pin("conduct case (two tabs)", fileConductSubject, CONDUCT_CASES, "CND-16", "cas-in-write");
 });

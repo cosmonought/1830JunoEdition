@@ -92,6 +92,9 @@ import {
 import { createMoneyLimiter, handleMoneyHttp } from "./escrow/moneyHttpApi";
 import { createTrustFacts } from "./rooms/trustFacts";
 import { createTrustLimiter, handleTrustHttp } from "./rooms/trustHttpApi";
+import { createConductService } from "./conduct/conductService";
+import type { ConductCaseStore } from "./conduct/conductStore";
+import { createConductLimiter, handleConductHttp } from "./conduct/conductHttpApi";
 import type { MoneyTables } from "./escrow/moneyTables";
 import type { EscrowGameplaySeam } from "./rooms/roomHost";
 import { reconcileLoaded } from "./rooms/reconcile";
@@ -159,6 +162,7 @@ import {
   excerpt,
   resolveLimits,
   type BucketName,
+  type BucketSpec,
   type IngressLimitOverrides,
 } from "./ingress/limits";
 
@@ -275,6 +279,10 @@ export interface GameServerOptions {
   holds?: HoldStore;
   /** LIVE-3C: the audit lines and the status snapshot (`persistence/opsRecorder.ts`). Nothing when absent. */
   ops?: OpsRecorder;
+  /** Phase 3 (P3-N032): conduct reports. `store`: the durable case store (`start.ts` the file store, the AWS runtime the
+   *  DynamoDB one); absent or null, every report is refused `unavailable` (never kept in memory only). `reviewers`: the
+   *  canonical login keys of the accounts that may open the review panel (`GS_CONDUCT_REVIEWERS`; none when absent). */
+  conduct?: { readonly store: ConductCaseStore | null; readonly reviewers?: ReadonlySet<string>; readonly reporterBudget?: BucketSpec };
   /** LIVE-3C: the terminal seam ESCROW-3 plugs into (`rooms/lifecycle.ts`). No-money when absent. */
   settlement?: SettlementLifecycle;
   /** LIVE-4 (L4-2): THIS POOL'S DEPLOYMENT CAPABILITY, built once at startup (`start.ts`: `thisDeploymentCapability` over
@@ -1374,8 +1382,19 @@ export function createGameServer(options: GameServerOptions): {
   /* ==================================================================
       LIVE-2C: THE SERVER-OWNED ROOM AUTHORITY (rooms/roomHost.ts)
      ================================================================== */
+  /* Phase 3 (P3-N032): conduct reports -- their own durable store, read by reviewers only, writing nothing else. */
+  const conduct = createConductService({
+    store: options.conduct?.store ?? null,
+    build: options.build,
+    now: identityNow,
+    // eslint-disable-next-line no-console
+    warn: (line) => console.warn(line),
+    ...(options.ops !== undefined ? { ops: options.ops } : {}),
+    ...(options.conduct?.reporterBudget !== undefined ? { reporterBudget: options.conduct.reporterBudget } : {}),
+  });
   const host: RoomHost = createRoomHost({
     build: options.build,
+    conduct,
     /* LIVE-5 L5-3: under POOL ownership the startup discovery writes nothing (it runs before any claim). */
     ...(pooled ? { discoveryReadOnly: true } : {}),
     records: recordStore,
@@ -1481,6 +1500,21 @@ export function createGameServer(options: GameServerOptions): {
   const moneyLimiter = createMoneyLimiter(identityNow);
   /* P3-ACCT: `/gs/api/trust/*` -- factual trust indicators, derived from the durable records (`rooms/trustFacts.ts`). */
   const trustLimiter = createTrustLimiter(identityNow);
+  /* Phase 3 (P3-N032): `/gs/api/conduct/*` -- the review routes (reviewers only; reporting is the table's room op). */
+  const conductLimiter = createConductLimiter(identityNow);
+  const conductReviewers: ReadonlySet<string> = options.conduct?.reviewers ?? new Set<string>();
+  /** A game's committed log, for re-verifying a case's pointer: through the registry like any reader's load; a game this
+   *  pool cannot serve (held, incompatible, routed elsewhere) answers null -- "cannot be verified here now". */
+  const committedLogOf = async (gameId: string) => {
+    try {
+      const actor = await games.get(gameId);
+      const view = actor.view;
+      if (view.record === null || view.incompatible !== null || isMaintenanceHold(view.hold)) return null;
+      return view.entries;
+    } catch {
+      return null;
+    }
+  };
   const trustFacts = createTrustFacts({
     profileFacts: (principalId) => (principalId.startsWith(DEV_PRINCIPAL_PREFIX) ? null : identity.trustProfileFacts(principalId)),
     tablesOf: (principalId) => host.tablesOf(principalId),
@@ -1535,6 +1569,31 @@ export function createGameServer(options: GameServerOptions): {
           },
         },
         trustLimiter,
+      )
+    ) {
+      return;
+    }
+    if (
+      handleConductHttp(
+        req,
+        res,
+        {
+          allowedOrigins,
+          trustedProxyHops: identityOptions.trustedProxyHops,
+          identity,
+          maxBodyBytes: limits.identity.maxApiBodyBytes,
+          now: identityNow,
+          service: conduct,
+          reviewers: conductReviewers,
+          readLog: committedLogOf,
+          onError: (what, error) => {
+            const ref = errorRef();
+            // eslint-disable-next-line no-console
+            console.error(`  conduct: ${what} failed (ref ${ref}) -- ${excerpt(error instanceof Error ? error.message : String(error), 300)}`);
+            return ref;
+          },
+        },
+        conductLimiter,
       )
     ) {
       return;

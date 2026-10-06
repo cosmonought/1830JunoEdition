@@ -20,6 +20,7 @@ import React from "react";
 
 import { NativeModal } from "./NativeModal";
 import { RulesReference } from "./RulesReference";
+import { ConductReviewPanel } from "./ConductReviewPanel";
 import { closeInfoPage, openInfoPage, useInfoPage } from "../utils/infoPages";
 import { profileStyles as styles } from "./profileStyles";
 import { SANDBOX_PANEL, SANDBOX_INK, SANDBOX_RULE, SANDBOX_TEXT } from "../styles/palette";
@@ -75,6 +76,7 @@ export function InfoPagesHost(): JSX.Element | null {
   const page = useInfoPage();
   if (page === "terms") return <TermsPage onClose={closeInfoPage} />;
   if (page === "rules") return <RulesPage onClose={closeInfoPage} />;
+  if (page === "conduct-review") return <ConductReviewPanel onClose={closeInfoPage} />;
   return null;
 }
 

@@ -228,7 +228,7 @@ describe("the profile menu (LIVE-2E)", () => {
       { recoveryKey: "rk_wrong" },
       { recoveryKey: OLD },
     ]);
-    expect(server.calls.map((call) => call.path).filter((path) => path !== "/gs/api/session" && path !== "/gs/api/account/me" && path !== "/gs/api/trust/me")).toEqual([
+    expect(server.calls.map((call) => call.path).filter((path) => path !== "/gs/api/session" && path !== "/gs/api/account/me" && path !== "/gs/api/trust/me" && path !== "/gs/api/conduct/me")).toEqual([
       "/gs/api/profile/recovery-key",
       "/gs/api/profile/reauth",
       "/gs/api/profile/reauth",

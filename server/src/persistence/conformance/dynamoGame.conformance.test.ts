@@ -37,6 +37,9 @@ import { createDynamoHoldStore } from "../../aws/game/dynamoHoldStore";
 import { createDynamoFinancialStore, financialIdentityKey } from "../../aws/game/dynamoFinancialStore";
 import { createDynamoIntentStore } from "../../aws/game/dynamoIntentStore";
 import { createDynamoTicketStore } from "../../aws/game/dynamoTicketStore";
+import { createDynamoConductStore } from "../../aws/game/dynamoConductStore";
+import { CONDUCT_CASE_FORMAT } from "../../conduct/conductCase";
+import { CONDUCT_CASES, type ConductSubject } from "./conductStore.conformance";
 import type { ResendTiming } from "../../aws/game/transact";
 import { createFileLogStore } from "../../fileLogStore";
 import { CHAIN_INTENT_FORMAT, confirmedIntent, heldIntent } from "../../escrow/chainIntents";
@@ -465,6 +468,30 @@ runConformance("hold", [dynamoHoldSubject], HOLD_CASES);
 runConformance("financial record", [dynamoFinancialSubject], FINANCIAL_CASES);
 runConformance("chain intent", [dynamoIntentSubject], INTENT_CASES);
 runConformance("wallet ticket", [dynamoTicketSubject], TICKET_CASES);
+
+/* ---- Phase 3 (P3-N032): conduct review cases (`CONDUCT#<case>/CASE`, POOL-fenced: no game is claimed for them) ---- */
+
+const conductHooks = faultHooks((_ctx, caseId) => names(`CONDUCT#${caseId}`, "CASE"));
+
+const dynamoConductSubject: ConductSubject = {
+  name: "dynamodb (createDynamoConductStore)",
+  backend: "dynamodb",
+  capabilities: [...DYNAMO_CAPABILITIES, "validates-shape"],
+  async open(ctx) {
+    return createDynamoConductStore(await options(ctx));
+  },
+  async stored(ctx, caseId) {
+    return body(ctx, `CONDUCT#${caseId}`, "CASE");
+  },
+  async plant(ctx, caseId, what) {
+    if (what === "corrupt") await putRaw(ctx, { pk: S(`CONDUCT#${caseId}`), sk: S("CASE"), body: S(`{"format":"${CONDUCT_CASE_FORMAT}",`) });
+    else await putRaw(ctx, { pk: S(`CONDUCT#${caseId}`), sk: S("CASE"), body: S(JSON.stringify({ format: CONDUCT_CASE_FORMAT, version: 99, case_id: caseId })), revision: N(1) });
+    await putRaw(ctx, { pk: S("LIST#conduct"), sk: S(caseId), case_id: S(caseId) });
+  },
+  ...conductHooks,
+};
+
+runConformance("conduct case", [dynamoConductSubject], CONDUCT_CASES);
 
 /* ================================================================== */
 /*  2-3. What only a DynamoDB adapter can be asked                     */

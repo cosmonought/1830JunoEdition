@@ -30,6 +30,7 @@ import { GAME_ID_PATTERN } from "../../rooms/gameRecord";
 import { createDynamoDbClient, createKmsClient } from "../awsClients";
 import { createDynamoFinancialStore } from "../game/dynamoFinancialStore";
 import { createDynamoHoldStore } from "../game/dynamoHoldStore";
+import { createDynamoConductStore } from "../game/dynamoConductStore";
 import { createDynamoIntentStore } from "../game/dynamoIntentStore";
 import { createDynamoLogStore } from "../game/dynamoLogStore";
 import { createDynamoRecordStore } from "../game/dynamoRecordStore";
@@ -135,6 +136,8 @@ export function realAwsSubstrate(options: AwsSubstrateOptions): AwsSubstrate<Poo
         },
         records: createDynamoRecordStore(base),
         holds: createDynamoHoldStore(base),
+        /* Phase 3 (P3-N032): conduct reports' review cases (`CONDUCT#<case>`), under this task's POOL fence. */
+        conduct: createDynamoConductStore(base),
         financial: createDynamoFinancialStore(base),
         tickets: createDynamoTicketStore(base),
         intents: relayQueue === null ? null : createDynamoIntentStore({ ...base, relayQueue }),

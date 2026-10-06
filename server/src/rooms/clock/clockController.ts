@@ -451,7 +451,7 @@ export function createClockController(deps: ClockControllerDeps) {
       entry.timer = timers.set(() => {
         entry.timer = null;
         void deps.runOn(entry.gameId, "clock", (game, tx) => tick(game, tx)).catch((error) => deps.warn(`  clock: ${entry.gameId}: a timed transition failed -- ${describe(error)}`));
-      }, Math.min(MAX_TIMER_MS, Math.max(0, due - now()) + 1));
+      }, Math.min(MAX_TIMER_MS, Math.max(0, due - now())));
     }
     const every = record.policy.class === "live" ? CLOCK_HEARTBEAT_LIVE_MS : CLOCK_HEARTBEAT_ASYNC_MS;
     entry.beat = timers.set(() => {

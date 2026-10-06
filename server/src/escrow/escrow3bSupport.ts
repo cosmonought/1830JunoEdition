@@ -136,6 +136,8 @@ export interface WorldOptions {
   readonly remedyGate?: Parameters<typeof createEscrowService>[0]["remedyGate"];
   /** FP4: more trusted resolver addresses beside the deployment's own (a test makes a player's wallet one). */
   readonly extraResolvers?: readonly string[];
+  /** Phase 3 final clocks: the table's recorded deadline class (`EscrowServiceDeps.tableDeadline`; default none). */
+  readonly tableDeadline?: Parameters<typeof createEscrowService>[0]["tableDeadline"];
 }
 
 export const proofKey = (gameId: string, playerId: string, principalId: string) => `${gameId}|${playerId}|${principalId}`;
@@ -239,6 +241,7 @@ export function makeWorld(options: WorldOptions = {}): World {
       ...(options.continuation !== undefined ? { continuation: options.continuation } : {}),
       ...(options.openGames !== undefined ? { openGames: options.openGames } : {}),
       ...(options.remedyGate !== undefined ? { remedyGate: options.remedyGate } : {}),
+      ...(options.tableDeadline !== undefined ? { tableDeadline: options.tableDeadline } : {}),
     });
     const seam = options.relayerSeam?.() ?? {};
     relayer = createJunoRelayer({

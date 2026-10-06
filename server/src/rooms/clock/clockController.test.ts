@@ -1,0 +1,213 @@
+// server/src/rooms/clock/clockController.test.ts
+//
+// PHASE 3 FINAL CLOCKS: the controller (`clockController.ts`) over a REAL engine session -- a legal phase-3 Operating
+// board (`offerFixtures74.ts`) where PRR's president (p1) may offer to buy NYC's (p2) or C&O's (p3) trains -- on
+// controlled time. What only real offers prove: the Live train-offer response timer freezes the proposer's clock
+// exactly; an unanswered offer is CLOSED BY THE SERVER at 10:00 (the proposer's rescission, stamped at the exact
+// moment) and the proposer resumes exactly what was left; a rejection or an expiry counts toward the two-decline
+// limit per direction per Operating Round; the third proposal in one direction is refused with the owner's sentence
+// while another direction stays open; an answer that arrives after the response time ended is refused (the offer
+// is gone) rather than accepted late.
+
+import { describe, test } from "node:test";
+import assert from "node:assert/strict";
+
+import { operatingBoard, P1, P2, P3, NYC, CO, PRR } from "../../../../frontend/src/utils/offerFixtures74";
+import { sandboxReplayProviders } from "../../../../frontend/src/gameEngine/replayProviders";
+import type { SandboxLogMsg } from "../../../../frontend/src/gameEngine/gameSetup";
+import { RoomSession, type ServerLogEntry } from "../../../../frontend/src/utils/roomSession";
+import type { MapGridResponse } from "../../../../frontend/src/components/hexContractTypes";
+import { CLOCK_REFUSAL, declinesReachedSentence } from "../../../../frontend/src/utils/clockProtocol";
+import { createMemoryOpsRecorder } from "../../persistence/opsRecorder";
+import type { GameActor, Tx } from "../gameActor";
+import { createClockController, rescindExpiredOffer, type GateResult } from "./clockController";
+import { createMemoryClockStore } from "./clockStore";
+import { fakeTime } from "./clockTestSupport";
+import { LIVE_ACTION_MS, LIVE_TRADE_MS } from "./clockRecord";
+
+const SEC = 1_000;
+const MIN = 60 * SEC;
+const T0 = 1_780_000_000_000;
+const GAME = "g_00000000000000000000000020";
+const GRID = { game_id: 1, tiles: [] } as unknown as MapGridResponse;
+
+const proposeTrain = (seller: number, model: string, price: string) => ({
+  ProposeTrainPurchase: { game_id: 1, seller_protocol_id: seller, seller_ticker: "x", seller_president: null, buyer_protocol_id: PRR, buyer_ticker: "PRR", model_type: model, price },
+});
+const answerTrain = (seller: number, accept: boolean) => ({ AnswerTrainPurchase: { game_id: 1, seller_protocol_id: seller, accept } });
+
+function harness() {
+  const time = fakeTime(T0);
+  let stamp: number | null = null;
+  const stampAt = <T>(at: number, fn: () => T): T => {
+    const prior = stamp;
+    stamp = at;
+    try {
+      return fn();
+    } finally {
+      stamp = prior;
+    }
+  };
+  let minted = 0;
+  const room = new RoomSession({
+    providers: { ...sandboxReplayProviders(), initialGrid: GRID },
+    seed: { state: operatingBoard(), waterfall: null },
+    build: "b",
+    mintId: () => `m${(minted += 1)}`,
+    now: () => stamp ?? time.now(),
+  });
+  const game = {
+    gameId: GAME,
+    get view() {
+      return { entries: room.entries, record: { variants: { mode: "live" }, money: null } };
+    },
+  } as unknown as GameActor;
+  const tx = { session: room } as unknown as Tx;
+  const ops = createMemoryOpsRecorder();
+  const store = createMemoryClockStore();
+  let chain: Promise<unknown> = Promise.resolve();
+  /* The game's serialization: every task (a submit, a timer, an op) runs alone, in order. */
+  const serial = <T>(task: () => Promise<T>): Promise<T> => {
+    const run = chain.then(task, task);
+    chain = run.catch(() => undefined);
+    return run;
+  };
+  const clock = createClockController({
+    store,
+    authority: "auth-1",
+    now: time.now,
+    timers: time.timers,
+    ops,
+    warn: () => undefined,
+    runOn: (_gameId, _label, task) => serial(() => task(game, tx)).then(() => true),
+    onChange: () => undefined,
+    serving: () => true,
+    closeOffer: async (_game, _tx, input) => {
+      const closed = rescindExpiredOffer(room, { proposer: input.proposer, at: input.at, build: "b", host: P1, hostUndo: "last-action" }, stampAt);
+      if (!closed.ok) return closed;
+      return { ok: true, first: closed.batch[0].index, last: closed.batch[closed.batch.length - 1].index, before: closed.before, after: closed.after };
+    },
+  });
+
+  /** A submit exactly as `gameServer.submitOnActor` runs it: gate, speculate stamped at the gate's time, fold. */
+  const submit = (actor: string, msg: object) =>
+    serial(async () => {
+      const gate = await clock.gateSubmit(game, tx, { actor, msg });
+      if (!gate.ok) return gate;
+      const start = room.entries.length;
+      const answer = stampAt(gate.now, () => room.submit({ actor, build: "b", host: P1, msg: msg as SandboxLogMsg, baseIndex: room.nextIndex - 1 }));
+      if (answer.kind !== "applied") return { ok: false as const, code: answer.kind, reason: (answer as { reason?: string }).reason ?? "" };
+      const batch = room.entries.slice(start);
+      await clock.afterCommit(game, { gate: gate as GateResult, actor, batch, board: room.state });
+      return { ok: true as const, at: batch[0]?.at };
+    });
+
+  const deal = () =>
+    serial(async () => {
+      const batch: ServerLogEntry[] = [{ index: 0, id: "deal", actor: P1, payload: "{}", at: T0 } as ServerLogEntry];
+      await clock.afterCommit(game, { gate: { ok: true, now: T0, before: null, cls: "deal", revertTarget: null }, actor: P1, batch, board: room.state });
+    });
+
+  const record = () => {
+    const r = clock.recordOf(GAME);
+    assert.ok(r !== null);
+    return r;
+  };
+  const remaining = () => {
+    const ob = record().obligation;
+    assert.ok(ob?.timer);
+    return ob.timer.since === null ? ob.timer.remaining_ms : ob.timer.remaining_ms - (time.now() - ob.timer.since);
+  };
+  return { time, room, clock, ops, store, submit, deal, record, remaining, serial };
+}
+
+describe("Live train offers through the controller (real engine offers)", () => {
+  test("a valid offer freezes the proposer exactly and gives the recipient a distinct 10:00; unanswered, the SERVER closes it at 10:00 and the proposer resumes exactly", async () => {
+    const h = harness();
+    await h.deal();
+    assert.deepEqual([h.record().obligation?.seat, h.remaining()], [P1, LIVE_ACTION_MS]);
+    await h.time.advance(4 * MIN + 30 * SEC);
+    const proposed = await h.submit(P1, proposeTrain(NYC, "2", "50"));
+    assert.equal(proposed.ok, true, JSON.stringify(proposed));
+    const r = h.record();
+    assert.deepEqual([r.obligation?.seat, r.obligation?.trade?.proposer, h.remaining()], [P2, P1, LIVE_TRADE_MS], "the recipient's distinct response timer");
+    assert.deepEqual(r.parked, [{ seat: P1, offer_key: r.parked[0].offer_key, remaining_ms: 15 * MIN + 30 * SEC }], "the proposer's 15:30 frozen exactly");
+    const view = h.clock.viewOf(GAME);
+    assert.equal(view?.state, "trade");
+    assert.deepEqual([view?.trade?.proposer, view?.trade?.recipient, view?.trade?.respond.remainingMs, view?.trade?.proposerRemainingMs], [P1, P2, LIVE_TRADE_MS, 15 * MIN + 30 * SEC]);
+    await h.time.advance(LIVE_TRADE_MS);
+    await h.serial(async () => undefined);
+    const after = h.record();
+    assert.equal(h.room.state.train_purchase_offer ?? null, null, "the offer was closed in the log");
+    const rescind = h.room.entries.find((e) => e.payload.includes("RescindTrainPurchase"));
+    assert.ok(rescind, "the server's own rescission is in the log");
+    assert.equal(rescind.at, T0 + 4 * MIN + 30 * SEC + LIVE_TRADE_MS, "stamped at the exact moment the response time ended");
+    assert.equal(rescind.actor, P1, "as the proposer's rescission");
+    assert.deepEqual([after.obligation?.seat, h.remaining()], [P1, 15 * MIN + 30 * SEC], "the proposer resumes exactly what was left");
+    assert.deepEqual(after.strikes, {}, "an expiry is no strike");
+    assert.equal(after.phase, "active", "an expiry is never an overdue");
+    assert.equal(after.declines.counts[`${P1}>${P2}`], 1, "an expiry counts as a decline");
+    assert.ok(after.undo_floor >= rescind.index, "no undo may resurrect the expired offer");
+    assert.ok(h.ops.lines.some((line) => line.event === "clock.trade-end"));
+  });
+
+  test("an answer that arrives after the response time ended is refused (the offer is gone), never accepted late", async () => {
+    const h = harness();
+    await h.deal();
+    await h.submit(P1, proposeTrain(NYC, "2", "50"));
+    h.time.jump(LIVE_TRADE_MS + 1); // the timer did not get to run first
+    const late = await h.submit(P2, answerTrain(NYC, true));
+    assert.equal(late.ok, false);
+    assert.equal((late as { code: string }).code, CLOCK_REFUSAL.stale);
+    assert.equal(h.room.state.train_purchase_offer ?? null, null);
+    assert.deepEqual(h.record().obligation?.seat, P1);
+  });
+
+  test("two declines (a rejection, an expiry) per direction per Operating Round; the third proposal is refused with the owner's sentence; another direction stays open", async () => {
+    const h = harness();
+    await h.deal();
+    await h.submit(P1, proposeTrain(NYC, "2", "50"));
+    await h.time.advance(MIN);
+    const rejected = await h.submit(P2, answerTrain(NYC, false));
+    assert.equal(rejected.ok, true, JSON.stringify(rejected));
+    assert.deepEqual([h.record().obligation?.seat, h.remaining()], [P1, LIVE_ACTION_MS], "the rejection completed p2's decision; p1 owes the next one");
+    assert.equal(h.record().declines.counts[`${P1}>${P2}`], 1);
+    await h.submit(P1, proposeTrain(NYC, "2", "60"));
+    await h.time.advance(LIVE_TRADE_MS);
+    await h.serial(async () => undefined);
+    assert.equal(h.record().declines.counts[`${P1}>${P2}`], 2, "the expiry is the second decline");
+    const third = await h.submit(P1, proposeTrain(NYC, "2", "70"));
+    assert.equal(third.ok, false);
+    assert.equal((third as { code: string }).code, CLOCK_REFUSAL.declines);
+    assert.equal((third as { reason: string }).reason, declinesReachedSentence(P2));
+    const other = await h.submit(P1, proposeTrain(CO, "3", "100"));
+    assert.equal(other.ok, true, `another direction is open: ${JSON.stringify(other)}`);
+    assert.equal(h.record().obligation?.seat, P3);
+  });
+
+  test("an accepted offer refreshes the proposer's allowance (a completed trade is progress); a rescission resumes exactly", async () => {
+    const h = harness();
+    await h.deal();
+    await h.time.advance(6 * MIN);
+    await h.submit(P1, proposeTrain(NYC, "2", "50"));
+    await h.time.advance(2 * MIN);
+    await h.submit(P1, { RescindTrainPurchase: { game_id: 1, seller_protocol_id: NYC } });
+    assert.deepEqual([h.record().obligation?.seat, h.remaining()], [P1, 14 * MIN], "a rescission resumes exactly (the trade time never charged)");
+    assert.equal(h.record().declines.counts[`${P1}>${P2}`] ?? 0, 0, "a rescission is not a decline");
+    await h.submit(P1, proposeTrain(NYC, "2", "50"));
+    await h.time.advance(3 * MIN);
+    const accepted = await h.submit(P2, answerTrain(NYC, true));
+    assert.equal(accepted.ok, true, JSON.stringify(accepted));
+    assert.deepEqual([h.record().obligation?.seat, h.remaining()], [P1, LIVE_ACTION_MS]);
+  });
+
+  test("the recipient's response timer is never an overdue: no strike, no interruption, no remedy", async () => {
+    const h = harness();
+    await h.deal();
+    await h.submit(P1, proposeTrain(NYC, "2", "50"));
+    await h.time.advance(LIVE_TRADE_MS + 5 * MIN);
+    await h.serial(async () => undefined);
+    const r = h.record();
+    assert.deepEqual([r.phase, r.overdue, r.strikes, r.remedy], ["active", null, {}, null]);
+  });
+});

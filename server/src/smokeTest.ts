@@ -14,30 +14,36 @@
 // project cannot debug cheaply.
 //
 // SO THIS RUNS FIRST. It spawns `dist/server/src/start.js` as a child process -- never `createGameServer` in this
-// process -- and walks a table the way two browsers walk it: nothing is seeded, nothing is reached around.
+// process -- and walks a table the way two browsers walk it: nothing is reached around. (PHASE 3 FINAL: production
+// serves no free game and this run has no Juno escrow, so HALF A's two tables are the one thing written into the data
+// directory -- while the server is stopped, as a restart finds tables an earlier build made; see HALF A.)
 //
 // ==================================================================
 //  LIVE-2D: THE CLIENT CUTOVER, SMOKED THROUGH THE ONE ROOM PROTOCOL
 // ==================================================================
 //
 // HALF A -- PRODUCTION (GS_MODE=production, an https origin, no proxy hops, a fresh data directory). Two browsers are
-//   bootstrapped at `POST /gs/api/session` (the `__Host-gs_session` cookie). Create (no stake) -> join by the
-//   JUNO-XXXX-XXXX code -> both seated -> both ready -> start -> the SERVER's SetupGame on both logs -> legal moves and
-//   an out-of-turn refusal -> a legal undo and two illegal ones -> reconnect -> the process KILLED (SIGKILL) and started
-//   again on the same directory -> the same log, the same seats, and a further move. No `?dev_claim=` anywhere in this
-//   half, except to prove it is refused.
+//   bootstrapped at `POST /gs/api/session` (the `__Host-gs_session` cookie). PHASE 3 FINAL (owner ruling 2026-10-06:
+//   every player game is anted): a create without a stake is refused `ante-required`, and one with a stake
+//   `money-games-disabled` (this run has no escrow). So the server is stopped and two tables are written into its data
+//   directory, seated by the accounts' principals (read-only from the identity store on disk): W, a waiting free table
+//   with a JUNO-XXXX-XXXX code -- joining it with a seat, and starting it, are refused `ante-required` -- and G, a dealt
+//   private table (Alice hosting, Bob seated, its log the deal). Restarted: both seated at G -> the stored SetupGame on
+//   both logs -> legal moves and an out-of-turn refusal -> a legal undo and two illegal ones -> reconnect -> the process
+//   KILLED (SIGKILL) and started again on the same directory -> the same log, the same seats, and a further move. No
+//   `?dev_claim=` anywhere in this half, except to prove it is refused.
 //
 // ==================================================================
 //  LIVE-2E: PROFILES ARE MANDATORY -- AND A SEAT OUTLIVES EVERY DEVICE
 // ==================================================================
 //
-// A bootstrap now gives an UNPROFILED session (`profile: null`) whose socket upgrade is refused 403; HALF A creates
-// the accounts "Alice" and "Bob" before either may open a socket -- PHASE 3 FINAL: an account is a username, a password
+// A bootstrap now gives an UNPROFILED session (`profile: null`); P3-ACCT (public first): its socket is admitted, public
+// and read-only, and every room op from it is answered `profile-required`. HALF A creates the accounts "Alice" and "Bob"
+// before either may play -- PHASE 3 FINAL: an account is a username, a password
 // and ONE Authorization Wallet: `POST /gs/api/account/authorization` mints the CREATE text, the wallet signs it (ADR-036,
 // exactly as Keplr's `signArbitrary`; a deterministic test Keplr account here), `POST /gs/api/account/create` makes the
-// account on a FRESH cookie (the temporary one answers 401 `replaced`), 409 on a second try -- and the seats start with
-// those names. No recovery key and no device-link code exists (their routes answer 410 `retired`). Then, around the
-// crash:
+// account on a FRESH cookie (the temporary one answers 401 `replaced`), 409 on a second try. No recovery key and no
+// device-link code exists (their routes answer 410 `retired`). Then, around the crash:
 //   SIGN IN   a brand-new browser C logs in with A's username and password and gets a fresh cookie for A's EXISTING
 //             principal (its temporary session answers 401 `replaced`); C's sockets see A's seat and A's log; a wrong
 //             password is 403; both devices play the seat; "sign out this device" on A's first device closes its
@@ -86,8 +92,18 @@ import {
 /* PHASE 3 FINAL: deterministic test Keplr accounts that sign ADR-036 exactly as Keplr's `signArbitrary` does (the
    accounts' Authorization Wallets). */
 import { keplrAccount, type KeplrAccount } from "./testSupport/authorizationWallets";
+import { IDENTITY_FILE } from "./identity/fileStore";
+import { IDENTITY_JOURNAL_FILE, parseSnapshotDocument, scanJournal } from "./identity/journalStore";
+import { IdentityIndex } from "./identity/store";
+import { serializeBatch } from "./persistence/logFormat";
 import { LOCK_DIRECTORY, LOCK_STALE_AFTER_MS } from "./persistence/processLock";
-import { GAME_ID_PATTERN, PLAYER_ID_PATTERN, parseJoinCode } from "./rooms/gameRecord";
+import { GAME_ID_PATTERN, mintGameId, mintJoinCode, mintPlayerId, PLAYER_ID_PATTERN, parseJoinCode, type GameRecord } from "./rooms/gameRecord";
+import { createFileRecordStore } from "./rooms/recordStore";
+import { createRecord } from "./rooms/roomService";
+/* PHASE 3 FINAL: the seeded tables' deal is made by the server's own session type (as every stored-log suite makes one). */
+import { BUILD as TEST_BUILD, probeSession } from "./rooms/testSupport";
+import { resolveVariants } from "../../frontend/src/gameEngine/gameVariants";
+import { RULES_ENGINE_VERSION } from "../../frontend/src/gameEngine/rulesVersion";
 /* The engine's own undo sentences, so the harness cannot drift from what the Undo button and the server both say --
    and its own reading of which actions still count, so "the last action" here is the one the server means. */
 import { effectiveActions, REVERT_DEAL_FLOOR, REVERT_NOT_YOURS } from "../../frontend/src/gameEngine/logRevert";
@@ -691,6 +707,18 @@ const noPrincipalOnWire = (...clients: WireClient[]) =>
 /** The secret half of a `__Host-gs_session=v1.<session id>.<secret>` pair: what must never reach a log. */
 const cookieSecretOf = (pair: string): string => pair.slice(pair.lastIndexOf(".") + 1);
 
+/** The accounts' principals, READ-ONLY from the identity store a stopped server left (its snapshot and journal, applied
+ *  in memory exactly as `gamesDoctor inspect` reads them): username -> principal id. Only to seat the tables written into
+ *  the data directory -- no id ever reaches a browser. */
+function principalsOnDisk(dataDir: string): Map<string, string> {
+  const parsed = parseSnapshotDocument(JSON.parse(fs.readFileSync(path.join(dataDir, IDENTITY_FILE), "utf8")), IDENTITY_FILE);
+  const journalPath = path.join(dataDir, IDENTITY_JOURNAL_FILE);
+  const scan = scanJournal(fs.existsSync(journalPath) ? fs.readFileSync(journalPath) : Buffer.alloc(0), parsed.seq);
+  const index = IdentityIndex.from(parsed.snapshot);
+  for (const { change } of scan.changes) index.apply(change);
+  return new Map(index.snapshot().profiles.flatMap((profile) => (typeof profile.login_name === "string" ? [[profile.login_name, profile.principal_id] as const] : [])));
+}
+
 async function productionHalf(): Promise<void> {
   say("\n==== A. PRODUCTION -- the real entry point, session cookies, mandatory profiles, no dev_claim ====");
   const dataDir = makeTempDir("production");
@@ -750,7 +778,8 @@ async function productionHalf(): Promise<void> {
   check(`the process answers GET ${HEALTH_PATH} on 127.0.0.1:${port}`, true);
   await until(() => sawLine(server, "PRODUCTION IDENTITY"), "the production banner");
   check("its banner says GS_MODE=production and names the cookie posture", sawLine(server, "GS_MODE=production"), server.output);
-  check("and says profiles are REQUIRED to play (LIVE-2E)", sawLine(server, "profiles: REQUIRED to play"), server.output);
+  check("and says accounts are REQUIRED to play (PHASE 3 FINAL: username + password + an Authorization Wallet)", sawLine(server, "accounts: REQUIRED to play"), server.output);
+  check("and that every player game is anted (no free tables)", sawLine(server, "every player game is anted"), server.output);
 
   /* ---- 1 and 2: two browsers, two sessions -- neither of them may play yet ---- */
   step("A1", `bootstrap cookie A: POST ${SESSION_PATH} from ${PRODUCTION_ORIGIN}`);
@@ -762,7 +791,7 @@ async function productionHalf(): Promise<void> {
   const tempB = await freshBrowser("B");
   check("two browsers, two different sessions", tempA !== tempB);
 
-  step("A2+", "the production socket gate refuses ?dev_claim=, a missing cookie and an UNPROFILED session at the upgrade");
+  step("A2+", "the production socket gate refuses ?dev_claim= and a missing cookie; an UNPROFILED session gets a public, read-only socket");
   check(
     "a socket on /gs?dev_claim= (no cookie) is refused 401 -- production has no development authenticator",
     (await upgradeStatus(`${socketUrl}?dev_claim=smoke-alice`, PRODUCTION_ORIGIN)) === 401,
@@ -771,8 +800,15 @@ async function productionHalf(): Promise<void> {
     "a socket on /?dev_claim= is refused 404 -- development's second path does not exist here",
     (await upgradeStatus(`ws://127.0.0.1:${port}/?dev_claim=smoke-alice`, PRODUCTION_ORIGIN)) === 404,
   );
-  check("unprofiled cookie A's upgrade is refused 403 -- no account, no game socket", (await upgradeStatus(socketUrl, PRODUCTION_ORIGIN, { Cookie: tempA })) === 403);
-  check("and so is unprofiled cookie B's", (await upgradeStatus(socketUrl, PRODUCTION_ORIGIN, { Cookie: tempB })) === 403);
+  /* P3-ACCT (owner, 2026-10-05: public first): a signed-out browser's socket is ADMITTED -- public and read-only (the
+     public list, a table's view and log) -- and every other frame is answered profile-required. (LIVE-2E refused this
+     upgrade 403.) */
+  const visitorA = await WireClient.open("A (signed out)", socketUrl, PRODUCTION_ORIGIN, { Cookie: tempA });
+  check("unprofiled cookie A's upgrade is admitted (101): a public, read-only socket", visitorA.isOpen);
+  const visitorCreate = await visitorA.op({ type: "create", visibility: "private", exactPlayers: null, variants: {}, nickname: "" });
+  check("but it may not play: a room op from it is answered profile-required", visitorCreate.ok === false && visitorCreate.code === "profile-required", visitorCreate);
+  await visitorA.close();
+  check("and unprofiled cookie B's upgrade is admitted the same way (101)", (await upgradeStatus(socketUrl, PRODUCTION_ORIGIN, { Cookie: tempB })) === 101);
   for (const retired of [RETIRED_PROFILE_PATH, RETIRED_LINK_CODE_PATH, RETIRED_LINK_PATH, RETIRED_RECOVER_PATH, RETIRED_RECOVERY_KEY_PATH]) {
     const answer = await api(retired, {}, tempA);
     check(`the recovery-key / device-link route ${retired} is retired: 410 retired, and sets no cookie`, answer.status === 410 && answer.body?.error === "retired" && answer.setCookie.length === 0, answer.text);
@@ -835,30 +871,98 @@ async function productionHalf(): Promise<void> {
   let bob = await connectB("Bob");
   check("cookie A and cookie B each open a socket on /gs from the allowed Origin", alice.isOpen && bob.isOpen);
 
-  /* ---- 3: create ---- */
-  step("A3", "A creates a table: room-op create, no stake, no nickname (the profile's name is the seat's)");
+  /* ---- 3: create -- PHASE 3 FINAL: production serves no free game, and this server has no Juno escrow ---- */
+  step("A3", "A tries to create tables: a staked one (no escrow on this server) and a free one (every player game is anted) -- both refused");
   const staked = await alice.op({ type: "create", visibility: "private", exactPlayers: null, variants: {}, nickname: "Alice", stake: "1000000" });
-  check("a create WITH a stake is refused money-games-disabled -- LIVE-2 opens no money games", staked.ok === false && staked.code === "money-games-disabled", staked);
-  const created = await alice.op({ type: "create", visibility: "private", exactPlayers: null, variants: {}, nickname: "" });
-  check("create (private, no stake) is acked ok", created.ok === true, created);
-  const { gameId, code, playerId: alicePid } = created.data as { gameId: string; code: string; playerId: string };
-  check(`the game id is server-minted (${gameId})`, GAME_ID_PATTERN.test(gameId));
-  check(`the join code is JUNO-XXXX-XXXX (${code})`, /^JUNO-[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(code) && parseJoinCode(code) === code);
-  check(`A's seat is server-minted (${alicePid})`, PLAYER_ID_PATTERN.test(alicePid));
+  check("a create WITH a stake is refused money-games-disabled -- this server has no Juno escrow configured", staked.ok === false && staked.code === "money-games-disabled", staked);
+  const free = await alice.op({ type: "create", visibility: "private", exactPlayers: null, variants: {}, nickname: "" });
+  check("a create WITHOUT a stake is refused ante-required -- every player game is anted (owner ruling 2026-10-06)", free.ok === false && free.code === "ante-required", free);
+  const freeB = await bob.op({ type: "create", visibility: "public", exactPlayers: null, variants: {}, nickname: "" });
+  check("and so is B's", freeB.ok === false && freeB.code === "ante-required", freeB);
 
-  /* ---- 4: join ---- */
-  step("A4", `B joins with ${code}, taking a seat`);
-  const joined = await bob.op({ type: "join", code, takeSeat: true });
-  const joinedData = (joined.data ?? {}) as { gameId?: string; playerId?: string };
-  check("join (takeSeat: true) is acked ok, for this game", joined.ok === true && joinedData.gameId === gameId, joined);
-  const bobPid = String(joinedData.playerId);
-  check(`B's seat is server-minted (${bobPid}), and not A's`, PLAYER_ID_PATTERN.test(bobPid) && bobPid !== alicePid);
+  /* No table this half plays can therefore be made over a socket. They are written into the data directory while the
+     server is stopped -- exactly as a restart finds tables an earlier build made -- seated by the two accounts'
+     principals (read-only from the identity store the server left; no id ever reaches a browser): W, a waiting free
+     table hosted by Alice, with a join code; G, a dealt private table, Alice hosting and Bob seated, its log the deal. */
+  step("A3+", "stop the server (SIGTERM); write a waiting free table W and a dealt private table G into its data directory; start it again");
+  await Promise.all([alice.close(), bob.close()]);
+  const stoppedForSeed = await stopServer(server, "SIGTERM");
+  check("SIGTERM stops the server cleanly (exit 0), releasing the lock", stoppedForSeed.code === 0 && !fs.existsSync(path.join(dataDir, LOCK_DIRECTORY)), stoppedForSeed);
+  const principals = principalsOnDisk(dataDir);
+  const alicePrincipal = principals.get(accountAlice.username) as string;
+  const bobPrincipal = principals.get(accountBob.username) as string;
+  check("both accounts' principals are in the identity store on disk", typeof alicePrincipal === "string" && typeof bobPrincipal === "string" && alicePrincipal !== bobPrincipal);
+  const seededAt = Date.now();
+  const variants = resolveVariants({});
+  const made = (input: { visibility: "public" | "private"; hostPlayerId: string; joinCode: string }): GameRecord => {
+    const outcome = createRecord({ gameId: mintGameId(), joinCode: input.joinCode, principalId: alicePrincipal, now: seededAt, visibility: input.visibility, exactPlayers: null, variants, nickname: "Alice", color: null, hostPlayerId: input.hostPlayerId });
+    if (!outcome.ok || outcome.record === null) throw new SmokeFailure(`the seed record was refused: ${JSON.stringify(outcome)}`);
+    return outcome.record;
+  };
+  const records = createFileRecordStore(dataDir, { warn: () => undefined });
+  /* W: waiting, Alice's seat only, findable by its join code. */
+  const code = mintJoinCode();
+  const waiting = made({ visibility: "public", hostPlayerId: mintPlayerId(), joinCode: code });
+  check("W is written to the record store", (await records.put(waiting, null)).kind === "committed");
+  check(`and its join code ${code} indexed`, (await records.claimCode(code, waiting.game_id)) === "claimed");
+  /* G: dealt -- the deal is the SetupGame the server's own session makes for these two seats. */
+  const alicePid = mintPlayerId();
+  const bobPid = mintPlayerId();
+  const dealer = probeSession("smoke-seed");
+  const dealing = dealer.submit({
+    actor: alicePid,
+    build: TEST_BUILD,
+    msg: { SetupGame: { players: [{ id: alicePid, nickname: "Alice" }, { id: bobPid, nickname: "Bob" }], variants: {} } } as never,
+    baseIndex: -1,
+    submissionId: "smoke-seed-deal",
+  });
+  check("the seeded deal is a SetupGame the reducer accepts", dealing.kind === "applied", dealing.kind);
+  const seededLog = [...dealer.entries];
+  const base = made({ visibility: "private", hostPlayerId: alicePid, joinCode: mintJoinCode() });
+  const gameRecord: GameRecord = {
+    ...base,
+    join_code: null,
+    status: "active",
+    started_at: seededLog[0].at ?? seededAt,
+    expires_at: null,
+    turn_order: [alicePid, bobPid],
+    rules_engine_version: RULES_ENGINE_VERSION,
+    seats: [
+      { ...base.seats[0], ready: true },
+      { ...base.seats[0], player_id: bobPid, principal_id: bobPrincipal, nickname: "Bob", ready: true },
+    ],
+    admitted: [...base.admitted, { principal_id: bobPrincipal, admitted_at: seededAt, via: "join-code" }],
+  };
+  const gameId = gameRecord.game_id;
+  check("G is written to the record store", (await records.put(gameRecord, null)).kind === "committed");
+  fs.writeFileSync(path.join(dataDir, `${gameId}.log.jsonl`), seededLog.map((entry) => serializeBatch([entry])).join(""));
+  check(`G's log holds its deal (${seededLog.length} entry)`, seededLog.length === 1 && isDeal(seededLog[0] as unknown as Entry));
+  server = await startServer("production #1 (seeded)", port, dataDir, settings);
+  const seededWindow = server;
+  const seededDiscovery = await until(() => seededWindow.output.find((line) => /discovery: \d+ games found/.test(line)), "the discovery line");
+  check(`the restarted server discovers both tables (${seededDiscovery.trim()})`, /discovery: 2 games found/.test(seededDiscovery), seededDiscovery);
+  alice = await connectA("Alice");
+  bob = await connectB("Bob");
+  check("cookie A and cookie B still open their sockets after the restart (accounts are durable)", alice.isOpen && bob.isOpen);
+  check(`G's id is server-shaped (${gameId}); its seats are ${alicePid} and ${bobPid}`, GAME_ID_PATTERN.test(gameId) && PLAYER_ID_PATTERN.test(alicePid) && PLAYER_ID_PATTERN.test(bobPid));
+  check(`W's join code is JUNO-XXXX-XXXX (${code})`, /^JUNO-[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(code) && parseJoinCode(code) === code);
 
-  /* ---- 5: both seated ---- */
-  step("A5", "both hold seats: room-hello {gameId} -> each socket's own RoomView");
+  /* ---- 4: join -- PHASE 3 FINAL: no seat at a free table ---- */
+  step("A4", `B joins W with ${code}, taking a seat -- refused: a free table can be watched, never joined with a seat`);
+  /* W is visited on sockets of its own (closed after A6), so G's sockets below see G's views only. */
+  const aliceW = await connectA("Alice (at W)");
+  const bobW = await connectB("Bob (at W)");
+  const joined = await bobW.op({ type: "join", code, takeSeat: true });
+  check("join (takeSeat: true) at the free table is refused ante-required", joined.ok === false && joined.code === "ante-required", joined);
+  aliceW.roomHello(waiting.game_id);
+  const waitingView = await aliceW.view((view) => view.gameId === waiting.game_id, "W's view");
+  check("W still has its one seat, Alice's, and is waiting", waitingView.players.length === 1 && waitingView.lifecycle === "waiting" && waitingView.you.role === "host", waitingView.players);
+
+  /* ---- 5: both seated (G) ---- */
+  step("A5", "both hold seats at G: room-hello {gameId} -> each socket's own RoomView");
   alice.roomHello(gameId);
   bob.roomHello(gameId);
-  const twoSeats = (view: RoomView) => view.players.length === 2;
+  const twoSeats = (view: RoomView) => view.gameId === gameId && view.players.length === 2;
   const viewA = await alice.view(twoSeats, "a two-seat view");
   const viewB = await bob.view(twoSeats, "a two-seat view");
   check(`A's view: you.role "host", you.playerId ${alicePid}`, viewA.you.role === "host" && viewA.you.playerId === alicePid, viewA.you);
@@ -868,12 +972,10 @@ async function productionHalf(): Promise<void> {
     same(viewA.players.map((p) => p.id), [alicePid, bobPid]) && same(viewB.players.map((p) => p.id), [alicePid, bobPid]) && viewA.hostId === alicePid && viewB.hostId === alicePid,
     { a: viewA.players, b: viewB.players },
   );
-  check(
-    `each seat starts with its profile's name: "Alice" (a create that named nobody), "Bob" (a join)`,
-    same(viewA.players.map((p) => p.nickname), ["Alice", "Bob"]) && same(viewB.players.map((p) => p.nickname), ["Alice", "Bob"]),
-    viewA.players,
-  );
-  check("the table is private and waiting, and its code is shown to both seats", viewA.visibility === "private" && viewB.lifecycle === "waiting" && viewA.code === code && viewB.code === code, viewB);
+  /* (LIVE-2E checked here that a seat starts with its profile's name -- that happens at a create or a join, which no
+     free table can have now; G's seats carry the names they were written with.) */
+  check(`the seats' names: "Alice", "Bob"`, same(viewA.players.map((p) => p.nickname), ["Alice", "Bob"]) && same(viewB.players.map((p) => p.nickname), ["Alice", "Bob"]), viewA.players);
+  check("the table is private and dealt (active) for both seats", viewA.visibility === "private" && viewA.lifecycle === "active" && viewB.lifecycle === "active", viewB);
   check(`the room's undo policy is projected: ${JSON.stringify(viewA.undoPolicy)}`, viewA.undoPolicy?.host_undo === "last-action" && same(viewA.undoPolicy, viewB.undoPolicy), viewA.undoPolicy);
 
   /* S10-5: the chat frame the old harness tripped over, exercised on purpose: stamped with the seat, never a name. */
@@ -886,44 +988,34 @@ async function productionHalf(): Promise<void> {
   check("a chat line reaches the other seat, trimmed and stamped with the sender's seat", line.author === alicePid && line.text === "good luck", line);
   check("and no principal or profile id is on either socket", noPrincipalOnWire(alice, bob));
 
-  /* ---- 6: ready ---- */
-  step("A6", "both mark ready");
-  const readyA = await alice.op({ type: "set-ready", ready: true }, gameId);
-  const readyB = await bob.op({ type: "set-ready", ready: true }, gameId);
-  check("set-ready is acked ok for both", readyA.ok === true && readyB.ok === true, { readyA, readyB });
-  const startable = await alice.view((view) => view.players.every((p) => p.isReady) && view.you.canStart, "an all-ready view with Start");
-  check("A's view: every seat ready, and you.canStart", startable.players.length === 2);
-  const bobReady = await bob.view((view) => view.players.every((p) => p.isReady), "an all-ready view");
-  check("B's view: every seat ready, and B may not start", bobReady.you.canStart === false);
+  /* ---- 6 and 7: ready and start -- PHASE 3 FINAL: an undealt free table is never started ---- */
+  step("A6", "the host may not start the undealt free table W (no ready or start can deal a free game here)");
+  const readyW = await aliceW.op({ type: "set-ready", ready: true }, waiting.game_id);
+  check("set-ready at W is still acked ok (nothing about a seat is refused but the deal)", readyW.ok === true, readyW);
+  const startW = await aliceW.op({ type: "start-game" }, waiting.game_id);
+  check("A's start-game at W is refused ante-required", startW.ok === false && startW.code === "ante-required", startW);
+  await Promise.all([aliceW.close(), bobW.close()]);
 
-  /* ---- 7: start ---- */
-  step("A7", "A starts: room-op start-game (both logs subscribed first: hello {gameId})");
+  step("A7", "both subscribe to G's log: hello {gameId} -> the stored deal, the same for both");
   alice.hello(gameId);
   bob.hello(gameId);
-  const emptyA = await alice.waitFor((frame) => frame.kind === "catch-up", "the hello's catch-up");
-  const emptyB = await bob.waitFor((frame) => frame.kind === "catch-up", "the hello's catch-up");
-  check("both hellos are answered with an empty catch-up: nothing is dealt yet", entriesOf(emptyA).length === 0 && entriesOf(emptyB).length === 0, { emptyA, emptyB });
+  const caughtA = await alice.waitFor((frame) => frame.kind === "catch-up", "the hello's catch-up");
+  const caughtB = await bob.waitFor((frame) => frame.kind === "catch-up", "the hello's catch-up");
   const bobStart = await bob.op({ type: "start-game" }, gameId);
-  check("B's start-game is refused forbidden -- starting is the host's", bobStart.ok === false && bobStart.code === "forbidden", bobStart);
-  const started = await alice.op({ type: "start-game" }, gameId);
-  check("A's start-game is acked ok", started.ok === true, started);
+  check("B's start-game at G is refused forbidden -- starting is the host's", bobStart.ok === false && bobStart.code === "forbidden", bobStart);
+  const aliceStart = await alice.op({ type: "start-game" }, gameId);
+  check("A's start-game at G is answered as already started (idempotent): nothing is dealt twice", aliceStart.ok === true && (aliceStart.data as { alreadyStarted?: unknown } | undefined)?.alreadyStarted === true, aliceStart);
 
-  /* ---- 8: the server deals ---- */
-  step("A8", "the server commits SetupGame -- observed on both clients' logs");
-  const dealtA = await alice.waitFor((frame) => frame.kind === "applied" && entriesOf(frame).some(isDeal), "the deal");
-  const dealtB = await bob.waitFor((frame) => frame.kind === "applied" && entriesOf(frame).some(isDeal), "the deal");
-  const deal = entriesOf(dealtA).find(isDeal) as Entry;
+  /* ---- 8: the deal ---- */
+  step("A8", "G's SetupGame -- the same entry, digest and seats on both clients' logs");
+  const deal = entriesOf(caughtA).find(isDeal) as Entry;
   const { order, rulesVersion } = dealOrder(deal);
-  check(
-    "SetupGame is entry #0, committed as the host's seat, and arrives as news -- in reply to nobody's submit",
-    deal.index === 0 && deal.actor === alicePid && dealtA.inReplyTo === undefined && dealtB.inReplyTo === undefined,
-    deal,
-  );
-  check("both clients were handed the same entries and the same digest", same(entriesOf(dealtA), entriesOf(dealtB)) && dealtA.digest === dealtB.digest);
-  check(`the deal seats exactly the two server-minted ids (turn order ${order.join(" then ")})`, same([...order].sort(), [alicePid, bobPid].sort()), order);
+  check("SetupGame is entry #0, committed as the host's seat", deal !== undefined && deal.index === 0 && deal.actor === alicePid, deal);
+  check("both clients were handed the same entries and the same digest", same(entriesOf(caughtA), entriesOf(caughtB)) && caughtA.digest === caughtB.digest && entriesOf(caughtA).length === 1);
+  check(`the deal seats exactly the two seats (turn order ${order.join(" then ")})`, same([...order].sort(), [alicePid, bobPid].sort()), order);
   check(`and pins a rules-engine version (${String(rulesVersion)})`, typeof rulesVersion === "number");
-  await alice.view((view) => view.lifecycle === "active" && view.status === "playing", "the playing view");
-  await bob.view((view) => view.lifecycle === "active" && view.status === "playing", "the playing view");
+  await alice.view((view) => view.gameId === gameId && view.lifecycle === "active" && view.status === "playing", "the playing view");
+  await bob.view((view) => view.gameId === gameId && view.lifecycle === "active" && view.status === "playing", "the playing view");
   check("both room views follow: lifecycle active, status playing", true);
 
   const seats: Record<string, Seat> = {
@@ -1035,7 +1127,7 @@ async function productionHalf(): Promise<void> {
   /* ---- 12: another device signs in (PHASE 3 FINAL: no device-link code exists -- the username and password) ---- */
   step("A12", `another device: a brand-new browser C signs in with Alice's username and password (${ACCOUNT_LOGIN_PATH})`);
   const cookieC = await freshBrowser("C (a new device)");
-  check("C's unprofiled session opens no socket: 403", (await upgradeStatus(socketUrl, PRODUCTION_ORIGIN, { Cookie: cookieC })) === 403);
+  check("C's unprofiled session opens only a public, read-only socket (101; P3-ACCT public first)", (await upgradeStatus(socketUrl, PRODUCTION_ORIGIN, { Cookie: cookieC })) === 101);
   const wrongPassword = await api(ACCOUNT_LOGIN_PATH, { username: accountAlice.username, password: "not Alice's passphrase" }, cookieC);
   check("a wrong password is refused 403 invalid-credential, and sets no cookie", wrongPassword.status === 403 && wrongPassword.body?.error === "invalid-credential" && wrongPassword.setCookie.length === 0, wrongPassword.text);
   /* Typed on the second device the way a person types it: the username's case forgiven. */
@@ -1281,7 +1373,7 @@ async function productionHalf(): Promise<void> {
     finalLog.every((entry) => entry.actor === alicePid || entry.actor === bobPid),
     finalLog.map((entry) => entry.actor),
   );
-  check("and no principal or profile id is on any socket", noPrincipalOnWire(alice, aliceC, aliceD, aliceF, bob));
+  check("and no principal or profile id is on any socket", noPrincipalOnWire(alice, aliceC, aliceD, aliceF, bob, aliceW, bobW));
 
   step("A16", "cleanup: close the sockets, stop the server, remove the data directory");
   await Promise.all([aliceD.close(), bob.close()]);

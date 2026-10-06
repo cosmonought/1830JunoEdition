@@ -1,0 +1,16 @@
+TAP version 13
+# Subtest: §9 RED → GREEN: linking Wallet A at Game 1 and Wallet B at Game 2 never changes the account's own wallet
+ok 1 - §9 RED → GREEN: linking Wallet A at Game 1 and Wallet B at Game 2 never changes the account's own wallet
+  ---
+  duration_ms: …
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 394.148991

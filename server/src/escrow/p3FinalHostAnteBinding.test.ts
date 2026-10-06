@@ -25,7 +25,7 @@ import assert from "node:assert/strict";
 
 import { RESTORE_READ_ONLY_SENTENCE } from "./escrowService";
 import { hostCreates, joinerFunds, linkWallet, moneyServer, openMoneyTable, player, testConsentKey, testWallet, viewOf, type MoneyServer, type Player } from "./escrow4Support";
-import { HINT_TTL_MS, HOST_CREATE_WINDOW_MS } from "./moneyTables";
+import { HINT_TTL_MS, HOST_ANTE_MAX_PAGES, HOST_CREATE_WINDOW_MS } from "./moneyTables";
 import { createMemoryRecordStore } from "../rooms/recordStore";
 import { apiRequest, Client, loginOnFreshBrowser, quietConsole, startServer, stopServer } from "../rooms/testSupport";
 import type { RoomMoneyView } from "../../../frontend/src/utils/moneyProtocol";
@@ -150,16 +150,27 @@ describe("PHASE 3 FINAL: a host's unbound ante on chain fixes the seat's wallet 
     }
   });
 
-  test("a game list that does not end within the search's page cap (200 pages): 503 and nothing issued -- never 'no ante'", async () => {
+  test("a game list longer than one search may read (HOST_ANTE_MAX_PAGES): 503 and nothing issued -- never 'no ante'; the next searches go on where it stopped and find the ante", async () => {
     const world = await moneyServer();
     try {
-      const { phone, table } = await unboundAnte(world, "hab/cap", 6_005);
+      const { phone, table, A, chainGameId } = await unboundAnte(world, "hab/cap", 6_005);
       try {
+        assert.ok(HOST_ANTE_MAX_PAGES * 30 < 6_005, "the list is longer than one search reads");
         const before = await grantCount(world, table.gameId);
-        const swap = await linkWallet(phone, table.gameId, testWallet("hab/cap/B"), testConsentKey("hab/cap/B"));
-        assert.deepEqual([swap.status, swap.body?.error], [503, "chain-unavailable"], `FAIL-OPEN: ${swap.text}`);
-        assert.equal(await grantCount(world, table.gameId), before, "nothing was issued");
-        assert.ok(world.warnings.some((line) => /could not be told -- the game list did not end within 200 pages/.test(line)), world.warnings.slice(-3).join(" | "));
+        const B = testWallet("hab/cap/B");
+        const answers: string[] = [];
+        let swap = await linkWallet(phone, table.gameId, B, testConsentKey("hab/cap/B"));
+        for (let attempt = 0; attempt < 5 && swap.status === 503; attempt += 1) {
+          answers.push(`${swap.status} ${String(swap.body?.error)}`);
+          assert.equal(await grantCount(world, table.gameId), before, "nothing was issued");
+          swap = await linkWallet(phone, table.gameId, B, testConsentKey("hab/cap/B"));
+        }
+        assert.deepEqual(answers, ["503 chain-unavailable", "503 chain-unavailable"], "two searches cut short by the cap (3,000 games each), never 'absent'");
+        assert.ok(world.warnings.some((line) => new RegExp(`could not be told -- the game list did not end within ${HOST_ANTE_MAX_PAGES} pages`).test(line)), world.warnings.slice(-3).join(" | "));
+        assert.deepEqual([swap.status, swap.body?.error], [409, "withdraw-or-relink-first"], `FAIL-OPEN: ${swap.text}`);
+        assert.match(String(swap.body?.reason), HOST_SENTENCE(A.address));
+        assert.equal(await grantCount(world, table.gameId), before);
+        assert.equal(await boundOf(world, table.gameId), chainGameId);
       } finally {
         await phone.client.close();
       }
@@ -329,6 +340,171 @@ describe("PHASE 3 FINAL: a host's unbound ante on chain fixes the seat's wallet 
       }
     } finally {
       await world.close();
+    }
+  });
+});
+
+/* ================================================================================================= */
+/* Review NEW 2: the search can't be forced into "can't tell" for good                                */
+/* ================================================================================================= */
+
+/** Every `games` list query the chain answers (one endpoint or the quorum), by its `start_after` (null: from game 1). */
+function countListReads(world: MoneyServer): { readonly starts: Array<number | null>; restore(): void } {
+  const smart = world.chain.smart.bind(world.chain);
+  const starts: Array<number | null> = [];
+  world.chain.smart = async (contract: string, queryJson: string) => {
+    const query = JSON.parse(queryJson) as { games?: { start_after: number | null } };
+    if (query.games !== undefined) starts.push(query.games.start_after);
+    return smart(contract, queryJson);
+  };
+  return { starts, restore: () => void (world.chain.smart = smart) };
+}
+
+describe("PHASE 3 FINAL (review NEW 2): the conclusive search goes on where it stopped, and never mints a ticket without a floor", () => {
+  test("the chain's next game id can't be read: no fresh ticket (503, nothing issued, the signed link not spent); once it can, the link carries a floor", async () => {
+    const world = await moneyServer();
+    try {
+      const host = await player(world, "Hana");
+      const table = await openMoneyTable(host);
+      const A = testWallet("hab/floor/A");
+      const kA = testConsentKey("hab/floor/A");
+      const smart = world.chain.smart.bind(world.chain);
+      /* The config answers, but without the next game id (as an endpoint that can't say it). */
+      world.chain.smart = async (contract: string, queryJson: string) => {
+        const answer = await smart(contract, queryJson);
+        return (JSON.parse(queryJson) as { config?: unknown }).config !== undefined ? { ...(answer as Record<string, unknown>), next_chain_game_id: null } : answer;
+      };
+      let refused;
+      let challenge;
+      try {
+        await host.confirm();
+        challenge = await host.api("wallet-challenge", { gameId: table.gameId, wallet: A.address });
+        assert.equal(challenge.status, 200, challenge.text);
+        const signed = A.signArbitrary(challenge.body?.text as string);
+        refused = await host.api("wallet-link", { gameId: table.gameId, nonce: challenge.body?.nonce, pubKey: signed.pubKey, signature: signed.signature, consentKey: kA.pubkey });
+      } finally {
+        world.chain.smart = smart;
+      }
+      assert.deepEqual([refused.status, refused.body?.error], [503, "chain-unavailable"], `a ticket with no floor: ${refused.text}`);
+      assert.equal(await grantCount(world, table.gameId), 0, "nothing was issued");
+      /* The same signed link, once the chain answers: issued, with the chain's next game id as its floor. */
+      const signed = A.signArbitrary(challenge.body?.text as string);
+      const linked = await host.api("wallet-link", { gameId: table.gameId, nonce: challenge.body?.nonce, pubKey: signed.pubKey, signature: signed.signature, consentKey: kA.pubkey });
+      assert.deepEqual([linked.status, linked.body?.mode], [200, "issued"], linked.text);
+      const grant = (await world.ledger.snapshot(table.gameId)).grants[0];
+      assert.equal(grant.create_floor, String(world.chain.games.size + 1), "the floor is the chain's next game id, read fresh");
+    } finally {
+      await world.close();
+    }
+  });
+
+  test("once a search over a long list concluded 'absent', a later cancel reads only the games that are new -- and never goes unknown", async () => {
+    const world = await moneyServer();
+    try {
+      const host = await player(world, "Hana");
+      const table = await openMoneyTable(host);
+      assert.equal((await linkWallet(host, table.gameId, testWallet("hab/mark/A"), testConsentKey("hab/mark/A"))).status, 200);
+      otherGames(world, 6_005, "hab/mark");
+      const phone = await hostPhoneSignsOutOthers(world, host);
+      try {
+        /* The first link after the security event searches 6,005 games: two searches cut short, then 'absent'. */
+        const B = testWallet("hab/mark/B");
+        const answers: number[] = [];
+        let linked = await linkWallet(phone, table.gameId, B, testConsentKey("hab/mark/B"));
+        for (let attempt = 0; attempt < 5 && linked.status === 503; attempt += 1) {
+          answers.push(linked.status);
+          linked = await linkWallet(phone, table.gameId, B, testConsentKey("hab/mark/B"));
+        }
+        assert.deepEqual(answers, [503, 503]);
+        assert.deepEqual([linked.status, linked.body?.mode], [200, "issued"], linked.text);
+        const head = world.chain.games.size;
+        otherGames(world, 12, "hab/mark/later");
+        world.advance(HOST_CREATE_WINDOW_MS + 1_000);
+        await world.money.idle();
+        const reads = countListReads(world);
+        let cancelled;
+        try {
+          cancelled = await phone.client.op({ type: "cancel-room" }, table.gameId);
+        } finally {
+          reads.restore();
+        }
+        assert.equal(cancelled.ok, true, JSON.stringify(cancelled));
+        assert.ok(reads.starts.length > 0 && reads.starts.length <= 6, `a page or two (and the observer's): ${JSON.stringify(reads.starts)}`);
+        assert.ok(reads.starts.every((start) => start !== null && start >= head), `nothing at or below game ${head} read again: ${JSON.stringify(reads.starts)}`);
+        assert.equal(world.warnings.filter((line) => /could not be told/.test(line)).length, 2, "only the two searches cut short");
+      } finally {
+        await phone.client.close();
+      }
+    } finally {
+      await world.close();
+    }
+  });
+
+  test("a CreateGame landing AFTER a search concluded 'absent', under a ticket that search covered, is still found", async () => {
+    const world = await moneyServer();
+    try {
+      const host = await player(world, "Hana");
+      const table = await openMoneyTable(host);
+      const A = testWallet("hab/late/A");
+      const kA = testConsentKey("hab/late/A");
+      const t1 = await linkWallet(host, table.gameId, A, kA);
+      assert.equal(t1.status, 200, t1.text);
+      otherGames(world, 40, "hab/late");
+      const phone = await hostPhoneSignsOutOthers(world, host);
+      try {
+        /* Absent: B is linked (the search covered A's ticket T1 through the head). */
+        const B = testWallet("hab/late/B");
+        const linked = await linkWallet(phone, table.gameId, B, testConsentKey("hab/late/B"));
+        assert.deepEqual([linked.status, linked.body?.mode], [200, "issued"], linked.text);
+        /* A's CreateGame, signed with T1 before, lands now (no hint), after more games. */
+        otherGames(world, 35, "hab/late/more");
+        const chainGameId = await hostCreates(world, host, table.gameId, A, kA, t1.body?.ticket as string, { hint: false });
+        const C = testWallet("hab/late/C");
+        const swap = await linkWallet(phone, table.gameId, C, testConsentKey("hab/late/C"), { replace: true });
+        assert.deepEqual([swap.status, swap.body?.error], [409, "withdraw-or-relink-first"], `the mark hid the ante: ${swap.text}`);
+        assert.match(String(swap.body?.reason), HOST_SENTENCE(A.address));
+        /* Remembered: a cancel finds it again (read by quorum), and A relinks it. */
+        world.advance(HOST_CREATE_WINDOW_MS + 1_000);
+        const cancel = await phone.client.op({ type: "cancel-room" }, table.gameId);
+        assert.equal(cancel.ok, false, JSON.stringify(cancel));
+        const relink = await linkWallet(phone, table.gameId, A, testConsentKey("hab/late/A2"));
+        assert.deepEqual([relink.status, relink.body?.mode, relink.body?.ticket], [200, "relinked", t1.body?.ticket], relink.text);
+        assert.equal(await boundOf(world, table.gameId), chainGameId);
+      } finally {
+        await phone.client.close();
+      }
+    } finally {
+      await world.close();
+    }
+  });
+
+  test("one endpoint lagging (its list ends before the host's CreateGame) or skipping it: the rest is read by quorum, never a false 'absent'", async () => {
+    for (const mode of ["lagging", "skipping"] as const) {
+      const world = await moneyServer();
+      try {
+        const { phone, table, A, chainGameId } = await unboundAnte(world, `hab/lag/${mode}`, 50);
+        otherGames(world, 3, `hab/lag/${mode}/after`);
+        try {
+          const smart = world.chain.smart.bind(world.chain);
+          const ante = Number(chainGameId);
+          /* One endpoint (the one-endpoint reads): its game list lacks the host's CreateGame -- every game from it on
+             (lagging), or just that one (skipping). Every endpoint asked together (the quorum) answers as the chain. */
+          world.chain.smartQuorum = async (contract: string, queryJson: string) => smart(contract, queryJson);
+          world.chain.smart = async (contract: string, queryJson: string) => {
+            const answer = await smart(contract, queryJson);
+            if ((JSON.parse(queryJson) as { games?: unknown }).games === undefined) return answer;
+            const games = (answer as { games: Array<{ chain_game_id: number }> }).games;
+            return { games: games.filter((game) => (mode === "lagging" ? game.chain_game_id < ante : game.chain_game_id !== ante)) };
+          };
+          const swap = await linkWallet(phone, table.gameId, testWallet(`hab/lag/${mode}/B`), testConsentKey(`hab/lag/${mode}/B`));
+          assert.deepEqual([swap.status, swap.body?.error], [409, "withdraw-or-relink-first"], `${mode}: ${swap.text}`);
+          assert.match(String(swap.body?.reason), HOST_SENTENCE(A.address));
+        } finally {
+          await phone.client.close();
+        }
+      } finally {
+        await world.close();
+      }
     }
   });
 });

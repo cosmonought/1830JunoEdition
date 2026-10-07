@@ -170,8 +170,10 @@ function approvalVerifies(ctx: RemedyChainContext, remedy: Pick<ClockRemedy, "ki
 export function createRemedyPipeline(deps: RemedyPipelineDeps): RemedyPort {
   const audit = (event: string, fields: Record<string, unknown>) => deps.audit?.(event, fields);
 
-  async function context(gameId: string): Promise<RemedyChainContext | { readonly refused: string }> {
-    const ctx = await deps.service.remedyContext(gameId, deps.signer?.remedyKeyId ?? null);
+  /** The bound game read by quorum; `withKey`: also this server's REMEDY key registry entry (an attestation needs it;
+   *  an approval check does not -- it is skipped to keep a vote's chain reads few). */
+  async function context(gameId: string, withKey = true): Promise<RemedyChainContext | { readonly refused: string }> {
+    const ctx = await deps.service.remedyContext(gameId, withKey ? (deps.signer?.remedyKeyId ?? null) : null);
     if ("ok" in ctx && ctx.ok === false) return { refused: `${ctx.code}: ${ctx.detail}` };
     return ctx as RemedyChainContext;
   }
@@ -280,14 +282,16 @@ export function createRemedyPipeline(deps: RemedyPipelineDeps): RemedyPort {
       const nowSecs = Math.floor(input.nowMs / 1000);
       const live = input.remedy <= 3;
       if (live) {
-        const minimum = Number(secsUp(input.finalNotBeforeMs)) + APPROVAL_MARGIN_SECS;
-        if (input.approveUntil < minimum) return `a Live approval must last until at least ${minimum} (finality plus ${APPROVAL_MARGIN_SECS} s)`;
+        /* The clock's own rule (`clockModel.ts` finality): strictly beyond the attested final second plus the margin. */
+        const finalSecs = Math.max(Number(secsUp(input.finalNotBeforeMs)), Number(secsUp(input.overdueMs)) + LIVE_CURE_WINDOW_SECS);
+        const minimum = finalSecs + APPROVAL_MARGIN_SECS;
+        if (input.approveUntil <= minimum) return `a Live approval must last beyond ${minimum} (finality plus ${APPROVAL_MARGIN_SECS} s)`;
         if (input.approveUntil > Number(secsUp(input.overdueMs)) + LIVE_APPROVAL_MAX_SECS) return "a Live approval may not reach more than six hours past the overdue";
       } else {
         if (input.approveUntil < nowSecs + ASYNC_APPROVAL_MIN_SECS) return "an Async approval must last at least an hour";
         if (input.approveUntil > nowSecs + ASYNC_APPROVAL_MAX_SECS) return "an Async approval may not reach more than 30 days ahead";
       }
-      const found = await context(gameId);
+      const found = await context(gameId, false);
       if ("refused" in found) return `the escrow cannot be read now (${found.refused})`;
       const ctx = found;
       const defaulting = ctx.seatOf[input.defaultingSeat];
@@ -317,7 +321,7 @@ export function createRemedyPipeline(deps: RemedyPipelineDeps): RemedyPort {
 
     async staleApprovals(gameId, facts, approvals) {
       if (approvals.length === 0) return [];
-      const found = await context(gameId);
+      const found = await context(gameId, false);
       if ("refused" in found) return null;
       const defaulting = found.seatOf[facts.defaultingSeat];
       const decision = { kind: facts.remedy, strike: facts.strike, epoch: facts.epoch, log_len: facts.logLen, log_hash: facts.logHash, overdue_ms: facts.overdueMs };

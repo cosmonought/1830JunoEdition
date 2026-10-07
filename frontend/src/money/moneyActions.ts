@@ -686,7 +686,7 @@ export const ASYNC_APPROVAL_REACH_SECS = 29 * 86_400;
 
 export async function signRemedyApproval(
   ctx: TableContext,
-  input: { readonly remedy: 2 | 4 | 5; readonly overdue: Pick<ClockOverdueView, "seat" | "strike" | "epoch" | "overdueAt" | "logLen" | "logHash">; readonly live: boolean },
+  input: { readonly remedy: 2 | 4 | 5; readonly overdue: Pick<ClockOverdueView, "seat" | "strike" | "epoch" | "overdueAt" | "logLen" | "logHash">; readonly live: boolean; readonly serverNowMs?: number },
 ): Promise<{ readonly ok: true; readonly approveUntil: number; readonly signature: string } | { readonly ok: false; readonly outcome: ActionOutcome }> {
   const services = ctx.services ?? moneyServices();
   const pinned = pinOf(services);
@@ -711,8 +711,10 @@ export async function signRemedyApproval(
   if (mineOnRoster !== own.index) return { ok: false, outcome: refuse("The table's roster doesn't match Juno for your seat, so nothing was signed.") };
   if (defaulting === own.index) return { ok: false, outcome: refuse("You can't approve a remedy against your own seat.") };
   /* Whole seconds, rounded UP (as the server and the contract read the overdue moment). Integers only. */
-  const overdueAtSecs = Math.floor((input.overdue.overdueAt + 999) / 1000);
-  const nowSecs = Math.floor(services.now() / 1000);
+  const overdueAtSecs = Number((BigInt(input.overdue.overdueAt) + BigInt(999)) / BigInt(1000));
+  /* The horizon is counted from the SERVER's time as this device last saw it (never this browser's wall clock alone). */
+  const nowMs = input.serverNowMs !== undefined && Number.isSafeInteger(input.serverNowMs) ? input.serverNowMs : services.now();
+  const nowSecs = Number(BigInt(nowMs) / BigInt(1000));
   const approveUntil = input.live ? overdueAtSecs + LIVE_APPROVAL_REACH_SECS : nowSecs + ASYNC_APPROVAL_REACH_SECS;
   let digest: string;
   try {

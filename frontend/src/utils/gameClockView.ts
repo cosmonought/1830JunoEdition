@@ -71,6 +71,9 @@ export interface ClockPresentation {
   readonly lines: readonly string[];
   /** A prominent warning for THIS seat, or `null` (the second strike's). */
   readonly warning: string | null;
+  /** What the chip shows INLINE, always (never only behind the toggle): the second-strike warning, the system-pause
+   *  sentences, the proposer's paused clock during a train offer. */
+  readonly banner: string | null;
   readonly tone: ClockTone;
   readonly ticking: boolean;
   readonly controls: ClockControls;
@@ -80,6 +83,8 @@ export const NO_CONTROLS: ClockControls = Object.freeze({ requestPause: false, r
 
 /** Shown to a seat whose approval of a sealed Async outcome must be renewed. */
 export const REAPPROVE_DETAIL = "Your approval of this outcome can no longer be sent to Juno (it lapsed, or your seat's key changed). Approve it again to send it.";
+/** Shown while an ended game's money outcome is held by a SYSTEM PAUSE. */
+export const REMEDY_HELD_DETAIL = "The outcome is recorded but held: nothing is sent to Juno until every player agrees to resume.";
 /** Shown to everyone while some approvals of a sealed Async outcome wait to be renewed. */
 export const REAPPROVE_WAITING_DETAIL = "Some players' approvals of this outcome must be renewed before it can be sent to Juno.";
 
@@ -106,6 +111,7 @@ const HIDDEN: ClockPresentation = Object.freeze({
   value: null,
   lines: Object.freeze([]),
   warning: null,
+  banner: null,
   tone: "muted",
   ticking: false,
   controls: NO_CONTROLS,
@@ -148,20 +154,25 @@ export function deadlineLabel(clock: Pick<RoomClockView, "deadline" | "paceSecs"
 }
 
 /** What the responsible seat owes, in words (the cure requirement). */
-export function owedSentence(kind: RequiredDecisionKind | null | undefined): string {
+export function owedSentence(kind: RequiredDecisionKind | null | undefined, own = false): string {
+  const whose = own ? "your" : "their";
   switch (kind) {
     case "auction-bid":
-      return "their bid or pass in the auction";
+      return `${whose} bid or pass in the auction`;
     case "bo-par":
       return "the B&O par price";
     case "discard":
       return "the train discard";
     case "offer-answer":
-      return "their answer to the standing offer";
+      return `${whose} answer to the standing offer`;
     default:
-      return "their move";
+      return `${whose} move`;
   }
 }
+
+/** A single NO on an N-1 proposal cancels it for everyone (the owner's veto). */
+export const VETO_DETAIL_LIVE = "One NO cancels this proposal for everyone; the 30:00 outcome is then the neutral annulment unless the player cures.";
+export const VETO_DETAIL_ASYNC = "One NO cancels this proposal for everyone.";
 
 export function endedSentence(kind: ClockEndKind | undefined, money: boolean): string {
   switch (kind) {
@@ -207,7 +218,7 @@ export function presentClock(input: ClockPresentationInput): ClockPresentation {
   const modeLabel = clock.deadline === "live" ? "Live" : clock.deadline === "no-deadline" ? "No deadline" : `Async · ${paceLabel(clock.paceSecs)}`;
   const elapsed = Math.max(0, input.sinceReceiptMs);
   const left = (timer: { remainingMs: number; running: boolean } | null) => (timer === null ? null : Math.max(0, timer.remainingMs - (timer.running ? elapsed : 0)));
-  const base = { visible: true, modeLabel, warning: null as string | null, controls: NO_CONTROLS };
+  const base = { visible: true, modeLabel, warning: null as string | null, banner: null as string | null, controls: NO_CONTROLS };
 
   if (clock.state === "setup") {
     return { ...base, state: "setup", label: deadlineLabel(clock), value: null, lines: clock.deadline === "no-deadline" ? [CLOCK_NO_DEADLINE_DETAIL] : [], tone: "muted", ticking: false };
@@ -216,15 +227,19 @@ export function presentClock(input: ClockPresentationInput): ClockPresentation {
     const kind = clock.ended?.kind;
     const lines = [endedSentence(kind, clock.money)];
     const stale = clock.money && clock.remedy !== null && Array.isArray(clock.remedy.stale) ? clock.remedy.stale : [];
-    if (clock.remedy !== null && clock.money) lines.push(stale.length > 0 ? REAPPROVE_WAITING_DETAIL : remedyStatusSentence(clock.remedy.status));
     /* An ended game whose money outcome is not final on Juno is held by a SYSTEM PAUSE after a continuity break: the
-       owner's sentences, and the resume vote. */
-    if (clock.system !== null) lines.push(SYSTEM_PAUSE_SENTENCE, SYSTEM_PAUSE_RESUME_SENTENCE, `${clock.system.yes.length} of ${clock.system.needed.length} agreed to resume.`);
+       owner's sentences and the resume vote -- only while there IS such an outcome to hold. */
+    const unfinal = clock.money && clock.remedy !== null && clock.remedy.status !== "confirmed" && clock.remedy.status !== "superseded";
+    const held = clock.system !== null && unfinal;
+    if (clock.remedy !== null && clock.money) lines.push(held ? REMEDY_HELD_DETAIL : stale.length > 0 ? REAPPROVE_WAITING_DETAIL : remedyStatusSentence(clock.remedy.status));
+    if (held && clock.system !== null) lines.push(SYSTEM_PAUSE_SENTENCE, SYSTEM_PAUSE_RESUME_SENTENCE, `${clock.system.yes.length} of ${clock.system.needed.length} agreed to resume.`);
     const remedyKind = clock.remedy?.kind;
-    const reapprove = seatedHere && stale.includes(me as string) && (remedyKind === 4 || remedyKind === 5) ? { remedy: remedyKind as 4 | 5 } : null;
+    /* A tab that is not current offers nothing to act on. */
+    const acting = seatedHere && input.current;
+    const reapprove = acting && stale.includes(me as string) && (remedyKind === 4 || remedyKind === 5) ? { remedy: remedyKind as 4 | 5 } : null;
     if (reapprove !== null) lines.push(REAPPROVE_DETAIL);
-    const endedControls: ClockControls = { ...NO_CONTROLS, systemResume: seatedHere && clock.system !== null && !clock.system.yes.includes(me as string), reapprove };
-    return { ...base, controls: endedControls, state: "ended", label: kind === "live-strike3-foreclosure" || kind === "live-foreclosure" || kind === "async-foreclosure" ? "Foreclosed" : kind === "game-end" ? "Game over" : "Ended", value: null, lines, tone: "ended", ticking: false };
+    const endedControls: ClockControls = { ...NO_CONTROLS, systemResume: acting && held && clock.system !== null && !clock.system.yes.includes(me as string), reapprove };
+    return { ...base, banner: held ? `${SYSTEM_PAUSE_SENTENCE} ${SYSTEM_PAUSE_RESUME_SENTENCE}` : null, controls: endedControls, state: "ended", label: kind === "live-strike3-foreclosure" || kind === "live-foreclosure" || kind === "async-foreclosure" ? "Foreclosed" : kind === "game-end" ? "Game over" : "Ended", value: null, lines, tone: "ended", ticking: false };
   }
   /* NOT CURRENT: no figure at all -- a stale tab never shows a countdown as the room's. */
   if (!input.current) {
@@ -233,7 +248,8 @@ export function presentClock(input: ClockPresentationInput): ClockPresentation {
 
   const strikes = me !== null ? (clock.strikes[me] ?? 0) : 0;
   const warning = clock.deadline === "live" && seated && strikes >= 2 ? STRIKE_TWO_WARNING : null;
-  const strikeLine = clock.deadline === "live" && seated && strikes === 1 ? STRIKE_ONE_NOTE : null;
+  /* "1 of 2 overdue cures used" is said once the first overdue is behind the seat -- not during it. */
+  const strikeLine = clock.deadline === "live" && seated && strikes === 1 && clock.overdue?.seat !== me ? STRIKE_ONE_NOTE : null;
   const controls = controlsOf(clock, me, seated);
   const responsible = clock.responsible;
   const actorLabel = responsible === null ? "Nobody to act" : responsible.seat === me ? "Your action" : `${input.nameOf(responsible.seat)} to act`;
@@ -241,14 +257,14 @@ export function presentClock(input: ClockPresentationInput): ClockPresentation {
   if (clock.state === "system-paused" && clock.system !== null) {
     const preserved = preservedLine(clock, name);
     const votes = `${clock.system.yes.length} of ${clock.system.needed.length} agreed to resume.`;
-    return { ...base, warning, controls, state: "system-paused", label: "Paused (server)", value: null, lines: [SYSTEM_PAUSE_SENTENCE, SYSTEM_PAUSE_RESUME_SENTENCE, ...(preserved !== null ? [preserved] : []), votes], tone: "paused", ticking: false };
+    return { ...base, warning, banner: `${SYSTEM_PAUSE_SENTENCE} ${SYSTEM_PAUSE_RESUME_SENTENCE}`, controls, state: "system-paused", label: "Paused (server)", value: null, lines: [SYSTEM_PAUSE_SENTENCE, SYSTEM_PAUSE_RESUME_SENTENCE, ...(preserved !== null ? [preserved] : []), votes], tone: "paused", ticking: false };
   }
   if (clock.state === "paused") {
     const preserved = preservedLine(clock, name);
     const request = clock.pause.request;
     const lines = [CLOCK_PAUSED_DETAIL, ...(preserved !== null ? [preserved] : [])];
     if (request !== null) lines.push(`${name(request.by)} asked to resume — ${request.yes.length} of ${request.needed.length} agree.`);
-    return { ...base, warning, controls, state: "paused", label: "Paused", value: null, lines, tone: "paused", ticking: false };
+    return { ...base, warning, banner: warning, controls, state: "paused", label: "Paused", value: null, lines, tone: "paused", ticking: false };
   }
 
   const requestLine = clock.pause.request !== null ? `${name(clock.pause.request.by)} asked to pause — ${clock.pause.request.yes.length} of ${clock.pause.request.needed.length} agree. The clock runs until everyone agrees.` : null;
@@ -258,12 +274,15 @@ export function presentClock(input: ClockPresentationInput): ClockPresentation {
   if (clock.state === "overdue" && clock.overdue !== null) {
     const od = clock.overdue;
     const who = od.seat === me ? "You are" : `${input.nameOf(od.seat)} is`;
-    const cure = `${who} overdue. To continue the game, ${od.seat === me ? "make" : `${input.nameOf(od.seat)} must make`} ${owedSentence(od.cure)}.`;
+    const cure = `${who} overdue. To continue the game, ${od.seat === me ? "make" : `${input.nameOf(od.seat)} must make`} ${owedSentence(od.cure, od.seat === me)}.`;
     const proposal = od.proposal;
+    /* A complete Live foreclosure decides 30:00 only while the server says it still would (its approvals outlive the
+       finality as it now stands); otherwise the line says the neutral outcome stands. */
+    const decides = proposal !== null && proposal.complete && clock.deadline === "live" && od.outcomeIfUncured === "foreclosure";
+    const suffix = proposal === null || !proposal.complete ? "." : clock.deadline !== "live" ? "." : decides ? " — decided at 30:00 unless cured first." : " — but its approvals no longer reach 30:00, so the neutral outcome stands.";
     const proposalLine =
-      proposal === null
-        ? null
-        : `${proposal.kind === "foreclose" ? "Foreclosure" : "Neutral annulment"} proposed by ${name(proposal.by)}: ${proposal.yes.length} of ${proposal.needed.length} agree${proposal.complete ? (clock.deadline === "live" ? " — decided at 30:00 unless cured first." : ".") : "."}`;
+      proposal === null ? null : `${proposal.kind === "foreclose" ? "Foreclosure" : "Neutral annulment"} proposed by ${name(proposal.by)}: ${proposal.yes.length} of ${proposal.needed.length} agree${suffix}`;
+    const vetoLine = proposal !== null && od.seat !== me && proposal.needed.includes(me ?? "") ? (clock.deadline === "live" ? VETO_DETAIL_LIVE : VETO_DETAIL_ASYNC) : null;
     if (clock.deadline === "live") {
       const finality = left(od.finality);
       const outcome = od.outcomeIfUncured === "foreclosure" ? LIVE_FORECLOSE_OUTCOME : LIVE_NEUTRAL_OUTCOME;
@@ -271,16 +290,17 @@ export function presentClock(input: ClockPresentationInput): ClockPresentation {
         ...base,
         warning,
         controls,
+        banner: warning,
         state: "overdue",
         label: "OVERDUE",
         value: finality === null ? null : `${formatClockDuration(finality)} to 30:00`,
-        lines: [cure, outcome, ...(proposalLine !== null ? [proposalLine] : []), ...extra],
+        lines: [cure, outcome, ...(proposalLine !== null ? [proposalLine] : []), ...(vetoLine !== null ? [vetoLine] : []), ...extra],
         tone: "overdue",
         ticking: od.finality?.running === true,
       };
     }
     /* Async: overdue only -- no automatic outcome, so no countdown at all. */
-    return { ...base, warning, controls, state: "overdue", label: "OVERDUE", value: null, lines: [cure, ASYNC_OVERDUE_DETAIL, ...(proposalLine !== null ? [proposalLine] : []), ...extra], tone: "overdue", ticking: false };
+    return { ...base, warning, banner: warning, controls, state: "overdue", label: "OVERDUE", value: null, lines: [cure, ASYNC_OVERDUE_DETAIL, ...(proposalLine !== null ? [proposalLine] : []), ...(vetoLine !== null ? [vetoLine] : []), ...extra], tone: "overdue", ticking: false };
   }
 
   if (clock.state === "trade" && clock.trade !== null) {
@@ -290,6 +310,7 @@ export function presentClock(input: ClockPresentationInput): ClockPresentation {
       ...base,
       warning,
       controls,
+      banner: clock.trade.proposer === me ? `Your action clock is paused at ${formatClockDuration(clock.trade.proposerRemainingMs)}.` : warning,
       state: "trade",
       label: `Train offer — ${value ?? "10:00"} to respond`,
       value: null,
@@ -305,7 +326,7 @@ export function presentClock(input: ClockPresentationInput): ClockPresentation {
   }
 
   if (clock.deadline === "no-deadline") {
-    return { ...base, warning, controls, state: "running", label: actorLabel, value: null, lines: [CLOCK_NO_DEADLINE_DETAIL, ...extra], tone: "normal", ticking: false };
+    return { ...base, warning, banner: warning, controls, state: "running", label: actorLabel, value: null, lines: [CLOCK_NO_DEADLINE_DETAIL, ...extra], tone: "normal", ticking: false };
   }
   const remaining = left(clock.action);
   const allowance = clock.deadline === "live" ? 20 * 60_000 : (clock.paceSecs ?? 0) * 1000;
@@ -313,6 +334,7 @@ export function presentClock(input: ClockPresentationInput): ClockPresentation {
   return {
     ...base,
     warning,
+    banner: warning,
     controls,
     state: "running",
     label: actorLabel,

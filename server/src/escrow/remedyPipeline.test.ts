@@ -194,7 +194,11 @@ describe("FP4 remedy pipeline: N-1 approvals", () => {
     assert.match((await check(BOB, until, signed(1, until, seatSecret(2)))) ?? "", /does not verify under your seat's current consent key/);
     assert.match((await check(BOB, until, signed(1, until, seatSecret(1), { log_len: 2 }))) ?? "", /does not verify/, "bound to the exact overdue instance");
     const short = Number(secsUp(finalNotBefore)) + 30;
-    assert.match((await check(BOB, short, signed(1, short))) ?? "", /must last until at least/);
+    assert.match((await check(BOB, short, signed(1, short))) ?? "", /must last beyond/);
+    /* Exactly at finality plus the margin is not enough (the clock requires strictly beyond it). */
+    const edge = Number(secsUp(finalNotBefore)) + 300;
+    assert.match((await check(BOB, edge, signed(1, edge))) ?? "", /must last beyond/);
+    assert.equal(await check(BOB, edge + 1, signed(1, edge + 1)), null);
     const far = Number(secsUp(remedy.overdue_ms)) + 7 * 3600;
     assert.match((await check(BOB, far, signed(1, far))) ?? "", /six hours/);
     assert.match((await check(ALICE, until, signed(0, until))) ?? "", /cannot approve a remedy against itself/);

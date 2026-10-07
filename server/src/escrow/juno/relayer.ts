@@ -827,6 +827,13 @@ export function createJunoRelayer(deps: RelayerDeps): Relayer {
       /* L5-6: the same bytes, but still a side effect -- a task that is no longer (shown to be) the relayer withholds it:
          the attempt stays live, unchanged, for the next pass or the next relayer. */
       if (!(await mayAct(attempt.phase === "signed" ? "broadcast" : "rebroadcast", intent))) return intent;
+      /* Phase 3 final clocks: a REMEDY attempt (signed by an earlier process, perhaps before a continuity break) is handed
+         to a node again only on the clock lane's word -- what was not final stays frozen through a SYSTEM PAUSE. Withheld,
+         it simply expires and is proven dead; a later attempt is admitted afresh. */
+      if (intent.op.kind === "remedy" && deps.admit !== undefined) {
+        const admission = await deps.admit(intent);
+        if (admission.kind !== "ok") return write(intent, withAttemptPatch(intent, { unknown_observations: attempt.unknown_observations + 1, observed_at: at }, at));
+      }
       return broadcast(intent, attempt);
     }
     return write(intent, withAttemptPatch(intent, { unknown_observations: attempt.unknown_observations + 1, observed_at: at }, at));

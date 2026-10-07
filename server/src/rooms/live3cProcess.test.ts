@@ -508,6 +508,17 @@ test("LIVE-3C, the real process: SIGKILL twice over a full data directory -- dis
     assert.deepEqual([alice2.entries().length, aliceOther2.entries().length, bob2.entries().length], [logBefore, logBefore, logBefore]);
     assert.equal(await playerIdOf(aliceOther2, activeId), alicePid, "Alice's second device is still her seat");
     const nextTab = next === alice ? alice2 : bob2;
+    /* Phase 3 final clocks: a restart is a continuity break nobody proved -- the Live table is SYSTEM-PAUSED (its timers
+       preserved as of the last proof) and takes no move until every player agrees to resume. */
+    const held = await nextTab.act(BUY);
+    assert.deepEqual([held.kind, held.code], ["refused", "clock-system-paused"], JSON.stringify(held));
+    bob2.roomHello(activeId);
+    const pausedView = await aliceOther2.view(activeId, (view) => (view.clock as { system?: unknown } | null)?.system != null);
+    const since = (pausedView.clock as { system: { since: number } }).system.since;
+    for (const tab of [aliceOther2, bob2]) {
+      const resumed = await tab.op({ type: "clock-sysresume", since }, activeId);
+      assert.equal(resumed.ok, true, JSON.stringify(resumed));
+    }
     const movedAgain = await nextTab.act(BUY);
     assert.equal(movedAgain.kind, "applied", JSON.stringify(movedAgain));
     assert.equal(await playerIdOf(bob2, activeId), bobPid);

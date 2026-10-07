@@ -309,7 +309,7 @@ describe("Live train offer: the proposer's clock freezes; the recipient has a di
     assert.equal(t.refusal(A, "move"), null);
     /* The next Operating Round clears it. */
     t.move(A, facts(turn(B, 1), { orKey: "OperatingRound/1/2" }));
-    assert.deepEqual(t.record.declines, { or_key: "OperatingRound/1/2", counts: {} });
+    assert.deepEqual(t.record.declines, { or_key: "OperatingRound/1/2", counts: {}, offers: [] });
     assert.equal(t.refusal(A, "propose", { trainRecipient: B }), null);
   });
 
@@ -864,14 +864,20 @@ describe("Undo never manufactures a clock", () => {
     assert.equal(t.remaining(), 2 * MIN, "5:00 then 3:00 used");
   });
 
-  test("undoing an action that passed responsibility restores the actor's own remainder (the other's time is not charged)", () => {
+  test("undoing one's OWN action that passed responsibility restores one's remainder, charged the time since (an act-handoff-undo cycle can never stall the table)", () => {
     const t = new Table("live");
     t.advance(12 * MIN);
     t.move(A, facts(turn(B, 1)));
     const actIndex = t.index;
     t.advance(4 * MIN);
     t.move(A, facts(turn(A, 0)), "revert", { revertTarget: actIndex });
-    assert.deepEqual([t.record.obligation?.seat, t.remaining()], [A, 8 * MIN]);
+    assert.deepEqual([t.record.obligation?.seat, t.remaining()], [A, 4 * MIN], "8:00 left at the act, less the 4:00 since");
+    /* The cycle that would stall B forever: A re-acts, B gets 20:00, A undoes again at B's 19:50 -- A pays every time. */
+    t.move(A, facts(turn(B, 1)));
+    const again = t.index;
+    t.advance(3 * MIN + 59 * SEC);
+    t.move(A, facts(turn(A, 0)), "revert", { revertTarget: again });
+    assert.equal(t.remaining(), 1 * SEC);
   });
 
   test("undoing a rejection restores the recipient's response time; the decline is NOT given back", () => {
@@ -882,8 +888,11 @@ describe("Undo never manufactures a clock", () => {
     const rejectIndex = t.index;
     t.advance(MIN);
     t.move(B, offering(offerOf("train", A, B)), "revert", { revertTarget: rejectIndex });
-    assert.deepEqual([t.record.obligation?.seat, t.remaining(), t.record.declines.counts[`${A}>${B}`]], [B, 6 * MIN, 1]);
+    assert.deepEqual([t.record.obligation?.seat, t.remaining(), t.record.declines.counts[`${A}>${B}`]], [B, 5 * MIN, 1], "6:00 at the reject, less the 1:00 since; the decline stays");
     assert.equal(t.record.parked[0]?.seat, A);
+    /* Rejecting the SAME offer again is the same decline: one offer is declined at most once. */
+    t.move(B, facts(turn(A, 0)), "reject");
+    assert.equal(t.record.declines.counts[`${A}>${B}`], 1);
   });
 
   test("no undo while overdue, nor across a fence (a cure, an expiry, a pause, a system pause)", () => {
@@ -1093,5 +1102,39 @@ describe("Review fixes: requests, breaks, gaps, offers, approvals", () => {
     assert.deepEqual([resealed.kind, resealed.epoch, resealed.log_len, resealed.status, resealed.stale], [5, sealed.epoch, sealed.log_len, "sealed", []]);
     assert.notEqual(resealed.evidence_hash, sealed.evidence_hash, "a new seal of the same decision");
     assert.equal(resealed.approvals.find((a) => a.seat === C)?.approve_until, nowSecs + 9 * 86_400);
+  });
+});
+
+describe("Review fixes (second pass): unanimous annulment everywhere, ended pauses", () => {
+  test("a free table annuls unanimously from plain active Live, from a pending Live foreclosure, from an Async overdue and from No-deadline", () => {
+    const all = (t: Table) => {
+      for (const seat of [A, B, C]) t.ok(annulVote(t.record, seat, true, t.t));
+      assert.equal(t.record.ended?.kind, "annulled");
+      assert.equal(t.record.remedy, null, "a free table moves no money");
+    };
+    const live = new Table("live");
+    live.advance(5 * MIN);
+    all(live);
+    const pending = new Table("live");
+    pending.advance(LIVE_ACTION_MS);
+    pending.ok(propose(pending.record, B, "foreclose", null, pending.t));
+    pending.ok(vote(pending.record, C, pending.record.overdue?.proposal?.id as number, true, null, pending.t));
+    assert.equal(pending.record.overdue?.proposal?.complete_at !== null, true, "the foreclosure is pending minute 30");
+    all(pending);
+    const paced = new Table("async-pace", { pace: 43_200 });
+    paced.advance(43_200 * SEC);
+    assert.equal(paced.record.phase, "overdue");
+    all(paced);
+    all(new Table("no-deadline"));
+  });
+
+  test("a game that ends while SYSTEM-PAUSED (a unanimous annulment) carries no pause: nothing is timed once it ended", () => {
+    const t = new Table("live");
+    t.advance(5 * MIN);
+    t.ok(continuityBreak(t.record, { now: t.t + MIN, preservedAt: t.t, reason: "restart", authority: "auth-2" }));
+    assert.notEqual(t.record.system, null);
+    for (const seat of [A, B, C]) t.ok(annulVote(t.record, seat, true, t.t));
+    assert.deepEqual([t.record.phase, t.record.system, t.record.pause.paused_at], ["ended", null, null]);
+    assert.equal(clockViewOf(t.record, t.t).system, null);
   });
 });

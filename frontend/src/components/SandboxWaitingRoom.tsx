@@ -886,8 +886,16 @@ export function SandboxWaitingRoom({
                       pace or No deadline, fixed once play begins -- a table with stakes fixed it with its escrow). */}
                   <TermRow
                     label="Deadline"
-                    value={room?.clock ? deadlineLabel(room.clock) : variants.mode === "live" ? "Live · 20:00 per action" : "No deadline"}
-                    note={room?.clock?.deadline === "no-deadline" || (room?.clock == null && variants.mode === "async") ? NO_DEADLINE_NOTE : variants.mode === "live" ? LIVE_DEADLINE_NOTE : ASYNC_DEADLINE_NOTE}
+                    value={room?.clock ? deadlineLabel(room.clock) : variants.mode === "live" ? "Live · 20:00 per action" : money !== null ? "—" : "No deadline"}
+                    note={
+                      room?.clock == null && variants.mode === "async" && money !== null
+                        ? "The table's deadline (fixed with its escrow) is being read from the server."
+                        : room?.clock?.deadline === "no-deadline" || (room?.clock == null && variants.mode === "async")
+                          ? NO_DEADLINE_NOTE
+                          : variants.mode === "live"
+                            ? LIVE_DEADLINE_NOTE
+                            : ASYNC_DEADLINE_NOTE
+                    }
                   />
                   {isHost && money === null && variants.mode === "async" && room?.status === "waiting" ? <DeadlineChooser gameId={room.gameId} clock={room.clock ?? null} /> : null}
                   {/* #1444: the visibility's explanation lives HERE and nowhere else. It used to sit beside

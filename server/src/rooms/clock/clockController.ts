@@ -46,7 +46,7 @@ import type { StoreWriteOutcome } from "../../persistence/storeResult";
 import type { RemedyPort } from "../../escrow/remedyPipeline";
 import type { ChainIntentRecord } from "../../escrow/chainIntents";
 import type { GameActor, Tx } from "../gameActor";
-import type { ClockConductHook, ClockEvidenceEvent } from "./clockEvidence";
+import { nextHead, type ClockConductHook, type ClockEvidenceEvent } from "./clockEvidence";
 import {
   acknowledge,
   advance,
@@ -217,6 +217,9 @@ interface Entry {
   /** A refused remedy is asked again no earlier than this. */
   remedyRetryAt: number;
   remedyBackoffMs: number;
+  /** The trust instant of the last record this process STORED (or read): continuity is proven only by what is durable,
+   *  never by an in-memory heartbeat whose write did not land. */
+  provenAt: number | null;
 }
 
 const describe = (error: unknown): string => (error instanceof Error ? error.message : String(error));
@@ -241,13 +244,15 @@ export function boardFactsOf(state: GameStateResponse, end?: { readonly ended: b
  *  session with every entry stamped at the exact moment the response time ended. The caller commits the batch. */
 export function rescindExpiredOffer(
   session: RoomSession,
-  input: { readonly proposer: string; readonly at: number; readonly build: string; readonly host: string; readonly hostUndo: UndoPolicy["host_undo"] },
+  input: { readonly proposer: string; readonly at: number; readonly offerKey?: string; readonly build: string; readonly host: string; readonly hostUndo: UndoPolicy["host_undo"] },
   stampAt?: <T>(at: number, fn: () => T) => T,
 ): { readonly ok: true; readonly batch: readonly ServerLogEntry[]; readonly before: ClockBoardFacts; readonly after: ClockBoardFacts; readonly board: GameStateResponse } | { readonly ok: false; readonly why: string } {
   const state = session.state;
   const offer = state.train_purchase_offer ?? null;
   if (offer === null || offer.accepted === true) return { ok: false, why: "no train offer stands" };
   const before = boardFactsOf(state);
+  /* Only THE offer whose response time ran out is closed: a different offer standing now is never rescinded. */
+  if (input.offerKey !== undefined && before.offer?.key !== input.offerKey) return { ok: false, why: "a different train offer stands" };
   const start = session.entries.length;
   const submit = () =>
     session.submit({
@@ -316,6 +321,7 @@ export function createClockController(deps: ClockControllerDeps) {
         retryAt: null,
         remedyRetryAt: 0,
         remedyBackoffMs: 0,
+        provenAt: null,
       };
       entries.set(gameId, entry);
     }
@@ -340,6 +346,7 @@ export function createClockController(deps: ClockControllerDeps) {
       if (outcome.kind === "committed") {
         counters.writes += 1;
         entry.stored = stamped.revision;
+        entry.provenAt = stamped.trusted_at;
         if (entry.record === record) entry.record = stamped;
         deliver(entry, stamped);
         return true;
@@ -385,6 +392,7 @@ export function createClockController(deps: ClockControllerDeps) {
       } else {
         entry.record = stored;
         entry.stored = stored?.revision ?? null;
+        entry.provenAt = stored?.trusted_at ?? null;
         entry.pending = [];
         entry.pendingEffects = [];
       }
@@ -394,6 +402,7 @@ export function createClockController(deps: ClockControllerDeps) {
     } else if (stored.authority === deps.authority && stored.revision <= entry.record.revision) {
       /* Our own write landed (or an earlier one did): the decided record stands; the next flush writes it. */
       entry.stored = stored.revision;
+      entry.provenAt = Math.max(entry.provenAt ?? 0, stored.trusted_at);
       if (stored.revision === entry.record.revision) deliver(entry, stored);
     } else {
       markLost(entry, stored, `the stored clock was written by another authority (${stored.authority})`);
@@ -408,6 +417,7 @@ export function createClockController(deps: ClockControllerDeps) {
     entry.lost = true;
     entry.record = stored;
     entry.stored = stored?.revision ?? null;
+    entry.provenAt = stored?.trusted_at ?? null;
     entry.pending = [];
     entry.pendingEffects = [];
     deps.warn(`  clock: ${entry.gameId}: ${why}; this process stops deciding it`);
@@ -493,10 +503,14 @@ export function createClockController(deps: ClockControllerDeps) {
   async function checkContinuity(entry: Entry, game: GameActor, state: GameStateResponse | null): Promise<void> {
     let record = entry.record as GameClockRecord;
     if (record.authority === deps.authority) {
-      /* This process's own record (an eviction and reload): this process held the authority throughout, so the elapsed
-         time is real -- proven now, so the stall check measures from here. (Residual, recorded: a process stall that
-         coincided with the eviction is not detected; a running Live clock is pinned resident, so this is an Async or a
-         stopped clock.) */
+      /* This process's own record (an eviction and reload). A LIVE clock is pinned resident while it runs, so finding one
+         reloaded means it was not (held, or a failure): its continuity is judged by the stall rule, never assumed. An
+         Async table is evicted while idle by design -- the elapsed time was real (anyone could have loaded it and acted),
+         so it is proven now and its due transitions are processed at their own moments. */
+      if (record.policy.class === "live") {
+        await checkStall(entry, game.gameId);
+        return;
+      }
       entry.record = heartbeat(record, deps.authority, now());
       return;
     }
@@ -535,13 +549,16 @@ export function createClockController(deps: ClockControllerDeps) {
     if (!running) return;
     const limit = record.policy.class === "live" ? CLOCK_CONTINUITY_GAP_LIVE_MS : CLOCK_CONTINUITY_GAP_ASYNC_MS;
     const at = now();
-    const gap = at - record.trusted_at;
+    /* The last DURABLE proof: a heartbeat whose write did not land proves nothing (a store outage in which no move can
+       be recorded is a continuity break like any other once it outlasts the limit). */
+    const proof = Math.min(record.trusted_at, entry.provenAt ?? record.trusted_at);
+    const gap = at - proof;
     if (gap <= limit) return;
     counters.breaks += 1;
-    const reason = `server continuity was not proven: this server did not run the table's clock for ${Math.floor(gap / 1000)} s (last proven at ${new Date(record.trusted_at).toISOString()})`;
-    const step = continuityBreak(record, { now: at, preservedAt: record.trusted_at, reason, authority: deps.authority });
+    const reason = `server continuity was not proven: this server did not durably run the table's clock for ${Math.floor(gap / 1000)} s (last proven at ${new Date(proof).toISOString()})`;
+    const step = continuityBreak(record, { now: at, preservedAt: proof, reason, authority: deps.authority });
     if (step.record.system !== null && record.system === null) counters.systemPauses += 1;
-    deps.ops.audit("clock.continuity-break", { game_id: gameId, cause: "stall", gap_ms: gap, preserved_at: record.trusted_at, system_pause: step.record.system !== null, deadline: record.policy.class });
+    deps.ops.audit("clock.continuity-break", { game_id: gameId, cause: "stall", gap_ms: gap, preserved_at: proof, system_pause: step.record.system !== null, deadline: record.policy.class });
     applyStep(entry, step, gameId, true);
     await flush(entry);
   }
@@ -553,7 +570,7 @@ export function createClockController(deps: ClockControllerDeps) {
     const current = entry.record;
     /* Revisions only ever rise (a store's CAS compares them): a step computed from an earlier record never reuses one. */
     entry.record = current !== null && step.record !== current && step.record.revision <= current.revision ? { ...step.record, revision: current.revision + 1 } : step.record;
-    queue(entry, step.events, entry.record);
+    queue(entry, step.events, entry.record, current?.evidence.head ?? null);
     for (const effect of step.effects) {
       if (effect.kind === "remedy") entry.sealedRev = entry.record.revision;
       else entry.pendingEffects.push({ effect, revision: entry.record.revision });
@@ -561,8 +578,20 @@ export function createClockController(deps: ClockControllerDeps) {
     void gameId;
   }
 
-  function queue(entry: Entry, events: readonly ClockEvidenceEvent[], record: GameClockRecord): void {
-    for (const event of events) entry.pending.push({ event, head: record.evidence.head });
+  /** Queue a step's events, each with the evidence head right AFTER it (a consumer can verify the chain event by
+   *  event); when the step's base head is unknown, every event carries the step's final head. */
+  function queue(entry: Entry, events: readonly ClockEvidenceEvent[], record: GameClockRecord, startHead: string | null = null): void {
+    let heads: string[] | null = null;
+    if (startHead !== null && events.length > 0) {
+      let head = startHead;
+      heads = [];
+      for (const event of events) {
+        head = nextHead(head, event);
+        heads.push(head);
+      }
+      if (head !== record.evidence.head) heads = null;
+    }
+    events.forEach((event, i) => entry.pending.push({ event, head: heads?.[i] ?? record.evidence.head }));
     if (entry.pending.length > 4_096) entry.pending.splice(0, entry.pending.length - 4_096);
   }
 
@@ -599,8 +628,9 @@ export function createClockController(deps: ClockControllerDeps) {
     if (closed) return;
     const timed = record !== null && !entry.lost && (record.phase === "active" || record.phase === "overdue") && record.system === null && record.pause.paused_at === null && record.policy.class !== "no-deadline";
     if (timed && isHeld(entry.gameId)) {
-      /* HELD: nobody can move, so nothing advances and no continuity is proven; looked at again later. */
-      pinFor(entry, false);
+      /* HELD: nobody can move, so nothing advances and no continuity is proven; looked at again later. A Live table
+         stays resident meanwhile (its held time is judged by the stall rule when the hold lifts). */
+      pinFor(entry, record?.policy.class === "live");
       entry.timer = timers.set(() => {
         entry.timer = null;
         if (!closed && !entry.lost && deps.serving(entry.gameId)) arm(entry);
@@ -731,8 +761,10 @@ export function createClockController(deps: ClockControllerDeps) {
         break;
       }
       if (!closed.ok) {
-        /* The offer is not standing after all (the record and the board disagree): re-derived from the board. */
+        /* The offer is not standing after all (the record and the board disagree): re-derived from the board -- and the
+           next attempt backs off (a board that still shows the offer must not spin the timer). */
         deps.warn(`  clock: ${game.gameId}: an expired train offer could not be closed (${closed.why}); the clock is re-derived from the board`);
+        retryLater(entry, closed.why);
         const view = game.view;
         const last = view.entries[view.entries.length - 1];
         if (last !== undefined && entry.record !== null) {
@@ -815,16 +847,22 @@ export function createClockController(deps: ClockControllerDeps) {
       trainRecipient = sellerPresident(state, (body as { seller_protocol_id: number }).seller_protocol_id);
     }
     const refusal = gate(current, { actor: input.actor, msg: cls.cls, closeRoom: cls.closeRoom, revertTarget: cls.revertTarget, trainRecipient, nameOf: (seat) => name(game.gameId, seat) });
-    if (current !== record) await settle(entry, game.gameId);
+    /* A move is judged only against a STORED clock: an overdue (a strike) decided but not yet durable must not be cured
+       -- or played past -- by a move a crash could then separate from it. */
+    const durable = entry.stored === current.revision ? true : await settle(entry, game.gameId);
     if (refusal !== null) {
       counters.refusals += 1;
       return { ok: false, code: refusal.code, reason: refusal.reason };
+    }
+    if (!durable && !cls.closeRoom) {
+      counters.refusals += 1;
+      return { ok: false, code: CLOCK_REFUSAL.unavailable, reason: "The server could not record the game clock just now, so no move was taken. Try again in a moment." };
     }
     return { ok: true, now: at, before: factsOfGame(game.gameId, state), cls: cls.cls, revertTarget: cls.revertTarget };
   }
 
   /** After a committed batch (in the same task): fold it and write the record before the task ends. */
-  async function afterCommit(game: GameActor, input: { readonly gate: GateResult; readonly actor: string; readonly batch: readonly ServerLogEntry[]; readonly board: GameStateResponse }): Promise<void> {
+  async function afterCommit(game: GameActor, input: { readonly gate: GateResult; readonly actor: string; readonly batch: readonly ServerLogEntry[]; readonly board: GameStateResponse; readonly applied?: boolean }): Promise<void> {
     const entry = entryOf(game.gameId);
     if (entry.record === null || entry.lost || entry.unreadable !== null || input.batch.length === 0) {
       if (entry.record === null && input.gate.cls === "deal") await afterDeal(game, input);
@@ -832,13 +870,18 @@ export function createClockController(deps: ClockControllerDeps) {
     }
     if (input.gate.cls === "deal") return afterDeal(game, input);
     const before = input.gate.before ?? factsOfGame(game.gameId, input.board);
+    /* A submit that was REFUSED but committed repair entries (a crash's interrupted burst) is the server's, not the
+       submitter's: it neither cures nor refreshes anyone's clock. The batch is keyed by its own move (the first entry
+       a player made), so an undo of that move finds its snapshot. */
+    const applied = input.applied !== false;
+    const own = input.batch.find((entry) => entry.derived !== true) ?? input.batch[0];
     const batch: ClockBatch = {
-      actor: input.actor,
-      first: input.batch[0].index,
+      actor: applied ? input.actor : "",
+      first: applied ? own.index : input.batch[0].index,
       last: input.batch[input.batch.length - 1].index,
       at: stampOf(input.batch[0]) ?? input.gate.now,
-      msg: input.gate.cls,
-      revertTarget: input.gate.revertTarget,
+      msg: applied ? input.gate.cls : "optional",
+      revertTarget: applied ? input.gate.revertTarget : null,
       before,
       after: factsOfGame(game.gameId, input.board),
     };
@@ -960,6 +1003,8 @@ export function createClockController(deps: ClockControllerDeps) {
         if (record === null || remedy === null || entry.lost) return;
         if (remedy.status === "confirmed" || remedy.status === "superseded") return;
         if (record.system !== null || record.authority !== deps.authority || isHeld(gameId)) return;
+        /* A refused (or fenced) remedy is asked again only after its backoff, whoever asks. */
+        if (now() < entry.remedyRetryAt) return;
         /* Async approvals waiting to be renewed: nothing to attest until every named seat approves again. */
         if (remedy.stale.length > 0) return;
         if (entry.sealedRev !== null && (entry.stored === null || entry.stored < entry.sealedRev)) {
@@ -976,8 +1021,12 @@ export function createClockController(deps: ClockControllerDeps) {
             attempt = { status: remedy.status, detail: `the remedy attempt failed (${describe(error)}); retried`, attested: false };
           }
         }
-        if (attempt.status === "refused") {
-          counters.remedyRefused += 1;
+        /* A standing refusal, or an attestation the FP4 fence holds back, is asked again only after a backoff; a fallback
+           to the neutral annulment or approvals to renew are acted on at once. */
+        const turned = attempt.fallback === true || (attempt.stale !== undefined && attempt.stale.length > 0);
+        const stuck = !turned && (attempt.status === "refused" || (!attempt.attested && attempt.status === "sealed" && attempt.detail !== null));
+        if (attempt.status === "refused") counters.remedyRefused += 1;
+        if (stuck) {
           /* Asked again no sooner than the backoff (doubling): a refusal is a standing condition, not a blip. */
           entry.remedyBackoffMs = Math.min(CLOCK_REMEDY_BACKOFF_MAX_MS, Math.max(CLOCK_REMEDY_BACKOFF_MIN_MS, entry.remedyBackoffMs * 2));
           entry.remedyRetryAt = now() + entry.remedyBackoffMs;

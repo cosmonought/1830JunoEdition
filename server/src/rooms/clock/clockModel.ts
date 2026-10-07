@@ -64,6 +64,7 @@ import {
   LIVE_CURE_MS,
   LIVE_DECLINES_PER_OR,
   LIVE_TRADE_MS,
+  emptyDeclines,
   type ClockEnded,
   type ClockObligation,
   type ClockOverdue,
@@ -280,7 +281,7 @@ export function newClockRecord(input: { readonly gameId: string; readonly deadli
     strikes: {},
     epochs: 0,
     proposals_total: 0,
-    declines: { or_key: null, counts: {} },
+    declines: emptyDeclines(null),
     pause: { paused_at: null, request: null, requests: 0, window: { key: null, count: 0 } },
     system: null,
     annul: null,
@@ -448,7 +449,7 @@ export function foldBatch(record: GameClockRecord, batch: ClockBatch, now: numbe
     const selfOffer = before.proposer !== null && before.proposer === before.answerer;
     const trainLive = isLive && before.slot === "train" && !selfOffer;
     if (trainLive && (batch.msg === "reject" || batch.msg === "server-expiry") && before.proposer !== null && before.answerer !== null) {
-      bumpDeclines(x, batch.before.orKey, before.proposer, before.answerer);
+      bumpDeclines(x, batch.before.orKey, before.proposer, before.answerer, before.key);
     }
     if (trainLive) {
       x.emit("trade-end", at, {
@@ -508,8 +509,8 @@ function finishFold(x: Draft, batch: ClockBatch): void {
   if (d.pause.window.key !== key && d.pause.window.count > 0) d.pause = { ...d.pause, window: { key, count: 0 } };
   /* The two-decline limit is the current Operating Round's: a new OR (or leaving the ORs) clears it. */
   const orKey = batch.after.orKey;
-  if (d.declines.or_key !== orKey && (Object.keys(d.declines.counts).length > 0 || d.declines.or_key !== null)) {
-    d.declines = { or_key: orKey, counts: {} };
+  if (d.declines.or_key !== orKey && (Object.keys(d.declines.counts).length > 0 || d.declines.or_key !== null || d.declines.offers.length > 0)) {
+    d.declines = emptyDeclines(orKey);
   }
   /* Parked clocks of offers no longer standing are dropped (the offer is gone; nothing may resume from it). */
   const standing = batch.after.offer?.key ?? null;
@@ -517,18 +518,22 @@ function finishFold(x: Draft, batch: ClockBatch): void {
   normalize(x, batch.at);
 }
 
-function bumpDeclines(x: Draft, orKey: string | null, from: string, to: string): void {
+function bumpDeclines(x: Draft, orKey: string | null, from: string, to: string, offerKey: string): void {
   const d = x.d;
-  const counts = d.declines.or_key === orKey ? { ...d.declines.counts } : {};
+  const same = d.declines.or_key === orKey;
+  const offers = same ? d.declines.offers : [];
+  /* One offer is declined at most once (an answer undone and given again is the same decline). */
+  if (offers.includes(offerKey)) return;
+  const counts = same ? { ...d.declines.counts } : {};
   const key = `${from}>${to}`;
   counts[key] = (counts[key] ?? 0) + 1;
-  d.declines = { or_key: orKey, counts };
+  d.declines = { or_key: orKey, counts, offers: [...offers, offerKey].slice(-64) };
 }
 
 function pushSnapshot(x: Draft, index: number, at: number, obligation: ClockObligation | null, parked: readonly ClockParked[], declines: GameClockRecord["declines"]): void {
   const frozen = obligation === null ? null : { ...obligation, timer: obligation.timer === null ? null : freeze(obligation.timer, at) };
   const kept = x.d.snapshots.filter((snap) => snap.index < index);
-  x.d.snapshots = [...kept, { index, at, obligation: frozen, parked: [...parked], declines: { or_key: declines.or_key, counts: { ...declines.counts } } }].slice(-CLOCK_SNAPSHOT_LIMIT);
+  x.d.snapshots = [...kept, { index, at, obligation: frozen, parked: [...parked], declines: { or_key: declines.or_key, counts: { ...declines.counts }, offers: [...declines.offers] } }].slice(-CLOCK_SNAPSHOT_LIMIT);
 }
 
 /** Declines never go back: the larger count per direction of two views of the same Operating Round. */
@@ -536,7 +541,7 @@ function mergeDeclines(a: GameClockRecord["declines"], b: GameClockRecord["decli
   if (a.or_key !== b.or_key) return a;
   const counts: Record<string, number> = { ...a.counts };
   for (const [key, count] of Object.entries(b.counts)) counts[key] = Math.max(counts[key] ?? 0, count);
-  return { or_key: a.or_key, counts };
+  return { or_key: a.or_key, counts, offers: [...new Set([...a.offers, ...b.offers])].slice(-64) };
 }
 
 function restoreUndo(x: Draft, batch: ClockBatch): void {
@@ -557,8 +562,11 @@ function restoreUndo(x: Draft, batch: ClockBatch): void {
     const since = d.snapshots.filter((s) => s.index > target);
     const sameSeatThroughout = current !== null && current.seat === prior.seat && since.every((s) => s.obligation !== null && s.obligation.seat === prior.seat);
     const parkedSince = current !== null && current.began_index === target && d.parked.some((p) => p.seat === prior.seat);
+    /* A seat undoing its OWN action is charged everything since it took it, whoever held the clock meanwhile: an
+       act-handoff-undo-redo cycle can never refresh the next seat's clock for free (an endless stall). */
+    const selfUndo = batch.actor === prior.seat;
     const charge =
-      sameSeatThroughout || parkedSince
+      sameSeatThroughout || parkedSince || selfUndo
         ? clamp(at - snap.at)
         : current !== null && current.seat === prior.seat && current.began_index === target && current.initial_ms !== null && current.timer !== null
           ? clamp(current.initial_ms - remainingAt(current.timer, at))
@@ -583,7 +591,7 @@ function restoreUndo(x: Draft, batch: ClockBatch): void {
     restored = obligationFor(d, D, at, batch.first, left, null);
     how = "undo-unrecorded";
   }
-  if (snap !== null && snap.declines.or_key === batch.after.orKey) d.declines = mergeDeclines({ or_key: snap.declines.or_key, counts: { ...snap.declines.counts } }, d.declines);
+  if (snap !== null && snap.declines.or_key === batch.after.orKey) d.declines = mergeDeclines(snap.declines, d.declines);
   d.snapshots = d.snapshots.filter((s) => s.index < target);
   d.obligation = restored;
   x.emit("undo", at, { target, index: batch.first, by: batch.actor, seat: restored?.seat ?? null, remaining_ms: restored?.timer?.remaining_ms ?? null, how });
@@ -598,7 +606,7 @@ function beginPlay(x: Draft, batch: ClockBatch): void {
   x.emit("policy", at, { deadline: d.policy.class, pace_secs: d.policy.pace_secs, money: d.money, seats: [...d.seats] });
   const D = batch.after.decision;
   d.obligation = D === null ? null : obligationFor(d, D, at, batch.first, allowanceOf(d), null);
-  d.declines = { or_key: batch.after.orKey, counts: {} };
+  d.declines = emptyDeclines(batch.after.orKey);
   emitResponsibility(x, d.obligation, at, { actor: batch.actor, index: batch.first, reason: "deal" });
   normalize(x, at);
 }
@@ -609,7 +617,10 @@ function endGame(x: Draft, kind: ClockEndKind, at: number, seat: string | null):
   normalize(x, at);
   d.phase = "ended";
   d.ended = { kind, at, seat };
-  d.pause = { ...d.pause, request: null };
+  /* Nothing is timed once the game has ended: no pause (voluntary or SYSTEM) outlives it. (An ended game whose money
+     remedy is not final on chain is system-paused again by a LATER break -- `continuityBreak`.) */
+  d.pause = { ...d.pause, request: null, paused_at: null };
+  d.system = null;
   d.annul = null;
   if (d.obligation !== null && d.obligation.timer !== null) d.obligation = { ...d.obligation, timer: freeze(d.obligation.timer, at) };
   if (d.overdue !== null && d.overdue.cure !== null) d.overdue = { ...d.overdue, cure: freeze(d.overdue.cure, at) };
@@ -1159,7 +1170,7 @@ export function recoverGap(record: GameClockRecord, input: { readonly now: numbe
       d.obligation = obligationFor(d, D, at, input.lastIndex, trade !== null ? LIVE_TRADE_MS : resumed !== null && allowance !== null ? resumed.remaining_ms : allowance, trade);
     }
   }
-  d.declines = d.declines.or_key === input.facts.orKey ? d.declines : { or_key: input.facts.orKey, counts: {} };
+  d.declines = d.declines.or_key === input.facts.orKey ? d.declines : emptyDeclines(input.facts.orKey);
   emitResponsibility(x, d.obligation, at, { actor: null, index: input.lastIndex, reason: "recovered-gap" });
   normalize(x, at);
   return x.done();
@@ -1175,7 +1186,7 @@ export function stampAuthority(record: GameClockRecord, authority: string, trust
    ================================================================== */
 
 export function annulVote(record: GameClockRecord, by: string, yes: boolean, now: number): ClockStep | ClockRefusal {
-  if (record.money) return { code: "wrong-state", reason: "A money table is annulled through its escrow: use Annul game in the money panel." };
+  if (record.money) return { code: "wrong-state", reason: "A table with stakes is annulled through its escrow: use “Agree to cancel this game” in the money panel." };
   if (record.phase !== "active" && record.phase !== "overdue") return { code: "wrong-state", reason: "There is nothing to annul." };
   if (!record.seats.includes(by)) return { code: "forbidden", reason: "Only a seated player can do that." };
   const x = new Draft(record, now);

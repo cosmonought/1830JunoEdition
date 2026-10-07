@@ -30,6 +30,16 @@ export const LIVE_ACTION_MS = 20 * 60_000;
 export const LIVE_CURE_MS = 10 * 60_000;
 export const LIVE_TRADE_MS = 10 * 60_000;
 export const ASYNC_PACES_SECS: readonly number[] = Object.freeze([43_200, 86_400, 172_800, 259_200, 604_800]);
+/** Live: the current Operating Round's train-offer declines per direction ("from>to"), and the offers already counted
+ *  (an offer is declined at most ONCE: an answer undone and given again never counts twice). */
+export interface ClockDeclines {
+  readonly or_key: string | null;
+  readonly counts: Readonly<Record<string, number>>;
+  readonly offers: readonly string[];
+}
+
+export const emptyDeclines = (orKey: string | null): ClockDeclines => ({ or_key: orKey, counts: {}, offers: [] });
+
 /** Live: the declines (rejections or unanswered expiries) one direction may collect in one Operating Round. */
 export const LIVE_DECLINES_PER_OR = 2;
 /** Live: the ordinary overdues a seat may cure; the next forecloses at once. */
@@ -173,7 +183,7 @@ export interface ClockSnapshot {
   readonly obligation: ClockObligation | null;
   readonly parked: readonly ClockParked[];
   /** The decline counts as of `at` (an undo across an Operating Round boundary restores them: they never go back). */
-  readonly declines: { readonly or_key: string | null; readonly counts: Readonly<Record<string, number>> };
+  readonly declines: ClockDeclines;
 }
 
 export type ClockPhase = "setup" | "active" | "overdue" | "ended";
@@ -201,7 +211,7 @@ export interface GameClockRecord {
   readonly epochs: number;
   readonly proposals_total: number;
   /** Live: the current Operating Round's declines per direction ("from>to"). */
-  readonly declines: { readonly or_key: string | null; readonly counts: Readonly<Record<string, number>> };
+  readonly declines: ClockDeclines;
   readonly pause: ClockPause;
   readonly system: ClockSystemPause | null;
   /** A free table's unanimous neutral annulment in progress. */
@@ -293,6 +303,12 @@ function isOverdue(value: unknown): value is ClockOverdue {
   );
 }
 
+function isDeclines(value: unknown): value is ClockDeclines {
+  if (!isObject(value) || !exact(value, ["or_key", "counts", "offers"]) || !(value.or_key === null || text(value.or_key, 80)) || !isObject(value.counts)) return false;
+  if (Object.keys(value.counts).length > 64 || !Object.entries(value.counts).every(([k, v]) => text(k, 130) && time(v))) return false;
+  return Array.isArray(value.offers) && value.offers.length <= 64 && value.offers.every((offer) => text(offer, 200));
+}
+
 function isEvidenceEvent(value: unknown): value is ClockEvidenceEvent {
   return isObject(value) && exact(value, ["seq", "kind", "at", "f"]) && time(value.seq) && text(value.kind, 32) && time(value.at) && isObject(value.f);
 }
@@ -375,9 +391,7 @@ export function isGameClockRecord(value: unknown): value is GameClockRecord {
   if (!(value.overdue === null || isOverdue(value.overdue))) return false;
   if (!isObject(value.strikes) || Object.keys(value.strikes).length > 8 || !Object.entries(value.strikes).every(([k, v]) => seat(k) && time(v) && (v as number) <= 3)) return false;
   if (!time(value.epochs) || !time(value.proposals_total)) return false;
-  const declines = value.declines;
-  if (!isObject(declines) || !exact(declines, ["or_key", "counts"]) || !(declines.or_key === null || text(declines.or_key, 80)) || !isObject(declines.counts)) return false;
-  if (Object.keys(declines.counts).length > 64 || !Object.entries(declines.counts).every(([k, v]) => text(k, 130) && time(v))) return false;
+  if (!isDeclines(value.declines)) return false;
   const pause = value.pause;
   if (!isObject(pause) || !exact(pause, ["paused_at", "request", "requests", "window"]) || !(pause.paused_at === null || time(pause.paused_at)) || !time(pause.requests)) return false;
   const window = pause.window;
@@ -392,7 +406,7 @@ export function isGameClockRecord(value: unknown): value is GameClockRecord {
   if (!Array.isArray(value.snapshots) || value.snapshots.length > CLOCK_SNAPSHOT_LIMIT) return false;
   for (const snap of value.snapshots as unknown[]) {
     if (!isObject(snap) || !exact(snap, ["index", "at", "obligation", "parked", "declines"]) || !time(snap.index) || !time(snap.at) || !(snap.obligation === null || isObligation(snap.obligation)) || !Array.isArray(snap.parked)) return false;
-    if (!isObject(snap.declines) || !exact(snap.declines, ["or_key", "counts"]) || !isObject(snap.declines.counts)) return false;
+    if (!isDeclines(snap.declines)) return false;
   }
   const ended = value.ended;
   if (!(ended === null || (isObject(ended) && exact(ended, ["kind", "at", "seat"]) && END_KINDS.includes(ended.kind as string) && time(ended.at) && (ended.seat === null || seat(ended.seat))))) return false;

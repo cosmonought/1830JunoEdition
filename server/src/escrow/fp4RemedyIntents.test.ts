@@ -557,6 +557,33 @@ describe("FP4 end to end: the relayer, the remedy intent and an escrow 2.1.0 gam
     assert.equal(sequenceOf(world), before + BigInt(1));
   });
 
+  test("an attempt signed before a SYSTEM PAUSE but never answered by a node is not handed to a node again while the gate says wait", async () => {
+    let paused = false;
+    const { world, chainGameId } = await liveWorld({ remedyGate: async () => (paused ? { kind: "wait", why: "the table is in system pause" } : { kind: "ok" }) });
+    const a = attestationFor(world, chainGameId, 1);
+    const record = intentFor(world, chainGameId, { ...a, expires_at: a.attested_at + n(600) });
+    await prepare(world, record);
+    advanceTo(world, Number(a.final_at));
+    const sequence = sequenceOf(world);
+    world.chain.dropNextBroadcast = 1; // signed and journalled, but no node ever received it
+    await world.relayer.pass();
+    const signed = await world.intents.load(GAME_A, record.intent_id);
+    assert.equal(signed?.status, "in-flight", "an attempt was signed and is open");
+    const sent = world.chain.broadcasts.length;
+    paused = true; // the server restarted: the table is system-paused
+    for (let round = 0; round < 4; round += 1) {
+      await world.relayer.pass();
+      world.chain.produceBlock();
+      world.clock.now += 60_000;
+    }
+    assert.equal(world.chain.broadcasts.length, sent, "the unanswered attempt is withheld while the gate says wait");
+    assert.equal(sequenceOf(world), sequence, "nothing landed");
+    /* Resumed: the same bytes go out at the next pass (the attempt had not expired). */
+    paused = false;
+    await world.relayer.pass();
+    assert.ok(world.chain.broadcasts.length > sent, "handed to a node once the gate says ok");
+  });
+
   test("a foreclosure refused for good (an approver rotated its consent key after the approval) gives way to the neutral TimeoutAnnul; the money game is not held", async () => {
     const { world, chainGameId } = await liveWorld({ relayerTuning: { failureBudget: 1 } });
     const fore = attestationFor(world, chainGameId, 2, { defaulting_seat: 1 });

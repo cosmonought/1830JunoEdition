@@ -27,6 +27,8 @@ export type ClockApprovalSigner = (input: {
   readonly remedy: 2 | 4 | 5;
   readonly overdue: Pick<NonNullable<RoomClockView["overdue"]>, "seat" | "strike" | "epoch" | "overdueAt" | "logLen" | "logHash">;
   readonly live: boolean;
+  /** The server's time as this tab last saw it, carried on by monotonic time (an Async horizon is counted from it). */
+  readonly serverNowMs?: number;
 }) => Promise<{ readonly ok: true; readonly approveUntil: number; readonly signature: string } | { readonly ok: false; readonly reason: string }>;
 
 export interface GameClockChipProps {
@@ -117,6 +119,8 @@ export function GameClockChip({ gameId, clock, players, viewerPlayerId, current,
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
+  /* A money table's signature is asked for only after the player confirms what it approves. */
+  const [confirming, setConfirming] = useState<{ readonly kind: "foreclose" | "annul"; readonly proposalId: number | null } | { readonly kind: "reapprove"; readonly remedy: 4 | 5 } | null>(null);
 
   useEffect(() => watchLink(gameId, setLinkOpen), [gameId, watchLink]);
 
@@ -134,8 +138,13 @@ export function GameClockChip({ gameId, clock, players, viewerPlayerId, current,
     return () => clearInterval(timer);
   }, [presentation.ticking]);
 
-  /* A refusal is about the clock it was sent against: a newer clock retires it. */
-  useEffect(() => setRefusal(null), [clock?.revision]);
+  /* A refusal is about the clock STATE it was sent against: a change of that state retires it (a heartbeat's new
+     revision does not). */
+  const stateKey = clock === null || clock === undefined ? "" : [clock.state, clock.responsible?.seat ?? "", clock.overdue?.epoch ?? "", clock.overdue?.proposal?.id ?? "", clock.pause.request?.id ?? "", clock.system?.since ?? "", clock.remedy?.status ?? ""].join("|");
+  useEffect(() => {
+    setRefusal(null);
+    setConfirming(null);
+  }, [stateKey]);
 
   if (!presentation.visible || clock === undefined || clock === null) return null;
   const controls = presentation.controls;
@@ -150,9 +159,21 @@ export function GameClockChip({ gameId, clock, players, viewerPlayerId, current,
     });
   };
 
-  /* A money table's YES carries this seat's REMEDY-APPROVE (signed here, verified by the server and the chain). */
-  const yes = (kind: "foreclose" | "annul", proposalId: number | null) => {
+  const serverNowMs = () => Math.round(clock.serverNow + Math.max(0, monotonic() - receivedAt));
+  const signFailed = (error: unknown) => {
+    setBusy(false);
+    setRefusal(`Nothing was signed: ${error instanceof Error ? error.message : "the signing step failed"}.`);
+  };
+
+  /* A money table's YES carries this seat's REMEDY-APPROVE (signed here, verified by the server and the chain) -- only
+     after the player confirmed it. A free table's YES is sent at once. */
+  const yes = (kind: "foreclose" | "annul", proposalId: number | null, confirmed = false) => {
     if (busy) return;
+    if (clock.money && !confirmed) {
+      setConfirming({ kind, proposalId });
+      return;
+    }
+    setConfirming(null);
     const remedyOf = (k: "foreclose" | "annul"): 2 | 4 | 5 => (clock.deadline === "live" ? 2 : k === "foreclose" ? 5 : 4);
     const body = (approval: { approveUntil: number; signature: string } | null): RoomOpBody =>
       proposalId === null
@@ -166,19 +187,26 @@ export function GameClockChip({ gameId, clock, players, viewerPlayerId, current,
     }
     setBusy(true);
     setRefusal(null);
-    void signApproval({ remedy: remedyOf(kind), overdue, live: clock.deadline === "live" }).then((signed) => {
-      setBusy(false);
-      if (!signed.ok) {
-        setRefusal(signed.reason);
-        return;
-      }
-      send(body({ approveUntil: signed.approveUntil, signature: signed.signature }));
-    });
+    void signApproval({ remedy: remedyOf(kind), overdue, live: clock.deadline === "live", serverNowMs: serverNowMs() })
+      .then((signed) => {
+        setBusy(false);
+        if (!signed.ok) {
+          setRefusal(signed.reason);
+          return;
+        }
+        send(body({ approveUntil: signed.approveUntil, signature: signed.signature }));
+      })
+      .catch(signFailed);
   };
 
   /* An Async N-1 outcome whose approval by this seat must be renewed: the SAME decision, signed again here. */
-  const approveAgain = (remedy: 4 | 5) => {
+  const approveAgain = (remedy: 4 | 5, confirmed = false) => {
     if (busy) return;
+    if (!confirmed) {
+      setConfirming({ kind: "reapprove", remedy });
+      return;
+    }
+    setConfirming(null);
     const facts = clock.remedy?.overdue ?? null;
     if (signApproval === undefined || facts === null) {
       setRefusal("This device can't sign the approval a table with stakes needs. Open the table's money panel on the device that holds your seat's key.");
@@ -186,15 +214,37 @@ export function GameClockChip({ gameId, clock, players, viewerPlayerId, current,
     }
     setBusy(true);
     setRefusal(null);
-    void signApproval({ remedy, overdue: facts, live: false }).then((signed) => {
-      setBusy(false);
-      if (!signed.ok) {
-        setRefusal(signed.reason);
-        return;
-      }
-      send({ type: CLOCK_OPS.reapprove, approveUntil: signed.approveUntil, signature: signed.signature });
-    });
+    void signApproval({ remedy, overdue: facts, live: false, serverNowMs: serverNowMs() })
+      .then((signed) => {
+        setBusy(false);
+        if (!signed.ok) {
+          setRefusal(signed.reason);
+          return;
+        }
+        send({ type: CLOCK_OPS.reapprove, approveUntil: signed.approveUntil, signature: signed.signature });
+      })
+      .catch(signFailed);
   };
+
+  /* What the confirmation says the signature approves (the defaulting player, the outcome, its effect). */
+  const confirmText = (() => {
+    if (confirming === null) return null;
+    const seat = confirming.kind === "reapprove" ? (clock.remedy?.overdue.seat ?? null) : (clock.overdue?.seat ?? null);
+    const who = seat === null ? "the overdue player" : nameOf(seat);
+    const outcome =
+      confirming.kind === "reapprove"
+        ? confirming.remedy === 5
+          ? `foreclosure against ${who}`
+          : `a neutral annulment of this game (${who} overdue)`
+        : confirming.kind === "foreclose"
+          ? `foreclosure against ${who}`
+          : `a neutral annulment of this game (${who} overdue)`;
+    const effect =
+      (confirming.kind === "foreclose" || (confirming.kind === "reapprove" && confirming.remedy === 5))
+        ? "Juno then splits the escrow by its foreclosure rule."
+        : "Juno then returns every player's own stake (minus the fee).";
+    return `Sign your approval of ${outcome} with this device's seat key? ${effect}`;
+  })();
 
   const hasControls =
     controls.requestPause ||
@@ -223,6 +273,11 @@ export function GameClockChip({ gameId, clock, players, viewerPlayerId, current,
       {presentation.warning !== null && (
         <span aria-hidden="true" style={{ color: "#f3b1a6" }} data-testid="game-clock-warning-mark">
           !
+        </span>
+      )}
+      {presentation.banner !== null && (
+        <span role={presentation.warning !== null ? "alert" : "status"} style={presentation.warning !== null ? { color: "#f3b1a6", fontWeight: 700 } : { fontWeight: 600 }} data-testid="game-clock-banner">
+          {presentation.banner}
         </span>
       )}
       {(detail.length > 0 || hasControls) && (
@@ -264,7 +319,7 @@ export function GameClockChip({ gameId, clock, players, viewerPlayerId, current,
               </>
             )}
             {controls.systemResume && (
-              <button type="button" style={buttonStyle} disabled={busy} onClick={() => send({ type: CLOCK_OPS.systemResume, ...(clock.system !== null ? { since: clock.system.since } : {}) })} data-testid="game-clock-system-resume">
+              <button type="button" style={buttonStyle} disabled={busy} onClick={() => clock.system !== null && send({ type: CLOCK_OPS.systemResume, since: clock.system.since })} data-testid="game-clock-system-resume">
                 Agree to resume
               </button>
             )}
@@ -272,6 +327,25 @@ export function GameClockChip({ gameId, clock, players, viewerPlayerId, current,
               <button type="button" style={buttonStyle} disabled={busy} onClick={() => approveAgain(controls.reapprove!.remedy)} data-testid="game-clock-reapprove">
                 Approve again
               </button>
+            )}
+            {confirmText !== null && confirming !== null && (
+              <span style={{ display: "flex", flexDirection: "column", gap: "4px" }} role="group" aria-label="Confirm your approval" data-testid="game-clock-confirm">
+                <span data-testid="game-clock-confirm-text">{confirmText}</span>
+                <span style={rowStyle}>
+                  <button
+                    type="button"
+                    style={buttonStyle}
+                    disabled={busy}
+                    onClick={() => (confirming.kind === "reapprove" ? approveAgain(confirming.remedy, true) : yes(confirming.kind, confirming.proposalId, true))}
+                    data-testid="game-clock-confirm-sign"
+                  >
+                    Sign and send
+                  </button>
+                  <button type="button" style={buttonStyle} disabled={busy} onClick={() => setConfirming(null)} data-testid="game-clock-confirm-cancel">
+                    Cancel
+                  </button>
+                </span>
+              </span>
             )}
             {controls.propose.map((kind) => (
               <button key={kind} type="button" style={buttonStyle} disabled={busy} onClick={() => yes(kind, null)} data-testid={`game-clock-propose-${kind}`}>
@@ -285,7 +359,7 @@ export function GameClockChip({ gameId, clock, players, viewerPlayerId, current,
             )}
             {controls.vote !== null && (
               <button type="button" style={buttonStyle} disabled={busy} onClick={() => send({ type: CLOCK_OPS.vote, proposalId: controls.vote!.id, yes: false })} data-testid="game-clock-vote-no">
-                {controls.vote.mine === "yes" ? "Withdraw my agreement" : "Disagree"}
+                {controls.vote.mine === "yes" ? "Withdraw and veto (cancels it for everyone)" : "Veto (cancels it for everyone)"}
               </button>
             )}
             {controls.annul !== null && (

@@ -921,7 +921,7 @@ const ROOM_OPS: Readonly<Record<string, FrameFields>> = nullTable<FrameFields>({
      No-deadline acknowledgement, and an Async money remedy's renewed approval (`clock-reapprove`). Every one names no player: the seat is the caller's own. */
   "clock-policy": nullTable({ type: req(str(16)), deadline: req(isDeadlineClass), paceSecs: opt(isClockPace) }),
   "clock-pause": nullTable({ type: req(str(16)), action: req(isPauseAction), kind: req(isPauseKind), id: opt(isClockId) }),
-  "clock-sysresume": nullTable({ type: req(str(16)), since: opt(isClockMs) }),
+  "clock-sysresume": nullTable({ type: req(str(16)), since: req(isClockMs) }),
   "clock-propose": nullTable({ type: req(str(16)), kind: req(isProposalKind), approveUntil: opt(isClockSecs), signature: opt(isSig64) }),
   "clock-vote": nullTable({ type: req(str(16)), proposalId: req(isClockId), yes: req(isBool), approveUntil: opt(isClockSecs), signature: opt(isSig64) }),
   "clock-annul": nullTable({ type: req(str(16)), yes: req(isBool) }),

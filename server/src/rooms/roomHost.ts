@@ -221,6 +221,8 @@ export interface RoomHostClockConfig {
   readonly moneyStartedAtSecs?: (gameId: string) => Promise<number | null>;
   /** The player-reporting lane's hook (safe conduct evidence). */
   readonly conduct?: ClockConductHook;
+  /** The ingress log cap (`gameServer.ts` limits): a table at it takes no move, so its clock is held. */
+  readonly logCap?: number;
 }
 
 /** The board's own end and close, read off a session. */
@@ -418,7 +420,9 @@ export function createRoomHost(deps: RoomHostDeps) {
           /* LIVE-3C: a held, incompatible or unreconciled table takes no move -- its clock does not run either. */
           held: (gameId) => {
             const game = peekLoaded(gameId);
-            return game !== undefined && (game.view.hold !== null || game.view.incompatible !== null || unreconciled.has(gameId));
+            /* A full log (the ingress cap) takes no move either: the clock does not run against a table nobody can play. */
+            const full = game !== undefined && deps.clock?.logCap !== undefined && game.view.entries.length >= deps.clock.logCap;
+            return game !== undefined && (game.view.hold !== null || game.view.incompatible !== null || unreconciled.has(gameId) || full);
           },
           ...(deps.clock.remedy !== undefined ? { remedy: deps.clock.remedy } : {}),
           ...(deps.clock.moneyTerminal !== undefined ? { moneyTerminal: deps.clock.moneyTerminal } : {}),
@@ -1440,7 +1444,7 @@ export function createRoomHost(deps: RoomHostDeps) {
   const closeExpiredOffer: CloseOffer = async (game, tx, input) => {
     const record = tx.view.record;
     if (record === null) return { ok: false, why: "the table has no record" };
-    const rescinded = rescindExpiredOffer(tx.session, { proposer: input.proposer, at: input.at, build: deps.build, host: record.host_player_id, hostUndo: record.policy.host_undo }, deps.stampAt);
+    const rescinded = rescindExpiredOffer(tx.session, { proposer: input.proposer, at: input.at, offerKey: input.offerKey, build: deps.build, host: record.host_player_id, hostUndo: record.policy.host_undo }, deps.stampAt);
     if (!rescinded.ok) {
       tx.rollback();
       return { ok: false, why: rescinded.why, kind: "engine" };
@@ -1485,7 +1489,8 @@ export function createRoomHost(deps: RoomHostDeps) {
         input = { type: "clock-pause", seat, action: op.action as "request" | "yes" | "no", kind: op.kind as "pause" | "resume", id: typeof op.id === "number" ? op.id : null };
         break;
       case "clock-sysresume":
-        input = { type: "clock-sysresume", seat, since: typeof op.since === "number" ? op.since : null };
+        /* The YES names the break the player looked at (`since`, required by the schema). */
+        input = { type: "clock-sysresume", seat, since: typeof op.since === "number" ? op.since : -1 };
         break;
       case "clock-annul":
         input = { type: "clock-annul", seat, yes: op.yes === true };

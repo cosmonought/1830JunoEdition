@@ -1069,7 +1069,7 @@ export function createGameServer(options: GameServerOptions): {
     if (settled.kind === "committed") host.afterGameplay(game, endedAfter, closedAfter, boardAfter);
     /* Phase 3 final clocks: the committed batch folded into the table clock (and written) before this task ends. */
     if (settled.kind === "committed" && clockGate !== null && host.clock !== null) {
-      await host.clock.afterCommit(game, { gate: clockGate, actor, batch: settled.entries, board: boardAfter });
+      await host.clock.afterCommit(game, { gate: clockGate, actor, batch: settled.entries, board: boardAfter, applied: result.kind === "applied" });
     }
     if (settled.kind !== "committed" || result.kind !== "applied") return;
     /* LIVE-2A: a revert that landed spends its budget. */
@@ -1454,7 +1454,7 @@ export function createGameServer(options: GameServerOptions): {
     ...(options.money !== undefined ? { money: options.money } : {}),
     boardFacts,
     /* Phase 3 final clocks */
-    ...(options.clock !== undefined ? { clock: { ...options.clock, now: clockTime } } : {}),
+    ...(options.clock !== undefined ? { clock: { ...options.clock, now: clockTime, logCap: limits.logEntryCap } } : {}),
     stampAt,
     /* LIVE-4 (L4-3): the room channel's client check. A game this pool does not continue is shown as such by its view
        (`holdKind: "incompatible"`, with its reason), so only a `reload` refuses a room socket. */

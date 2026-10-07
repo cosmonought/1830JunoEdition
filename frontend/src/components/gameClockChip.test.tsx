@@ -144,8 +144,9 @@ describe("Phase 3 final clocks: the clock chip", () => {
     expect(q("game-clock-value")?.textContent).toBe("20:00");
   });
 
-  it("system pause: the owner's sentences and the resume vote", async () => {
+  it("system pause: the owner's sentences (inline in the chip) and the resume vote", async () => {
     render(view({ state: "system-paused", action: { remainingMs: 6 * MIN + 12_000, running: false }, system: { since: 2, preservedAt: 1, yes: [], needed: ["p-me", "p-bob", "p-carol"] } }));
+    expect(q("game-clock-banner")?.textContent).toBe("Game paused because server continuity was interrupted. All players must agree to resume.");
     await click("game-clock-toggle");
     const text = q("game-clock-panel")?.textContent ?? "";
     expect(text).toContain("Game paused because server continuity was interrupted.");
@@ -169,7 +170,9 @@ describe("Phase 3 final clocks: the clock chip", () => {
     await click("game-clock-toggle");
     expect(q("game-clock-panel")?.textContent).toMatch(/Approve it again/);
     await click("game-clock-reapprove");
-    expect(asked[0]).toEqual({ remedy: 5, overdue: facts, live: false });
+    await click("game-clock-confirm-sign");
+    expect(asked[0]).toMatchObject({ remedy: 5, overdue: facts, live: false });
+    expect(typeof asked[0].serverNowMs).toBe("number");
     expect(sent[0].op).toEqual({ type: "clock-reapprove", approveUntil: 1_802_000_000, signature: "ef".repeat(64) });
   });
 
@@ -194,13 +197,31 @@ describe("Phase 3 final clocks: the clock chip", () => {
     };
     render(overdueView(true), { signApproval: signer });
     await click("game-clock-propose-foreclose");
+    /* A money YES is signed only after the player confirms what it approves. */
+    expect(asked.length).toBe(0);
+    expect(q("game-clock-confirm-text")?.textContent).toMatch(/foreclosure against Bob/);
+    await click("game-clock-confirm-cancel");
+    expect(q("game-clock-confirm")).toBeNull();
+    await click("game-clock-propose-foreclose");
+    await click("game-clock-confirm-sign");
     expect(asked[0]).toMatchObject({ remedy: 2, live: true, overdue: { seat: "p-bob", epoch: 4, logLen: 12 } });
     expect(sent[1].op).toEqual({ type: "clock-propose", kind: "foreclose", approveUntil: 1_800_021_540, signature: "cd".repeat(64) });
 
     render(overdueView(true));
     await click("game-clock-propose-foreclose");
+    await click("game-clock-confirm-sign");
     expect(sent.length).toBe(2);
     expect(q("game-clock-refusal")?.textContent).toMatch(/can't sign the approval/);
+  });
+
+  it("a NO on an N-1 proposal is named for what it does: a veto that cancels it for everyone", async () => {
+    const od = overdueView(false);
+    render({ ...od, overdue: { ...(od.overdue as NonNullable<RoomClockView["overdue"]>), proposal: { id: 5, kind: "foreclose", by: "p-carol", yes: ["p-carol"], no: [], needed: ["p-me", "p-carol"], complete: false } } });
+    await click("game-clock-toggle");
+    expect(q("game-clock-vote-no")?.textContent).toBe("Veto (cancels it for everyone)");
+    expect(q("game-clock-panel")?.textContent).toContain("One NO cancels this proposal for everyone");
+    await click("game-clock-vote-no");
+    expect(sent[0].op).toEqual({ type: "clock-vote", proposalId: 5, yes: false });
   });
 
   it("'Annul game' on a free table, with the count of agreements", async () => {
@@ -211,9 +232,11 @@ describe("Phase 3 final clocks: the clock chip", () => {
     expect(sent[0].op).toEqual({ type: "clock-annul", yes: true });
   });
 
-  it("the second strike's warning is prominent for the seat it concerns", async () => {
+  it("the second strike's warning is prominent for the seat it concerns -- shown inline, not only behind the toggle", async () => {
     render(view({ strikes: { "p-me": 2 }, responsible: { seat: "p-me", kind: "turn" } }));
     expect(q("game-clock-warning-mark")).not.toBeNull();
+    expect(q("game-clock-banner")?.textContent).toBe("Next action-clock expiry results in automatic foreclosure.");
+    expect(q("game-clock-banner")?.getAttribute("role")).toBe("alert");
     await click("game-clock-toggle");
     expect(q("game-clock-warning")?.textContent).toBe("Next action-clock expiry results in automatic foreclosure.");
   });

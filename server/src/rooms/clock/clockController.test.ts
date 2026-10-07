@@ -25,7 +25,7 @@ import type { GameActor, Tx } from "../gameActor";
 import { createClockController, rescindExpiredOffer, type GateResult } from "./clockController";
 import { createMemoryClockStore } from "./clockStore";
 import { fakeTime } from "./clockTestSupport";
-import { LIVE_ACTION_MS, LIVE_CURE_MS, LIVE_TRADE_MS } from "./clockRecord";
+import { LIVE_ACTION_MS, LIVE_CURE_MS, LIVE_TRADE_MS, type GameClockRecord } from "./clockRecord";
 
 const SEC = 1_000;
 const MIN = 60 * SEC;
@@ -351,5 +351,43 @@ describe("Controller review fixes: reads, durability, holds, retries", () => {
     await h.clock.idle();
     assert.equal(h.room.state.train_purchase_offer ?? null, null, "the retry closed it");
     assert.deepEqual([h.record().obligation?.seat, h.record().declines.counts[`${P1}>${P2}`]], [P1, 1]);
+  });
+});
+
+describe("Controller review fixes (second pass): outages and authority changes", () => {
+  test("a clock-store write outage: no move is taken on an unstored clock, and once it outlasts the limit the table is SYSTEM-PAUSED -- never an overdue from it", async () => {
+    const h = harness();
+    await h.deal();
+    await h.time.advance(2 * MIN);
+    for (let i = 0; i < 400; i += 1) h.store.failSaves.push("definite");
+    await h.time.advance(25 * MIN);
+    await h.clock.idle();
+    const r = h.record();
+    assert.deepEqual([r.phase, r.strikes, r.system !== null], ["active", {}, true], "the outage became a system pause, not a strike");
+    assert.ok((r.obligation?.timer?.remaining_ms ?? 0) >= 17 * MIN, "the outage was never charged");
+    h.store.failSaves.length = 0;
+    const refused = await h.submit(P1, proposeTrain(NYC, "2", "50"));
+    assert.equal((refused as { code: string }).code, CLOCK_REFUSAL.systemPaused);
+  });
+
+  test("an AWS takeover (another pool / epoch / task) is a new authority: the Live table is SYSTEM-PAUSED before anyone moves", async () => {
+    const h = harness();
+    await h.deal();
+    await h.time.advance(3 * MIN);
+    await h.clock.idle();
+    const stored = h.store.clocks.get(GAME) as GameClockRecord;
+    h.store.clocks.set(GAME, { ...stored, authority: "aws:7:pool-a:3:task-1" });
+    h.clock.drop(GAME);
+    const refused = await h.submit(P1, proposeTrain(NYC, "2", "50"));
+    assert.equal((refused as { code: string }).code, CLOCK_REFUSAL.systemPaused);
+    assert.ok(h.ops.lines.some((line) => line.event === "clock.continuity-break" && String(line.prior_authority).startsWith("aws:7:pool-a")));
+  });
+
+  test("the server's expiry closes only THE offer whose time ran out", () => {
+    const h = harness();
+    const offer = h.room.state.train_purchase_offer ?? null;
+    assert.equal(offer, null);
+    const closed = rescindExpiredOffer(h.room, { proposer: P1, at: T0, offerKey: "train:other", build: "b", host: P1, hostUndo: "last-action" });
+    assert.equal(closed.ok, false);
   });
 });

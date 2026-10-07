@@ -398,11 +398,13 @@ describe("Voluntary pause and system pause through the server", () => {
         await time.advance(2 * HOUR);
         view = await clockWhere(watcher, (c) => c.state === "system-paused", "recovery is not resume");
         assert.equal(view.action?.remainingMs, LIVE_ACTION_MS);
-        await opOk(booted.port, ALICE, gameId, { type: "clock-sysresume" });
-        await opOk(booted.port, BOB, gameId, { type: "clock-sysresume" });
+        /* Each YES names the break the player looked at (`since`, required by the closed schema). */
+        const since = view.system?.since as number;
+        await opOk(booted.port, ALICE, gameId, { type: "clock-sysresume", since });
+        await opOk(booted.port, BOB, gameId, { type: "clock-sysresume", since });
         view = await clockWhere(watcher, (c) => (c.system?.yes.length ?? 0) === 2, "two of three");
         assert.equal(view.state, "system-paused");
-        await opOk(booted.port, CAROL, gameId, { type: "clock-sysresume" });
+        await opOk(booted.port, CAROL, gameId, { type: "clock-sysresume", since });
         view = await clockWhere(watcher, (c) => c.state === "running", "every player resumed");
         assert.deepEqual([view.responsible?.seat, view.action?.remainingMs], [ids[BOB], LIVE_ACTION_MS]);
         await play(booted.port, BOB, gameId, BUY, "b-buys");

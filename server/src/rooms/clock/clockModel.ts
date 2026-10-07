@@ -199,7 +199,8 @@ function parkOf(live: boolean, seat: string, offerKey: string, remainingMs: numb
  *  remainder (owner ruling, 2026-10-07). `waited`: the wait so far; `frozen` / `charged`: its two parts. */
 export function liveParkAt(p: ClockParked, ob: ClockObligation | null, at: number): { readonly remaining: number; readonly freeze: number; readonly waited: number; readonly frozen: number; readonly charged: number } {
   const budget = p.freeze_ms ?? 0;
-  const waited = ob !== null && ob.trade !== null && ob.trade.offer_key === p.offer_key && ob.initial_ms !== null && ob.timer !== null ? clamp(ob.initial_ms - remainingAt(ob.timer, at)) : 0;
+  /* Only the PROPOSER's own park waits on its offer's response (a bystander's park, were one possible, stays frozen). */
+  const waited = ob !== null && ob.trade !== null && ob.trade.offer_key === p.offer_key && ob.trade.proposer === p.seat && ob.initial_ms !== null && ob.timer !== null ? clamp(ob.initial_ms - remainingAt(ob.timer, at)) : 0;
   const frozen = Math.min(budget, waited);
   const charged = waited - frozen;
   return { remaining: clamp(p.remaining_ms - charged), freeze: budget - frozen, waited, frozen, charged };
@@ -214,7 +215,8 @@ function liveParkDueOf(record: Pick<GameClockRecord, "policy" | "parked" | "obli
   const park = record.parked.find((p) => p.since === undefined && p.freeze_ms !== undefined && p.offer_key === trade.offer_key && p.seat === trade.proposer) ?? null;
   if (park === null) return null;
   const waitedBefore = ob.initial_ms - ob.timer.remaining_ms;
-  return { park, due: ob.timer.since + (park.freeze_ms as number) + park.remaining_ms - waitedBefore };
+  /* (Never before the response timer last started: a pause in between is never back-dated.) */
+  return { park, due: Math.max(ob.timer.since, ob.timer.since + (park.freeze_ms as number) + park.remaining_ms - waitedBefore) };
 }
 
 const freeze = (timer: ClockTimer, at: number): ClockTimer => (timer.since === null ? timer : { remaining_ms: remainingAt(timer, at), since: null });
@@ -506,7 +508,15 @@ export function foldBatch(record: GameClockRecord, batch: ClockBatch, now: numbe
        replaced offer stays parked behind this one -- a negotiation never loses, nor manufactures, anybody's time). */
     const proposer = after.proposer;
     const answerer = after.answerer;
-    if (before !== null) d.parked = d.parked.map((p) => (p.offer_key === before.key ? { ...p, offer_key: after.key } : p));
+    /* (A replaced offer's wait is settled first: a Live park is charged what went beyond its budget, then waits on.) */
+    if (before !== null) {
+      d.parked = d.parked.map((p) => {
+        if (p.offer_key !== before.key) return p;
+        if (!isLive || p.since !== undefined) return { ...p, offer_key: after.key };
+        const settled = liveParkAt(p, current, at);
+        return parkOf(true, p.seat, after.key, settled.remaining, p.key, at, settled.freeze);
+      });
+    }
     const answerOwed = proposer !== null && answerer !== null && proposer !== answerer && D !== null && D.seat === answerer;
     if (D !== null && current !== null && D.seat === current.seat) {
       /* The answer is owed by the seat already responsible (an offer made TO it, or an offer to oneself): nothing is
@@ -698,26 +708,37 @@ function restoreUndo(x: Draft, batch: ClockBatch): void {
         : current !== null && current.seat === prior.seat && current.began_index === target && current.initial_ms !== null && current.timer !== null
           ? clamp(current.initial_ms - remainingAt(current.timer, at))
           : 0;
+    const restoredTimer = prior.timer === null ? null : { remaining_ms: clamp(prior.timer.remaining_ms - charge), since: at };
     restored = {
       ...prior,
       kind: D.kind,
       key: D.key,
       began_at: at,
       began_index: prior.began_index,
-      timer: prior.timer === null ? null : { remaining_ms: clamp(prior.timer.remaining_ms - charge), since: at },
-      /* The charge is not part of this run's own use: a later measure of the run (a rescission's `ran`) excludes it, so
-         nothing is charged twice. */
-      initial_ms: prior.initial_ms === null ? null : clamp(prior.initial_ms - charge),
+      timer: restoredTimer,
+      /* An action run: the charge is not part of its own use (a later measure of the run excludes it). A Live RESPONSE
+         timer: the wait it had measured is settled into the restored park below, so it measures afresh from here. */
+      initial_ms: prior.trade !== null && restoredTimer !== null ? restoredTimer.remaining_ms : prior.initial_ms === null ? null : clamp(prior.initial_ms - charge),
     };
-    /* A park restored for the seat whose CURRENT run began at the undone batch (it resumed there -- the answer to its
-       offer is what is undone) is never given back more than that run has left: an undo never gives time. A running
-       (Timed Async) park is restored as it stands now. */
+    /* AN UNDO NEVER GIVES TIME, NOR FREEZE BUDGET (owner ruling, 2026-10-07): a restored park is first SETTLED at the
+       snapshot (the wait its response timer had measured, split into frozen and charged), charged its seat's own run
+       since the undone batch, and never restored above what that seat holds NOW (its current action clock and budget, or
+       its current park as it stands). A running (Timed Async) park is restored as it stands now. */
+    const parkedNow = d.parked;
+    const standingNow = (seat: string): { readonly remaining: number; readonly freeze: number } | null => {
+      if (current !== null && current.seat === seat && current.trade === null && current.timer !== null) return { remaining: remainingAt(current.timer, at), freeze: current.freeze_ms ?? 0 };
+      const park = parkedNow.find((q) => q.seat === seat) ?? null;
+      if (park === null) return null;
+      return park.since !== undefined ? { remaining: parkedRemainingAt(park, at), freeze: 0 } : liveParkAt(park, current, at);
+    };
     d.parked = snap.parked.map((p) => {
-      /* A running (Timed Async) park already counted every moment since it was parked. A frozen (Live) park is charged
-         exactly what its seat's own run since the undone batch used -- never the offer's standing time again. */
       if (p.since !== undefined) return parkOf(false, p.seat, p.offer_key, parkedRemainingAt(p, at), p.key, at);
+      const settled = liveParkAt(p, snap.obligation, snap.at);
       const ran = current !== null && current.seat === p.seat && current.began_index === target && current.timer !== null && current.initial_ms !== null ? clamp(current.initial_ms - remainingAt(current.timer, at)) : 0;
-      return ran === 0 ? p : parkOf(true, p.seat, p.offer_key, clamp(p.remaining_ms - ran), p.key, at, p.freeze_ms ?? 0);
+      const now = standingNow(p.seat);
+      const remaining = Math.min(clamp(settled.remaining - ran), now?.remaining ?? Number.MAX_SAFE_INTEGER);
+      const freeze = Math.min(settled.freeze, now?.freeze ?? Number.MAX_SAFE_INTEGER);
+      return parkOf(true, p.seat, p.offer_key, remaining, p.key, at, freeze);
     });
     how = charge > 0 ? "undo-restored-charged" : "undo-restored";
   } else if (D === null) {
@@ -735,7 +756,9 @@ function restoreUndo(x: Draft, batch: ClockBatch): void {
   if (snap !== null && snap.declines.round_key === batch.after.roundKey) d.declines = mergeDeclines(snap.declines, d.declines);
   d.snapshots = d.snapshots.filter((s) => s.index < target);
   d.obligation = restored;
-  x.emit("undo", at, { target, index: batch.first, by: batch.actor, seat: restored?.seat ?? null, remaining_ms: restored?.timer?.remaining_ms ?? null, how });
+  /* (Live: a restored park's remainder and freeze budget are evidenced with the undo.) */
+  const livePark = d.parked.find((p) => p.since === undefined && p.freeze_ms !== undefined) ?? null;
+  x.emit("undo", at, { target, index: batch.first, by: batch.actor, seat: restored?.seat ?? null, remaining_ms: restored?.timer?.remaining_ms ?? null, how, park_seat: livePark?.seat ?? null, park_ms: livePark?.remaining_ms ?? null, park_freeze_ms: livePark?.freeze_ms ?? null });
   emitResponsibility(x, restored, at, { actor: batch.actor, index: batch.first, reason: how });
 }
 
@@ -1370,17 +1393,12 @@ export function recoverGap(record: GameClockRecord, input: { readonly now: numbe
   } else {
     /* (A funding offer is made TO the seat that owes the decision: it suspends nobody -- as `foldBatch` folds it.) */
     const standing = offer !== null && offer.proposer !== null && offer.answerer === D.seat && offer.proposer !== D.seat && offer.slot !== "funding" ? offer : null;
-    let keptPark: ClockParked | null = null;
-    if (standing !== null && standing.proposer !== null) {
-      /* The proposer's own park: of THIS offer, or -- the gap closed its earlier offer and it proposed again -- of an
-         earlier one (never a fresh allowance from a gap). */
-      const kept = keptParked.find((p) => p.offer_key === standing.key && p.seat === standing.proposer) ?? (!input.actors.includes(standing.proposer) ? (keptParked.find((p) => p.seat === standing.proposer) ?? null) : null);
-      keptPark = kept;
-      const parkedMs = kept !== null ? parkedRemainingAt(kept, at) : prior !== null && prior.seat === standing.proposer && prior.timer !== null ? remainingAt(prior.timer, at) : (allowance ?? 0);
-      /* (Live: the park's freeze budget is the kept park's, else the proposer's own episode's, else a fresh episode's.) */
-      const freeze = kept !== null ? (kept.freeze_ms ?? 0) : prior !== null && prior.seat === standing.proposer && prior.trade === null ? (prior.freeze_ms ?? 0) : LIVE_FREEZE_BUDGET_MS;
-      if (allowance !== null) d.parked = [parkOf(d.policy.class === "live", standing.proposer, standing.key, parkedMs, kept !== null ? kept.key : prior !== null && prior.seat === standing.proposer ? prior.key : null, at, freeze)];
-    }
+    /* The proposer's own park: of THIS offer, or -- the gap closed its earlier offer and it proposed again -- of an
+       earlier one (never a fresh allowance from a gap). */
+    const keptPark: ClockParked | null =
+      standing !== null && standing.proposer !== null
+        ? (keptParked.find((p) => p.offer_key === standing.key && p.seat === standing.proposer) ?? (!input.actors.includes(standing.proposer) ? (keptParked.find((p) => p.seat === standing.proposer) ?? null) : null))
+        : null;
     /* LIVE: the response timer for a train offer and for any offer that suspended its proposer (the proposer held the
        running obligation, or this record already parked it behind this offer) -- as `foldBatch` decides it. */
     const suspended =
@@ -1392,15 +1410,28 @@ export function recoverGap(record: GameClockRecord, input: { readonly now: numbe
         (prior !== null && prior.trade !== null && prior.trade.offer_key === standing.key));
     const trade = d.policy.class === "live" && standing !== null && standing.proposer !== null && (standing.slot === "train" || suspended) ? { proposer: standing.proposer, offer_key: standing.key } : null;
     const continues = prior !== null && prior.seat === D.seat && !input.actors.includes(D.seat) && cured !== D.seat && (prior.trade?.offer_key ?? null) === (trade?.offer_key ?? null);
+    /* A Live park is SETTLED -- the wait its response timer had measured split into frozen and charged -- unless that
+       same response timer carries on measuring it; never a refund of the wait from a gap. */
+    const settledPark = (p: ClockParked): { readonly remaining: number; readonly freeze: number } => (p.since !== undefined ? { remaining: parkedRemainingAt(p, at), freeze: 0 } : liveParkAt(p, prior, at));
+    if (standing !== null && standing.proposer !== null && allowance !== null) {
+      const kept = keptPark;
+      const sameWait = continues && kept !== null && kept.offer_key === standing.key && kept.since === undefined;
+      const fromKept = kept === null ? null : sameWait ? { remaining: kept.remaining_ms, freeze: kept.freeze_ms ?? 0 } : settledPark(kept);
+      const parkedMs = fromKept !== null ? fromKept.remaining : prior !== null && prior.seat === standing.proposer && prior.timer !== null ? remainingAt(prior.timer, at) : allowance;
+      /* (Live: the park's freeze budget is the kept park's, else the proposer's own episode's, else a fresh episode's.) */
+      const freeze = fromKept !== null ? fromKept.freeze : prior !== null && prior.seat === standing.proposer && prior.trade === null ? (prior.freeze_ms ?? 0) : LIVE_FREEZE_BUDGET_MS;
+      d.parked = [parkOf(d.policy.class === "live", standing.proposer, standing.key, parkedMs, kept !== null ? kept.key : prior !== null && prior.seat === standing.proposer ? prior.key : null, at, freeze)];
+    }
     if (continues && prior !== null) {
       d.obligation = { ...prior, kind: D.kind, key: D.key, timer: prior.timer === null ? null : { remaining_ms: remainingAt(prior.timer, at), since: at } };
     } else {
       /* A seat resumes a closed offer's park only while it owes the SAME decision and took no required action in the gap
          (as `foldBatch` resumes it); otherwise responsibility genuinely passed: fresh. */
       const resumed = trade === null && cured !== D.seat && !input.actors.includes(D.seat) ? (keptParked.find((p) => p.seat === D.seat && p.offer_key !== standing?.key && (p.key === null || p.key === D.key)) ?? null) : null;
-      d.obligation = obligationFor(d, D, at, input.lastIndex, trade !== null ? LIVE_TRADE_MS : resumed !== null && allowance !== null ? parkedRemainingAt(resumed, at) : allowance, trade);
-      /* A resumed Live park carries its episode's freeze budget on (never a fresh one from a gap). */
-      if (resumed !== null && d.obligation.freeze_ms !== null) d.obligation = { ...d.obligation, freeze_ms: resumed.freeze_ms ?? 0 };
+      const back = resumed !== null ? settledPark(resumed) : null;
+      d.obligation = obligationFor(d, D, at, input.lastIndex, trade !== null ? LIVE_TRADE_MS : back !== null && allowance !== null ? back.remaining : allowance, trade);
+      /* A resumed Live park carries its episode's freeze budget on, settled (never a fresh one, never a refund, from a gap). */
+      if (back !== null && d.obligation.freeze_ms !== null) d.obligation = { ...d.obligation, freeze_ms: back.freeze };
     }
   }
   d.declines = d.declines.round_key === input.facts.roundKey ? d.declines : emptyDeclines(input.facts.roundKey);

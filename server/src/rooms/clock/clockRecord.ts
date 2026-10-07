@@ -23,7 +23,10 @@ import { GAME_ID_PATTERN } from "../gameRecord";
 import type { ClockEvidenceEvent, RemedyEvidenceDocument } from "./clockEvidence";
 
 export const CLOCK_FORMAT = "gs-game-clock";
-export const CLOCK_VERSION = 2;
+/** 3 (2026-10-07): optional park `since` (Timed Async) and `freeze_ms` (Live), and the obligation's `freeze_ms`. A
+ *  version-2 record is read and carried forward (each missing field supplied: a running Async park from the record's
+ *  last write, a full Live freeze budget once); an older build refuses a version-3 record as NEWER. */
+export const CLOCK_VERSION = 3;
 
 /** Escrow 2.1.0's policy constants, in ms (`contracts/escrow/src/state.rs`, `junoRemedyV1.ts`). */
 export const LIVE_ACTION_MS = 20 * 60_000;
@@ -496,7 +499,9 @@ export function parseClockDocument(raw: string, gameId: string): GameClockRecord
   }
   if (isObject(parsed) && parsed.format === CLOCK_FORMAT && typeof parsed.version === "number") {
     if (parsed.version > CLOCK_VERSION) throw new ClockUnreadableError(`the clock of ${gameId} was written by a newer build (version ${parsed.version})`, gameId, "newer");
-    if (parsed.version < CLOCK_VERSION) throw new ClockUnreadableError(`the clock of ${gameId} is the provisional version ${parsed.version} (never read by this build)`, gameId, "older");
+    if (parsed.version < CLOCK_VERSION - 1) throw new ClockUnreadableError(`the clock of ${gameId} is the provisional version ${parsed.version} (never read by this build)`, gameId, "older");
+    /* Version 2: carried forward by the field migrations below. */
+    if (parsed.version === CLOCK_VERSION - 1) parsed = { ...parsed, version: CLOCK_VERSION };
   }
   /* A record written before the owner-policy correction (2026-10-06) carried the offer budget (`offers`): it never
      entered the evidence or any decision that remains, so it is dropped on read (the record is otherwise the same v2). */

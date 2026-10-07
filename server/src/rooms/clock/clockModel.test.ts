@@ -352,6 +352,86 @@ describe("Live optional-offer FREEZE BUDGET: at most 10:00 in total per required
     assert.deepEqual([t.remaining(), budget(t)], [14 * MIN, 5 * MIN], "exact: 5:00 of real waiting used, 14:00 untouched");
   });
 
+  test("REVIEW: an undo never gives back clock or budget -- not A's own undo of an offer and of a withdrawal, not the answerer undoing its own answer, not a host undo", () => {
+    /* A's own undos only: O1 withdrawn at once; O2 waits 9:50 unanswered; A undoes O2, then the O1 withdrawal. */
+    const t = new Table("live", { money: true });
+    t.advance(5 * MIN); // A has 15:00, budget 10:00
+    t.move(A, offering(offerOf("private", A, B, 1)), "propose");
+    t.advance(SEC);
+    t.move(A, facts(turn(A, 0)), "rescind");
+    const rescindIndex = t.index;
+    t.move(A, offering(offerOf("trade", A, C, 2)), "propose");
+    const o2 = t.index;
+    t.advance(9 * MIN + 50 * SEC);
+    t.move(A, facts(turn(A, 0)), "revert", { revertTarget: o2 });
+    assert.deepEqual([t.remaining(), budget(t)], [5 * MIN + 10 * SEC, 9 * MIN + 59 * SEC], "undoing its own offer, A is charged the time it stood");
+    t.move(A, offering(offerOf("private", A, B, 1)), "revert", { revertTarget: rescindIndex });
+    const park = t.record.parked.find((p) => p.seat === A);
+    assert.deepEqual([park?.remaining_ms, park?.freeze_ms], [5 * MIN + 10 * SEC, 9 * MIN + 59 * SEC], "the restored park is never above what A holds now (it was 15:00)");
+    t.move(A, facts(turn(A, 0)), "rescind");
+    assert.deepEqual([t.remaining(), budget(t)], [5 * MIN + 10 * SEC, 9 * MIN + 59 * SEC]);
+    /* The answerer undoing its own acceptance after A ran: the wait already measured stays used. */
+    const u = new Table("live");
+    u.move(A, offering(offerOf("trade", A, B, 1)), "propose");
+    u.advance(9 * MIN + 59 * SEC);
+    u.move(B, facts(turn(A, 0)), "accept");
+    const acceptIndex = u.index;
+    assert.deepEqual([u.remaining(), u.record.obligation?.freeze_ms], [LIVE_ACTION_MS, SEC]);
+    u.advance(5 * MIN);
+    u.move(B, offering(offerOf("trade", A, B, 1)), "revert", { revertTarget: acceptIndex });
+    const restored = u.record.parked.find((p) => p.seat === A);
+    assert.deepEqual([restored?.remaining_ms, restored?.freeze_ms], [LIVE_ACTION_MS - 5 * MIN, SEC], "A's 5:00 run since charged; the 9:59 of budget stays used");
+    const expiry = u.advance(0);
+    assert.equal(expiry?.cause, "response", "B's own undo cost B its remaining response time");
+    u.commit(A, facts(turn(A, 0)), "server-expiry");
+    assert.deepEqual([u.remaining(), u.record.obligation?.freeze_ms], [LIVE_ACTION_MS - 5 * MIN, SEC], "no refund");
+    /* A host undo of a rejection after A ran: the same. */
+    const h = new Table("live");
+    h.move(A, offering(offerOf("trade", A, B, 1)), "propose");
+    h.advance(9 * MIN + 58 * SEC);
+    h.move(B, facts(turn(A, 0)), "reject");
+    const rejectIndex = h.index;
+    h.advance(2 * MIN);
+    h.move(C, offering(offerOf("trade", A, B, 1)), "revert", { revertTarget: rejectIndex });
+    h.move(B, facts(turn(A, 0)), "reject");
+    assert.deepEqual([h.remaining(), h.record.obligation?.freeze_ms], [LIVE_ACTION_MS - 2 * MIN, 2 * SEC], "the host's undo refunded nothing");
+  });
+
+  test("REVIEW: a recovered gap settles the wait already measured (never a refund); a replaced offer's wait is settled before the new one waits; a proposer deadline is never back-dated across a pause", () => {
+    const t = new Table("live");
+    cycle(t, 1, 9 * MIN, "accept");
+    t.advance(14 * MIN); // A has 6:00, budget 1:00
+    t.move(A, offering(offerOf("trade", A, C, 2)), "propose");
+    t.advance(5 * MIN + 59 * SEC); // A effectively at 1:01 (1:00 frozen, 4:59 charged)
+    assert.equal(clockViewOf(t.record, t.t).trade?.proposerRemainingMs, MIN + SEC);
+    /* The rejection's clock write was lost; the gap is recovered from the board. */
+    t.take(recoverGap(t.record, { now: t.t, lastIndex: t.index + 1, lastAt: t.t, actors: [C], facts: facts(turn(A, 0)) }));
+    assert.deepEqual([t.record.obligation?.seat, t.remaining(), budget(t)], [A, MIN + SEC, 0], "the measured wait is not refunded");
+    /* A counter (a new offer replacing the standing one) settles the replaced offer's wait first. */
+    const c = new Table("live");
+    c.advance(10 * MIN); // A has 10:00
+    c.move(A, offering(offerOf("trade", A, B, 1)), "propose");
+    c.advance(9 * MIN);
+    c.move(B, offering(offerOf("trade", B, A, 2)), "propose");
+    const parkA = c.record.parked.find((p) => p.seat === A);
+    assert.deepEqual([parkA?.remaining_ms, parkA?.freeze_ms], [10 * MIN, MIN], "9:00 of the budget used by the replaced offer");
+    /* A pause straddling the proposer's deadline: the close is stamped when the clock really runs out, after the resume. */
+    const p = new Table("live");
+    cycle(p, 1, 10 * MIN, "reject"); // budget spent
+    p.advance(15 * MIN); // A has 5:00
+    p.move(A, offering(offerOf("trade", A, C, 2)), "propose");
+    p.advance(4 * MIN);
+    p.ok(pauseOp(p.record, A, { action: "request", kind: "pause", id: null }, p.t));
+    for (const seat of [B, C]) p.ok(pauseOp(p.record, seat, { action: "yes", kind: "pause", id: p.record.pause.request?.id ?? null }, p.t));
+    p.advance(HOUR);
+    p.ok(pauseOp(p.record, B, { action: "request", kind: "resume", id: null }, p.t));
+    for (const seat of [A, C]) p.ok(pauseOp(p.record, seat, { action: "yes", kind: "resume", id: p.record.pause.request?.id ?? null }, p.t));
+    const resumedAt = p.t;
+    assert.equal(p.advance(MIN - 1), null);
+    const close = p.advance(1);
+    assert.deepEqual([close?.cause, close?.at], ["proposer-deadline", resumedAt + MIN], "A's last minute ran after the resume");
+  });
+
   test("Timed Async keeps no freeze budget (its deadline keeps running); a pre-budget Live record is read with a full budget once", () => {
     const a = new Table("async-pace", { pace: 86_400 });
     assert.equal(a.record.obligation?.freeze_ms, null);
@@ -1626,11 +1706,18 @@ describe("Canonical clock evidence", () => {
     assert.ok(!JSON.stringify(t.record.evidence.window).includes(sig), "the signature itself never enters the evidence");
   });
 
-  test("a record round-trips; an older (v1) or newer document is unreadable, never guessed", () => {
+  test("a record round-trips; a version-2 record is carried forward; an older (v1) or newer document is unreadable, never guessed", () => {
     const t = new Table("live");
+    assert.equal(t.record.version, 3);
     assert.deepEqual(parseClockDocument(JSON.stringify(t.record), GAME), t.record);
+    /* A version-2 record (before the freeze budget) reads as version 3 with a full budget supplied once. */
+    const v2 = JSON.parse(JSON.stringify(t.record)) as Record<string, unknown> & { obligation: Record<string, unknown>; snapshots: Array<{ obligation: Record<string, unknown> | null }> };
+    v2.version = 2;
+    delete v2.obligation.freeze_ms;
+    for (const snap of v2.snapshots) if (snap.obligation !== null) delete snap.obligation.freeze_ms;
+    assert.deepEqual(parseClockDocument(JSON.stringify(v2), GAME), t.record);
     assert.throws(() => parseClockDocument(JSON.stringify({ format: "gs-game-clock", version: 1, game_id: GAME }), GAME), (error) => error instanceof ClockUnreadableError && error.format === "older");
-    assert.throws(() => parseClockDocument(JSON.stringify({ format: "gs-game-clock", version: 3, game_id: GAME }), GAME), (error) => error instanceof ClockUnreadableError && error.format === "newer");
+    assert.throws(() => parseClockDocument(JSON.stringify({ format: "gs-game-clock", version: 4, game_id: GAME }), GAME), (error) => error instanceof ClockUnreadableError && error.format === "newer");
   });
 
   test("message classes: proposals, answers, rescissions, undo, the deal, the room's close", () => {

@@ -60,6 +60,12 @@ export interface PrivatePowerFlowModalProps {
   onDecline: (step: PowerFlowStep["key"]) => void;
   /** Only called while `flow.cancellable`; the control is not rendered otherwise. */
   onCancel: () => void;
+  /** Phase 3 W3-B (AUD-14.06): the shell's in-flight sentence (`actionLatchReason`) while a press of this tab's is still
+   *  travelling. Every step's act button is greyed with it -- the M&H exchange sends `ExchangePrivate` from here, and the
+   *  D&H / CSL steps lead straight to a lay or a station confirm on a board one round trip old. The declines send
+   *  nothing (the M&H's closes, the D&H's forfeit is the shell's own record) and keep their meaning. `null` / absent
+   *  leaves the modal exactly as before. */
+  inFlightReason?: string | null;
 }
 
 export function PrivatePowerFlowModal({
@@ -70,6 +76,7 @@ export function PrivatePowerFlowModal({
   onAct,
   onDecline,
   onCancel,
+  inFlightReason = null,
 }: PrivatePowerFlowModalProps): React.ReactElement {
   return (
     /* W3-A (AUD-13.07): opens itself, so it waits until no other native dialog is open (`NativeModalTurn`). */
@@ -185,12 +192,17 @@ export function PrivatePowerFlowModal({
               )}
               <button
                 type="button"
+                data-testid={`power-flow-act-${step.key}`}
                 style={{
                   ...styles.primary,
-                  ...(step.enabled ? {} : styles.buttonDisabled),
+                  ...(step.enabled && inFlightReason === null ? {} : styles.buttonDisabled),
                 }}
-                disabled={!step.enabled}
-                onClick={() => onAct(step.key)}
+                /* Phase 3 W3-B (AUD-14.06): and latched while the last press travels -- guarded at the press too. */
+                disabled={!step.enabled || inFlightReason !== null}
+                onClick={() => {
+                  if (inFlightReason !== null) return;
+                  onAct(step.key);
+                }}
                 /* Design note #619: a disabled button has to LOOK disabled, and #732's rule that a greyed
                    control means one thing -- here, "not yet", which the `title` says in words because a
                    player cannot see an order of operations. */
@@ -198,7 +210,7 @@ export function PrivatePowerFlowModal({
                   step.done
                     ? "Already done."
                     : step.enabled
-                      ? undefined
+                      ? (inFlightReason ?? undefined)
                       : "Available once the step above is finished."
                 }
               >

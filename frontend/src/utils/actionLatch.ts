@@ -15,10 +15,11 @@
    forms read the queue.
 
    THE LINK IS THE LONG-DURATION GUARD. Two rules, one answer for every control that reads `actionInFlight`:
-     1. BUSY while the link holds a submission from this tab, latch or no latch. Some presses never take the latch
-        (`automatic`-flagged presses: the par answer, the M&H exchange, a home station, Undo) yet still travel the
-        link; and every message on this link is a game-log submission (`ServerLink.submit` is called from the gameplay
-        dispatch alone), so a held one means the board every control is judging is stale.
+     1. BUSY while the link holds a submission from this tab, latch or no latch. (When W3-B's AUD-25.01 landed, the
+        `automatic`-flagged presses -- the par answer, the M&H exchange, a home station, Undo -- took no latch yet still
+        travelled the link; since W3-B's P3-N021 RED R1 commit every press but a `derived` one takes it.) Every message
+        on this link is a game-log submission (`ServerLink.submit` is called from the gameplay dispatch alone), so a
+        held one means the board every control is judging is stale.
      2. THE BACKSTOP DOES NOT RUN WHILE THE LINK HOLDS. It starts (afresh) only once the link holds nothing, so the
         ordinary releases decide: the drain on the landed entry (the link settles an `applied` frame in the same turn
         that hands the entries to the shell, whose drain applies them later -- releasing at the link's settlement
@@ -39,6 +40,8 @@
    unchanged (#916's route loop and #1077's multi-train buy still send several messages from one press). */
 
 import { useEffect, type Dispatch, type SetStateAction } from "react";
+
+import { LINK_SENDING_NOTE, type LinkQueueView } from "./useLinkQueue";
 
 /** The shell's busy answer: a press of this tab's is latched, or the room link still holds one of its submissions. */
 export function actionLatchBusy(pendingAppendIndex: number | null, linkHolds: boolean): boolean {
@@ -67,4 +70,17 @@ export function useActionLatch(
     return () => window.clearTimeout(timer);
   }, [pendingAppendIndex, setPendingAppendIndex, linkHolds, backstopMs]);
   return actionLatchBusy(pendingAppendIndex, linkHolds);
+}
+
+/* ==================================================================
+    PHASE 3 W3-B (AUD-14.06): THE ONE SENTENCE FOR THE ONE FLAG
+   ==================================================================
+   The surfaces AUD-14.06 latched (the licence modal, the private-power modal, the auction prompt, the token confirm,
+   Undo) say why they are greyed in the words the Stocks tab already uses for the same held press (W3-J AUD-25.10 (c)):
+   the link's own sentence while it holds one of this tab's submissions ("Queued -- will send on reconnect." while it
+   waits for a socket), otherwise the latch's. `null` when nothing is in flight. A READING of `actionInFlight` and W3-I's
+   view, never a second busy state: it cannot be busy when the flag is not. */
+export function actionLatchReason(actionInFlight: boolean, link: LinkQueueView): string | null {
+  if (!actionInFlight) return null;
+  return link.blocked && link.reason !== null ? link.reason : LINK_SENDING_NOTE;
 }

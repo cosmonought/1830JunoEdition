@@ -28,7 +28,7 @@ import { CLIENT_BUILD_ID, GAME_SERVER_URL, JUNO_RPC_ENDPOINT } from "./config";
 import { connectServerLink, type ServerLink } from "./utils/serverLink";
 // Phase 3 W3-I: the active room link's read-only queue, for the par prompt and the offer forms.
 import { linkQueueView, useLinkQueue } from "./utils/useLinkQueue";
-import { useActionLatch } from "./utils/actionLatch"; // Phase 3 W3-B (AUD-25.01)
+import { actionLatchReason, useActionLatch } from "./utils/actionLatch"; // Phase 3 W3-B (AUD-25.01; AUD-14.06)
 import { DelayedAuctionStatusChip } from "./components/DelayedAuctionStatusChip"; // Phase 3 W2-I (AUD-02.08)
 import { GameClockChip } from "./components/GameClockChip"; // Phase 3 final clocks
 import { declinesBlock } from "./utils/gameClockView"; // Phase 3 final clocks: the Live two-decline rule
@@ -953,6 +953,10 @@ const COMMITTED_PREVIEW_MS = 4000;
    on a bad connection, short enough that a dropped listener does not strand a player who could otherwise
    retry. The same reasoning, and the same figure, as #1169's seat echo. */
 const ACTION_LATCH_BACKSTOP_MS = 6000;
+/** Phase 3 W3-B (AUD-14.06): the route builder's map click while a press is in flight -- the click is CONSUMED (the
+ *  board's own flow after `onHexClick` is untouched) and the draft is not edited. One stable identity, so swapping it
+ *  in rebuilds the canvas's click handler once per latch rather than every render. */
+const ROUTE_EDIT_WHILE_IN_FLIGHT = (): void => undefined;
 /** #1376: how long past the line's moment a first frame may still start it, and how long past that moment
  *  the shell waits for a frame before playing the line anyway (a viewer who is not on the map). */
 const HAUNTING_AUDIO_GRACE_MS = 1500;
@@ -4584,9 +4588,15 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
      SET BEFORE THE AWAIT, because the double-click lands DURING the Firestore write -- a latch taken from the
      resolved index would be armed after the damage. `appendAt` is the position the write is taking and is
      known before it starts.
-     ONLY A PLAYER'S OWN PRESS. A replay is somebody else's action arriving and an `automatic` dispatch is the
+     ONLY A PLAYER'S OWN PRESS. A replay is somebody else's action arriving and a `derived` dispatch is the
      game moving on the player's behalf; neither is a press a hand could repeat, and latching on them would
      grey the board during the app's own housekeeping.
+     Phase 3 W3-B (P3-N021, OD-12 RED R1): THIS SAID `automatic`, AND #668 HAD ALREADY SPLIT THE TWO. `automatic` means
+     "skip the turn gate", and the B&O par, Proceed, the M&H exchange, a home / D&H station, Undo and Close Room all
+     carry it while being presses a hand can repeat -- so they took no latch, and once the link let go (or on the path
+     with no link) their own controls and everything else re-armed on a board one round trip old. The latch is now
+     taken for every press that is not `derived`; `derived` (the auto-skip, the forced withhold, the no-server derived
+     purchase) is the game's, takes none, and -- on the server path, where it is not sent -- releases none.
      IT GREYS CONTROLS AND DOES NOT CLOSE THE DISPATCH GATE, which is the whole reason it is a UI flag rather
      than a fourth condition on `runGameplayAction`'s turn check. #916's route loop and #1077's multi-train
      buy send several messages from ONE press, in code, without passing back through a button -- closing the
@@ -4605,6 +4615,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
      while a press is latched OR the room link still holds a submission of this tab's, and the latch's backstop waits
      for the link to let go -- so no control re-arms while the link says "queued" or "sending". */
   const actionInFlight = useActionLatch(pendingAppendIndex, setPendingAppendIndex, linkQueueNote.blocked, ACTION_LATCH_BACKSTOP_MS);
+  /* Phase 3 W3-B (AUD-14.06): the same flag, as the sentence the surfaces it newly reaches show (`actionLatchReason`):
+     the licence modal, the private-power modal, the auction prompt, the token confirm and Undo. `null` when idle. */
+  const actionInFlightReason = actionLatchReason(actionInFlight, linkQueueNote);
 
   /* Design note #1173c: THE RELEASE MOVED INTO THE DRAIN. It was an effect here comparing
      `sandboxAppliedCount` -- a count of EFFECTIVE actions -- against an index taken from the raw log, two
@@ -6796,7 +6809,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
              append leaves the position free for a retry. */
           const appendAt = appliedIndexRef.current;
           // Design note #1173a, whose reasoning is on `pendingAppendIndex`.
-          if (options?.automatic !== true) setPendingAppendIndex(appendAt);
+          /* Phase 3 W3-B (P3-N021, OD-12 RED R1): EVERY PLAYER PRESS TAKES THE LATCH, `automatic` ones included -- the
+             B&O par, Proceed, the M&H exchange, a home / D&H station, Undo and Close Room are decisions a hand can
+             repeat (#668). Only the game's own `derived` dispatches are not presses. */
+          if (options?.derived !== true) setPendingAppendIndex(appendAt);
 
           /* ==================================================================
               DESIGN NOTE 1213: THE GAME'S OWN ACTIONS ARE NOT THIS CLIENT'S TO SEND
@@ -6815,7 +6831,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
              dispatch stops here, and the action arrives from the server like any other. */
           const link = serverLinkRef.current;
           if (link && options?.derived === true) {
-            setPendingAppendIndex(null);
+            /* Phase 3 W3-B (P3-N021, OD-12 RED R1): returns WITHOUT touching the latch. A derived dispatch takes none,
+               so the `null` that stood here could only release a PLAYER's press still held -- an auto-skip or forced
+               withhold that fired while a later press was in flight (an earlier entry drained and moved the step)
+               re-armed the controls on a board one round trip old. */
             return;
           }
           /* #1242: A SERVER-PATH BUILD WITH NO LINK REFUSES; IT DOES NOT FALL BACK TO FIRESTORE. The two
@@ -9484,7 +9503,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
   /* undoReachFor decides both the button's enabled state and the dispatch; read-only is folded in so there is one reason to be disabled.
      See docs/ai_architecture/state_machine.md - App.tsx #592 */
   const undoBlockedReason = useMemo(() => {
-    if (!sandbox) return controlsEnabled ? null : "Initialize the session key to act.";
+    /* Phase 3 W3-B (AUD-14.06 / P3-N021): Undo is a press (`RevertTo`, `automatic` -- it takes the latch since P3-N021),
+       so it is latched like every other control: last in the precedence, because it resolves itself. Before this the
+       button read only the reach, and a second Undo pressed while the first was held by the link sent a second
+       `RevertTo` judged on the same, stale log. */
+    if (!sandbox) return controlsEnabled ? actionInFlightReason : "Initialize the session key to act.";
     if (!controlsEnabled) return "Initialize the session key to act.";
     /* LIVE-2D: a watcher holds no seat, and the server refuses its every move (`not-seated`, RV-1) -- so the button
        says so rather than offering a press the server will refuse. */
@@ -9500,11 +9523,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
       sandboxStateRef.current ?? undefined,
       sandboxRoom?.undoPolicy,
     );
-    return reach.index === null ? (reach.blockedReason ?? "There is nothing to undo.") : null;
+    return reach.index === null ? (reach.blockedReason ?? "There is nothing to undo.") : actionInFlightReason;
     // sandboxAppliedCount is the real dependency and the linter cannot see it:
     // the reach is read out of a ref. See docs/ai_architecture/state_machine.md - App.tsx #592
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sandbox, controlsEnabled, localId, sandboxRoom, describeLoggedAction, sandboxAppliedCount]);
+  }, [sandbox, controlsEnabled, localId, sandboxRoom, describeLoggedAction, sandboxAppliedCount, actionInFlightReason]);
 
   const handleUndoLastAction = useCallback(() => {
     if (!sandbox) {
@@ -10307,6 +10330,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
     if (gameState.current_round_type !== "StockRound") return;
     if (autoPassArm.player !== viewerAddress) return;
     if (!isMyTurn) return;
+    /* Phase 3 W3-B (P3-N021): A STANDING INSTRUCTION WAITS FOR THE PRESS IN FLIGHT. While a press of this tab's is still
+       travelling (the shell's latch, or the link holding it) the board this effect judges is one round trip old, and a
+       Pass sent now would race the held press. It re-runs when the latch lets go, on the board that press produced. */
+    if (actionInFlight) return;
 
     /* Design note #816: one dispatch per TURN, measured against the append-only log. Nothing has happened
        since this arm last acted means this is still that same turn; anything at all in the log means it is
@@ -10336,7 +10363,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
     autoPassedAtLogIndexRef.current = lastLogIndex;
     void handlePassTurn();
     // Design note #759a: the prices decide the debt, so a price move must re-run this.
-  }, [autoPassArm, gameState, viewerAddress, isMyTurn, handlePassTurn, logInfo, sandboxMarketPrices]);
+  }, [autoPassArm, gameState, viewerAddress, isMyTurn, handlePassTurn, logInfo, sandboxMarketPrices, actionInFlight]);
 
   /* ==================================================================
    *  DESIGN NOTE 1240: AUTO-BUY, WIRED THE WAY AUTO-PASS IS
@@ -10420,6 +10447,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
     if (gameState.current_round_type !== "StockRound") return;
     if (autoBuyPlan.player !== viewerAddress) return;
     if (!isMyTurn) return;
+    // Phase 3 W3-B (P3-N021): and waits for the press in flight, as Auto-Pass does -- including its own last buy.
+    if (actionInFlight) return;
 
     const log = sandboxLogRef.current;
     const lastLogIndex = log.length > 0 ? log[log.length - 1].index : -1;
@@ -10546,6 +10575,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
     logInfo,
     sandboxMarketPrices,
     homeHexToAxial,
+    actionInFlight,
   ]);
 
   const handleSellShares = useCallback(
@@ -14452,6 +14482,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
            first, "queued" while it waits for a socket, and "not reached the table yet" only after the link says the
            press did not land. Absent on the path with no room link (the prompt's own timers, as before). */
         linkQueue={GAME_SERVER_URL ? linkQueue : undefined}
+        /* Phase 3 W3-B (AUD-14.06 / P3-N021): the par confirm and Proceed are latched with every other control. */
+        inFlightReason={actionInFlightReason}
       />
 
       {/* Design note #416: blocking, for the same reason the B&O prompt is -- a floated corporation owes its
@@ -15672,7 +15704,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
                           : tokenTargetMode
                             ? handleTokenHexClick
                             : routeSelectMode
-                              ? handleRouteHexClick
+                              ? /* Phase 3 W3-B (AUD-14.06): route edits are latched with the Run they feed -- a draft
+                                   edited while the last press travels would be drawn as the route in flight. */
+                                actionInFlight
+                                ? ROUTE_EDIT_WHILE_IN_FLIGHT
+                                : handleRouteHexClick
                               : previewRotateArmed
                                 ? handlePreviewRotate
                                 : undefined
@@ -16061,6 +16097,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
           onAct={handlePowerFlowAct}
           onDecline={handlePowerFlowDecline}
           onCancel={handlePowerFlowCancel}
+          // Phase 3 W3-B (AUD-14.06): the act buttons are latched while the last press travels.
+          inFlightReason={actionInFlightReason}
         />
       )}
       {/* Design note #1060: the payout overlay. Not a modal and deliberately not in this stack's ordering
@@ -16109,6 +16147,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
         refusal={licenseModalFacts?.refusal ?? "Licences are not in play."}
         treasuryBefore={licenseModalFacts?.treasury ?? null}
         onBuy={() => kanawhaLicenseControl?.onBuy()}
+        // Phase 3 W3-B (AUD-14.06): the licence's own door, latched like the chip beside it.
+        inFlightReason={actionInFlightReason}
       />
       {/* W3-A / OD-5(c): every forced notice below presents only when the notice chain gives it the screen. */}
       <PrivateRevenueModal
@@ -16328,11 +16368,18 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
           /* Phase 3 W2-A (OD-1): and the hold, asked of the message this tick sends -- the compulsory home station
              (`PlaceHomeStation` home) is what the home hold waits for and is never greyed by it; the D&H's free
              station and a paid token are refused like any other move while a hold stands. */
-          canConfirm={controlsEnabled && pendingTokenHold === null}
+          /* Phase 3 W3-B (AUD-14.06): and the in-flight latch, last in the precedence (it resolves itself) -- the tick
+             sends `PlaceStationToken` or, for a home / D&H station, `PlaceHomeStation`, and neither may follow a press
+             still travelling. Latched at the mount too, as the tile ring's tick is. */
+          canConfirm={controlsEnabled && pendingTokenHold === null && !actionInFlight}
           confirmDisabledReason={
-            !controlsEnabled ? "Initialize the session key to place a token." : (pendingTokenHold ?? undefined)
+            !controlsEnabled
+              ? "Initialize the session key to place a token."
+              : (pendingTokenHold ?? actionInFlightReason ?? undefined)
           }
-          onConfirm={handleConfirmTokenPlacement}
+          onConfirm={() => {
+            if (!actionInFlight) handleConfirmTokenPlacement();
+          }}
           onCancel={handleCancelTokenPlacement}
         />
       )}

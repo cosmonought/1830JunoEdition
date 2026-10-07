@@ -194,7 +194,9 @@ describe("the controls go quiet while a press is in flight", () => {
        taking the index and sending anything. `const allocated = link` appears in both functions, and
        `indexOf` takes the first after the start -- which is this one. */
     const dispatch = sliceBetween(APP, "const appendAt = appliedIndexRef.current;", "const allocated = link");
-    expect(dispatch).toContain("if (options?.automatic !== true) setPendingAppendIndex(appendAt);");
+    /* Phase 3 W3-B (P3-N021, OD-12 RED R1): every player press takes it -- `automatic` ones too; only `derived` does not. */
+    expect(dispatch).toContain("if (options?.derived !== true) setPendingAppendIndex(appendAt);");
+    expect(dispatch).not.toContain("options?.automatic !== true) setPendingAppendIndex");
   });
 
   it("releases against an INDEX, in the scale the latch was taken in", () => {

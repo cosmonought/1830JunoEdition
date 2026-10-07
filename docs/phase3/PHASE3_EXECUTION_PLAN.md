@@ -178,7 +178,7 @@ estimate in §10.2 rises; the barrier figure is given there too.
 | R-DOCKOBS | status-dock `ResizeObserver` (`useState(96)`) | 3104–3123 | L5 | W1-I |
 | R-RECEIPT | "no upgrade" receipt | 3811 | L4 | W1-E |
 | R-PRIVEXCH | `runPrivateExchange`, `handlePowerFlowAct` | 5831–5885 | L2 | W1-C |
-| **RED R1 — submit half** | `runGameplayAction` (the callback opens at 6108) — submit half | 6227–6468 | none | only via OD-12 (W3-C: 6425–6427; W3-B: the `press:true` latch; W3-J, used: `6378dea` AUD-25.03, `77b0b38` AUD-25.13 #9, `b9afbdf` AUD-25.05, `b4c1714` AUD-25.16 -- the last under OD-19; the owner does not re-ask confirmation, 2026-10-05) |
+| **RED R1 — submit half** | `runGameplayAction` (the callback opens at 6108) — submit half | 6227–6468 | none | only via OD-12 (W3-C: 6425–6427; W3-B, used: `0b2f360` P3-N021 (the latch rule and the derived return); W3-J, used: `6378dea` AUD-25.03, `77b0b38` AUD-25.13 #9, `b9afbdf` AUD-25.05, `b4c1714` AUD-25.16 -- the last under OD-19; the owner does not re-ask confirmation, 2026-10-05) |
 | **RED R2 — apply half** | `runGameplayAction` apply | 6469–8758 | none | only via OD-12 (W2-J: 7111–7123; W1-N: 7828–7834; W3-H: 7580–7614 if needed) |
 | **RED R3 — rebuild** | `rebuildSandbox` | 8877–8965 | none | — |
 | R-UNDOLABEL | undo labels map (`WaterfallMiniAuctionPass`) | 8998 | L1 | W1-B |
@@ -718,6 +718,11 @@ gates.
   for P3-N021.
 - **Status (2026-10-04):** PARTIAL — INTEGRATED THROUGH AUD-25.01. AUD-25.01 (U-46, MEDIUM, from the W3-G audit) IMPLEMENTED on the slice branch `phase3/w3-b-action-latch-linkqueue` (`26f5982` + review fix `5fd3a7b` + tracking `7efda71`, from `d29bb2f`) and **INTEGRATED on `phase3/wave3-i-w2i-w2j-w3c-w3g-w3b-v13cert-integration`** (merge `00b2b3c`, parents `d29bb2f` / `7efda71`; then the provisional baseline, superseded 2026-10-05 by `phase3/consolidated-pre-playtest-integration`). No RED region edited (OD-12 not used). Accepted LOW residue (RED R5): a held press can briefly re-arm once its own move lands if another seat's move landed meanwhile. OPEN: AUD-14.06 and P3-N021 NOT STARTED (W3-H; OD-12).
 - **Consolidated integration (2026-10-05):** still PARTIAL, re-evaluated on the combined tree: AUD-14.06 (`BuyLicenseModal`, `PrivatePowerFlowModal`, the token confirm, route edits -- none reads a latch) and P3-N021 (the automatic presses' latch / serialisation order, OD-12 RED R1) are NOT STARTED; no later slice closed either. They are pre-Phase-4 lane E.
+- **Latch residue (2026-10-05): COMPLETE** on `phase3/preplaytest-w3b-latch-residue` (from `b8d5246`; NOT integrated): P3-N021 by the
+  OD-12 RED R1 commit `0b2f360` (every press but a `derived` one takes the latch; the server-path `derived` return releases nothing) and
+  the non-RED `2cea8c4` (Auto-Pass / Auto-Buy wait for the press in flight); AUD-14.06 by `2cea8c4` (BuyLicenseModal, PrivatePowerFlowModal,
+  the auction prompt, the token confirm, Undo, the map's route edits) with the dispatch-site coverage registry
+  (`phase3W3BLatchResidue.test.tsx`); review fixes `f855b8b`. Record: `PHASE3_AUDIT_RECONCILIATION.md` "W3-B latch residue slice status".
 
 #### W3-C
 **Refusal display model** · L6 · **3.5–5.5 h**
@@ -861,7 +866,7 @@ The remaining Phase-3 work that MUST land before Phase-4 human playtesting, each
 | **B** | **D-35 OO reservation marker:** the marker follows its own city identity through the animated transition and resolves to the final city at commit | VF/D-35 | presentation only; no gameplay / state / rules change |
 | **C** | **Emergency `train-offer` third-seat duplicate prompt** (the first post-integration bugfix lane) | P3-N027 | narrow; prove one presentation, live controls only for the answering seat, status-only third seat, correct proposer status / rescind; server authority unchanged |
 | **D** | **Terms route / page shell and Terms / deposit link infrastructure** (OD-16) -- **built inside W3-L (2026-10-05, `9afc74a`, not integrated)** | AUD-20.08 | NO invented Terms prose -- an owner-copy slot only; final Terms are a Phase-7 / mainnet gate |
-| **E** | **W3-B latch residue** | AUD-14.06, P3-N021 | P3-N021 only via an OD-12 RED R1 commit |
+| **E** | **W3-B latch residue** | AUD-14.06, P3-N021 | P3-N021 only via an OD-12 RED R1 commit -- **DONE on its branch (2026-10-05):** `phase3/preplaytest-w3b-latch-residue`, RED R1 `0b2f360`; W3-B COMPLETE; pending integration |
 
 **Also before the Phase-4 baseline under the closure contract (§11), though not among the owner's lanes A–E:** **F (last)** the FINAL tutorial pass -- AUD-13.04 and the tutorial system (OD-5(A): contextual whitebox / spotlight, built LAST, after the shell/UI is stable); the closure contract (§11 item 2) puts every A row before Phase-3 closure and the Phase-4 baseline, so by default it follows lanes A–E, but its TIMING IS AN OWNER DECISION OPEN -- if the owner means after Phase 4, AUD-13.04 moves to E with that ruling. W1-K (AUD-19.02, cross-tab Keplr single flight -- folded into W3-L 2026-10-05, IMPLEMENTED there, not integrated), AUD-00.02 (P0 docs), W3-F (AUD-25.14, the Phase-4 checklist, the broad owner gate). **Not pre-Phase-4:** D-17 (a Phase-4 observation); phone-width layout and keyboard map access (Phase 5, OD-10(b)). **Asset dependency:** the official Keplr logo (AUD-18.05, ASSET PENDING).
 

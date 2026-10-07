@@ -93,6 +93,11 @@ export interface AuctionPromptModalProps {
   viewerActsOnHandoff?: boolean;
   /** Phase 3 W3-I: the room link's read-only queue state (`useLinkQueue`), or absent on a path with no room link. */
   linkQueue?: LinkQueueState;
+  /** Phase 3 W3-B (AUD-14.06 / P3-N021): the shell's in-flight sentence (`actionLatchReason`) while a press of this
+   *  tab's is still travelling -- the par confirm and Proceed are `automatic` presses, which take the shell's latch
+   *  since P3-N021, and neither may follow another press made on a board one round trip old. `null` / absent: as
+   *  before (the par's own W3-I hold still applies). */
+  inFlightReason?: string | null;
 }
 
 export function AuctionPromptModal({
@@ -106,6 +111,7 @@ export function AuctionPromptModal({
   delayedAuction = false,
   viewerActsOnHandoff = true,
   linkQueue,
+  inFlightReason = null,
 }: AuctionPromptModalProps) {
   /* Seeded at the top of the ladder rather than left blank. Every rung is
      legal, so there is no "unset" state worth representing -- and a
@@ -174,7 +180,9 @@ export function AuctionPromptModal({
   /* W3-I (I-1): a submission the link still holds -- this press's, or one made before this card was (re)mounted -- is
      never followed by a second press. */
   const linkHolds = linkQueue !== undefined && linkQueue.unsettled > 0;
-  const confirmHeld = sending !== null || linkHolds;
+  /* W3-B (AUD-14.06): and the shell's latch -- one more reader of the one flag, not a second hold. */
+  const ownHold = sending !== null || linkHolds;
+  const confirmHeld = ownHold || inFlightReason !== null;
   const confirmPar = () => {
     if (confirmHeld) return;
     sendSerial.current += 1;
@@ -300,9 +308,17 @@ export function AuctionPromptModal({
               style={{ ...styles.confirm, ...(confirmHeld ? styles.confirmDisabled : {}) }}
               onClick={confirmPar}
               disabled={confirmHeld}
-              title={confirmHeld ? (linkQueue !== undefined && linkQueue.unsent > 0 ? LINK_QUEUED_NOTE : "Sending your par price — one moment.") : undefined}
+              title={
+                ownHold
+                  ? linkQueue !== undefined && linkQueue.unsent > 0
+                    ? LINK_QUEUED_NOTE
+                    : "Sending your par price — one moment."
+                  : (inFlightReason ?? undefined)
+              }
             >
-              {confirmHeld
+              {/* W3-B review: "Sending…" names THIS card's own send (or the link's hold); a different press in flight only
+                  greys the button, with its own sentence in the title. */}
+              {ownHold
                 ? "Sending…"
                 : <>Take the President&rsquo;s Certificate at ${selected}</>}
             </button>
@@ -312,7 +328,7 @@ export function AuctionPromptModal({
                 {LINK_QUEUED_NOTE}
               </span>
             )}
-            {!confirmHeld && notLanded && (
+            {!ownHold && notLanded && (
               <span style={styles.waiting} role="status">
                 {PAR_NOT_LANDED_NOTE}
               </span>
@@ -335,13 +351,19 @@ export function AuctionPromptModal({
               )}
             </p>
 
-            {/* W2-H: never disabled. A viewer who cannot proceed (a par still owed, or a watcher) is on the waiting
-               status above and never reaches this button. */}
+            {/* W2-H: never disabled for WHO may press it. A viewer who cannot proceed (a par still owed, or a watcher) is
+               on the waiting status above and never reaches this button. Phase 3 W3-B (AUD-14.06 / P3-N021): greyed only
+               while this tab's last press is still travelling -- a second Proceed would be a second `OpenStockRound`. */}
             <button
               type="button"
-              style={styles.confirm}
-              onClick={onProceed}
-              title={`Close the auction and open ${stockRound}.`}
+              data-testid="auction-proceed"
+              style={{ ...styles.confirm, ...(inFlightReason !== null ? styles.confirmDisabled : {}) }}
+              disabled={inFlightReason !== null}
+              onClick={() => {
+                if (inFlightReason !== null) return;
+                onProceed();
+              }}
+              title={inFlightReason ?? `Close the auction and open ${stockRound}.`}
             >
               Proceed to {stockRound} &#8250;
             </button>

@@ -40,6 +40,10 @@ export interface BuyLicenseModalProps {
   /** #1388: the acting corporation's treasury now, for the confirm line; `null` when no corporation is acting. */
   treasuryBefore?: number | null;
   onBuy: () => void;
+  /** Phase 3 W3-B (AUD-14.06): the shell's in-flight sentence (`actionLatchReason`) while a press of this tab's is still
+   *  travelling -- the licence chip already greys on it (`sessionReady`), and this door must not stay open beside it.
+   *  The Buy is greyed with the sentence; `null` / absent leaves the modal exactly as before. */
+  inFlightReason?: string | null;
 }
 
 /* ==================================================================
@@ -73,6 +77,7 @@ export function BuyLicenseModal({
   refusal,
   treasuryBefore = null,
   onBuy,
+  inFlightReason = null,
 }: BuyLicenseModalProps) {
   if (!open) return null;
   const canBuy = refusal === null;
@@ -124,12 +129,17 @@ export function BuyLicenseModal({
           {canBuy && actingTicker && (
             <button
               type="button"
-              style={styles.primaryButton}
+              data-testid="buy-license-confirm"
+              style={{ ...styles.primaryButton, ...(inFlightReason !== null ? styles.primaryButtonDisabled : {}) }}
+              /* Phase 3 W3-B (AUD-14.06): latched while the last press is still travelling (and guarded at the press, so
+                 a click that lands before the commit sends nothing). */
+              disabled={inFlightReason !== null}
               onClick={() => {
+                if (inFlightReason !== null) return;
                 onBuy();
                 onClose();
               }}
-              title={`${actingTicker} pays $${KANAWHA_LICENSE_COST} to the Bank.`}
+              title={inFlightReason ?? `${actingTicker} pays $${KANAWHA_LICENSE_COST} to the Bank.`}
             >
               Buy License for {actingTicker} (${KANAWHA_LICENSE_COST})
             </button>
@@ -205,4 +215,6 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 700,
     cursor: "pointer",
   },
+  // Phase 3 W3-B (AUD-14.06): the in-flight Buy looks the way it behaves (#619).
+  primaryButtonDisabled: { opacity: 0.45, cursor: "not-allowed" },
 };

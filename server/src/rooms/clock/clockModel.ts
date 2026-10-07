@@ -27,7 +27,8 @@
 // the answerer's completed decision: the next decision starts fresh. A rejection, an unanswered expiry or anything else
 // that closes it resumes the proposer's parked time EXACTLY (never a fresh 20:00); a rescission is charged the time the
 // answerer's clock ran. LIVE ONLY: a rejection or an unanswered expiry of a qualifying offer counts one DECLINE for that
-// direction (one counter per direction, whatever the kind) in the current Operating Round; two block a third
+// direction (one counter per direction, whatever the kind) in the current ROUND INSTANCE (one operating sub-round,
+// one Stock Round); two block a third
 // qualifying offer in that direction until the next OR (the reverse direction and other players stay open). ASYNC
 // (Timed and No-deadline): an offer follows the ordinary responsibility model -- no response timer, no decline count,
 // no limit. No count of offers per round and no history length ever limits an offer (owner, 2026-10-06; offer churn is
@@ -74,7 +75,7 @@ import {
   LIVE_ACTION_MS,
   LIVE_CURABLE_OVERDUES,
   LIVE_CURE_MS,
-  LIVE_DECLINES_PER_OR,
+  LIVE_DECLINES_PER_ROUND_INSTANCE,
   LIVE_TRADE_MS,
   emptyDeclines,
   type ClockEnded,
@@ -104,8 +105,9 @@ export interface ClockBoardFacts {
   readonly seats: readonly string[];
   readonly decision: RequiredDecision | null;
   readonly offer: StandingOffer | null;
-  /** The Operating Round (`OperatingRound/macro/sub`), or `null` outside one. */
-  readonly orKey: string | null;
+  /** The ROUND INSTANCE (`<round type>/<macro>/<sub>`: one Stock Round, one operating sub-round, one auction) -- the
+   *  Live two-decline limit's scope. */
+  readonly roundKey: string;
 }
 
 /** `optional`: an accepted action that is never a REQUIRED decision (a private company's own power, taken at any time):
@@ -385,7 +387,7 @@ function emitResponsibility(x: Draft, ob: ClockObligation | null, at: number, ca
    ================================================================== */
 
 /** Responsibility events that CONTINUE an obligation rather than begin one (the evidence window is not restarted). */
-const RESUMPTION_REASONS: ReadonlySet<string> = new Set(["offer-expired", "offer-rejected", "offer-withdrawn", "undo-restored", "undo-restored-charged", "undo-unrecorded", "recovered-gap"]);
+const RESUMPTION_REASONS: ReadonlySet<string> = new Set(["offer-expired", "offer-rejected", "offer-withdrawn", "offer-accepted-resumed", "offer-closed-resumed", "undo-restored", "undo-restored-charged", "undo-unrecorded", "recovered-gap"]);
 
 /** Brings the record in line with one committed batch. */
 export function foldBatch(record: GameClockRecord, batch: ClockBatch, now: number): ClockStep {
@@ -453,17 +455,23 @@ export function foldBatch(record: GameClockRecord, batch: ClockBatch, now: numbe
   const isLive = d.policy.class === "live";
 
   if (after !== null && (before === null || before.key !== after.key)) {
-    /* A NEW STANDING OFFER. */
+    /* A NEW STANDING OFFER (or a counter / continuation that replaces the standing one: whatever was parked behind the
+       replaced offer stays parked behind this one -- a negotiation never loses, nor manufactures, anybody's time). */
     const proposer = after.proposer;
     const answerer = after.answerer;
+    if (before !== null) d.parked = d.parked.map((p) => (p.offer_key === before.key ? { ...p, offer_key: after.key } : p));
     const answerOwed = proposer !== null && answerer !== null && proposer !== answerer && D !== null && D.seat === answerer;
-    /* A QUALIFYING offer suspends the proposer's own required action: the proposer was the responsible player (its clock
-       running) and the answer is now owed by another seat. Its clock freezes at its exact remainder. */
-    const suspends = answerOwed && current !== null && current.seat === proposer && current.timer !== null;
-    if (answerOwed && D !== null) {
-      if (suspends && current !== null && current.timer !== null) {
-        d.parked = [...d.parked.filter((p) => p.seat !== proposer), { seat: proposer, offer_key: after.key, remaining_ms: remainingAt(current.timer, at) }];
+    if (D !== null && current !== null && D.seat === current.seat) {
+      /* The answer is owed by the seat already responsible (an offer made TO it, or an offer to oneself): nothing is
+         suspended; its clock runs on; nothing parks, nothing refreshes. */
+      d.obligation = { ...current, kind: D.kind, key: D.key };
+    } else if (answerOwed && D !== null) {
+      /* The answer is owed by another seat: the running obligation the offer suspends is frozen at its EXACT remainder
+         (with the decision it was for). A QUALIFYING offer is one that suspends the PROPOSER's own required action. */
+      if (current !== null && current.timer !== null && !d.parked.some((p) => p.seat === current?.seat && p.offer_key === after.key)) {
+        d.parked = [...d.parked.filter((p) => p.seat !== current?.seat), { seat: current.seat, offer_key: after.key, remaining_ms: remainingAt(current.timer, at), key: current.key }];
       }
+      const suspends = d.parked.some((p) => p.seat === proposer && p.offer_key === after.key);
       if (isLive && (suspends || after.slot === "train")) {
         /* LIVE: the answerer gets the distinct 10:00 RESPONSE timer -- never an action clock, an overdue or a strike (the
            owner's train rule, generalised by the owner to every inter-player offer that suspends its proposer). */
@@ -474,32 +482,30 @@ export function foldBatch(record: GameClockRecord, batch: ClockBatch, now: numbe
            decision under the ordinary responsibility model (the Async pace; the Live action clock). */
         fresh(D, "offer");
       }
-    } else if (D !== null && current !== null && D.seat === current.seat) {
-      /* An offer that suspends nobody's required action (an offer to oneself, or one made TO the responsible player --
-         a prompt to them): their clock runs on; nothing parks, nothing refreshes (only an accepted trade is progress). */
-      d.obligation = { ...current, kind: D.kind, key: D.key };
     } else {
       fresh(D, "offer");
     }
   } else if (before !== null && (after === null || after.key !== before.key)) {
-    /* THE STANDING OFFER RESOLVED. */
-    const parked = d.parked.find((p) => p.offer_key === before.key) ?? null;
+    /* THE STANDING OFFER RESOLVED (accepted, rejected, expired, rescinded or otherwise closed). */
+    const parkedHere = d.parked.filter((p) => p.offer_key === before.key);
     d.parked = d.parked.filter((p) => p.offer_key !== before.key);
     /* An unanswered expiry is a fence: no undo may resurrect the expired offer. */
     if (batch.msg === "server-expiry") d.undo_floor = Math.max(d.undo_floor, batch.last);
     const selfOffer = before.proposer !== null && before.proposer === before.answerer;
     /* A qualifying offer is one that parked its proposer (it suspended the proposer's required action); a Live train
        offer is always answered on the response timer (the owner's train rule). */
-    const qualifying = !selfOffer && parked !== null && parked.seat === before.proposer;
+    const proposerPark = parkedHere.find((p) => p.seat === before.proposer) ?? null;
+    const qualifying = !selfOffer && proposerPark !== null;
     const liveQualifying = isLive && !selfOffer && (qualifying || before.slot === "train");
     /* LIVE ONLY: a rejection, or an unanswered expiry, of a qualifying offer is one DECLINE for its direction in the
-       current Operating Round (one counter per direction, whatever the offer's kind; once per offer). Async keeps no
-       decline count. A negotiation the answerer CONTINUES (a new offer of its own) resolves no offer here: no decline. */
+       current ROUND INSTANCE (one operating sub-round -- OR 2.1 and OR 2.2 are two -- or one Stock Round; one counter per
+       direction, whatever the offer's kind; once per proposal). Async keeps no decline count. A negotiation the
+       answerer CONTINUES (a new offer of its own) resolves no offer here: no decline. */
     if (liveQualifying && (batch.msg === "reject" || batch.msg === "server-expiry") && before.proposer !== null && before.answerer !== null) {
       /* Once per PROPOSAL (its position in the log -- the response obligation began at it): a board key can repeat (a
          funding offer has no instance; an undo rewinds a serial), an answer undone and given again cannot. */
       const proposedAt = current !== null && current.trade !== null && current.trade.offer_key === before.key ? current.began_index : batch.first;
-      bumpDeclines(x, batch.before.orKey, declineKey(before.proposer, before.answerer), `${before.key}@${proposedAt}`.slice(-200));
+      bumpDeclines(x, batch.before.roundKey, declineKey(before.proposer, before.answerer), `${before.key}@${proposedAt}`.slice(-200));
     }
     if (liveQualifying) {
       x.emit("trade-end", at, {
@@ -512,30 +518,27 @@ export function foldBatch(record: GameClockRecord, batch: ClockBatch, now: numbe
       });
     }
     const answered = (batch.msg === "accept" || batch.msg === "reject") && batch.actor === before.answerer;
-    if (selfOffer) {
-      if (batch.msg === "accept") fresh(D, "accepted");
-      else if (D !== null && current !== null && D.seat === current.seat) d.obligation = { ...current, kind: D.kind, key: D.key };
-      else fresh(D, "offer-closed");
-    } else if (answered && batch.msg === "accept") {
-      /* An ACCEPTED offer is progress (the trade happened): the next decision starts fresh. */
-      fresh(D, "offer-accepted");
-    } else if (D !== null && parked !== null && D.seat === parked.seat) {
-      /* A REJECTION, an unanswered expiry, or anything else that closed a qualifying offer: the proposer resumes EXACTLY
-         what it had (an offer never refreshes its proposer, and the answerer can never pick the moment of the
-         proposer's overdue). Only the proposer's own RESCISSION is charged: the time the answerer's clock actually
-         RAN while the offer stood (never a pause or an outage). */
+    /* OPTIONAL NEGOTIATION NEVER MANUFACTURES CLOCK TIME (owner, 2026-10-07): whatever closed the offer -- an acceptance,
+       a rejection, an unanswered expiry, a rescission -- a seat that still owes the SAME required decision it was owing
+       when the offer suspended it resumes EXACTLY the remainder it had (Live and Async alike). Only the proposer's own
+       RESCISSION is charged: the time the answerer's clock actually RAN while the offer stood (never a pause or an
+       outage). A seat newly responsible gets the ordinary fresh allowance. */
+    const resume = D !== null ? (parkedHere.find((p) => p.seat === D.seat && (p.key === null || p.key === D.key)) ?? null) : null;
+    if (D !== null && resume !== null) {
       const ran = current !== null && current.key === `offer:${before.key}` && current.initial_ms !== null && current.timer !== null ? clamp(current.initial_ms - remainingAt(current.timer, at)) : 0;
-      const stood = batch.msg === "rescind" && batch.actor === parked.seat ? ran : 0;
-      const resumed = clamp(parked.remaining_ms - stood);
+      const stood = batch.msg === "rescind" && batch.actor === resume.seat && resume.seat === before.proposer ? ran : 0;
+      const resumed = clamp(resume.remaining_ms - stood);
       d.obligation = obligationFor(d, D, at, batch.first, resumed, null);
       d.obligation = { ...d.obligation, initial_ms: resumed };
-      emitResponsibility(x, d.obligation, at, { actor: batch.actor, index: batch.first, reason: batch.msg === "server-expiry" ? "offer-expired" : batch.msg === "reject" ? "offer-rejected" : "offer-withdrawn" });
-    } else if (parked === null && D !== null && current !== null && D.seat === current.seat && current.trade === null && batch.msg !== "accept") {
-      /* A non-qualifying offer (made TO the responsible player) closed without a trade: their clock runs on -- a
-         rejection never refreshes it. */
+      const why = batch.msg === "server-expiry" ? "offer-expired" : batch.msg === "reject" ? "offer-rejected" : batch.msg === "accept" ? "offer-accepted-resumed" : batch.msg === "rescind" ? "offer-withdrawn" : "offer-closed-resumed";
+      emitResponsibility(x, d.obligation, at, { actor: batch.actor, index: batch.first, reason: why });
+    } else if (parkedHere.length === 0 && D !== null && current !== null && D.seat === current.seat && current.trade === null && (D.key === current.key || current.key === `offer:${before.key}`)) {
+      /* An offer that suspended nobody (made TO the responsible seat, or to oneself) closed -- accepted or not: that
+         seat still owes the same decision and its clock runs on. */
       d.obligation = { ...current, kind: D.kind, key: D.key };
     } else {
-      fresh(D, answered ? "offer-rejected" : "offer-closed");
+      /* Responsibility genuinely passed (or the decision changed): the newly responsible seat starts fresh. */
+      fresh(D, answered ? (batch.msg === "accept" ? "offer-accepted" : "offer-answered-handoff") : selfOffer && batch.msg === "accept" ? "accepted" : "offer-closed");
     }
   } else {
     /* AN ORDINARY MOVE. */
@@ -563,10 +566,11 @@ function finishFold(x: Draft, batch: ClockBatch): void {
   /* The pause-request bound is per obligation: a new obligation starts a new window. */
   const key = d.obligation?.key ?? null;
   if (d.pause.window.key !== key && d.pause.window.count > 0) d.pause = { ...d.pause, window: { key, count: 0 } };
-  /* The two-decline limit is the current Operating Round's: a new OR (or leaving the ORs) clears it. */
-  const orKey = batch.after.orKey;
-  if (d.declines.or_key !== orKey && (Object.keys(d.declines.counts).length > 0 || d.declines.or_key !== null || d.declines.offers.length > 0)) {
-    d.declines = emptyDeclines(orKey);
+  /* The two-decline limit is the current ROUND INSTANCE's: the next instance (the next operating sub-round, the next
+     Stock Round, any other round) starts from zero. */
+  const roundKey = batch.after.roundKey;
+  if (d.declines.round_key !== roundKey) {
+    d.declines = emptyDeclines(roundKey);
   }
   /* Parked clocks of offers no longer standing are dropped (the offer is gone; nothing may resume from it). */
   const standing = batch.after.offer?.key ?? null;
@@ -579,29 +583,29 @@ export function declineKey(from: string, to: string): string {
   return `${from}>${to}`;
 }
 
-function bumpDeclines(x: Draft, orKey: string | null, key: string, offerKey: string): void {
+function bumpDeclines(x: Draft, roundKey: string, key: string, offerKey: string): void {
   const d = x.d;
-  const same = d.declines.or_key === orKey;
+  const same = d.declines.round_key === roundKey;
   const offers = same ? d.declines.offers : [];
   /* One offer is declined at most once (an answer undone and given again is the same decline). */
   if (offers.includes(offerKey)) return;
   const counts = same ? { ...d.declines.counts } : {};
   counts[key] = (counts[key] ?? 0) + 1;
-  d.declines = { or_key: orKey, counts, offers: [...offers, offerKey].slice(-64) };
+  d.declines = { round_key: roundKey, counts, offers: [...offers, offerKey].slice(-64) };
 }
 
 function pushSnapshot(x: Draft, index: number, at: number, obligation: ClockObligation | null, parked: readonly ClockParked[], declines: GameClockRecord["declines"]): void {
   const frozen = obligation === null ? null : { ...obligation, timer: obligation.timer === null ? null : freeze(obligation.timer, at) };
   const kept = x.d.snapshots.filter((snap) => snap.index < index);
-  x.d.snapshots = [...kept, { index, at, obligation: frozen, parked: [...parked], declines: { or_key: declines.or_key, counts: { ...declines.counts }, offers: [...declines.offers] } }].slice(-CLOCK_SNAPSHOT_LIMIT);
+  x.d.snapshots = [...kept, { index, at, obligation: frozen, parked: [...parked], declines: { round_key: declines.round_key, counts: { ...declines.counts }, offers: [...declines.offers] } }].slice(-CLOCK_SNAPSHOT_LIMIT);
 }
 
-/** Declines never go back: the larger count per direction of two views of the same Operating Round. */
+/** Declines never go back: the larger count per direction of two views of the same round instance. */
 function mergeDeclines(a: GameClockRecord["declines"], b: GameClockRecord["declines"]): GameClockRecord["declines"] {
-  if (a.or_key !== b.or_key) return a;
+  if (a.round_key !== b.round_key) return a;
   const counts: Record<string, number> = { ...a.counts };
   for (const [key, count] of Object.entries(b.counts)) counts[key] = Math.max(counts[key] ?? 0, count);
-  return { or_key: a.or_key, counts, offers: [...new Set([...a.offers, ...b.offers])].slice(-64) };
+  return { round_key: a.round_key, counts, offers: [...new Set([...a.offers, ...b.offers])].slice(-64) };
 }
 
 function restoreUndo(x: Draft, batch: ClockBatch): void {
@@ -651,7 +655,7 @@ function restoreUndo(x: Draft, batch: ClockBatch): void {
     restored = obligationFor(d, D, at, batch.first, left, null);
     how = "undo-unrecorded";
   }
-  if (snap !== null && snap.declines.or_key === batch.after.orKey) d.declines = mergeDeclines(snap.declines, d.declines);
+  if (snap !== null && snap.declines.round_key === batch.after.roundKey) d.declines = mergeDeclines(snap.declines, d.declines);
   d.snapshots = d.snapshots.filter((s) => s.index < target);
   d.obligation = restored;
   x.emit("undo", at, { target, index: batch.first, by: batch.actor, seat: restored?.seat ?? null, remaining_ms: restored?.timer?.remaining_ms ?? null, how });
@@ -666,7 +670,7 @@ function beginPlay(x: Draft, batch: ClockBatch): void {
   x.emit("policy", at, { deadline: d.policy.class, pace_secs: d.policy.pace_secs, money: d.money, seats: [...d.seats] });
   const D = batch.after.decision;
   d.obligation = D === null ? null : obligationFor(d, D, at, batch.first, allowanceOf(d), null);
-  d.declines = emptyDeclines(batch.after.orKey);
+  d.declines = emptyDeclines(batch.after.roundKey);
   emitResponsibility(x, d.obligation, at, { actor: batch.actor, index: batch.first, reason: "deal" });
   normalize(x, at);
 }
@@ -1207,7 +1211,7 @@ export function recoverGap(record: GameClockRecord, input: { readonly now: numbe
     if (standing !== null && standing.proposer !== null) {
       const kept = keptParked.find((p) => p.offer_key === standing.key && p.seat === standing.proposer) ?? null;
       const parkedMs = kept !== null ? kept.remaining_ms : prior !== null && prior.seat === standing.proposer && prior.timer !== null ? remainingAt(prior.timer, at) : (allowance ?? 0);
-      if (allowance !== null) d.parked = [{ seat: standing.proposer, offer_key: standing.key, remaining_ms: parkedMs }];
+      if (allowance !== null) d.parked = [{ seat: standing.proposer, offer_key: standing.key, remaining_ms: parkedMs, key: kept !== null ? kept.key : prior !== null && prior.seat === standing.proposer ? prior.key : null }];
     }
     /* LIVE: the response timer for a train offer and for any offer that suspended its proposer (the proposer held the
        running obligation, or this record already parked it behind this offer) -- as `foldBatch` decides it. */
@@ -1225,7 +1229,7 @@ export function recoverGap(record: GameClockRecord, input: { readonly now: numbe
       d.obligation = obligationFor(d, D, at, input.lastIndex, trade !== null ? LIVE_TRADE_MS : resumed !== null && allowance !== null ? resumed.remaining_ms : allowance, trade);
     }
   }
-  d.declines = d.declines.or_key === input.facts.orKey ? d.declines : emptyDeclines(input.facts.orKey);
+  d.declines = d.declines.round_key === input.facts.roundKey ? d.declines : emptyDeclines(input.facts.roundKey);
   emitResponsibility(x, d.obligation, at, { actor: null, index: input.lastIndex, reason: "recovered-gap" });
   normalize(x, at);
   return x.done();
@@ -1320,7 +1324,7 @@ export function gate(record: GameClockRecord, input: GateInput): ClockRefusal | 
   }
   if (record.policy.class === "live" && input.msg === "propose" && input.trainRecipient !== null && input.trainRecipient !== input.actor) {
     const count = record.declines.counts[`${input.actor}>${input.trainRecipient}`] ?? 0;
-    if (count >= LIVE_DECLINES_PER_OR) return { code: CLOCK_REFUSAL.declines, reason: declinesReachedSentence(input.nameOf(input.trainRecipient)) };
+    if (count >= LIVE_DECLINES_PER_ROUND_INSTANCE) return { code: CLOCK_REFUSAL.declines, reason: declinesReachedSentence(input.nameOf(input.trainRecipient)) };
   }
   return null;
 }

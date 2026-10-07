@@ -151,8 +151,9 @@ export function requiredDecisionOf(state: GameStateResponse, waterfall: Waterfal
   }
 }
 
-/** The Operating Round a board is in (`round/macro/sub`, the server's checkpoint round key for an OR), or `null`
- *  outside an Operating Round. The Live two-decline limit is scoped to it. */
-export function operatingRoundKeyOf(state: GameStateResponse): string | null {
-  return state.current_round_type === "OperatingRound" ? `OperatingRound/${state.macro_round_number ?? 0}/${state.sub_round_index ?? 0}` : null;
+/** The ROUND INSTANCE a board is in -- one Stock Round, one operating sub-round (OR 2.1 and OR 2.2 are two instances),
+ *  one auction -- from the board's own authoritative round identity (`current_round_type`, `macro_round_number`,
+ *  `sub_round_index`), never from time. The Live two-decline limit is scoped to it: it resets when the instance ends. */
+export function roundInstanceKeyOf(state: GameStateResponse): string {
+  return `${String(state.current_round_type ?? "none")}/${state.macro_round_number ?? 0}/${state.sub_round_index ?? 0}`;
 }

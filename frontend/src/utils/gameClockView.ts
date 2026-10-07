@@ -25,7 +25,7 @@
 // Eligibility for any remedy is the server's and the chain's -- never this countdown's.
 
 import {
-  CLOCK_LIVE_DECLINES_PER_OR,
+  CLOCK_LIVE_DECLINES_PER_ROUND_INSTANCE,
   declinesReachedSentence,
   STRIKE_TWO_WARNING,
   SYSTEM_PAUSE_RESUME_SENTENCE,
@@ -391,5 +391,5 @@ function controlsOf(clock: RoomClockView, me: string | null, seated: boolean): C
 export function declinesBlock(clock: RoomClockView | null | undefined, proposer: string | null, recipient: string | null, recipientName: string): string | null {
   if (clock === null || clock === undefined || clock.v !== 2 || clock.deadline !== "live" || proposer === null || recipient === null || proposer === recipient) return null;
   const row = clock.declines.find((entry) => entry.from === proposer && entry.to === recipient);
-  return row !== undefined && row.count >= CLOCK_LIVE_DECLINES_PER_OR ? declinesReachedSentence(recipientName) : null;
+  return row !== undefined && row.count >= CLOCK_LIVE_DECLINES_PER_ROUND_INSTANCE ? declinesReachedSentence(recipientName) : null;
 }

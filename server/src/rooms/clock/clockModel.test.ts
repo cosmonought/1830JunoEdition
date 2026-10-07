@@ -53,7 +53,7 @@ const turn = (seat: string, n = 0): RequiredDecision => ({ seat, kind: "turn", k
 const offerOf = (slot: StandingOffer["slot"], proposer: string, answerer: string, n = 1): StandingOffer => ({ slot, key: `${slot}:${n}`, proposer, answerer });
 
 function facts(decision: RequiredDecision | null, over: Partial<ClockBoardFacts> = {}): ClockBoardFacts {
-  return { over: false, closed: false, seats: [A, B, C], decision, offer: null, orKey: "OperatingRound/1/1", ...over };
+  return { over: false, closed: false, seats: [A, B, C], decision, offer: null, roundKey: "OperatingRound/1/1", ...over };
 }
 const offering = (offer: StandingOffer, over: Partial<ClockBoardFacts> = {}): ClockBoardFacts =>
   facts({ seat: offer.answerer as string, kind: "offer-answer", key: `offer:${offer.key}`, offer }, { offer, ...over });
@@ -231,7 +231,7 @@ describe("Live train offer: the proposer's clock freezes; the recipient has a di
     assert.equal(t.record.obligation?.seat, B);
     assert.deepEqual(t.record.obligation?.trade, { proposer: A, offer_key: offer.key });
     assert.equal(t.remaining(), LIVE_TRADE_MS);
-    assert.deepEqual(t.record.parked, [{ seat: A, offer_key: offer.key, remaining_ms: 13 * MIN + 48 * SEC }]);
+    assert.deepEqual(t.record.parked, [{ seat: A, offer_key: offer.key, remaining_ms: 13 * MIN + 48 * SEC, key: turn(A).key }]);
     const view = clockViewOf(t.record, t.t);
     assert.equal(view.state, "trade");
     assert.equal(view.action, null, "no ordinary action clock is shown for the recipient");
@@ -255,16 +255,19 @@ describe("Live train offer: the proposer's clock freezes; the recipient has a di
     assert.ok(t.record.undo_floor >= t.index, "no undo can resurrect the expired offer");
   });
 
-  test("accept: the trade resolves; the proposer's next decision starts fresh", () => {
+  test("accept: the trade resolves; the proposer, still owing its turn, resumes its EXACT remainder -- an accepted optional offer never manufactures time", () => {
     const t = new Table("live");
     t.advance(15 * MIN);
     t.move(A, offering(offer), "propose", { trainRecipient: B });
     t.advance(3 * MIN);
     t.move(B, facts(turn(A, 0)), "accept");
     assert.equal(t.record.obligation?.seat, A);
-    assert.equal(t.remaining(), LIVE_ACTION_MS);
+    assert.equal(t.remaining(), 5 * MIN, "the 5:00 A had when it proposed (never a fresh 20:00)");
     assert.equal(t.record.declines.counts[`${A}>${B}`] ?? 0, 0, "an acceptance is no decline");
     assert.deepEqual(t.record.parked, []);
+    /* A genuine handoff after it (A's own required move passing responsibility) gives the next seat a fresh 20:00. */
+    t.move(A, facts(turn(B, 1)));
+    assert.deepEqual([t.record.obligation?.seat, t.remaining()], [B, LIVE_ACTION_MS]);
   });
 
   test("explicit rejection counts one decline, and A resumes EXACTLY what it had (an offer never refreshes its proposer: no offer-and-reject stall)", () => {
@@ -275,10 +278,11 @@ describe("Live train offer: the proposer's clock freezes; the recipient has a di
     t.move(B, facts(turn(A, 0)), "reject");
     assert.equal(t.record.declines.counts[`${A}>${B}`], 1);
     assert.equal(t.remaining(), 5 * MIN, "the 5:00 A had when it proposed");
-    /* An ACCEPTED offer is progress: A's next decision starts fresh. */
+    /* An ACCEPTED offer does not refresh either: A still owes its turn. */
     t.move(A, offering(offerOf("train", A, C, 2)), "propose", { trainRecipient: C });
+    t.advance(MIN);
     t.move(C, facts(turn(A, 0)), "accept");
-    assert.equal(t.remaining(), LIVE_ACTION_MS);
+    assert.equal(t.remaining(), 5 * MIN);
   });
 
   test("LIVE: a qualifying NON-train inter-player offer gets the same 10:00 response treatment; the proposer resumes its exact remainder; the decline joins the one directional counter", () => {
@@ -287,7 +291,7 @@ describe("Live train offer: the proposer's clock freezes; the recipient has a di
     const priv = offerOf("private", A, B, 9);
     t.move(A, offering(priv), "propose");
     assert.deepEqual([t.record.obligation?.seat, t.record.obligation?.trade?.proposer, t.remaining()], [B, A, LIVE_TRADE_MS], "B's distinct 10:00 response timer");
-    assert.deepEqual(t.record.parked, [{ seat: A, offer_key: priv.key, remaining_ms: 10 * SEC }], "A frozen at its exact remainder");
+    assert.deepEqual(t.record.parked, [{ seat: A, offer_key: priv.key, remaining_ms: 10 * SEC, key: turn(A).key }], "A frozen at its exact remainder");
     assert.equal(clockViewOf(t.record, t.t).trade?.kind, "private");
     t.advance(4 * MIN);
     t.move(B, facts(turn(A, 0)), "reject");
@@ -322,8 +326,8 @@ describe("Live train offer: the proposer's clock freezes; the recipient has a di
     t.move(A, facts(turn(B, 1)), "reject");
     assert.deepEqual([t.record.declines.counts[`${B}>${A}`], t.record.declines.counts[`${A}>${B}`]], [1, 2]);
     /* The next Operating Round clears every count. */
-    t.move(B, facts(turn(A, 2), { orKey: "OperatingRound/1/2" }));
-    assert.deepEqual(t.record.declines, { or_key: "OperatingRound/1/2", counts: {}, offers: [] });
+    t.move(B, facts(turn(A, 2), { roundKey: "OperatingRound/1/2" }));
+    assert.deepEqual(t.record.declines, { round_key: "OperatingRound/1/2", counts: {}, offers: [] });
     assert.equal(t.refusal(A, "propose", { trainRecipient: B }), null);
   });
 
@@ -349,9 +353,11 @@ describe("Live train offer: the proposer's clock freezes; the recipient has a di
     assert.equal(t.record.obligation?.seat, B);
     assert.equal(t.record.obligation?.trade, null, "no 10:00 response timer: the ordinary action clock");
     assert.equal(t.remaining(), LIVE_ACTION_MS);
-    assert.deepEqual(t.record.parked, [], "nothing of C's was running: nothing parks");
+    assert.deepEqual(t.record.parked, [{ seat: A, offer_key: "trade:4", remaining_ms: 15 * MIN, key: turn(A).key }], "the RESPONSIBLE seat's clock (A's) is suspended meanwhile: frozen exactly");
+    t.advance(2 * MIN);
     t.move(B, facts(turn(A, 0)), "reject");
     assert.deepEqual(t.record.declines.counts, {}, "no decline for an offer that never suspended its proposer");
+    assert.deepEqual([t.record.obligation?.seat, t.remaining()], [A, 15 * MIN], "A resumes exactly: nobody's negotiation manufactures A time");
   });
 
   test("REVIEW: an offer whose board key repeats (a funding offer has no instance) still counts each declined PROPOSAL -- a third is refused; an answer undone and given again is still one decline", () => {
@@ -386,6 +392,67 @@ describe("Live train offer: the proposer's clock freezes; the recipient has a di
     const expiry = t.advance(LIVE_TRADE_MS);
     assert.notEqual(expiry, null, "it expires as an offer, never as an overdue");
     assert.deepEqual([t.record.phase, t.record.strikes], ["active", {}]);
+  });
+
+  test("LAST CORRECTION: a counter / continuation never manufactures time -- the original proposer resumes its exact remainder however the chain ends", () => {
+    for (const ending of ["accept", "reject"] as const) {
+      const t = new Table("live");
+      t.advance(15 * MIN); // A has 5:00
+      t.move(A, offering(offerOf("trade", A, B, 1)), "propose");
+      t.advance(2 * MIN);
+      /* B continues the negotiation with an offer of its own that replaces A's: A's park carries over. */
+      t.move(B, offering(offerOf("trade", B, A, 2)), "propose");
+      assert.deepEqual(t.record.declines.counts, {}, "a counter is no decline");
+      assert.ok(t.record.parked.some((p) => p.seat === A && p.remaining_ms === 5 * MIN), "A still parked at exactly 5:00");
+      t.advance(MIN);
+      t.move(A, facts(turn(A, 0)), ending);
+      assert.deepEqual([t.record.obligation?.seat, t.remaining()], [A, 5 * MIN], `${ending}: A resumes exactly 5:00 (never fresh)`);
+    }
+  });
+
+  test("LAST CORRECTION (Async): an optional offer never resets the action deadline -- accepted or rejected the proposer resumes its exact remainder; a required action and a genuine handoff do refresh", () => {
+    const t = new Table("async-pace", { pace: 86_400 });
+    t.advance(20 * HOUR); // A has 4 h
+    t.move(A, offering(offerOf("private", A, B, 1)), "propose");
+    t.advance(3 * HOUR);
+    t.move(B, facts(turn(A, 0)), "accept");
+    assert.deepEqual([t.record.obligation?.seat, t.remaining()], [A, 4 * HOUR], "accepted: A resumes its 4 hours");
+    for (let n = 2; n <= 6; n += 1) {
+      t.move(A, offering(offerOf("private", A, B, n)), "propose");
+      t.move(B, facts(turn(A, 0)), n % 2 === 0 ? "accept" : "reject");
+    }
+    assert.equal(t.remaining(), 4 * HOUR, "colluding trades keep nobody's deadline alive");
+    /* A required action that leaves A owing the next decision refreshes (the settled per-action rule). */
+    t.move(A, facts(turn(A, 1)));
+    assert.equal(t.remaining(), 86_400 * SEC);
+    /* A genuine handoff gives the next seat its fresh pace. */
+    t.move(A, facts(turn(B, 2)));
+    assert.deepEqual([t.record.obligation?.seat, t.remaining()], [B, 86_400 * SEC]);
+  });
+
+  test("LAST CORRECTION (round instance): two declines in OR 2.1 block a third A -> B there; OR 2.2 starts at zero; a Stock Round's count resets at the next Stock Round even when the empty ORs between pass inside one batch", () => {
+    const or21 = "OperatingRound/2/1";
+    const t = new Table("live");
+    t.move(A, facts(turn(A, 0), { roundKey: or21 }));
+    for (let n = 1; n <= 2; n += 1) {
+      t.move(A, offering(offerOf("train", A, B, n), { roundKey: or21 }), "propose", { trainRecipient: B });
+      t.move(B, facts(turn(A, 0), { roundKey: or21 }), "reject");
+    }
+    assert.deepEqual([t.record.declines.round_key, t.record.declines.counts[`${A}>${B}`]], [or21, 2]);
+    assert.equal(t.refusal(A, "propose", { trainRecipient: B })?.code, CLOCK_REFUSAL.declines, "OR 2.1: the third A -> B is refused");
+    t.move(A, facts(turn(B, 1), { roundKey: "OperatingRound/2/2" }));
+    assert.deepEqual(t.record.declines, { round_key: "OperatingRound/2/2", counts: {}, offers: [] }, "OR 2.2 starts with zero A -> B declines");
+    assert.equal(t.refusal(A, "propose", { trainRecipient: B }), null);
+    /* Stock Round instances: SR 3's declines never leak into SR 4, even across a batch that passes the empty ORs. */
+    const sr = new Table("live");
+    sr.move(A, facts(turn(A, 0), { roundKey: "StockRound/3/0" }));
+    for (let n = 1; n <= 2; n += 1) {
+      sr.move(A, offering(offerOf("trade", A, B, n), { roundKey: "StockRound/3/0" }), "propose");
+      sr.move(B, facts(turn(A, 0), { roundKey: "StockRound/3/0" }), "reject");
+    }
+    assert.equal(sr.record.declines.counts[`${A}>${B}`], 2);
+    sr.move(A, facts(turn(B, 1), { roundKey: "StockRound/4/0" }));
+    assert.deepEqual(sr.record.declines, { round_key: "StockRound/4/0", counts: {}, offers: [] }, "the next Stock Round resets it");
   });
 
   test("NO 16-OFFER CAP: well over 16 otherwise-legal offers in one round are each taken (Live and Async); no game-rule refusal exists", () => {
@@ -512,12 +579,12 @@ describe("Live train offer: the proposer's clock freezes; the recipient has a di
     assert.equal(t.refusal(B, "propose", { trainRecipient: A }), null);
     assert.equal(t.refusal(A, "move"), null);
     /* The next Operating Round clears it. */
-    t.move(A, facts(turn(B, 1), { orKey: "OperatingRound/1/2" }));
-    assert.deepEqual(t.record.declines, { or_key: "OperatingRound/1/2", counts: {}, offers: [] });
+    t.move(A, facts(turn(B, 1), { roundKey: "OperatingRound/1/2" }));
+    assert.deepEqual(t.record.declines, { round_key: "OperatingRound/1/2", counts: {}, offers: [] });
     assert.equal(t.refusal(A, "propose", { trainRecipient: B }), null);
   });
 
-  test("an offer to oneself parks nothing and refreshes nothing; only an accepted trade is progress", () => {
+  test("an offer to oneself parks nothing and refreshes nothing -- proposed, withdrawn or accepted", () => {
     const t = new Table("live");
     t.advance(10 * MIN);
     const self = offerOf("train", A, A);
@@ -526,6 +593,10 @@ describe("Live train offer: the proposer's clock freezes; the recipient has a di
     assert.equal(t.remaining(), 10 * MIN, "no refresh by proposing to oneself");
     t.move(A, facts(turn(A, 0)), "rescind");
     assert.equal(t.remaining(), 10 * MIN, "no refresh by withdrawing it either");
+    t.move(A, offering(offerOf("train", A, A, 2)), "propose");
+    t.advance(MIN);
+    t.move(A, facts(turn(A, 0)), "accept");
+    assert.equal(t.remaining(), 9 * MIN, "nor by accepting it: the clock ran on");
   });
 
   test("invalid offers never freeze: a proposal the gate refuses is never a batch -- the clock is exactly as it was (the engine's own refusals: clockController.test.ts)", () => {

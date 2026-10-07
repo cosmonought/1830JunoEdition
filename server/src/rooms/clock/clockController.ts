@@ -36,7 +36,7 @@
 // (taken over) cannot write the clock (the HEAD fence / the lock check), so it can neither move a clock nor sign a remedy.
 
 import type { GameStateResponse } from "../../../../frontend/src/gameEngine/gameState";
-import { operatingRoundKeyOf, requiredDecisionOf, standingOfferOf } from "../../../../frontend/src/gameEngine/clockResponsibility";
+import { requiredDecisionOf, roundInstanceKeyOf, standingOfferOf } from "../../../../frontend/src/gameEngine/clockResponsibility";
 import { logHash } from "../../../../frontend/src/gameEngine/logHash";
 import { sellerPresident } from "../../../../frontend/src/gameEngine/trainSaleAuthority";
 import type { ClockDeadlineClass, RoomClockView } from "../../../../frontend/src/utils/clockProtocol";
@@ -80,7 +80,7 @@ import {
   type ClockRefusal,
   type ClockStep,
 } from "./clockModel";
-import { ClockUnreadableError, LIVE_CURE_MS, LIVE_DECLINES_PER_OR, type ClockVote, type GameClockRecord } from "./clockRecord";
+import { ClockUnreadableError, LIVE_CURE_MS, LIVE_DECLINES_PER_ROUND_INSTANCE, type ClockVote, type GameClockRecord } from "./clockRecord";
 import type { ClockStore } from "./clockStore";
 
 /* ==================================================================
@@ -239,7 +239,7 @@ export function boardFactsOf(state: GameStateResponse, end?: { readonly ended: b
     seats,
     decision: over || closed ? null : requiredDecisionOf(state, state.waterfall ?? null),
     offer: over || closed ? null : standingOfferOf(state),
-    orKey: operatingRoundKeyOf(state),
+    roundKey: roundInstanceKeyOf(state),
   };
 }
 
@@ -921,7 +921,7 @@ export function createClockController(deps: ClockControllerDeps) {
 
   /** After a PROPOSAL was speculated (before it is committed): a LIVE qualifying offer -- one that parks the proposer's
    *  own running action clock and hands the answer to another seat (the board names both), and any Live train offer
-   *  (the owner's train rule) -- may not follow two declines in its direction this Operating Round. Async keeps no
+   *  (the owner's train rule) -- may not follow two declines in its direction this ROUND INSTANCE. Async keeps no
    *  decline limit; an offer that suspends nothing of the proposer's (an off-turn or a self-addressed one) is not
    *  counted or blocked. */
   function offerBlocked(game: GameActor, input: { readonly actor: string; readonly board: GameStateResponse }): { readonly code: string; readonly reason: string } | null {
@@ -934,13 +934,12 @@ export function createClockController(deps: ClockControllerDeps) {
     const holder = record.obligation;
     const suspends = holder !== null && holder.seat === offer.proposer && holder.timer !== null;
     if (!suspends && offer.slot !== "train") return null;
-    const orKey = operatingRoundKeyOf(input.board);
-    if (record.declines.or_key !== orKey) return null;
+    if (record.declines.round_key !== roundInstanceKeyOf(input.board)) return null;
     const count = record.declines.counts[declineKey(offer.proposer, offer.answerer)] ?? 0;
-    if (count < LIVE_DECLINES_PER_OR) return null;
+    if (count < LIVE_DECLINES_PER_ROUND_INSTANCE) return null;
     const who = name(game.gameId, offer.answerer);
     counters.refusals += 1;
-    return { code: CLOCK_REFUSAL.declines, reason: offer.slot === "train" ? declinesReachedSentence(who) : `${who} has declined two offers from you this operating round.` };
+    return { code: CLOCK_REFUSAL.declines, reason: offer.slot === "train" ? declinesReachedSentence(who) : `${who} has declined two offers from you this round.` };
   }
 
   /** After a committed batch (in the same task): fold it and write the record before the task ends. */

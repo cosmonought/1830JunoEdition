@@ -154,7 +154,8 @@ describe("Live train offers through the controller (real engine offers)", () => 
     assert.equal(proposed.ok, true, JSON.stringify(proposed));
     const r = h.record();
     assert.deepEqual([r.obligation?.seat, r.obligation?.trade?.proposer, h.remaining()], [P2, P1, LIVE_TRADE_MS], "the recipient's distinct response timer");
-    assert.deepEqual(r.parked, [{ seat: P1, offer_key: r.parked[0].offer_key, remaining_ms: 15 * MIN + 30 * SEC }], "the proposer's 15:30 frozen exactly");
+    assert.deepEqual(r.parked, [{ seat: P1, offer_key: r.parked[0].offer_key, remaining_ms: 15 * MIN + 30 * SEC, key: r.parked[0].key }], "the proposer's 15:30 frozen exactly");
+    assert.match(String(r.parked[0].key), /^turn:OperatingRound\|/, "with the required decision it was owing");
     const view = h.clock.viewOf(GAME);
     assert.equal(view?.state, "trade");
     assert.deepEqual([view?.trade?.proposer, view?.trade?.recipient, view?.trade?.respond.remainingMs, view?.trade?.proposerRemainingMs], [P1, P2, LIVE_TRADE_MS, 15 * MIN + 30 * SEC]);
@@ -209,7 +210,7 @@ describe("Live train offers through the controller (real engine offers)", () => 
     assert.equal(h.record().obligation?.seat, P3);
   });
 
-  test("an accepted offer refreshes the proposer's allowance (a completed trade is progress); a rescission is charged the time its offer stood", async () => {
+  test("an ACCEPTED real train purchase does not refresh the proposer still owing its turn (owner, 2026-10-07); a rescission is charged the time its offer stood", async () => {
     const h = harness();
     await h.deal();
     await h.time.advance(6 * MIN);
@@ -222,7 +223,7 @@ describe("Live train offers through the controller (real engine offers)", () => 
     await h.time.advance(3 * MIN);
     const accepted = await h.submit(P2, answerTrain(NYC, true));
     assert.equal(accepted.ok, true, JSON.stringify(accepted));
-    assert.deepEqual([h.record().obligation?.seat, h.remaining()], [P1, LIVE_ACTION_MS]);
+    assert.deepEqual([h.record().obligation?.seat, h.remaining()], [P1, 12 * MIN], "the 12:00 P1 had when it proposed: the trade happened, the turn did not end");
   });
 
   test("a stall inside one process (no heartbeat for over a minute) is a continuity break: SYSTEM PAUSE as of the last proof, never an overdue from it", async () => {
@@ -504,7 +505,7 @@ describe("Owner-policy correction: Live inter-player offers that suspend the pro
     /* A third qualifying offer P1 -> P2 (any kind), checked on the board the speculation made, before commit. */
     const blocked = h.clock.offerBlocked(h.game, { actor: P1, board: privStanding });
     assert.equal(blocked?.code, CLOCK_REFUSAL.declines);
-    assert.equal(blocked?.reason, `${P2} has declined two offers from you this operating round.`);
+    assert.equal(blocked?.reason, `${P2} has declined two offers from you this round.`);
     assert.equal(h.clock.offerBlocked(h.game, { actor: P2, board: privStanding }), null, "only the proposer named by the board is judged");
     const third = await h.submit(P1, proposeTrain(NYC, "2", "70"));
     assert.equal((third as { code: string }).code, CLOCK_REFUSAL.declines, "the train's own pre-speculation check: the owner's sentence");

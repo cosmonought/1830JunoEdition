@@ -35,7 +35,7 @@ const G = gameId(1);
 const SEATS = ["p-alice", "p-bob"];
 
 function facts(seat: string, n: number): ClockBoardFacts {
-  return { over: false, closed: false, seats: SEATS, decision: { seat, kind: "turn", key: `turn:StockRound|1.0.-1|${seat}|${n}`, offer: null }, offer: null, orKey: null };
+  return { over: false, closed: false, seats: SEATS, decision: { seat, kind: "turn", key: `turn:StockRound|1.0.-1|${seat}|${n}`, offer: null }, offer: null, roundKey: "StockRound/1/0" };
 }
 
 /** The first clock of `G` (revision 2: created, then the deal), and the next one (a hand-over). */

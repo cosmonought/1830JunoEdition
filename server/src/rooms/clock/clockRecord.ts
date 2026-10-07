@@ -30,18 +30,18 @@ export const LIVE_ACTION_MS = 20 * 60_000;
 export const LIVE_CURE_MS = 10 * 60_000;
 export const LIVE_TRADE_MS = 10 * 60_000;
 export const ASYNC_PACES_SECS: readonly number[] = Object.freeze([43_200, 86_400, 172_800, 259_200, 604_800]);
-/** Live: the current Operating Round's train-offer declines per direction ("from>to"), and the offers already counted
+/** Live: the current ROUND INSTANCE's offer declines per direction ("from>to"), and the proposals already counted
  *  (an offer is declined at most ONCE: an answer undone and given again never counts twice). */
 export interface ClockDeclines {
-  readonly or_key: string | null;
+  readonly round_key: string | null;
   readonly counts: Readonly<Record<string, number>>;
   readonly offers: readonly string[];
 }
 
-export const emptyDeclines = (orKey: string | null): ClockDeclines => ({ or_key: orKey, counts: {}, offers: [] });
+export const emptyDeclines = (roundKey: string | null): ClockDeclines => ({ round_key: roundKey, counts: {}, offers: [] });
 
-/** Live: the declines (rejections or unanswered expiries) one direction may collect in one Operating Round. */
-export const LIVE_DECLINES_PER_OR = 2;
+/** Live: the declines (rejections or unanswered expiries) one direction may collect in one round instance. */
+export const LIVE_DECLINES_PER_ROUND_INSTANCE = 2;
 /** Live: the ordinary overdues a seat may cure; the next forecloses at once. */
 export const LIVE_CURABLE_OVERDUES = 2;
 
@@ -84,6 +84,9 @@ export interface ClockParked {
   readonly seat: string;
   readonly offer_key: string;
   readonly remaining_ms: number;
+  /** The required decision it was owing when the offer suspended it (`null`: not known -- a pre-correction record): it
+   *  resumes its exact remainder only while it still owes that same decision. */
+  readonly key: string | null;
 }
 
 export interface ClockVote {
@@ -192,7 +195,7 @@ export interface ClockSnapshot {
   /** As of `at`, frozen (re-anchored when restored). */
   readonly obligation: ClockObligation | null;
   readonly parked: readonly ClockParked[];
-  /** The decline counts as of `at` (an undo across an Operating Round boundary restores them: they never go back). */
+  /** The decline counts as of `at` (an undo across a round-instance boundary restores them: they never go back). */
   readonly declines: ClockDeclines;
 }
 
@@ -220,7 +223,7 @@ export interface GameClockRecord {
   /** Overdue instances so far (the next is `epochs + 1`). */
   readonly epochs: number;
   readonly proposals_total: number;
-  /** Live: the current Operating Round's declines per direction ("from>to"). */
+  /** Live: the current round instance's declines per direction ("from>to"). */
   readonly declines: ClockDeclines;
   readonly pause: ClockPause;
   readonly system: ClockSystemPause | null;
@@ -319,9 +322,13 @@ function isOverdue(value: unknown): value is ClockOverdue {
 }
 
 function isDeclines(value: unknown): value is ClockDeclines {
-  if (!isObject(value) || !exact(value, ["or_key", "counts", "offers"]) || !(value.or_key === null || text(value.or_key, 80)) || !isObject(value.counts)) return false;
+  if (!isObject(value) || !exact(value, ["round_key", "counts", "offers"]) || !(value.round_key === null || text(value.round_key, 80)) || !isObject(value.counts)) return false;
   if (Object.keys(value.counts).length > 64 || !Object.entries(value.counts).every(([k, v]) => text(k, 130) && time(v))) return false;
   return Array.isArray(value.offers) && value.offers.length <= 64 && value.offers.every((offer) => text(offer, 200));
+}
+
+function isParked(p: unknown): p is ClockParked {
+  return isObject(p) && exact(p, ["seat", "offer_key", "remaining_ms", "key"]) && seat(p.seat) && text(p.offer_key, 120) && time(p.remaining_ms) && (p.key === null || text(p.key, 200));
 }
 
 function isEvidenceEvent(value: unknown): value is ClockEvidenceEvent {
@@ -408,7 +415,7 @@ export function isGameClockRecord(value: unknown): value is GameClockRecord {
   if (!Array.isArray(value.seats) || value.seats.length > 8 || !value.seats.every(seat)) return false;
   if (!["setup", "active", "overdue", "ended"].includes(value.phase as string)) return false;
   if (!(value.obligation === null || isObligation(value.obligation))) return false;
-  if (!Array.isArray(value.parked) || value.parked.length > 8 || !value.parked.every((p) => isObject(p) && exact(p, ["seat", "offer_key", "remaining_ms"]) && seat(p.seat) && text(p.offer_key, 120) && time(p.remaining_ms))) return false;
+  if (!Array.isArray(value.parked) || value.parked.length > 8 || !value.parked.every(isParked)) return false;
   if (!(value.overdue === null || isOverdue(value.overdue))) return false;
   if (!isObject(value.strikes) || Object.keys(value.strikes).length > 8 || !Object.entries(value.strikes).every(([k, v]) => seat(k) && time(v) && (v as number) <= 3)) return false;
   if (!time(value.epochs) || !time(value.proposals_total)) return false;
@@ -428,7 +435,7 @@ export function isGameClockRecord(value: unknown): value is GameClockRecord {
   if (!int(value.undo_floor) || (value.undo_floor as number) < -1) return false;
   if (!Array.isArray(value.snapshots) || value.snapshots.length > CLOCK_SNAPSHOT_LIMIT) return false;
   for (const snap of value.snapshots as unknown[]) {
-    if (!isObject(snap) || !exact(snap, ["index", "at", "obligation", "parked", "declines"]) || !time(snap.index) || !time(snap.at) || !(snap.obligation === null || isObligation(snap.obligation)) || !Array.isArray(snap.parked)) return false;
+    if (!isObject(snap) || !exact(snap, ["index", "at", "obligation", "parked", "declines"]) || !time(snap.index) || !time(snap.at) || !(snap.obligation === null || isObligation(snap.obligation)) || !Array.isArray(snap.parked) || !snap.parked.every(isParked)) return false;
     if (!isDeclines(snap.declines)) return false;
   }
   const ended = value.ended;
@@ -473,6 +480,24 @@ export function parseClockDocument(raw: string, gameId: string): GameClockRecord
     const { offers: _legacy, ...rest } = parsed as Record<string, unknown>;
     void _legacy;
     parsed = rest;
+  }
+  /* Before the round-instance correction (2026-10-07) the declines' scope was named `or_key` (null outside an Operating
+     Round): read as `round_key` -- the next fold re-scopes it to the board's round instance. */
+  if (isObject(parsed)) {
+    const renamed = (declines: unknown): unknown => {
+      if (!isObject(declines) || !Object.prototype.hasOwnProperty.call(declines, "or_key")) return declines;
+      const { or_key: legacyKey, ...rest } = declines as Record<string, unknown>;
+      return { round_key: legacyKey, ...rest };
+    };
+    /* A parked clock recorded before the offer-clock correction names no decision (`key`): resumed as before. */
+    const keyed = (parked: unknown): unknown => (Array.isArray(parked) ? parked.map((p) => (isObject(p) && !Object.prototype.hasOwnProperty.call(p, "key") ? { ...p, key: null } : p)) : parked);
+    const record = parsed as Record<string, unknown>;
+    parsed = {
+      ...record,
+      ...(Object.prototype.hasOwnProperty.call(record, "declines") ? { declines: renamed(record.declines) } : {}),
+      ...(Object.prototype.hasOwnProperty.call(record, "parked") ? { parked: keyed(record.parked) } : {}),
+      ...(Array.isArray(record.snapshots) ? { snapshots: record.snapshots.map((snap) => (isObject(snap) ? { ...snap, declines: renamed(snap.declines), parked: keyed(snap.parked) } : snap)) } : {}),
+    };
   }
   if (!isGameClockRecord(parsed) || parsed.game_id !== gameId) throw new ClockUnreadableError(`the clock of ${gameId} is not a clock of that game`, gameId);
   return parsed;

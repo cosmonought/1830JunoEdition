@@ -43,7 +43,7 @@ export const CLOCK_ASYNC_PACES_SECS: readonly number[] = Object.freeze([43_200, 
 export const CLOCK_LIVE_ACTION_MS = 20 * 60_000;
 export const CLOCK_LIVE_CURE_MS = 10 * 60_000;
 export const CLOCK_LIVE_TRADE_MS = 10 * 60_000;
-export const CLOCK_LIVE_DECLINES_PER_OR = 2;
+export const CLOCK_LIVE_DECLINES_PER_ROUND_INSTANCE = 2;
 export const CLOCK_LIVE_FREE_OVERDUES = 2;
 
 /** One countdown as the server computed it at `serverNow`. */

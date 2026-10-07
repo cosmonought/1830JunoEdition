@@ -385,6 +385,8 @@ const INTERNAL_REASON = (ref: string) => `The server could not process that requ
 const MOVE_INTERNAL_REASON = (ref: string) => `The server could not process that move, so it was not made. (ref ${ref})`;
 const RATE_LIMITED_REASON = "Too many requests too quickly. Wait a moment and try again.";
 const SUBMIT_RATE_LIMITED_REASON = "You are sending moves too quickly. Wait a moment and try again.";
+/** Phase 3 final clocks (owner-policy correction): offer FREQUENCY (transport), never an offer limit of the game. */
+export const OFFER_RATE_LIMITED_REASON = "You are making offers too quickly. Wait a moment and try again.";
 const REVERT_BUDGET_REASON = "Too many undos in the last hour. Play on, and undo again later.";
 const LOG_FULL_REASON = "This game has reached the server's limit on its length and cannot take another move.";
 /** LIVE-2C (LIVE-2 §6.3 #20): the deal of a server-owned game is the server's. */
@@ -946,11 +948,17 @@ export function createGameServer(options: GameServerOptions): {
       answer({ kind: "refused", code: "log-full", reason: LOG_FULL_REASON, build: options.build });
       return;
     }
-    /* Phase 3 final clocks: past the alarm, no new OFFER is taken (offers are optional; the room left is kept for the
-       moves the game needs, so offer churn can never fill a log and freeze a timed table). */
-    if (length >= limits.logEntryAlarm && host.clock !== null && classifyMessage(frame.msg).cls === "propose") {
-      answer({ kind: "refused", code: "log-nearly-full", reason: "This game's history is very long, so no new offers are taken. Make your move instead.", build: options.build });
-      return;
+    /* Phase 3 final clocks (owner-policy correction): the history's length never changes which offers are legal and no
+       round counts offers. Offer CHURN -- the one optional message a seat can repeat at will, and the one that could
+       grow a timed table's log toward the cap above -- is bounded by FREQUENCY only, as transport: the ordinary
+       `rate-limited` answer with its wait, after which the same offer is taken. */
+    if (host.clock !== null && classifyMessage(frame.msg).cls === "propose") {
+      const offerWait = host.offerBudget(attached.room, actor);
+      if (offerWait > 0) {
+        ingress.rateLimited += 1;
+        answer({ kind: "refused", code: RATE_LIMITED_CODE, reason: OFFER_RATE_LIMITED_REASON, retryAfterMs: offerWait, build: options.build });
+        return;
+      }
     }
     let revertBudget: HourlyBudget | null = null;
     if ("RevertTo" in frame.msg) {

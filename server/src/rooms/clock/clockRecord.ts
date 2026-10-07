@@ -49,11 +49,6 @@ export const LIVE_CURABLE_OVERDUES = 2;
 export const CLOCK_SNAPSHOT_LIMIT = 48;
 /** The strike ledger keeps the newest this many overdue / cure events (a Live game has at most 5 per seat). */
 export const CLOCK_LEDGER_LIMIT = 64;
-/** Proposals one seat may make in one round (an Operating Round, or the stretch outside ORs): an offer budget that
- *  bounds offer spam and the log it fills (an undo never refunds it). */
-export const CLOCK_OFFERS_PER_ROUND = 16;
-/** The offer budget's key outside an Operating Round. */
-export const CLOCK_OFFERS_OUTSIDE_OR = "outside-or";
 /** Resume requests in one pause before they are limited to one a minute. */
 export const CLOCK_RESUME_BURST = 16;
 export const CLOCK_RESUME_SPACING_MS = 60_000;
@@ -181,10 +176,12 @@ export interface ClockRemedy {
   readonly detail: string | null;
   /** How many times it was attested (a lapsed attestation of the same decision is attested again). */
   readonly attestations: number;
-  /** A neutral fallback sealed because this decision could no longer land (Live foreclosure whose approvals lapsed). */
+  /** Always `null` since the owner-policy correction (2026-10-06): a sealed decision is never replaced by another. Kept
+   *  in the sealed shape (and its seal event) for format stability. */
   readonly replaces: RemedyKind | null;
-  /** Async N-1 remedies: the approving seats whose REMEDY-APPROVE can no longer land (lapsed, or the seat's consent key
-   *  moved since) -- each is asked to approve the SAME decision again (`reapprove`); nothing is attested until none is. */
+  /** N-1 remedies (2, 4, 5): the approving seats whose REMEDY-APPROVE can no longer land (a horizon passed, or the
+   *  seat's consent key moved since it signed). Informational: the SAME decision stays sealed and held (`refused`, owner
+   *  decision required) -- nobody is asked to approve again, nothing is converted (`remedyBlocked`). */
   readonly stale: readonly string[];
 }
 
@@ -249,8 +246,6 @@ export interface GameClockRecord {
     readonly ledger_head: string;
     readonly ledger: readonly ClockEvidenceEvent[];
   };
-  /** The proposals each seat made in the current round (`key`: the Operating Round, or `outside-or`): the offer budget. */
-  readonly offers: { readonly key: string | null; readonly counts: Readonly<Record<string, number>> };
   readonly created_at: number;
   readonly updated_at: number;
 }
@@ -396,7 +391,6 @@ const RECORD_KEYS = [
   "remedy",
   "acks",
   "evidence",
-  "offers",
   "created_at",
   "updated_at",
 ];
@@ -445,8 +439,6 @@ export function isGameClockRecord(value: unknown): value is GameClockRecord {
   if (!isObject(evidence) || !exact(evidence, ["seq", "head", "window_from", "window", "truncated", "ledger_from", "ledger_head", "ledger"]) || !time(evidence.seq) || !hex64(evidence.head) || !hex64(evidence.window_from)) return false;
   if (!Array.isArray(evidence.window) || evidence.window.length > CLOCK_EVIDENCE_WINDOW || !evidence.window.every(isEvidenceEvent) || typeof evidence.truncated !== "boolean") return false;
   if (!hex64(evidence.ledger_from) || !hex64(evidence.ledger_head) || !Array.isArray(evidence.ledger) || evidence.ledger.length > CLOCK_LEDGER_LIMIT || !evidence.ledger.every(isEvidenceEvent)) return false;
-  const offers = value.offers;
-  if (!isObject(offers) || !exact(offers, ["key", "counts"]) || !(offers.key === null || text(offers.key, 200)) || !isObject(offers.counts) || Object.keys(offers.counts).length > 8 || !Object.entries(offers.counts).every(([k, v]) => seat(k) && time(v))) return false;
   return time(value.created_at) && time(value.updated_at);
 }
 

@@ -9,7 +9,7 @@
 //
 //   gateSubmit    IN THE SUBMIT TASK, before the move is speculated: the record is read back and its CONTINUITY
 //                 checked (once per process), every transition due by now is processed at its own exact moment (an
-//                 overdue, a minute-30 finality, a train offer's unanswered expiry -- which closes the offer in the log,
+//                 overdue, a minute-30 finality, a Live offer's unanswered expiry -- which closes the offer in the log,
 //                 as the server's own move, and refuses the submit that found it so it is judged on the new board),
 //                 then the gate says whether this move may be taken (a pause, a system pause, an interruption, an ended
 //                 game, a fenced undo, the two-decline limit). The SAME time `now` stamps the move's entries, so a cure
@@ -21,15 +21,17 @@
 //   timers        the next due transition and (Live) the continuity heartbeat, each fired as an actor task, so a table
 //                 nobody is watching still reaches its overdue and its finality in real time. A Live table whose clock
 //                 runs is PINNED resident (never evicted while timed).
-//   remedies      a sealed money remedy is attested and relayed (`remedyPipeline.ts`) only once its seal is DURABLE,
-//                 only while no system pause holds the table, and only from the clock's current authority; the relayer
-//                 asks `remedyGate` before every new attempt.
+//   remedies      a sealed money remedy (an ENDED game's) is attested and relayed (`remedyPipeline.ts`) only once its
+//                 seal is DURABLE and only from the clock's current authority -- revalidated at every attempt, never
+//                 changed, never gated by a player vote (owner, 2026-10-06); the relayer asks `remedyGate` before every
+//                 new attempt.
 //
 // CONTINUITY. Every write stamps this process's AUTHORITY token (file mode: the data-directory lock's instance id; AWS:
 // the generation, pool, pool epoch and task) and its trust instant. A record another authority wrote is a continuity
 // break that was NOT proven continuous: the gap the previous authority left in the log (if any) is recovered from the
-// log itself, then a Live table enters SYSTEM PAUSE (every timer frozen as of the last proven instant; unanimous resume),
-// a Timed Async table's outage is credited, and a No-deadline table changes nothing. A reload in the SAME process (an
+// log itself, then a Live table still in play enters SYSTEM PAUSE (every timer frozen as of the last proven instant;
+// unanimous resume), a Timed Async table's outage is credited, a No-deadline table changes nothing, and an ENDED table
+// (its remedy sealed) only carries the sealed remedy on -- no pause, no vote. A reload in the SAME process (an
 // eviction) keeps continuity: the process held the authority throughout, so the elapsed time is real. A stale actor
 // (taken over) cannot write the clock (the HEAD fence / the lock check), so it can neither move a clock nor sign a remedy.
 
@@ -43,7 +45,7 @@ import type { RoomSession, ServerLogEntry } from "../../../../frontend/src/utils
 import type { UndoPolicy } from "../../../../frontend/src/gameEngine/logRevert";
 import type { OpsRecorder } from "../../persistence/opsRecorder";
 import type { StoreWriteOutcome } from "../../persistence/storeResult";
-import type { RemedyPort } from "../../escrow/remedyPipeline";
+import { intentCarriesDecision, sealedRemedyProblem, type RemedyPort } from "../../escrow/remedyPipeline";
 import type { ChainIntentRecord } from "../../escrow/chainIntents";
 import type { GameActor, Tx } from "../gameActor";
 import { nextHead, type ClockConductHook, type ClockEvidenceEvent } from "./clockEvidence";
@@ -66,10 +68,8 @@ import {
   propose,
   recoverGap,
   isRequiredClass,
-  reapprove,
+  remedyBlocked,
   remedyProgress,
-  remedyStale,
-  sealNeutralFallback,
   stampAuthority,
   systemResumeVote,
   vote,
@@ -240,7 +240,6 @@ export function boardFactsOf(state: GameStateResponse, end?: { readonly ended: b
     decision: over || closed ? null : requiredDecisionOf(state, state.waterfall ?? null),
     offer: over || closed ? null : standingOfferOf(state),
     orKey: operatingRoundKeyOf(state),
-    roundKey: `${String(state.current_round_type ?? "none")}/${state.macro_round_number ?? 0}/${state.sub_round_index ?? 0}`,
   };
 }
 
@@ -887,7 +886,7 @@ export function createClockController(deps: ClockControllerDeps) {
     if (expired) {
       await settle(entry, game.gameId);
       counters.refusals += 1;
-      return { ok: false, code: CLOCK_REFUSAL.stale, reason: "The train offer expired unanswered. Check the board and try again." };
+      return { ok: false, code: CLOCK_REFUSAL.stale, reason: "The offer expired unanswered. Check the board and try again." };
     }
     const current = entry.record as GameClockRecord;
     const state = tx.session.state;
@@ -896,7 +895,7 @@ export function createClockController(deps: ClockControllerDeps) {
     if (typeof body === "object" && body !== null && typeof (body as { seller_protocol_id?: unknown }).seller_protocol_id === "number") {
       trainRecipient = sellerPresident(state, (body as { seller_protocol_id: number }).seller_protocol_id);
     }
-    const refusal = gate(current, { actor: input.actor, msg: cls.cls, closeRoom: cls.closeRoom, revertTarget: cls.revertTarget, trainRecipient, nameOf: (seat) => name(game.gameId, seat), roundKey: factsOfGame(game.gameId, state).roundKey ?? null });
+    const refusal = gate(current, { actor: input.actor, msg: cls.cls, closeRoom: cls.closeRoom, revertTarget: cls.revertTarget, trainRecipient, nameOf: (seat) => name(game.gameId, seat) });
     /* A move is judged only against a STORED clock: an overdue (a strike) decided but not yet durable must not be cured
        -- or played past -- by a move a crash could then separate from it. */
     const durable = entry.stored === current.revision ? true : await settle(entry, game.gameId);
@@ -911,21 +910,28 @@ export function createClockController(deps: ClockControllerDeps) {
     return { ok: true, now: at, before: factsOfGame(game.gameId, state), cls: cls.cls, revertTarget: cls.revertTarget };
   }
 
-  /** After a PROPOSAL was speculated (before it is committed): the offer it made may not exceed its direction's two
-   *  declines this round (every offer kind -- the train counter is the owner's rule; the board names the answerer). */
+  /** After a PROPOSAL was speculated (before it is committed): a LIVE qualifying offer -- one that parks the proposer's
+   *  own running action clock and hands the answer to another seat (the board names both), and any Live train offer
+   *  (the owner's train rule) -- may not follow two declines in its direction this Operating Round. Async keeps no
+   *  decline limit; an offer that suspends nothing of the proposer's (an off-turn or a self-addressed one) is not
+   *  counted or blocked. */
   function offerBlocked(game: GameActor, input: { readonly actor: string; readonly board: GameStateResponse }): { readonly code: string; readonly reason: string } | null {
     const record = entries.get(game.gameId)?.record ?? null;
-    if (record === null || record.phase === "setup" || record.phase === "ended") return null;
-    const offer = factsOfGame(game.gameId, input.board).offer;
+    if (record === null || record.phase === "setup" || record.phase === "ended" || record.policy.class !== "live") return null;
+    const facts = factsOfGame(game.gameId, input.board);
+    const offer = facts.offer;
     if (offer === null || offer.proposer !== input.actor || offer.answerer === null || offer.answerer === offer.proposer) return null;
-    const live = record.policy.class === "live";
+    if (facts.decision?.seat !== offer.answerer) return null;
+    const holder = record.obligation;
+    const suspends = holder !== null && holder.seat === offer.proposer && holder.timer !== null;
+    if (!suspends && offer.slot !== "train") return null;
     const orKey = operatingRoundKeyOf(input.board);
     if (record.declines.or_key !== orKey) return null;
-    const count = record.declines.counts[declineKey(live, offer.slot, offer.proposer, offer.answerer)] ?? 0;
+    const count = record.declines.counts[declineKey(offer.proposer, offer.answerer)] ?? 0;
     if (count < LIVE_DECLINES_PER_OR) return null;
     const who = name(game.gameId, offer.answerer);
     counters.refusals += 1;
-    return { code: CLOCK_REFUSAL.declines, reason: live && offer.slot === "train" ? declinesReachedSentence(who) : `${who} has declined two offers like this from you this round.` };
+    return { code: CLOCK_REFUSAL.declines, reason: offer.slot === "train" ? declinesReachedSentence(who) : `${who} has declined two offers from you this operating round.` };
   }
 
   /** After a committed batch (in the same task): fold it and write the record before the task ends. */
@@ -1022,13 +1028,6 @@ export function createClockController(deps: ClockControllerDeps) {
         return finish(entry, game.gameId, systemResumeVote(current, seat, at, input.since));
       case "clock-annul":
         return finish(entry, game.gameId, annulVote(current, seat, input.yes, at));
-      case "clock-reapprove": {
-        const r = current.remedy;
-        if (r === null || r.epoch !== input.verifiedFor.epoch || r.log_len !== input.verifiedFor.logLen || r.kind !== input.verifiedFor.remedy) {
-          return { ok: false, code: CLOCK_REFUSAL.stale, reason: "The outcome changed while your approval was checked. Look again." };
-        }
-        return finish(entry, game.gameId, reapprove(current, seat, input.approval, at));
-      }
       case "clock-propose":
       case "clock-vote": {
         const od = current.overdue;
@@ -1058,71 +1057,57 @@ export function createClockController(deps: ClockControllerDeps) {
 
   /* ---- money remedies ---- */
 
-  /** Carry the sealed remedy on (serialized per table). Never from a system-paused table, a lost authority, a seal not
-   *  yet durable, or a server with no remedy pipeline. */
+  /** Carry the sealed remedy on (serialized per table): the SAME sealed decision, revalidated by the pipeline at every
+   *  attempt (the sealed evidence, the FP4 intents, the REMEDY key, the contract's state, the approvals' horizons, the
+   *  attestation's expiry -- an expired attestation of the decision is attested again, never changed). A sealed remedy
+   *  belongs to an ENDED game: no SYSTEM PAUSE and no player vote gates it (the owner's ruling, policy correction
+   *  2026-10-06). Never from a lost authority, a seal not yet durable, a held table, or a server with no pipeline. */
   function driveRemedy(gameId: string): Promise<void> {
     const entry = entries.get(gameId);
     if (entry === undefined) return Promise.resolve();
     if (entry.pipeline !== null) return entry.pipeline;
     const run = (async () => {
-      for (let pass = 0; pass < 3 && !closed; pass += 1) {
-        const record = entry.record;
-        const remedy = record?.remedy ?? null;
-        if (record === null || remedy === null || entry.lost) return;
-        if (remedy.status === "confirmed" || remedy.status === "superseded") return;
-        if (record.system !== null || record.authority !== deps.authority || isHeld(gameId)) return;
-        /* A refused (or fenced) remedy is asked again only after its backoff, whoever asks. */
-        if (now() < entry.remedyRetryAt) return;
-        /* Async approvals waiting to be renewed: nothing to attest until every named seat approves again. */
-        if (remedy.stale.length > 0) return;
-        if (entry.sealedRev !== null && (entry.stored === null || entry.stored < entry.sealedRev)) {
-          if (!(await flush(entry))) return;
-        }
-        const port = deps.remedy?.() ?? null;
-        counters.remedyAttempts += 1;
-        let attempt: Awaited<ReturnType<RemedyPort["attest"]>>;
-        if (port === null) attempt = { status: "refused", detail: "this server has no remedy pipeline (no Juno backend): the remedy is not attested", attested: false };
-        else {
-          try {
-            attempt = await port.attest(gameId, remedy);
-          } catch (error) {
-            attempt = { status: remedy.status, detail: `the remedy attempt failed (${describe(error)}); retried`, attested: false };
-          }
-        }
-        /* A standing refusal, or an attestation the FP4 fence holds back, is asked again only after a backoff; a fallback
-           to the neutral annulment or approvals to renew are acted on at once. */
-        const turned = attempt.fallback === true || (attempt.stale !== undefined && attempt.stale.length > 0);
-        const stuck = !turned && (attempt.status === "refused" || (!attempt.attested && (attempt.status === "sealed" || attempt.status === "submitted") && attempt.detail !== null));
-        if (attempt.status === "refused") counters.remedyRefused += 1;
-        if (stuck) {
-          /* Asked again no sooner than the backoff (doubling): a refusal is a standing condition, not a blip. */
-          entry.remedyBackoffMs = Math.min(CLOCK_REMEDY_BACKOFF_MAX_MS, Math.max(CLOCK_REMEDY_BACKOFF_MIN_MS, entry.remedyBackoffMs * 2));
-          entry.remedyRetryAt = now() + entry.remedyBackoffMs;
-        } else {
-          entry.remedyBackoffMs = 0;
-          entry.remedyRetryAt = 0;
-        }
-        const latest = entry.record;
-        if (latest === null || latest.remedy === null || latest.remedy.kind !== remedy.kind || latest.remedy.epoch !== remedy.epoch || latest.remedy.evidence_hash !== remedy.evidence_hash) return;
-        if (attempt.stale !== undefined && attempt.stale.length > 0) {
-          applyStep(entry, remedyStale(latest, attempt.stale, now()), gameId);
-          await flush(entry);
-          deps.onChange(gameId);
-          return;
-        }
-        if (attempt.fallback === true) {
-          const fallback = sealNeutralFallback(latest, now(), attempt.detail ?? "the foreclosure's approvals lapsed");
-          if ("code" in fallback) return;
-          applyStep(entry, fallback, gameId);
-          await flush(entry);
-          deps.onChange(gameId);
-          continue;
-        }
-        applyStep(entry, remedyProgress(latest, attempt.status, attempt.detail, now(), attempt.attested), gameId);
-        await flush(entry);
-        deps.onChange(gameId);
-        return;
+      const record = entry.record;
+      const remedy = record?.remedy ?? null;
+      if (closed || record === null || remedy === null || entry.lost) return;
+      if (remedy.status === "confirmed" || remedy.status === "superseded") return;
+      if (record.authority !== deps.authority || isHeld(gameId)) return;
+      /* A refused (or fenced) remedy is asked again only after its backoff, whoever asks. */
+      if (now() < entry.remedyRetryAt) return;
+      if (entry.sealedRev !== null && (entry.stored === null || entry.stored < entry.sealedRev)) {
+        if (!(await flush(entry))) return;
       }
+      const port = deps.remedy?.() ?? null;
+      counters.remedyAttempts += 1;
+      let attempt: Awaited<ReturnType<RemedyPort["attest"]>>;
+      if (port === null) attempt = { status: "refused", detail: "this server has no remedy pipeline (no Juno backend): the remedy is not attested", attested: false };
+      else {
+        try {
+          attempt = await port.attest(gameId, remedy);
+        } catch (error) {
+          attempt = { status: remedy.status, detail: `the remedy attempt failed (${describe(error)}); retried`, attested: false };
+        }
+      }
+      /* A standing refusal (an unlandable decision included), or an attestation the FP4 fence holds back, is asked again
+         only after a backoff (doubling): a refusal is a standing condition, not a blip. */
+      const stuck = attempt.status === "refused" || (!attempt.attested && (attempt.status === "sealed" || attempt.status === "submitted") && attempt.detail !== null);
+      if (attempt.status === "refused") counters.remedyRefused += 1;
+      if (stuck) {
+        entry.remedyBackoffMs = Math.min(CLOCK_REMEDY_BACKOFF_MAX_MS, Math.max(CLOCK_REMEDY_BACKOFF_MIN_MS, entry.remedyBackoffMs * 2));
+        entry.remedyRetryAt = now() + entry.remedyBackoffMs;
+      } else {
+        entry.remedyBackoffMs = 0;
+        entry.remedyRetryAt = 0;
+      }
+      const latest = entry.record;
+      if (latest === null || latest.remedy === null || latest.remedy.kind !== remedy.kind || latest.remedy.epoch !== remedy.epoch || latest.remedy.evidence_hash !== remedy.evidence_hash) return;
+      const step =
+        attempt.unlandable !== undefined && attempt.unlandable.length > 0
+          ? remedyBlocked(latest, attempt.unlandable, attempt.detail ?? "the sealed decision's approvals can no longer land: owner decision required", now())
+          : remedyProgress(latest, attempt.status, attempt.detail, now(), attempt.attested);
+      applyStep(entry, step, gameId);
+      await flush(entry);
+      deps.onChange(gameId);
     })()
       .catch((error) => deps.warn(`  clock: ${gameId}: the remedy pipeline failed -- ${describe(error)}`))
       .finally(() => {
@@ -1155,8 +1140,13 @@ export function createClockController(deps: ClockControllerDeps) {
     }
     if (record === null || record.remedy === null) return { kind: "wait", why: "the table's clock has sealed no remedy" };
     const r = record.remedy;
-    if (r.kind !== intent.op.remedy || String(r.epoch) !== intent.op.overdue_epoch || String(r.log_len) !== intent.op.log_len || r.strike !== intent.op.strike) return { kind: "wait", why: "the intent is not the table's sealed remedy decision" };
-    if (record.system !== null) return { kind: "wait", why: "the table is in SYSTEM PAUSE: nothing not yet final is relayed until every player resumes" };
+    /* The intent must carry exactly the sealed decision (its evidence hash included), and the sealed decision must be
+       exactly what its evidence proves -- revalidated at every attempt, after a restart as before it. */
+    if (!intentCarriesDecision(intent, r)) return { kind: "wait", why: "the intent is not the table's sealed remedy decision" };
+    const sealedProblem = sealedRemedyProblem(gameId, r);
+    if (sealedProblem !== null) return { kind: "wait", why: sealedProblem };
+    /* A sealed remedy belongs to an ENDED game: a system pause (of a game still playable) never gates it. */
+    if (record.phase !== "ended") return { kind: "wait", why: "the table's game has not ended: no remedy is relayed" };
     if (record.authority !== deps.authority) {
       /* After a restart the table may not be open here yet: open it, so its continuity is judged (and the remedy carried
          on, or system-paused) without waiting for a player. */
@@ -1395,8 +1385,7 @@ export type ClockOpInput =
       readonly stale: readonly string[];
       /** Money: this seat's own standing YES no longer verifies (its consent key moved): the new approval replaces it. */
       readonly renew?: boolean;
-    }
-  | { readonly type: "clock-reapprove"; readonly seat: string; readonly approval: NonNullable<ClockVote["approval"]>; readonly verifiedFor: { readonly epoch: number; readonly logLen: number; readonly remedy: number } };
+    };
 
 /** The overdue (and, for a vote, the proposal) a money approval was verified against, outside the task. */
 export interface ClockVerifiedFor {

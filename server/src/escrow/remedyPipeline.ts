@@ -20,13 +20,20 @@
 //      `expires_at` one hour later), signed, verified again (`remedyChainIntent`), and written as ONE durable FP4 intent
 //      behind the per-game fence (`prepareRemedyIntent`: one open remedy intent per game, idempotent, restart-safe).
 //
+//   0. before any of it, the SEALED decision itself is revalidated (`sealedRemedyProblem`): its evidence document folds
+//      to the sealed `evidence_hash`, ends with the `remedy-sealed` event that names exactly this decision (kind, seat,
+//      strike, epoch, stalled position and hash, allowance, overdue and final moments, approvals) and the strike
+//      ledger's head; an FP4 intent counts as this decision's only if it carries that same evidence hash.
+//
 // The relayer then submits it, but only on the clock lane's word (`EscrowServiceDeps.remedyGate`, the controller's
-// `remedyGate`): never during a SYSTEM PAUSE, never from an authority that is not the clock's current one, never while a
-// unanimous annulment of the game is open (it supersedes the non-final remedy). An attestation that expired before it
-// landed is attested AGAIN for the same decision (`attestations` counts them); a Live foreclosure whose approvals lapsed
-// is replaced by the neutral timeout annulment (the clock seals that fallback; FP4's fence makes it wait until the
-// earlier attestation can no longer land). NO payout is computed here or in any browser: the contract's
-// `foreclosure_split` decides every amount.
+// `remedyGate`): only for an ENDED game's sealed decision, never from an authority that is not the clock's current one,
+// never while a unanimous annulment of the game is open. A sealed remedy is never gated by a player vote (the owner's
+// ruling, policy correction 2026-10-06: a system pause protects only a game that is still playable). An attestation that
+// expired before it landed is attested AGAIN for the same decision (`attestations` counts them) -- the protocol's own
+// recovery (a fresh `attested_at`, the same decision digest). A sealed N-1 decision whose seat approvals can no longer
+// land (escrow 2.1.0 checks each horizon against the block time; a seat's consent key may have moved) is NEVER converted
+// into another outcome and never put to a new vote: it stays sealed and held (`unlandable`), and needs an owner decision.
+// NO payout is computed here or in any browser: the contract's `foreclosure_split` decides every amount.
 
 import {
   LIVE_CURE_WINDOW_SECS,
@@ -37,6 +44,7 @@ import {
 } from "../../../frontend/src/gameEngine/escrow/junoRemedyV1";
 import type { ClockRemedy, RemedyKind, RemedyStatus } from "../rooms/clock/clockRecord";
 import { LIVE_FINALITY_APPROVAL_MARGIN_SECS } from "../rooms/clock/clockModel";
+import { evidenceHashOf, ledgerHeadOf, signatureDigest } from "../rooms/clock/clockEvidence";
 import { isLiveAttempt, type ChainIntentRecord } from "./chainIntents";
 import type { EscrowService, RemedyChainContext } from "./escrowService";
 import { remedyChainIntent, RemedyIntentError } from "./juno/remedyIntents";
@@ -49,11 +57,9 @@ export interface RemedyAttempt {
   readonly detail: string | null;
   /** A new attestation was signed and its intent written. */
   readonly attested: boolean;
-  /** Live foreclosure only: its approvals can no longer land -- the clock should seal the neutral fallback. */
-  readonly fallback?: boolean;
-  /** Async N-1 remedy only: the seats whose approvals can no longer land (lapsed, or their consent key moved since they
-   *  signed) -- the clock asks each to approve the same decision again (`remedyStale`). */
-  readonly stale?: readonly string[];
+  /** An N-1 remedy (2, 4, 5): the seats whose approvals can no longer land (a horizon passed, or the seat's consent key
+   *  moved since it signed). The sealed decision is held as it is (`remedyBlocked`): owner decision required. */
+  readonly unlandable?: readonly string[];
 }
 
 /** What the clock asks of the money side. */
@@ -132,8 +138,60 @@ export interface RemedyPipelineDeps {
   readonly audit?: (event: string, fields: Record<string, unknown>) => void;
 }
 
-const matches = (intent: ChainIntentRecord, remedy: ClockRemedy): boolean =>
-  intent.op.kind === "remedy" && intent.op.remedy === remedy.kind && intent.op.overdue_epoch === String(remedy.epoch) && intent.op.log_len === String(remedy.log_len) && intent.op.strike === remedy.strike;
+/** Whether an FP4 intent is an attestation of THIS sealed decision: the same remedy, overdue instance and final moment,
+ *  and the same sealed evidence hash (read from the signed message it carries). */
+export function intentCarriesDecision(intent: ChainIntentRecord, remedy: ClockRemedy): boolean {
+  if (intent.op.kind !== "remedy" || intent.op.remedy !== remedy.kind || intent.op.overdue_epoch !== String(remedy.epoch) || intent.op.log_len !== String(remedy.log_len) || intent.op.strike !== remedy.strike) return false;
+  if (intent.op.final_at !== remedyTimes(remedy).finalAt.toString()) return false;
+  try {
+    const msg = JSON.parse(intent.msg_json) as { submit_remedy?: { attestation?: { evidence_hash?: unknown } } };
+    return msg.submit_remedy?.attestation?.evidence_hash === remedy.evidence_hash;
+  } catch {
+    return false;
+  }
+}
+const matches = intentCarriesDecision;
+
+/** Whether a sealed remedy is exactly what its evidence proves (`null`), or why not. Pure; no chain read. The document
+ *  must fold to the sealed `evidence_hash`, end with the `remedy-sealed` event naming this decision field by field, and
+ *  carry the strike ledger whose head that event signs. A record that fails this is never attested (fail closed). */
+export function sealedRemedyProblem(gameId: string, remedy: ClockRemedy): string | null {
+  const doc = remedy.evidence;
+  if (doc.game_id !== gameId) return "the sealed evidence names another game";
+  let head: string;
+  let ledgerHead: string;
+  try {
+    head = evidenceHashOf(doc);
+    ledgerHead = ledgerHeadOf(doc);
+  } catch {
+    return "the sealed evidence cannot be folded";
+  }
+  if (head !== remedy.evidence_hash) return "the sealed evidence does not fold to the sealed evidence hash";
+  const last = doc.events[doc.events.length - 1];
+  if (last === undefined || last.kind !== "remedy-sealed") return "the sealed evidence does not end with its seal";
+  const f = last.f as Record<string, unknown>;
+  const approvals = remedy.approvals.map((a) => `${a.seat}:${a.approve_until}:${signatureDigest(a.signature)}`);
+  const named = Array.isArray(f.approvals) ? (f.approvals as unknown[]) : null;
+  if (
+    f.remedy !== remedy.kind ||
+    f.seat !== remedy.seat ||
+    f.strike !== remedy.strike ||
+    f.epoch !== remedy.epoch ||
+    f.log_len !== remedy.log_len ||
+    f.log_hash !== remedy.log_hash ||
+    f.allowance_secs !== remedy.allowance_secs ||
+    f.overdue_ms !== remedy.overdue_ms ||
+    f.final_ms !== remedy.final_ms ||
+    last.at !== remedy.final_ms ||
+    named === null ||
+    named.length !== approvals.length ||
+    !named.every((value, i) => value === approvals[i])
+  ) {
+    return "the sealed evidence's seal does not name this decision";
+  }
+  if (f.ledger_head !== ledgerHead) return "the sealed evidence's strike ledger does not match its seal";
+  return null;
+}
 
 function progressOf(intents: readonly ChainIntentRecord[]): "none" | "open" | "confirmed" | "dead" {
   if (intents.some((intent) => intent.status === "confirmed")) return "confirmed";
@@ -184,6 +242,10 @@ export function createRemedyPipeline(deps: RemedyPipelineDeps): RemedyPort {
     async attest(gameId, remedy) {
       const signer = deps.signer;
       if (signer === null) return { status: "refused", detail: "no dedicated REMEDY key is configured on this server: no remedy is attested (fail closed)", attested: false };
+      /* The sealed decision is revalidated first, every time (a restart, a takeover, a retry): exactly what its evidence
+         proves, or nothing is carried on. */
+      const sealedProblem = sealedRemedyProblem(gameId, remedy);
+      if (sealedProblem !== null) return { status: "refused", detail: `${sealedProblem}: nothing is attested (fail closed)`, attested: false };
       /* What the FP4 intents already say comes first: a confirmed or in-flight attestation needs no new chain read. */
       const intents = (await deps.service.intentsOf(gameId)).filter((intent) => matches(intent, remedy));
       const progress = progressOf(intents);
@@ -224,9 +286,14 @@ export function createRemedyPipeline(deps: RemedyPipelineDeps): RemedyPort {
         approvals.push({ seat_index: seat, approve_until: BigInt(approval.approve_until), signature: approval.signature });
       }
       if (invalid.length > 0) {
-        if (remedy.kind === 2) return { status: "refused", detail: "an approval of the foreclosure can no longer land (lapsed, or its consent key changed): the neutral timeout annulment replaces it", attested: false, fallback: true };
-        if (remedy.kind === 4 || remedy.kind === 5) return { status: "refused", detail: "an approval can no longer land (lapsed, or its consent key changed): those players must approve again", attested: false, stale: [...invalid].sort() };
-        return { status: "refused", detail: "an approval can no longer land", attested: false };
+        /* Escrow 2.1.0 has no way to land an approval past its horizon (or under a moved key), and the sealed decision
+           is never converted or re-voted: it is held as it is -- owner decision required. */
+        return {
+          status: "refused",
+          detail: "owner decision required: the sealed decision's seat approvals can no longer land on escrow 2.1.0 (a horizon passed, or a consent key moved); it is held unchanged -- never converted, never re-voted",
+          attested: false,
+          unlandable: [...invalid].sort(),
+        };
       }
       const attestation: RemedyAttestationV1 = {
         version: 1,

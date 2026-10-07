@@ -68,6 +68,10 @@ export interface RoomLimits {
   /** Gameplay submits per seat and per game. */
   submitsPerSeat: BucketSpec;
   submitsPerGame: BucketSpec;
+  /** Phase 3 final clocks (owner-policy correction): the FREQUENCY of offers (proposals) per seat per game -- a
+   *  transport-sanity bound on pathological offer churn, never a count of offers a round allows. A refusal is the
+   *  ordinary `rate-limited` answer with its wait; the same offer is legal the moment the bucket refills. */
+  offersPerSeat: BucketSpec;
   /** Chat per principal per game. */
   chatPerSeat: BucketSpec;
   /** Join-code rotations (rotate-code, going private) per game: each rewrites the join index. */
@@ -217,6 +221,9 @@ export const DEFAULT_INGRESS_LIMITS: IngressLimits = Object.freeze({
     membershipOpsPerPrincipal: { capacity: 10, refillPerSecond: perMinute(20) },
     submitsPerSeat: { capacity: 20, refillPerSecond: 3 },
     submitsPerGame: { capacity: 30, refillPerSecond: 10 },
+    /* Offers: burst 10, then one every 10 seconds (six a minute) -- far above any table's negotiation, far below a
+       script's churn (which would otherwise fill the game's log). */
+    offersPerSeat: { capacity: 10, refillPerSecond: 1 / 10 },
     chatPerSeat: { capacity: 5, refillPerSecond: 1 / 3 },
     codeRotationsPerGame: { capacity: 5, refillPerSecond: 5 / 3600 },
     listCoalesceMs: 1_000,

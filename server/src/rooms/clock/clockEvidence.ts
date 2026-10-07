@@ -62,8 +62,7 @@ export type ClockEvidenceKind =
   | "annul-vote"
   | "ended"
   | "ack"
-  | "vote-stale"
-  | "reapproval";
+  | "vote-stale";
 
 /** Sorted-key, whitespace-free JSON. Only integers, booleans, null, strings and arrays / objects of them are allowed:
  *  a float (or a non-finite number) is refused -- evidence never carries one. */

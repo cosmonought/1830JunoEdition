@@ -26,18 +26,17 @@ import {
   nextDue,
   pauseOp,
   propose,
-  reapprove,
   recoverGap,
   remainingAt,
-  remedyStale,
-  sealNeutralFallback,
+  remedyBlocked,
   systemResumeVote,
   vote,
   type ClockBoardFacts,
   type ClockMsgClass,
   type ClockStep,
 } from "./clockModel";
-import { isGameClockRecord, LIVE_ACTION_MS, LIVE_CURE_MS, LIVE_TRADE_MS, parseClockDocument, ClockUnreadableError, type GameClockRecord } from "./clockRecord";
+import { CLOCK_EVIDENCE_WINDOW, isGameClockRecord, LIVE_ACTION_MS, LIVE_CURE_MS, LIVE_TRADE_MS, parseClockDocument, ClockUnreadableError, type GameClockRecord } from "./clockRecord";
+import { sealedRemedyProblem } from "../../escrow/remedyPipeline";
 
 const SEC = 1_000;
 const MIN = 60 * SEC;
@@ -281,18 +280,18 @@ describe("Live train offer: the proposer's clock freezes; the recipient has a di
     assert.equal(t.remaining(), LIVE_ACTION_MS);
   });
 
-  test("every Live offer runs the 10:00 response timer (proposer frozen exactly; no strike); a rejection or expiry resumes the proposer exactly and counts a decline of its kind; Async offers resume exactly too", () => {
+  test("LIVE: a qualifying NON-train inter-player offer gets the same 10:00 response treatment; the proposer resumes its exact remainder; the decline joins the one directional counter", () => {
     const t = new Table("live");
     t.advance(19 * MIN + 50 * SEC);
     const priv = offerOf("private", A, B, 9);
     t.move(A, offering(priv), "propose");
     assert.deepEqual([t.record.obligation?.seat, t.record.obligation?.trade?.proposer, t.remaining()], [B, A, LIVE_TRADE_MS], "B's distinct 10:00 response timer");
+    assert.deepEqual(t.record.parked, [{ seat: A, offer_key: priv.key, remaining_ms: 10 * SEC }], "A frozen at its exact remainder");
     assert.equal(clockViewOf(t.record, t.t).trade?.kind, "private");
     t.advance(4 * MIN);
     t.move(B, facts(turn(A, 0)), "reject");
     assert.equal(t.remaining(), 10 * SEC, "A resumes exactly: never fresh, never charged for B's time");
-    assert.equal(t.record.declines.counts[`private:${A}>${B}`], 1, "a private-offer decline (the train counter is untouched)");
-    assert.equal(t.record.declines.counts[`${A}>${B}`] ?? 0, 0);
+    assert.equal(t.record.declines.counts[`${A}>${B}`], 1, "one decline A -> B (one counter per direction, whatever the kind)");
     /* A confederate sitting on the offer: at most 10:00, then it expires (no strike for anyone), one more decline. */
     const sat = new Table("live");
     sat.advance(5 * MIN);
@@ -300,25 +299,150 @@ describe("Live train offer: the proposer's clock freezes; the recipient has a di
     const expiry = sat.advance(LIVE_TRADE_MS);
     assert.notEqual(expiry, null, "the response time ran out");
     sat.commit(A, facts(turn(A, 0)), "server-expiry");
-    assert.deepEqual([sat.remaining(), sat.record.strikes, sat.record.declines.counts[`trade:${A}>${B}`]], [15 * MIN, {}, 1]);
+    assert.deepEqual([sat.remaining(), sat.record.strikes, sat.record.declines.counts[`${A}>${B}`]], [15 * MIN, {}, 1]);
+  });
+
+  test("LIVE: two declines A -> B (mixed kinds) block a third QUALIFYING A -> B offer that Operating Round; B -> A and A -> C stay open; the next OR clears it", () => {
+    const t = new Table("live");
+    t.move(A, offering(offerOf("private", A, B, 1)), "propose");
+    t.move(B, facts(turn(A, 0)), "reject");
+    t.move(A, offering(offerOf("train", A, B, 2)), "propose", { trainRecipient: B });
+    t.advance(LIVE_TRADE_MS);
+    t.commit(A, facts(turn(A, 0)), "server-expiry");
+    assert.equal(t.record.declines.counts[`${A}>${B}`], 2);
+    /* The pre-speculation train check (the board's own answerer is re-checked after speculation: clockController). */
+    assert.equal(t.refusal(A, "propose", { trainRecipient: B })?.code, CLOCK_REFUSAL.declines);
+    assert.equal(t.refusal(A, "propose", { trainRecipient: C }), null, "another player stays open");
+    assert.equal(clockViewOf(t.record, t.t).declines.find((d) => d.from === A && d.to === B)?.count, 2);
+    /* The reverse direction is its own counter. */
+    t.move(A, facts(turn(B, 1)));
+    t.move(B, offering(offerOf("private", B, A, 3)), "propose");
+    assert.equal(t.record.obligation?.trade?.proposer, B, "B -> A is a qualifying offer of its own");
+    t.move(A, facts(turn(B, 1)), "reject");
+    assert.deepEqual([t.record.declines.counts[`${B}>${A}`], t.record.declines.counts[`${A}>${B}`]], [1, 2]);
+    /* The next Operating Round clears every count. */
+    t.move(B, facts(turn(A, 2), { orKey: "OperatingRound/1/2" }));
+    assert.deepEqual(t.record.declines, { or_key: "OperatingRound/1/2", counts: {}, offers: [] });
+    assert.equal(t.refusal(A, "propose", { trainRecipient: B }), null);
+  });
+
+  test("LIVE: a genuine counter / continuation of the negotiation is not a decline; an accept or a rescission is none either", () => {
+    const t = new Table("live");
+    const first = offerOf("trade", A, B, 1);
+    t.move(A, offering(first), "propose");
+    /* B answers with an offer of its own that replaces A's (a continuation): no offer was declined. */
+    t.move(B, offering(offerOf("trade", B, A, 2)), "propose");
+    assert.equal(t.record.declines.counts[`${A}>${B}`] ?? 0, 0, "a counter is no decline");
+    t.move(A, facts(turn(A, 0)), "accept");
+    assert.deepEqual(t.record.declines.counts, {}, "an acceptance is no decline");
+    t.move(A, offering(offerOf("private", A, B, 3)), "propose");
+    t.move(A, facts(turn(A, 0)), "rescind");
+    assert.deepEqual(t.record.declines.counts, {}, "the proposer's own rescission is no decline");
+  });
+
+  test("LIVE: an offer that suspends nothing of its proposer's (an off-turn proposer) gets no response timer and counts no decline", () => {
+    const t = new Table("live");
+    t.advance(5 * MIN);
+    /* C is not the responsible seat (A is): C's offer to B puts the answer on B as an ordinary required decision. */
+    t.move(C, offering(offerOf("trade", C, B, 4)), "propose");
+    assert.equal(t.record.obligation?.seat, B);
+    assert.equal(t.record.obligation?.trade, null, "no 10:00 response timer: the ordinary action clock");
+    assert.equal(t.remaining(), LIVE_ACTION_MS);
+    assert.deepEqual(t.record.parked, [], "nothing of C's was running: nothing parks");
+    t.move(B, facts(turn(A, 0)), "reject");
+    assert.deepEqual(t.record.declines.counts, {}, "no decline for an offer that never suspended its proposer");
+  });
+
+  test("NO 16-OFFER CAP: well over 16 otherwise-legal offers in one round are each taken (Live and Async); no game-rule refusal exists", () => {
+    const live = new Table("live");
+    for (let n = 1; n <= 40; n += 1) {
+      assert.equal(live.refusal(A, "propose"), null, `offer ${n} is legal`);
+      live.move(A, offering(offerOf("private", A, B, 100 + n)), "propose");
+      live.move(A, facts(turn(A, 0)), "rescind");
+    }
+    /* Alternating answerers with acceptances: still no limit of any kind. */
+    for (let n = 1; n <= 20; n += 1) {
+      live.move(A, offering(offerOf("trade", A, n % 2 === 0 ? B : C, 200 + n)), "propose");
+      live.move(n % 2 === 0 ? B : C, facts(turn(A, 0)), "accept");
+    }
+    assert.equal(live.refusal(A, "propose"), null);
+    assert.equal("offers" in live.record, false, "the record keeps no offer count");
+  });
+
+  test("EVIDENCE BOUND: a defaulting obligation with more facts than the window keeps a CHECKPOINTED window (the head before it, the newest events) and its seal still proves exactly its decision", () => {
+    const t = new Table("live", { money: true });
+    t.ok(pauseOp(t.record, A, { action: "request", kind: "pause", id: null }, t.t));
+    for (const seat of [B, C]) t.ok(pauseOp(t.record, seat, { action: "yes", kind: "pause", id: t.record.pause.request?.id ?? null }, t.t));
+    for (let i = 0; i < 300; i += 1) {
+      t.t += MIN;
+      t.ok(pauseOp(t.record, A, { action: "request", kind: "resume", id: null }, t.t));
+      t.ok(pauseOp(t.record, C, { action: "no", kind: "resume", id: t.record.pause.request?.id ?? null }, t.t));
+    }
+    t.t += MIN;
+    t.ok(pauseOp(t.record, A, { action: "request", kind: "resume", id: null }, t.t));
+    for (const seat of [B, C]) t.ok(pauseOp(t.record, seat, { action: "yes", kind: "resume", id: t.record.pause.request?.id ?? null }, t.t));
+    assert.equal(t.record.evidence.truncated, true, "more facts than the window: the oldest are checkpointed into its starting head");
+    t.advance(LIVE_ACTION_MS + LIVE_CURE_MS);
+    const remedy = t.record.remedy as NonNullable<GameClockRecord["remedy"]>;
+    assert.deepEqual([remedy.kind, remedy.evidence.truncated], [1, true]);
+    assert.ok(remedy.evidence.events.length <= CLOCK_EVIDENCE_WINDOW);
+    assert.equal(evidenceHashOf(remedy.evidence), remedy.evidence_hash, "the checkpointed document folds to the attested hash");
+    assert.equal(sealedRemedyProblem(GAME, remedy), null);
+    assert.deepEqual(parseClockDocument(JSON.stringify(t.record), GAME).remedy, remedy, "restart-safe");
+  });
+
+  test("ASYNC: repeated rejected legal offers stay available -- no decline counter, no 10:00 response timer, the proposer resumes exactly", () => {
     const paced = new Table("async-pace", { pace: 86_400 });
     paced.advance(20 * HOUR);
-    paced.move(A, offering(offerOf("train", A, B, 3)), "propose");
-    paced.advance(3 * HOUR);
-    paced.move(B, facts(turn(A, 0)), "reject");
-    assert.equal(paced.remaining(), 4 * HOUR, "Async: A resumes exactly its 4 hours");
-    assert.equal(paced.record.declines.counts[`async-train:${A}>${B}`], 1);
-    /* The budget: 16 proposals in one round, then none until the next. */
-    const budget = new Table("live");
-    for (let n = 1; n <= 16; n += 1) {
-      budget.move(A, offering(offerOf("private", A, B, 100 + n)), "propose");
-      budget.move(A, facts(turn(A, 0)), "rescind");
+    for (let n = 1; n <= 25; n += 1) {
+      assert.equal(paced.refusal(A, "propose", { trainRecipient: B }), null, `Async offer ${n} is never blocked`);
+      paced.move(A, offering(offerOf(n % 2 === 0 ? "train" : "private", A, B, n)), "propose", { trainRecipient: B });
+      assert.equal(paced.record.obligation?.trade, null, "no Live response timer in Async");
+      assert.equal(paced.remaining(), 86_400 * SEC, "the answerer owes an ordinary pace obligation");
+      paced.move(B, facts(turn(A, 0)), "reject");
     }
-    assert.equal(budget.refusal(A, "propose")?.code, "rate-limited");
-    budget.move(A, facts(turn(B, 1)));
-    assert.equal(budget.refusal(A, "propose")?.code, "rate-limited", "a new action in the same round does not refund it");
-    budget.move(B, facts(turn(A, 2), { orKey: "OperatingRound/1/2" }));
-    assert.equal(gate(budget.record, { actor: A, msg: "propose", closeRoom: false, revertTarget: null, trainRecipient: null, nameOf: (x) => x, roundKey: "OperatingRound/1/2" }), null, "the next round opens a new budget");
+    assert.equal(paced.remaining(), 4 * HOUR, "A resumes exactly its 4 hours every time");
+    assert.deepEqual(paced.record.declines.counts, {}, "Async keeps no decline count");
+    assert.deepEqual(clockViewOf(paced.record, paced.t).declines, []);
+    const free = new Table("no-deadline");
+    for (let n = 1; n <= 5; n += 1) {
+      free.move(A, offering(offerOf("train", A, B, n)), "propose", { trainRecipient: B });
+      free.move(B, facts(turn(A, 0)), "reject");
+    }
+    assert.deepEqual(free.record.declines.counts, {}, "No-deadline keeps none either");
+    assert.equal(free.refusal(A, "propose", { trainRecipient: B }), null);
+  });
+
+  test("NO HISTORY CAP: past 5,000 log entries an offer is still legal, and the sealed remedy's evidence still proves exactly its decision (bounded window, checkpointed head, restart-safe)", () => {
+    const t = new Table("async-pace", { pace: 86_400, money: true });
+    /* 2,600 offer-and-reject cycles: 5,200 entries of negotiation, every one folded. */
+    for (let n = 1; n <= 2_600; n += 1) {
+      t.move(A, offering(offerOf("private", A, B, n)), "propose");
+      t.move(B, facts(turn(A, 0)), "reject");
+    }
+    assert.ok(t.logLen > 5_000, "the history is past the old 5,000 bound");
+    assert.equal(t.refusal(A, "propose"), null, "an offer is still legal: history length never changes the rules");
+    /* The evidence the record keeps is the defaulting obligation's window, never the history's length. */
+    assert.ok(t.record.evidence.window.length <= CLOCK_EVIDENCE_WINDOW);
+    assert.ok(t.record.evidence.seq > 5_000, "every fact was hashed into the chain");
+    assert.equal(foldEvidence(t.record.evidence.window_from, t.record.evidence.window), t.record.evidence.head, "the checkpointed window still folds to the head");
+    /* The overdue and the N-1 money remedy: the sealed evidence proves exactly the sealed decision. */
+    t.advance(86_400 * SEC);
+    assert.equal(t.record.phase, "overdue");
+    const nowSecs = Math.floor(t.t / 1000);
+    t.ok(propose(t.record, B, "foreclose", { approve_until: nowSecs + 7 * 86_400, signature: "12".repeat(64) }, t.t));
+    t.ok(vote(t.record, C, t.record.overdue?.proposal?.id as number, true, { approve_until: nowSecs + 7 * 86_400, signature: "34".repeat(64) }, t.t));
+    const remedy = t.record.remedy as NonNullable<GameClockRecord["remedy"]>;
+    assert.equal(remedy.kind, 5);
+    assert.equal(remedy.log_len, t.logLen, "the stalled position is the full history's");
+    assert.equal(evidenceHashOf(remedy.evidence), remedy.evidence_hash);
+    assert.equal(sealedRemedyProblem(GAME, remedy), null, "the sealed decision verifies against its own evidence");
+    /* Restart safety: the record round-trips byte for byte, and a break after the seal changes nothing of it. */
+    const reloaded = parseClockDocument(JSON.stringify(t.record), GAME);
+    assert.deepEqual(reloaded, t.record);
+    const broken = continuityBreak(reloaded, { now: t.t + HOUR, preservedAt: t.t, reason: "restart", authority: "auth-2" }).record;
+    assert.deepEqual(broken.remedy, remedy);
+    assert.equal(broken.system, null);
   });
 
   test("the proposer's own rescission is no decline, and is charged the time its offer stood (a propose-and-rescind never gives time)", () => {
@@ -337,7 +461,7 @@ describe("Live train offer: the proposer's clock freezes; the recipient has a di
     assert.equal(t.record.phase, "overdue");
   });
 
-  test("two declines (one rejection, one expiry) block a third A -> B proposal until the next Operating Round", () => {
+  test("two declines (one rejection, one expiry) (train) block a third A -> B proposal until the next Operating Round", () => {
     const t = new Table("live");
     t.move(A, offering(offer), "propose", { trainRecipient: B });
     t.move(B, facts(turn(A, 0)), "reject");
@@ -395,7 +519,7 @@ describe("Live train offer: the proposer's clock freezes; the recipient has a di
     assert.equal(t.record.epochs, 0);
   });
 
-  test("Async has no train response timer: the answerer owes an ordinary pace allowance", () => {
+  test("Async has no response timer: the answerer owes an ordinary pace allowance", () => {
     const t = new Table("async-pace", { pace: 86_400 });
     t.move(A, offering(offer), "propose");
     assert.equal(t.record.obligation?.trade, null);
@@ -536,12 +660,7 @@ describe("Live first / second overdue: cure until 30:00; the N-1 vote only decid
     t.advance(LIVE_CURE_MS);
     assert.equal(t.record.remedy?.kind, 2);
     assert.deepEqual(t.record.remedy?.approvals.map((a) => a.seat), [B, C].sort());
-    /* The neutral fallback, if the foreclosure could not land, is the same overdue instance and the same finality. */
-    const fallback = sealNeutralFallback(t.record, t.t + 5 * MIN, "lapsed");
-    assert.ok(!("code" in fallback));
-    if (!("code" in fallback)) {
-      assert.deepEqual([fallback.record.remedy?.kind, fallback.record.remedy?.replaces, fallback.record.remedy?.final_ms, fallback.record.remedy?.epoch], [1, 2, t.record.remedy?.final_ms, 1]);
-    }
+    assert.equal(t.record.remedy?.replaces, null, "a sealed decision never replaces (or is replaced by) another");
   });
 
   test("the second overdue is the second strike; a warning names the next expiry's consequence", () => {
@@ -739,20 +858,58 @@ describe("System pause: entered with no vote on a continuity break; unanimous re
     assert.equal(t.record.ended?.kind, "live-timeout-annul", "the staled foreclosure approval no longer decides minute 30");
   });
 
-  test("a money remedy sealed before the break, not final on chain, stays sealed and frozen by the system pause until every player resumes", () => {
+  test("POST-TERMINAL: a break AFTER the seal pauses nothing and asks no vote -- the SAME sealed remedy stands, unchanged, with no cure and no alternate", () => {
+    for (const kind of [1, 2] as const) {
+      const t = new Table("live", { money: true });
+      t.advance(LIVE_ACTION_MS);
+      if (kind === 2) {
+        const finalSecs = Math.ceil((T0 + LIVE_ACTION_MS + LIVE_CURE_MS) / 1000);
+        t.ok(propose(t.record, B, "foreclose", { approve_until: finalSecs + 900, signature: "22".repeat(64) }, t.t));
+        t.ok(vote(t.record, C, t.record.overdue!.proposal!.id, true, { approve_until: finalSecs + 900, signature: "33".repeat(64) }, t.t));
+      }
+      t.advance(LIVE_CURE_MS);
+      assert.deepEqual([t.record.phase, t.record.remedy?.kind, t.record.remedy?.status], ["ended", kind, "sealed"]);
+      const sealed = t.record.remedy;
+      /* The server / AWS restart: another authority takes the record. */
+      const reloaded = parseClockDocument(JSON.stringify(t.record), GAME);
+      t.ok(continuityBreak(reloaded, { now: t.t + HOUR, preservedAt: t.t, reason: "lost", authority: "auth-2" }));
+      assert.equal(t.record.system, null, "no SYSTEM PAUSE after a terminal seal: there is no gameplay to resume");
+      assert.deepEqual(t.record.remedy, sealed, "the sealed decision is unchanged (never re-decided)");
+      assert.deepEqual([t.record.phase, t.record.overdue?.cure?.since ?? null], ["ended", null], "no cure window reopens");
+      /* No player vote is asked or possible; no alternate remedy can be proposed; no move is taken. */
+      assert.equal("code" in systemResumeVote(t.record, A, t.t), true, "there is no system pause to vote on");
+      assert.equal("code" in propose(t.record, B, "foreclose", null, t.t), true, "no new foreclosure vote");
+      assert.equal(t.refusal(A)?.code, CLOCK_REFUSAL.ended, "the defaulter gets no cure opportunity");
+      const view = clockViewOf(t.record, t.t);
+      assert.deepEqual([view.state, view.system, view.remedy?.kind], ["ended", null, kind]);
+    }
+  });
+
+  test("POST-TERMINAL: a sealed first / second overdue survives a restart exactly (strike 2 neutral annulment and foreclosure)", () => {
     const t = new Table("live", { money: true });
+    t.advance(LIVE_ACTION_MS);
+    t.move(A, facts(turn(A, 0)));
     t.advance(LIVE_ACTION_MS + LIVE_CURE_MS);
-    assert.equal(t.record.remedy?.status, "sealed");
-    const sealed = t.record.remedy;
-    t.ok(continuityBreak(t.record, { now: t.t + HOUR, preservedAt: t.t, reason: "lost", authority: "auth-2" }));
-    assert.notEqual(t.record.system, null, "nothing not yet final on chain is relayed while system-paused");
-    assert.deepEqual(t.record.remedy, sealed, "the sealed decision is unchanged (never re-decided)");
-    for (const seat of [A, B, C]) t.ok(systemResumeVote(t.record, seat, t.t));
-    assert.equal(t.record.system, null);
-    assert.equal(t.record.phase, "ended");
-    const done = t.record as GameClockRecord;
-    const confirmed = { ...done, remedy: { ...(done.remedy as NonNullable<GameClockRecord["remedy"]>), status: "confirmed" as const } };
-    assert.equal(continuityBreak(confirmed, { now: t.t + HOUR, preservedAt: t.t, reason: "lost", authority: "auth-3" }).record.system, null, "a result already final on chain stays final: no pause");
+    const sealed = t.record.remedy as NonNullable<GameClockRecord["remedy"]>;
+    assert.deepEqual([sealed.kind, sealed.strike, t.record.ended?.kind], [1, 2, "live-timeout-annul"]);
+    let record = t.record;
+    for (const authority of ["auth-2", "auth-3"]) record = continuityBreak(parseClockDocument(JSON.stringify(record), GAME), { now: t.t + HOUR, preservedAt: t.t, reason: "restart", authority }).record;
+    assert.deepEqual([record.remedy, record.system, record.ended?.kind], [sealed, null, "live-timeout-annul"]);
+    assert.equal(sealedRemedyProblem(GAME, record.remedy as NonNullable<GameClockRecord["remedy"]>), null);
+  });
+
+  test("POST-TERMINAL: strike 3 stays gameplay-terminal across a restart; its sealed foreclosure (the challengeable remedy 3) is unchanged", () => {
+    const t = new Table("live", { money: true });
+    for (let strike = 1; strike <= 2; strike += 1) {
+      t.advance(LIVE_ACTION_MS);
+      t.move(A, facts(turn(A, 0)));
+    }
+    t.advance(LIVE_ACTION_MS);
+    const sealed = t.record.remedy as NonNullable<GameClockRecord["remedy"]>;
+    assert.deepEqual([sealed.kind, t.record.ended?.kind], [3, "live-strike3-foreclosure"]);
+    const after = continuityBreak(parseClockDocument(JSON.stringify(t.record), GAME), { now: t.t + 3 * HOUR, preservedAt: t.t, reason: "restart", authority: "auth-2" }).record;
+    assert.deepEqual([after.phase, after.system, after.remedy], ["ended", null, sealed]);
+    assert.equal(gate(after, { actor: A, msg: "move", closeRoom: false, revertTarget: null, trainRecipient: null, nameOf: (x) => x })?.code, CLOCK_REFUSAL.ended, "gameplay never reopens");
   });
 
   test("a break DURING the cure window freezes it; nothing is sealed until every player resumes and the preserved time runs out", () => {
@@ -1136,7 +1293,7 @@ describe("Review fixes: requests, breaks, gaps, offers, approvals", () => {
     assert.deepEqual(t.record.overdue?.proposal?.votes.map((v) => v.seat), [C], "B's lapsing YES is set aside; B is asked again");
   });
 
-  test("Async money: approvals found stale after sealing are renewed by their seats, then the SAME decision is sealed again", () => {
+  test("a sealed N-1 decision whose approvals can no longer land is HELD unchanged (owner decision required): never converted, never re-voted", () => {
     const t = new Table("async-pace", { pace: 86_400, money: true });
     t.advance(86_400 * SEC);
     const nowSecs = Math.floor(t.t / 1000);
@@ -1144,17 +1301,20 @@ describe("Review fixes: requests, breaks, gaps, offers, approvals", () => {
     t.ok(vote(t.record, C, t.record.overdue?.proposal?.id as number, true, sig(nowSecs + 7 * 86_400, "55"), t.t));
     const sealed = t.record.remedy as NonNullable<GameClockRecord["remedy"]>;
     assert.equal(sealed.kind, 5);
-    t.take(remedyStale(t.record, [C], t.t));
-    assert.deepEqual([t.record.remedy?.status, t.record.remedy?.stale], ["refused", [C]]);
-    assert.deepEqual(clockViewOf(t.record, t.t).remedy?.stale, [C]);
-    assert.equal(clockViewOf(t.record, t.t).remedy?.overdue.logLen, sealed.log_len, "the view carries what a renewed approval binds to");
-    const notStale = reapprove(t.record, B, sig(nowSecs + 9 * 86_400), t.t);
-    assert.equal("code" in notStale, true);
-    t.ok(reapprove(t.record, C, sig(nowSecs + 9 * 86_400, "77"), t.t));
-    const resealed = t.record.remedy as NonNullable<GameClockRecord["remedy"]>;
-    assert.deepEqual([resealed.kind, resealed.epoch, resealed.log_len, resealed.status, resealed.stale], [5, sealed.epoch, sealed.log_len, "sealed", []]);
-    assert.notEqual(resealed.evidence_hash, sealed.evidence_hash, "a new seal of the same decision");
-    assert.equal(resealed.approvals.find((a) => a.seat === C)?.approve_until, nowSecs + 9 * 86_400);
+    t.take(remedyBlocked(t.record, [C], "owner decision required: approvals lapsed", t.t));
+    const held = t.record.remedy as NonNullable<GameClockRecord["remedy"]>;
+    assert.deepEqual([held.status, held.stale, held.detail], ["refused", [C], "owner decision required: approvals lapsed"]);
+    assert.deepEqual(
+      [held.kind, held.seat, held.epoch, held.log_len, held.log_hash, held.final_ms, held.evidence_hash, held.approvals, held.replaces],
+      [sealed.kind, sealed.seat, sealed.epoch, sealed.log_len, sealed.log_hash, sealed.final_ms, sealed.evidence_hash, sealed.approvals, null],
+      "the SAME decision: nothing converted, nothing resealed",
+    );
+    assert.equal(sealedRemedyProblem(GAME, held), null, "and still exactly what its evidence proves");
+    assert.equal(t.record.overdue?.proposal?.complete_at !== null, true);
+    assert.equal("code" in propose(t.record, C, "annul", sig(nowSecs + 7 * 86_400), t.t), true, "no new vote can be opened");
+    const again = remedyBlocked(t.record, [C], "owner decision required: approvals lapsed", t.t + MIN);
+    assert.equal(again.events.length, 0, "an unchanged block writes nothing");
+    assert.equal(remedyBlocked({ ...t.record, remedy: { ...held, kind: 1 } }, [C], "x", t.t).events.length, 0, "remedies 1 and 3 carry no approvals: never blocked this way");
   });
 });
 

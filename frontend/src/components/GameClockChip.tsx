@@ -121,7 +121,7 @@ export function GameClockChip({ gameId, clock, players, viewerPlayerId, current,
   const [busy, setBusy] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
   /* A money table's signature is asked for only after the player confirms what it approves. */
-  const [confirming, setConfirming] = useState<{ readonly kind: "foreclose" | "annul"; readonly proposalId: number | null } | { readonly kind: "reapprove"; readonly remedy: 4 | 5 } | null>(null);
+  const [confirming, setConfirming] = useState<{ readonly kind: "foreclose" | "annul"; readonly proposalId: number | null } | null>(null);
 
   useEffect(() => watchLink(gameId, setLinkOpen), [gameId, watchLink]);
 
@@ -200,50 +200,13 @@ export function GameClockChip({ gameId, clock, players, viewerPlayerId, current,
       .catch(signFailed);
   };
 
-  /* An Async N-1 outcome whose approval by this seat must be renewed: the SAME decision, signed again here. */
-  const approveAgain = (remedy: 4 | 5, confirmed = false) => {
-    if (busy) return;
-    if (!confirmed) {
-      setConfirming({ kind: "reapprove", remedy });
-      return;
-    }
-    setConfirming(null);
-    const facts = clock.remedy?.overdue ?? null;
-    if (signApproval === undefined || facts === null) {
-      setRefusal("This device can't sign the approval a table with stakes needs. Open the table's money panel on the device that holds your seat's key.");
-      return;
-    }
-    setBusy(true);
-    setRefusal(null);
-    void signApproval({ remedy, overdue: facts, live: false, serverNowMs: serverNowMs() })
-      .then((signed) => {
-        setBusy(false);
-        if (!signed.ok) {
-          setRefusal(signed.reason);
-          return;
-        }
-        send({ type: CLOCK_OPS.reapprove, approveUntil: signed.approveUntil, signature: signed.signature });
-      })
-      .catch(signFailed);
-  };
-
   /* What the confirmation says the signature approves (the defaulting player, the outcome, its effect). */
   const confirmText = (() => {
     if (confirming === null) return null;
-    const seat = confirming.kind === "reapprove" ? (clock.remedy?.overdue.seat ?? null) : (clock.overdue?.seat ?? null);
+    const seat = clock.overdue?.seat ?? null;
     const who = seat === null ? "the overdue player" : nameOf(seat);
-    const outcome =
-      confirming.kind === "reapprove"
-        ? confirming.remedy === 5
-          ? `foreclosure against ${who}`
-          : `a neutral annulment of this game (${who} overdue)`
-        : confirming.kind === "foreclose"
-          ? `foreclosure against ${who}`
-          : `a neutral annulment of this game (${who} overdue)`;
-    const effect =
-      (confirming.kind === "foreclose" || (confirming.kind === "reapprove" && confirming.remedy === 5))
-        ? "Juno then splits the escrow by its foreclosure rule."
-        : "Juno then returns every player's own stake (minus the fee).";
+    const outcome = confirming.kind === "foreclose" ? `foreclosure against ${who}` : `a neutral annulment of this game (${who} overdue)`;
+    const effect = confirming.kind === "foreclose" ? "Juno then splits the escrow by its foreclosure rule." : "Juno then returns every player's own stake (minus the fee).";
     return `Sign your approval of ${outcome} with this device's seat key? ${effect}`;
   })();
 
@@ -254,8 +217,7 @@ export function GameClockChip({ gameId, clock, players, viewerPlayerId, current,
     controls.systemResume ||
     controls.propose.length > 0 ||
     controls.vote !== null ||
-    controls.annul !== null ||
-    controls.reapprove !== null;
+    controls.annul !== null;
   const detail = [presentation.warning, ...presentation.lines, refusal].filter((line): line is string => line !== null && line !== "");
   const title = detail.join(" ") || undefined;
 
@@ -324,11 +286,6 @@ export function GameClockChip({ gameId, clock, players, viewerPlayerId, current,
                 Agree to resume
               </button>
             )}
-            {controls.reapprove !== null && (
-              <button type="button" style={buttonStyle} disabled={busy} onClick={() => approveAgain(controls.reapprove!.remedy)} data-testid="game-clock-reapprove">
-                Approve again
-              </button>
-            )}
             {confirmText !== null && confirming !== null && (
               <span style={{ display: "flex", flexDirection: "column", gap: "4px" }} role="group" aria-label="Confirm your approval" data-testid="game-clock-confirm">
                 <span data-testid="game-clock-confirm-text">{confirmText}</span>
@@ -337,7 +294,7 @@ export function GameClockChip({ gameId, clock, players, viewerPlayerId, current,
                     type="button"
                     style={buttonStyle}
                     disabled={busy}
-                    onClick={() => (confirming.kind === "reapprove" ? approveAgain(confirming.remedy, true) : yes(confirming.kind, confirming.proposalId, true))}
+                    onClick={() => yes(confirming.kind, confirming.proposalId, true)}
                     data-testid="game-clock-confirm-sign"
                   >
                     Sign and send

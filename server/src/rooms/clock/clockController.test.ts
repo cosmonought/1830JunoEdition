@@ -12,14 +12,14 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 
-import { operatingBoard, P1, P2, P3, NYC, CO, PRR } from "../../../../frontend/src/utils/offerFixtures74";
+import { operatingBoard, P1, P2, P3, NYC, CO, PRR, DH } from "../../../../frontend/src/utils/offerFixtures74";
 import { sandboxReplayProviders } from "../../../../frontend/src/gameEngine/replayProviders";
 import type { SandboxLogMsg } from "../../../../frontend/src/gameEngine/gameSetup";
 import { RoomSession, type ServerLogEntry } from "../../../../frontend/src/utils/roomSession";
 import type { MapGridResponse } from "../../../../frontend/src/components/hexContractTypes";
 import { CLOCK_REFUSAL, declinesReachedSentence } from "../../../../frontend/src/utils/clockProtocol";
 import { createMemoryOpsRecorder } from "../../persistence/opsRecorder";
-import type { RemedyPort } from "../../escrow/remedyPipeline";
+import { remedyTimes, type RemedyPort } from "../../escrow/remedyPipeline";
 import type { ChainIntentRecord } from "../../escrow/chainIntents";
 import type { GameActor, Tx } from "../gameActor";
 import { createClockController, rescindExpiredOffer, type GateResult } from "./clockController";
@@ -274,14 +274,21 @@ describe("Live train offers through the controller (real engine offers)", () => 
     await h.clock.idle();
     const r = h.record();
     assert.equal(r.remedy?.kind, 1);
-    const intent = { op: { kind: "remedy", remedy: 1, overdue_epoch: String(r.remedy?.epoch), log_len: String(r.remedy?.log_len), strike: r.remedy?.strike } } as unknown as ChainIntentRecord;
+    const sealedRemedy = r.remedy as NonNullable<typeof r.remedy>;
+    const carrying = (evidenceHash: string) =>
+      ({
+        op: { kind: "remedy", remedy: 1, overdue_epoch: String(sealedRemedy.epoch), log_len: String(sealedRemedy.log_len), strike: sealedRemedy.strike, final_at: remedyTimes(sealedRemedy).finalAt.toString() },
+        msg_json: JSON.stringify({ submit_remedy: { attestation: { evidence_hash: evidenceHash } } }),
+      }) as unknown as ChainIntentRecord;
+    const intent = carrying(sealedRemedy.evidence_hash);
     const waiting = await h.clock.remedyGate(GAME, intent);
     assert.equal(waiting.kind, "wait");
     assert.match((waiting as { why: string }).why, /annulment/);
     annulOpen = false;
     assert.equal((await h.clock.remedyGate(GAME, intent)).kind, "ok");
-    const other = { op: { ...intent.op, overdue_epoch: "99" } } as unknown as ChainIntentRecord;
+    const other = { ...intent, op: { ...intent.op, overdue_epoch: "99" } } as unknown as ChainIntentRecord;
     assert.equal((await h.clock.remedyGate(GAME, other)).kind, "wait", "an intent that is not the sealed decision never passes");
+    assert.equal((await h.clock.remedyGate(GAME, carrying("cd".repeat(32)))).kind, "wait", "nor one carrying another evidence hash for the same instance");
   });
 
   test("the recipient's response timer is never an overdue: no strike, no interruption, no remedy", async () => {
@@ -451,20 +458,59 @@ describe("Controller review fixes (fourth pass)", () => {
   });
 });
 
-describe("Controller review fixes (fifth pass): every offer kind is bounded by its direction's declines", () => {
-  test("after two declines, the board's own offer (any kind) is refused before it is committed -- the answerer named by the board", async () => {
+describe("Owner-policy correction: Live inter-player offers that suspend the proposer; Async keeps no decline limit", () => {
+  const offerDH = (price: string) => ({ ProposePrivatePurchase: { game_id: 1, private_id: DH, private_name: "x", owner: P2, buyer_protocol_id: PRR, buyer_ticker: "PRR", price } });
+  const answerDH = (accept: boolean) => ({ AnswerPrivatePurchase: { game_id: 1, private_id: DH, accept } });
+
+  test("LIVE: a qualifying NON-train offer (a real private purchase) gets the 10:00 response timer with the proposer frozen exactly; its declines and a train offer's share the one directional counter, and a third qualifying offer is refused before commit", async () => {
     const h = harness();
     await h.deal();
+    await h.time.advance(4 * MIN);
+    const proposed = await h.submit(P1, offerDH("70"));
+    assert.equal(proposed.ok, true, JSON.stringify(proposed));
+    const privStanding = structuredClone(h.room.state);
+    let r = h.record();
+    assert.deepEqual([r.obligation?.seat, r.obligation?.trade?.proposer, h.remaining()], [P2, P1, LIVE_TRADE_MS], "the recipient's distinct response timer, not an action clock");
+    assert.deepEqual(r.parked.map((p) => [p.seat, p.remaining_ms]), [[P1, 16 * MIN]], "the proposer frozen at its exact remainder");
+    assert.equal(h.clock.viewOf(GAME)?.trade?.kind, "private");
+    assert.equal(h.clock.offerBlocked(h.game, { actor: P1, board: privStanding }), null, "no declines yet");
+    await h.time.advance(3 * MIN);
+    assert.equal((await h.submit(P2, answerDH(false))).ok, true);
+    r = h.record();
+    assert.deepEqual([r.obligation?.seat, h.remaining(), r.declines.counts[`${P1}>${P2}`]], [P1, 16 * MIN, 1], "the proposer resumes exactly; one decline");
+    assert.deepEqual(r.strikes, {}, "the response timer is never a strike");
+    /* The second decline: a train offer to the same player, left unanswered. */
     await h.submit(P1, proposeTrain(NYC, "2", "50"));
-    const standing = structuredClone(h.room.state);
-    assert.equal(h.clock.offerBlocked(h.game, { actor: P1, board: standing }), null, "no declines yet");
-    await h.submit(P2, answerTrain(NYC, false));
-    await h.submit(P1, proposeTrain(NYC, "2", "60"));
     await h.time.advance(LIVE_TRADE_MS);
     await h.serial(async () => undefined);
-    const blocked = h.clock.offerBlocked(h.game, { actor: P1, board: standing });
+    assert.deepEqual([h.record().declines.counts[`${P1}>${P2}`], h.remaining()], [2, 16 * MIN]);
+    /* A third qualifying offer P1 -> P2 (any kind), checked on the board the speculation made, before commit. */
+    const blocked = h.clock.offerBlocked(h.game, { actor: P1, board: privStanding });
     assert.equal(blocked?.code, CLOCK_REFUSAL.declines);
-    assert.equal(blocked?.reason, declinesReachedSentence(P2));
-    assert.equal(h.clock.offerBlocked(h.game, { actor: P2, board: standing }), null, "only the proposer named by the board is judged");
+    assert.equal(blocked?.reason, `${P2} has declined two offers from you this operating round.`);
+    assert.equal(h.clock.offerBlocked(h.game, { actor: P2, board: privStanding }), null, "only the proposer named by the board is judged");
+    const third = await h.submit(P1, proposeTrain(NYC, "2", "70"));
+    assert.equal((third as { code: string }).code, CLOCK_REFUSAL.declines, "the train's own pre-speculation check: the owner's sentence");
+    assert.equal((third as { reason: string }).reason, declinesReachedSentence(P2));
+    /* Another player stays open. */
+    const other = await h.submit(P1, proposeTrain(CO, "3", "100"));
+    assert.equal(other.ok, true, `another direction is open: ${JSON.stringify(other)}`);
+  });
+
+  test("ASYNC: repeated rejected legal offers stay available -- no decline counter, no 10:00 response timer, nothing blocked before commit", async () => {
+    const h = harness();
+    assert.equal((await h.clock.createPolicy(GAME, { deadline: "async-pace", paceSecs: 43_200, money: false })).ok, true);
+    await h.deal();
+    for (let n = 0; n < 4; n += 1) {
+      const proposed = await h.submit(P1, n % 2 === 0 ? offerDH(String(70 + n)) : proposeTrain(NYC, "2", String(50 + n)));
+      assert.equal(proposed.ok, true, `offer ${n + 1}: ${JSON.stringify(proposed)}`);
+      const r = h.record();
+      assert.deepEqual([r.obligation?.seat, r.obligation?.trade ?? null], [P2, null], "the answerer owes an ordinary pace obligation");
+      assert.equal(h.clock.offerBlocked(h.game, { actor: P1, board: h.room.state }), null, "Async never blocks an offer");
+      const answered = await h.submit(P2, n % 2 === 0 ? answerDH(false) : answerTrain(NYC, false));
+      assert.equal(answered.ok, true, JSON.stringify(answered));
+    }
+    assert.deepEqual(h.record().declines.counts, {}, "no decline count in Async");
+    assert.deepEqual(h.clock.viewOf(GAME)?.declines, []);
   });
 });

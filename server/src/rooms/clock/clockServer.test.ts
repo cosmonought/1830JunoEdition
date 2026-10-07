@@ -10,8 +10,10 @@
 //                 30:00 keeps the game; no cure and no complete N-1 approval -> neutral timeout annulment at 30:00;
 //                 complete N-1 approval -> foreclosure at 30:00, decided at 30:00 only; one NO vetoes.
 //   Pause         unanimous to pause, unanimous to resume, the remainder exact; moves refused while paused.
-//   Continuity    a restart under a NEW authority (a new process) is a SYSTEM PAUSE: the outage is never charged, no
-//                 overdue is created from it, and only every player's resume continues play.
+//   Continuity    a restart under a NEW authority (a new process) of a game still in play is a SYSTEM PAUSE: the
+//                 outage is never charged, no overdue is created from it, and only every player's resume continues
+//                 play. An ENDED game has nothing to resume: no pause, no vote (its sealed remedy is carried on).
+//   Offers        no count of offers and no history length is a rule: offer FREQUENCY alone is bounded, as transport.
 //   Async         the pace is the host's, fixed at the deal; expiry is OVERDUE only (no automatic outcome); the other
 //                 N-1 annul or foreclose; No-deadline has no clock at all.
 //   Annulment     a free table's unanimous annulment ends it in any state.
@@ -29,7 +31,7 @@ import type { RoomClockView } from "../../../../frontend/src/utils/clockProtocol
 import { CLOCK_REFUSAL } from "../../../../frontend/src/utils/clockProtocol";
 import { createFileHoldStore } from "../holdStore";
 import { createFileRecordStore } from "../recordStore";
-import { ALICE, BOB, BUY, CAROL, Client, quietConsole, startServer, stopServer, until, type Frame } from "../testSupport";
+import { ALICE, BOB, BUY, CAROL, Client, quietConsole, sleep, startServer, stopServer, until, type Frame } from "../testSupport";
 import { fakeTime, type FakeTime } from "./clockTestSupport";
 import { createFileClockStore } from "./clockStore";
 import { LIVE_ACTION_MS, LIVE_CURE_MS } from "./clockRecord";
@@ -493,6 +495,39 @@ describe("Timed Async, No-deadline and annulment through the server", () => {
         view = await clockWhere(watcher, (c) => c.state === "ended", "annulled");
         assert.equal(view.ended?.kind, "annulled");
         await watcher.close();
+      } finally {
+        await stopServer(server);
+      }
+    }));
+});
+
+/* ==================================================================
+    OFFERS: NO COUNT, NO HISTORY BOUND -- FREQUENCY ONLY, AS TRANSPORT (owner, 2026-10-06)
+   ================================================================== */
+
+describe("Offers through the server: no game-rule cap, no history bound; frequency is transport", () => {
+  test("past the 5,000-entry alarm (here: 1) an offer still reaches the game; a pathological burst answers rate-limited WITH its wait (never a game rule), and the same offer is taken once it passes", () =>
+    withDir("offer-rate", async (dir) => {
+      const time = fakeTime(T0);
+      const { server, port } = await boot(dir, time, "auth-1", { limits: { logEntryAlarm: 1, rooms: { offersPerSeat: { capacity: 2, refillPerSecond: 20 } } } });
+      try {
+        const { gameId } = await openTable(port, THREE);
+        const offer = { ProposeTrainPurchase: { game_id: 0, seller_protocol_id: 2, seller_ticker: "x", seller_president: null, buyer_protocol_id: 1, buyer_ticker: "x", model_type: "2", price: "50" } };
+        const answers: Frame[] = [];
+        for (let n = 1; n <= 3; n += 1) answers.push(await submit(port, ALICE, gameId, offer, `offer-${n}`));
+        for (const [n, answer] of answers.slice(0, 2).entries()) {
+          assert.notEqual(answer.code, "rate-limited", `offer ${n + 1} reaches the game: ${JSON.stringify(answer)}`);
+          assert.notEqual(answer.code, "log-nearly-full", "the history's length is never a rule");
+        }
+        assert.equal(answers[2].code, "rate-limited", JSON.stringify(answers[2]));
+        assert.ok(typeof answers[2].retryAfterMs === "number" && (answers[2].retryAfterMs as number) > 0, "a transport answer: it says when to try again");
+        assert.match(String(answers[2].reason), /too quickly/);
+        await sleep((answers[2].retryAfterMs as number) + 60);
+        const later = await submit(port, ALICE, gameId, offer, "offer-4");
+        assert.notEqual(later.code, "rate-limited", `the same offer is taken once the burst passed: ${JSON.stringify(later)}`);
+        /* Another seat has its own budget; an ordinary move is never an offer. */
+        assert.notEqual((await submit(port, BOB, gameId, offer, "offer-bob")).code, "rate-limited");
+        await play(port, ALICE, gameId, BUY, "a-buys");
       } finally {
         await stopServer(server);
       }

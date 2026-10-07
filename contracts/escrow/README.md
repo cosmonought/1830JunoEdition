@@ -202,8 +202,13 @@ signature → approvals (each: seat range, not the defaulter, no duplicate,
   So an admin pause never traps funds (a neutral exit always exists), never
   manufactures a foreclosure (no foreclosing remedy enters while paused) and
   never revives the standings exit. A foreclosure that became final during a
-  pause is attested again after it, within its approvals' horizons; past them
-  the seats approve again or the server falls back to the neutral remedy.
+  pause is attested again after it, within its approvals' horizons. Past
+  them it cannot land (the contract checks each horizon against the block
+  time): under the owner's policy correction of 2026-10-06 the server neither
+  asks the seats to approve again nor falls back to the neutral remedy -- it
+  holds the sealed decision unchanged for an owner decision
+  (`docs/phase3/PHASE3_FINAL_CLOCKS_REMEDIES.md` §3, §8; documentation only,
+  the contract is unchanged).
 * **OD-ESC2-1 narrowed, OD-ESC-4 narrowed.** An indefinite admin pause blocks
   `Settle` and every foreclosure; IN_PROGRESS 2.1.0 games then leave only
   neutrally (remedy 1 / 4, unanimity, review). OD-ESC-4 ("never force-refund")

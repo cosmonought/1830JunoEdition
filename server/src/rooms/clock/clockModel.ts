@@ -20,12 +20,19 @@
 // request) changes nothing; one that moves it starts the new obligation fresh.
 //
 // OFFERS. A proposal (train, private, funding, private trade) by the responsible human whose answerer is SOMEONE ELSE
-// parks the proposer's remaining time and starts the answerer's obligation; on Live a TRAIN offer gives the answerer a
-// distinct 10:00 RESPONSE timer instead of an action clock (it is never an overdue timer). The answer (accept / reject)
-// is the answerer's completed decision: the proposer's next decision starts fresh. A rescission, or a Live train offer
-// left unanswered for 10:00, resumes the proposer's parked time EXACTLY (never a fresh 20:00). A rejection or an
-// unanswered expiry counts one DECLINE for that direction in the current Operating Round; two block a third proposal
-// in that direction until the next OR. An offer to oneself parks nothing and refreshes nothing until it is accepted.
+// -- a QUALIFYING offer: it suspends the proposer's own required action -- parks the proposer's remaining time EXACTLY
+// and puts the answer on the answerer. LIVE: the answerer gets the distinct 10:00 RESPONSE timer (never an action
+// clock, never an overdue timer) -- the owner's train rule, generalised by the owner (2026-10-06) to every inter-player
+// offer that puts its proposer in a waiting state (a Live train offer is always answered on it). An accepted offer is
+// the answerer's completed decision: the next decision starts fresh. A rejection, an unanswered expiry or anything else
+// that closes it resumes the proposer's parked time EXACTLY (never a fresh 20:00); a rescission is charged the time the
+// answerer's clock ran. LIVE ONLY: a rejection or an unanswered expiry of a qualifying offer counts one DECLINE for that
+// direction (one counter per direction, whatever the kind) in the current Operating Round; two block a third
+// qualifying offer in that direction until the next OR (the reverse direction and other players stay open). ASYNC
+// (Timed and No-deadline): an offer follows the ordinary responsibility model -- no response timer, no decline count,
+// no limit. No count of offers per round and no history length ever limits an offer (owner, 2026-10-06; offer churn is
+// bounded by the transport's frequency limit, `gameServer.ts`). An offer that suspends nothing of its proposer's (to
+// oneself, or made TO the responsible player) parks nothing and refreshes nothing until it is accepted.
 //
 // OVERDUE (Live). At 20:00 the seat is OVERDUE: its durable overdue count rises; the first and second open a 10-minute
 // cure window (gameplay is INTERRUPTED: only the overdue seat's own owed action is taken, and it cures); the N-1
@@ -38,9 +45,11 @@
 // final at once. A cure (the seat's owed action) before completion ends the instance and moots the proposal.
 //
 // PAUSES. A voluntary pause (Live) needs every seated player's YES to begin and to end; it freezes whatever timer runs,
-// exactly, for as long as it lasts. A SYSTEM PAUSE (a continuity break) is entered by the server with no vote, freezes
-// every timer at the last instant continuity was proven, stales any not-yet-final votes, and needs every seated
-// player's YES to end. Outage time is never charged: it never creates an overdue, a strike, a finality or an expiry.
+// exactly, for as long as it lasts. A SYSTEM PAUSE (a continuity break while the game is still PLAYABLE) is entered by
+// the server with no vote, freezes every timer at the last instant continuity was proven, stales any not-yet-final
+// votes, and needs every seated player's YES to end. Outage time is never charged: it never creates an overdue, a
+// strike, a finality or an expiry. Once the game has ENDED (its remedy sealed) there is nothing to resume: a break
+// pauses nothing and no vote gates the sealed remedy, which the controller carries on unchanged (owner, 2026-10-06).
 //
 // UNDO. A standing undo restores the obligation the undone batch replaced, from the snapshot taken before it -- never
 // a fresh allowance -- and charges any time the current run had already used if that run began at the undone batch
@@ -56,8 +65,6 @@ import {
   CLOCK_EVIDENCE_WINDOW,
   CLOCK_FORMAT,
   CLOCK_LEDGER_LIMIT,
-  CLOCK_OFFERS_OUTSIDE_OR,
-  CLOCK_OFFERS_PER_ROUND,
   CLOCK_RESUME_BURST,
   CLOCK_RESUME_SPACING_MS,
   CLOCK_PAUSE_REQUESTS_PER_OBLIGATION,
@@ -99,8 +106,6 @@ export interface ClockBoardFacts {
   readonly offer: StandingOffer | null;
   /** The Operating Round (`OperatingRound/macro/sub`), or `null` outside one. */
   readonly orKey: string | null;
-  /** The round, whatever its kind (`<type>/macro/sub`): the offer budget's scope. */
-  readonly roundKey?: string | null;
 }
 
 /** `optional`: an accepted action that is never a REQUIRED decision (a private company's own power, taken at any time):
@@ -311,7 +316,6 @@ export function newClockRecord(input: { readonly gameId: string; readonly deadli
     remedy: null,
     acks: {},
     evidence: { seq: 0, head: genesis, window_from: genesis, window: [], truncated: false, ledger_from: ledgerGenesisHead(input.gameId), ledger_head: ledgerGenesisHead(input.gameId), ledger: [] },
-    offers: { key: null, counts: {} },
     created_at: input.now,
     updated_at: input.now,
   };
@@ -445,28 +449,27 @@ export function foldBatch(record: GameClockRecord, batch: ClockBatch, now: numbe
     /* A NEW STANDING OFFER. */
     const proposer = after.proposer;
     const answerer = after.answerer;
-    /* The offer budget: proposals per seat in the round (the Operating Round, or the stretch outside ORs). */
-    if (proposer !== null) {
-      const key = batch.before.roundKey ?? batch.before.orKey ?? CLOCK_OFFERS_OUTSIDE_OR;
-      const counts = d.offers.key === key ? { ...d.offers.counts } : {};
-      counts[proposer] = (counts[proposer] ?? 0) + 1;
-      d.offers = { key, counts: Object.fromEntries(Object.entries(counts).slice(-8)) };
-    }
-    if (proposer !== null && answerer !== null && proposer !== answerer && D !== null && D.seat === answerer) {
-      if (current !== null && current.seat === proposer && current.timer !== null) {
+    const answerOwed = proposer !== null && answerer !== null && proposer !== answerer && D !== null && D.seat === answerer;
+    /* A QUALIFYING offer suspends the proposer's own required action: the proposer was the responsible player (its clock
+       running) and the answer is now owed by another seat. Its clock freezes at its exact remainder. */
+    const suspends = answerOwed && current !== null && current.seat === proposer && current.timer !== null;
+    if (answerOwed && D !== null) {
+      if (suspends && current !== null && current.timer !== null) {
         d.parked = [...d.parked.filter((p) => p.seat !== proposer), { seat: proposer, offer_key: after.key, remaining_ms: remainingAt(current.timer, at) }];
       }
-      if (isLive) {
-        /* LIVE: every offer -- a train offer by the owner's rule, and (for the same reasons) a private, funding or
-           private-trade offer -- gives its answerer the distinct 10:00 RESPONSE timer (never an overdue or a strike)
-           with the proposer frozen exactly. */
+      if (isLive && (suspends || after.slot === "train")) {
+        /* LIVE: the answerer gets the distinct 10:00 RESPONSE timer -- never an action clock, an overdue or a strike (the
+           owner's train rule, generalised by the owner to every inter-player offer that suspends its proposer). */
         fresh(D, after.slot === "train" ? "train-offer" : "offer", { proposer, offer_key: after.key });
         x.emit("trade-begin", at, { proposer, recipient: answerer, offer: after.key, index: batch.first, parked_ms: d.parked.find((p) => p.seat === proposer)?.remaining_ms ?? null });
       } else {
+        /* ASYNC (any offer), or a Live offer that suspends nothing of its proposer's: the answerer owes the next required
+           decision under the ordinary responsibility model (the Async pace; the Live action clock). */
         fresh(D, "offer");
       }
     } else if (D !== null && current !== null && D.seat === current.seat) {
-      /* An offer to oneself: nothing parks, nothing refreshes (only an accepted trade is progress). */
+      /* An offer that suspends nobody's required action (an offer to oneself, or one made TO the responsible player --
+         a prompt to them): their clock runs on; nothing parks, nothing refreshes (only an accepted trade is progress). */
       d.obligation = { ...current, kind: D.kind, key: D.key };
     } else {
       fresh(D, "offer");
@@ -478,20 +481,24 @@ export function foldBatch(record: GameClockRecord, batch: ClockBatch, now: numbe
     /* An unanswered expiry is a fence: no undo may resurrect the expired offer. */
     if (batch.msg === "server-expiry") d.undo_floor = Math.max(d.undo_floor, batch.last);
     const selfOffer = before.proposer !== null && before.proposer === before.answerer;
-    const liveOffer = isLive && !selfOffer;
-    /* A rejection, or a Live offer's unanswered expiry, is one DECLINE for its direction in the current round (per offer
-       kind; the train counter is the owner's rule, the others bound offer stalls the same way, Live and Async). */
-    if (!selfOffer && (batch.msg === "reject" || batch.msg === "server-expiry") && before.proposer !== null && before.answerer !== null) {
-      bumpDeclines(x, batch.before.orKey, declineKey(isLive, before.slot, before.proposer, before.answerer), before.key);
+    /* A qualifying offer is one that parked its proposer (it suspended the proposer's required action); a Live train
+       offer is always answered on the response timer (the owner's train rule). */
+    const qualifying = !selfOffer && parked !== null && parked.seat === before.proposer;
+    const liveQualifying = isLive && !selfOffer && (qualifying || before.slot === "train");
+    /* LIVE ONLY: a rejection, or an unanswered expiry, of a qualifying offer is one DECLINE for its direction in the
+       current Operating Round (one counter per direction, whatever the offer's kind; once per offer). Async keeps no
+       decline count. A negotiation the answerer CONTINUES (a new offer of its own) resolves no offer here: no decline. */
+    if (liveQualifying && (batch.msg === "reject" || batch.msg === "server-expiry") && before.proposer !== null && before.answerer !== null) {
+      bumpDeclines(x, batch.before.orKey, declineKey(before.proposer, before.answerer), before.key);
     }
-    if (liveOffer) {
+    if (liveQualifying) {
       x.emit("trade-end", at, {
         result: batch.msg === "accept" ? "accept" : batch.msg === "reject" ? "reject" : batch.msg === "server-expiry" ? "expire" : batch.msg === "rescind" ? "rescind" : "other",
         proposer: before.proposer,
         recipient: before.answerer,
         offer: before.key,
         index: batch.first,
-        declines: before.proposer !== null && before.answerer !== null ? (d.declines.counts[declineKey(isLive, before.slot, before.proposer, before.answerer)] ?? 0) : 0,
+        declines: before.proposer !== null && before.answerer !== null ? (d.declines.counts[declineKey(before.proposer, before.answerer)] ?? 0) : 0,
       });
     }
     const answered = (batch.msg === "accept" || batch.msg === "reject") && batch.actor === before.answerer;
@@ -502,27 +509,23 @@ export function foldBatch(record: GameClockRecord, batch: ClockBatch, now: numbe
     } else if (answered && batch.msg === "accept") {
       /* An ACCEPTED offer is progress (the trade happened): the next decision starts fresh. */
       fresh(D, "offer-accepted");
-    } else if (answered && !(D !== null && parked !== null && D.seat === parked.seat)) {
-      /* A rejection that hands the next decision to someone other than the parked proposer: theirs starts fresh. */
-      fresh(D, "offer-rejected");
     } else if (D !== null && parked !== null && D.seat === parked.seat) {
-      /* A REJECTION, an unanswered expiry, or anything else that closed it: the proposer resumes EXACTLY what it had (an
-         offer never refreshes its proposer's clock -- an offer-and-reject loop can never stall the table). A RESCISSION
-         by the proposer is charged the time the answerer's clock actually RAN while the offer stood (never a pause or
-         an outage): an offer can never be used to stop the proposer's own clock. */
+      /* A REJECTION, an unanswered expiry, or anything else that closed a qualifying offer: the proposer resumes EXACTLY
+         what it had (an offer never refreshes its proposer, and the answerer can never pick the moment of the
+         proposer's overdue). Only the proposer's own RESCISSION is charged: the time the answerer's clock actually
+         RAN while the offer stood (never a pause or an outage). */
       const ran = current !== null && current.key === `offer:${before.key}` && current.initial_ms !== null && current.timer !== null ? clamp(current.initial_ms - remainingAt(current.timer, at)) : 0;
-      /* A rejection or an expiry resumes the proposer EXACTLY (the answerer can never pick the moment of the proposer's
-         overdue); a stall by a confederate answerer is bounded by the response timer (Live 10:00), the two declines per
-         direction per round and the offer budget. Only the proposer's own RESCISSION is charged (the time the answerer's
-         clock actually ran). */
-      const charged = batch.msg === "rescind" && batch.actor === parked.seat;
-      const stood = charged ? ran : 0;
+      const stood = batch.msg === "rescind" && batch.actor === parked.seat ? ran : 0;
       const resumed = clamp(parked.remaining_ms - stood);
       d.obligation = obligationFor(d, D, at, batch.first, resumed, null);
       d.obligation = { ...d.obligation, initial_ms: resumed };
       emitResponsibility(x, d.obligation, at, { actor: batch.actor, index: batch.first, reason: batch.msg === "server-expiry" ? "offer-expired" : batch.msg === "reject" ? "offer-rejected" : "offer-withdrawn" });
+    } else if (parked === null && D !== null && current !== null && D.seat === current.seat && current.trade === null && batch.msg !== "accept") {
+      /* A non-qualifying offer (made TO the responsible player) closed without a trade: their clock runs on -- a
+         rejection never refreshes it. */
+      d.obligation = { ...current, kind: D.kind, key: D.key };
     } else {
-      fresh(D, "offer-closed");
+      fresh(D, answered ? "offer-rejected" : "offer-closed");
     }
   } else {
     /* AN ORDINARY MOVE. */
@@ -561,10 +564,9 @@ function finishFold(x: Draft, batch: ClockBatch): void {
   normalize(x, batch.at);
 }
 
-/** The decline counter of one direction: `from>to` for a Live TRAIN offer (the owner's rule, shown on the table),
- *  `<slot>:from>to` for every other kind (and every Async offer). */
-export function declineKey(live: boolean, slot: string, from: string, to: string): string {
-  return live && slot === "train" ? `${from}>${to}` : `${live ? "" : "async-"}${slot}:${from}>${to}`;
+/** The Live decline counter of one direction (every qualifying inter-player offer; the owner's two-decline rule). */
+export function declineKey(from: string, to: string): string {
+  return `${from}>${to}`;
 }
 
 function bumpDeclines(x: Draft, orKey: string | null, key: string, offerKey: string): void {
@@ -665,8 +667,8 @@ function endGame(x: Draft, kind: ClockEndKind, at: number, seat: string | null):
   normalize(x, at);
   d.phase = "ended";
   d.ended = { kind, at, seat };
-  /* Nothing is timed once the game has ended: no pause (voluntary or SYSTEM) outlives it. (An ended game whose money
-     remedy is not final on chain is system-paused again by a LATER break -- `continuityBreak`.) */
+  /* Nothing is timed once the game has ended: no pause (voluntary or SYSTEM) outlives it, and no later break pauses it
+     (`continuityBreak`): a sealed remedy is carried on without any player vote (the owner's ruling). */
   d.pause = { ...d.pause, request: null, paused_at: null };
   d.system = null;
   d.annul = null;
@@ -845,22 +847,6 @@ function seal(x: Draft, kind: RemedyKind, od: ClockOverdue, finalMs: number, vot
   x.effects.push({ kind: "remedy" });
 }
 
-/** Money, Live: the sealed foreclosure (remedy 2) can no longer land (an approval's horizon passed while the escrow was
- *  paused or the relay stalled): the server falls back to the NEUTRAL timeout annulment (remedy 1) of the same overdue
- *  instance, final at the same moment. A different decision: FP4's fence makes it wait until the earlier attestation
- *  can no longer land. */
-export function sealNeutralFallback(record: GameClockRecord, now: number, why: string): ClockStep | ClockRefusal {
-  const r = record.remedy;
-  if (r === null || r.kind !== 2 || r.status === "confirmed") return { code: "wrong-state", reason: "There is no foreclosure to fall back from." };
-  const x = new Draft(record, now);
-  const od: ClockOverdue = { epoch: r.epoch, seat: r.seat, strike: r.strike, at: r.overdue_ms, log_len: r.log_len, log_hash: r.log_hash, decision_kind: "turn", cure: null, proposal: null, proposals: 0 };
-  x.emit("remedy-status", now, { remedy: 2, status: "superseded", detail: why.slice(0, 200) });
-  seal(x, 1, od, r.final_ms, [], 2);
-  /* The game's end is told as what the money outcome now is: the neutral timeout annulment. */
-  if (x.d.ended !== null && x.d.ended.kind === "live-foreclosure") x.d.ended = { ...x.d.ended, kind: "live-timeout-annul" };
-  return x.done();
-}
-
 /** The pipeline's progress on the sealed remedy (`submitted` once attested and handed to FP4, `confirmed` on chain,
  *  `superseded` when the game ended another way, `refused` while it cannot be attested -- fail closed). */
 export function remedyProgress(record: GameClockRecord, status: RemedyStatus, detail: string | null, now: number, attested = false): ClockStep {
@@ -876,38 +862,21 @@ export function remedyProgress(record: GameClockRecord, status: RemedyStatus, de
   return x.done();
 }
 
-/** Async N-1 remedy (money): the pipeline found approvals that can no longer land (lapsed, or the seat's consent key
- *  moved since it signed). Nothing is attested; each named seat is asked to approve the SAME decision again. */
-export function remedyStale(record: GameClockRecord, seats: readonly string[], now: number): ClockStep {
+/** A sealed N-1 remedy (Live foreclosure 2; Async annulment 4 or foreclosure 5) whose seat approvals can no longer land
+ *  (a horizon passed -- the contract checks it against the block time -- or a seat's consent key moved since it signed).
+ *  The owner's rule (policy correction, 2026-10-06): a sealed terminal remedy is never changed, recalculated, converted
+ *  to another outcome or put to a new vote. Escrow 2.1.0 has no way to land approvals past their horizon, so the SAME
+ *  decision stays sealed and is HELD (`refused`, its detail naming the owner decision it needs); `stale` names the seats
+ *  (informational). Nothing is attested on it; nobody is asked to approve again. */
+export function remedyBlocked(record: GameClockRecord, seats: readonly string[], detail: string, now: number): ClockStep {
   const r = record.remedy;
-  if (r === null || (r.kind !== 4 && r.kind !== 5) || r.status === "confirmed" || r.status === "superseded") return { record, events: [], effects: [] };
+  if (r === null || (r.kind !== 2 && r.kind !== 4 && r.kind !== 5) || r.status === "confirmed" || r.status === "superseded") return { record, events: [], effects: [] };
   const stale = [...new Set(seats.filter((seat) => r.approvals.some((a) => a.seat === seat)))].sort();
-  if (stale.length === 0 || (stale.length === r.stale.length && stale.every((seat, i) => r.stale[i] === seat) && r.status === "refused")) return { record, events: [], effects: [] };
+  const text = detail.slice(0, 500);
+  if (stale.length === r.stale.length && stale.every((seat, i) => r.stale[i] === seat) && r.status === "refused" && r.detail === text) return { record, events: [], effects: [] };
   const x = new Draft(record, now);
-  x.d.remedy = { ...r, status: "refused", detail: "approvals must be renewed", stale };
-  x.emit("remedy-status", now, { remedy: r.kind, status: "approvals-stale", seats: stale });
-  return x.done();
-}
-
-/** A seat named stale renews its REMEDY-APPROVE for the sealed Async decision (verified by the caller against its
- *  CURRENT key and these facts). Once none is stale the same decision is sealed again with the renewed approvals -- a
- *  new evidence head, so FP4's fence treats it as a later attestation of the decision. */
-export function reapprove(record: GameClockRecord, by: string, approval: NonNullable<ClockVote["approval"]>, now: number): ClockStep | ClockRefusal {
-  const r = record.remedy;
-  if (r === null || (r.kind !== 4 && r.kind !== 5) || r.status === "confirmed" || r.status === "superseded") return { code: "wrong-state", reason: "There is no outcome waiting for your approval." };
-  if (!r.stale.includes(by)) return { code: "wrong-state", reason: "Your approval of this outcome is still valid." };
-  const x = new Draft(record, now);
-  const approvals = [...r.approvals.filter((a) => a.seat !== by), { seat: by, approve_until: approval.approve_until, signature: approval.signature }].sort((a, b) => (a.seat < b.seat ? -1 : a.seat > b.seat ? 1 : 0));
-  const stale = r.stale.filter((seat) => seat !== by);
-  x.emit("reapproval", now, { epoch: r.epoch, seat: by, approve_until: approval.approve_until, signature: signatureDigest(approval.signature) });
-  if (stale.length > 0) {
-    x.d.remedy = { ...r, approvals, stale };
-    return x.done();
-  }
-  /* Every approval renewed: the same decision, sealed again (its evidence now ends at this seal). */
-  const od: ClockOverdue = { epoch: r.epoch, seat: r.seat, strike: r.strike, at: r.overdue_ms, log_len: r.log_len, log_hash: r.log_hash, decision_kind: "turn", cure: null, proposal: null, proposals: 0 };
-  seal(x, r.kind, od, r.final_ms, approvals.map((a) => ({ seat: a.seat, yes: true, at: now, approval: { approve_until: a.approve_until, signature: a.signature } })), r.replaces);
-  x.d.remedy = { ...(x.d.remedy as ClockRemedy), attestations: r.attestations };
+  x.d.remedy = { ...r, status: "refused", detail: text, stale };
+  x.emit("remedy-status", now, { remedy: r.kind, status: "approvals-unlandable", seats: stale });
   return x.done();
 }
 
@@ -1096,15 +1065,15 @@ function applyIfUnanimous(x: Draft, now: number): void {
    ================================================================== */
 
 /** The authority this process holds took a record another authority wrote (a restart, a takeover, a failover): the
- *  continuity between them is NOT proven. Live: SYSTEM PAUSE (no vote to enter, unanimous to leave), every timer
+ *  continuity between them is NOT proven. While the game still has PLAYABLE state -- Live, not ended (an overdue whose
+ *  remedy is not yet sealed included) -- it enters SYSTEM PAUSE (no vote to enter, unanimous to leave), every timer
  *  frozen as of `preservedAt` -- the last instant the earlier authority proved it was in control -- and every
  *  not-yet-final vote staled. Timed Async: the outage is credited (the timers resume, as of `preservedAt`, from now).
- *  No-deadline: nothing is timed. A Live game already ENDED stays ended; if its sealed money remedy is not final on chain
- *  it is SYSTEM-PAUSED too (the owner's rule: on recovery, before signing a remedy, system pause; anything not final on
- *  chain stays frozen until every player resumes) -- nothing is attested or relayed until then. (Residual, recorded:
- *  the defaulting seat can withhold its resume; the contract's exceptional review is the backstop.) Decisions are
- *  never made ACROSS a break: the timers of a running game are frozen as of the last proven instant, and a stall inside
- *  one process is a break too (`clockController.ts`, `CLOCK_CONTINUITY_GAP_*`). */
+ *  No-deadline: nothing is timed. A game already ENDED has nothing to resume (the owner's ruling, policy correction
+ *  2026-10-06): no system pause and no player vote -- a sealed terminal remedy is carried on technically (revalidated
+ *  and submitted, or attested again, unchanged) by the controller's remedy drive. Decisions are never made ACROSS a
+ *  break: the timers of a running game are frozen as of the last proven instant, and a stall inside one process is a
+ *  break too (`clockController.ts`, `CLOCK_CONTINUITY_GAP_*`). */
 export function continuityBreak(record: GameClockRecord, input: { readonly now: number; readonly preservedAt: number; readonly reason: string; readonly authority: string; readonly resumeFrom?: number }): ClockStep {
   const x = new Draft(record, input.now);
   const d = x.d;
@@ -1113,7 +1082,7 @@ export function continuityBreak(record: GameClockRecord, input: { readonly now: 
     x.touch();
     return x.done();
   }
-  const timed = d.policy.class === "live" && (d.phase !== "ended" || (d.remedy !== null && d.remedy.status !== "confirmed" && d.remedy.status !== "superseded"));
+  const timed = d.policy.class === "live" && d.phase !== "ended";
   if (timed) {
     if (d.system !== null) {
       /* Already system-paused (a second break before anyone resumed): keep the first preserved state; votes restart, and
@@ -1305,8 +1274,6 @@ export interface GateInput {
   readonly trainRecipient: string | null;
   /** Names, for the owner's copy. */
   readonly nameOf: (seat: string) => string;
-  /** The board's round key (any round) -- the offer budget's round. Absent: the record's own. */
-  readonly roundKey?: string | null;
 }
 
 export function gate(record: GameClockRecord, input: GateInput): ClockRefusal | null {
@@ -1326,11 +1293,6 @@ export function gate(record: GameClockRecord, input: GateInput): ClockRefusal | 
      else while the overdue stands. */
   if (record.phase === "overdue" && od !== null && input.actor === od.seat && input.msg === "propose") {
     return { code: CLOCK_REFUSAL.interrupted, reason: "You're overdue: make your owed move first. An offer can't cure an overdue." };
-  }
-  if (input.msg === "propose") {
-    const key = input.roundKey === undefined ? record.offers.key : (input.roundKey ?? CLOCK_OFFERS_OUTSIDE_OR);
-    const used = record.offers.key === key ? (record.offers.counts[input.actor] ?? 0) : 0;
-    if (used >= CLOCK_OFFERS_PER_ROUND) return { code: "rate-limited", reason: `You have made ${CLOCK_OFFERS_PER_ROUND} offers this round. Offers open again next round.` };
   }
   if (record.policy.class === "live" && input.msg === "propose" && input.trainRecipient !== null && input.trainRecipient !== input.actor) {
     const count = record.declines.counts[`${input.actor}>${input.trainRecipient}`] ?? 0;
@@ -1444,9 +1406,7 @@ export function clockViewOf(record: GameClockRecord, now: number): RoomClockView
             stale: [...record.remedy.stale],
             overdue: { seat: record.remedy.seat, strike: record.remedy.strike, epoch: record.remedy.epoch, overdueAt: record.remedy.overdue_ms, logLen: record.remedy.log_len, logHash: record.remedy.log_hash },
           },
-    declines: Object.entries(record.declines.counts)
-      .filter(([key]) => !key.includes(":"))
-      .map(([key, count]) => {
+    declines: Object.entries(record.declines.counts).map(([key, count]) => {
       const [from, to] = key.split(">");
       return { from, to, count };
     }),

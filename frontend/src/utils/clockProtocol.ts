@@ -12,15 +12,20 @@
 //
 // THE POLICY (owner, 2026-10-06; escrow 2.1.0 / financial protocol 4):
 //   Live         20:00 per REQUIRED action (never per turn); an accepted action refreshes the allowance of whoever owes
-//                the next one. A valid train offer freezes the proposer's clock and gives the recipient a distinct
-//                10:00 to respond (never an overdue timer); unanswered, the offer expires, the proposer resumes exactly
-//                what was left. Two declines (rejections or expiries) per direction per Operating Round. At 20:00 the
-//                seat is OVERDUE: the first and second may cure until 30:00; the N-1 foreclosure vote only decides the
-//                minute-30 outcome (neutral timeout annulment otherwise); the third expiry forecloses at once
-//                (challengeable money). Voluntary pause and resume: unanimous. A server continuity break: SYSTEM
-//                PAUSE, unanimous resume, outage time never charged.
+//                the next one. A valid inter-player offer that puts its proposer in a waiting state (a train offer,
+//                and -- owner, 2026-10-06 -- every other offer that suspends the proposer's own required action)
+//                freezes the proposer's clock and gives the recipient a distinct 10:00 to respond (never an overdue
+//                timer); unanswered, the offer expires, the proposer resumes exactly what was left. Two declines
+//                (rejections or expiries) per direction per Operating Round, Live only. No count of offers and no
+//                history length ever limits them. At 20:00 the seat is OVERDUE: the first and second may cure until
+//                30:00; the N-1 foreclosure vote only decides the minute-30 outcome (neutral timeout annulment
+//                otherwise); the third expiry forecloses at once (challengeable money). Voluntary pause and resume:
+//                unanimous. A server continuity break while the game is still playable: SYSTEM PAUSE, unanimous
+//                resume, outage time never charged. Once the game has ended (a remedy sealed), there is nothing to
+//                resume: the sealed remedy is carried on without any vote.
 //   Timed Async  12 h / 24 h / 2 d / 3 d / 7 d per required action, fixed at the deal; expiry is OVERDUE only (no money
-//                moves, no grace timer); the other N-1 may unanimously propose neutral annulment or foreclosure.
+//                moves, no grace timer); the other N-1 may unanimously propose neutral annulment or foreclosure. Offers
+//                follow the ordinary responsibility model: no 10:00 response timer, no decline limit.
 //   No-deadline  no clock, no overdue; it ends by completion, unanimous annulment or the exceptional review.
 //
 // WHAT THE BROWSER MAY BELIEVE. The numbers are the server's, computed at `serverNow`. The browser counts on from them
@@ -114,8 +119,8 @@ export interface ClockPauseView {
   readonly request: { readonly kind: "pause" | "resume"; readonly id: number; readonly by: string; readonly yes: readonly string[]; readonly needed: readonly string[] } | null;
 }
 
-/** Money tables: the sealed remedy decision's progress, and (Async N-1) the seats whose approvals must be renewed --
- *  with the overdue facts a renewed REMEDY-APPROVE binds to. */
+/** Money tables: the sealed remedy decision's progress, and (N-1 remedies) the seats whose approvals can no longer land
+ *  -- the sealed decision is then held unchanged for an owner decision (never converted, never re-voted). */
 export interface ClockRemedyView {
   readonly kind: number;
   readonly status: string;
@@ -146,13 +151,14 @@ export interface RoomClockView {
   /** The responsible human's ordinary clock (Live 20:00 or the Async pace); `null`: No-deadline, a trade (see
    *  `trade`), or nobody responsible. */
   readonly action: ClockTimerView | null;
-  /** Live: a train offer awaiting its answer. */
+  /** Live: an offer awaiting its answer on the 10:00 response timer (a train offer, or any offer that suspends its
+   *  proposer's own required action). */
   readonly trade: {
     readonly proposer: string;
     readonly recipient: string;
     readonly respond: ClockTimerView;
     readonly proposerRemainingMs: number;
-    /** The offer's kind (absent: a train offer). Every Live offer runs the 10:00 response timer. */
+    /** The offer's kind (absent: a train offer). */
     readonly kind?: "train" | "private" | "trade" | "funding";
   } | null;
   readonly overdue: ClockOverdueView | null;
@@ -163,7 +169,7 @@ export interface RoomClockView {
   readonly ended: { readonly kind: ClockEndKind; readonly at: number; readonly seat: string | null } | null;
   /** Money tables: the financial remedy's progress (the chain decides the money). */
   readonly remedy: ClockRemedyView | null;
-  /** Live: the current Operating Round's train-offer declines, per direction. */
+  /** Live: the current Operating Round's offer declines, per direction (Async keeps none). */
   readonly declines: readonly { readonly from: string; readonly to: string; readonly count: number }[];
   /** A free table's unanimous annulment in progress (a money table's runs through its escrow). */
   readonly annul: { readonly yes: readonly string[]; readonly needed: readonly string[] } | null;
@@ -190,8 +196,6 @@ export const CLOCK_OPS = Object.freeze({
   annul: "clock-annul",
   /** No-deadline money tables: acknowledge the indefinite-lock disclosure before the ante. */
   ackNoDeadline: "clock-ack",
-  /** Async money remedy: a seat whose approval of the sealed outcome lapsed (or whose consent key moved) renews it. */
-  reapprove: "clock-reapprove",
 } as const);
 
 /** The owner's No-deadline disclosure, shown conspicuously before the ante (and persisted per player per table). */

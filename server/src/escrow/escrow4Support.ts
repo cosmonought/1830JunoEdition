@@ -130,6 +130,9 @@ export interface MoneyServerOptions {
   /** Phase 3 final clocks: a table clock (memory store, inert timers, the money clock) wired as `start.ts` wires one:
    *  the async bind's recorded deadline, the remedy gate, the No-deadline acknowledgement before a join admission. */
   readonly clock?: boolean;
+  /** Phase 3 final clocks: whether the dedicated REMEDY signer is configured (default: on). Off: the clock's remedy port
+   *  has no signer (`configured: false`) -- never the settlement signer in its place. A test may flip it. */
+  readonly remedySigner?: { on: boolean };
 }
 
 export async function moneyServer(options: MoneyServerOptions = {}): Promise<MoneyServer> {
@@ -206,6 +209,7 @@ export async function moneyServer(options: MoneyServerOptions = {}): Promise<Mon
       : {}),
   });
   remedyPort = createRemedyPipeline({ service, signer: deterministicTestRemedySigner(1, Buffer.alloc(32, 7)), now: () => clock.now, warn: (line) => warnings.push(line) });
+  const unsignedPort = createRemedyPipeline({ service, signer: null, now: () => clock.now, warn: (line) => warnings.push(line) });
   relayer = createJunoRelayer({
     rest: chain,
     store: intents,
@@ -270,7 +274,7 @@ export async function moneyServer(options: MoneyServerOptions = {}): Promise<Mon
             timers: { set: () => null, clear: () => undefined },
             /* A configured REMEDY signer (its key is not registered on this chain: every attestation is refused there),
                so timed money tables open as on a production server with a remedy key. */
-            remedy: () => remedyPort,
+            remedy: () => (options.remedySigner?.on === false ? unsignedPort : remedyPort),
           },
         }
       : {}),

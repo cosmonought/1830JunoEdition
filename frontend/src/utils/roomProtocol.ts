@@ -227,7 +227,6 @@ export type RoomOpBody =
   | { type: "clock-vote"; proposalId: number; yes: boolean; approveUntil?: number; signature?: string }
   | { type: "clock-annul"; yes: boolean }
   | { type: "clock-ack" }
-  | { type: "clock-reapprove"; approveUntil: number; signature: string }
   /** LIVE-2F/3D (C9-01): a read -- the caller's own tables, answered `{tables: MyTableSummary[]}`. */
   | { type: "my-tables" };
 

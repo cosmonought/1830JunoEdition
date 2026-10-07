@@ -13,10 +13,13 @@
 //      seconds rounded up (integers only), the Live finality floor and the strike-3 rule applied;
 //   3. ONE intent per decision: a second attempt is idempotent (`exists`), a restart finds it, and the chain is
 //      confirmed once; the clock's sealed remedy is carried to a closed money game through the controller's own gate;
-//   4. the gate: only the clock's current authority relays; after a break a sealed remedy waits for every player's resume;
+//   4. the gate: only the clock's current authority relays; after a restart a sealed (terminal) remedy is carried on
+//      with NO system pause and NO player vote (owner, 2026-10-06), and an attestation that expired during the outage
+//      is attested AGAIN for the same decision;
 //   5. N-1 approvals: a seat's REMEDY-APPROVE verifies under its CURRENT consent key for exactly that overdue and
-//      horizon; a horizon too short (or a self-approval, or a wrong key) is refused; a Live foreclosure whose approvals
-//      lapsed falls back to the neutral timeout annulment;
+//      horizon; a horizon too short (or a self-approval, or a wrong key) is refused; a sealed decision whose approvals
+//      can no longer land is held unchanged (owner decision required) -- never converted, never re-voted;
+//   5b. the sealed decision is revalidated against its own evidence before anything is signed;
 //   6. the async bind: an async chain game is bound only under the table's recorded deadline (the same pace, or none).
 
 import { describe, test } from "node:test";
@@ -35,7 +38,10 @@ import { LIVE_ACTION_MS, LIVE_CURE_MS } from "../rooms/clock/clockRecord";
 import { createMemoryOpsRecorder } from "../persistence/opsRecorder";
 import { publicKeyOf, signDigest } from "./juno/secp256k1";
 import { deterministicTestRemedySigner } from "./juno/remedySigner";
-import { createRemedyPipeline, remedyTimes, secsUp, type RemedyPort } from "./remedyPipeline";
+import { createRemedyPipeline, intentCarriesDecision, remedyTimes, secsUp, sealedRemedyProblem, type RemedyPort } from "./remedyPipeline";
+import { foldEvidence, signatureDigest, type ClockEvidenceEvent } from "../rooms/clock/clockEvidence";
+import { CLOCK_REMEDY_SWEEP_MS } from "../rooms/clock/clockController";
+import type { ClockStore } from "../rooms/clock/clockStore";
 import { CHAIN_ID, CONTRACT, GAME_A, VARIANTS, fundedGame, makeWorld, startedGame, type World, type WorldOptions } from "./escrow3bSupport";
 
 const sha = (label: string) => createHash("sha256").update(label).digest();
@@ -60,8 +66,40 @@ async function liveWorld(options: WorldOptions = {}): Promise<{ world: World; ch
   return { world, chainGameId };
 }
 
+const PREV_HEAD = "a1".repeat(32);
+const LEDGER_FROM = "b2".repeat(32);
+
+/** The decision sealed WITH its evidence, as the clock seals it: a window ending with the `remedy-sealed` event that
+ *  names exactly this decision, folded to the sealed evidence hash. */
+function withEvidence(r: ClockRemedy): ClockRemedy {
+  const seal: ClockEvidenceEvent = {
+    seq: 7,
+    kind: "remedy-sealed",
+    at: r.final_ms,
+    f: {
+      remedy: r.kind,
+      seat: r.seat,
+      strike: r.strike,
+      epoch: r.epoch,
+      log_len: r.log_len,
+      log_hash: r.log_hash,
+      allowance_secs: r.allowance_secs,
+      overdue_ms: r.overdue_ms,
+      final_ms: r.final_ms,
+      approvals: r.approvals.map((a) => `${a.seat}:${a.approve_until}:${signatureDigest(a.signature)}`),
+      replaces: r.replaces,
+      ledger_head: LEDGER_FROM,
+    },
+  };
+  return { ...r, evidence: { format: "18COSMOS/CLOCK-EVIDENCE/v1", game_id: GAME_A, prev_head: PREV_HEAD, events: [seal], truncated: false, ledger: { from: LEDGER_FROM, events: [] } }, evidence_hash: foldEvidence(PREV_HEAD, [seal]) };
+}
+
 /** The clock's sealed Live decision for the chain game (ALICE = seat 0 defaulting unless told). */
 function sealed(world: World, chainGameId: string, kind: 1 | 2 | 3, over: Partial<ClockRemedy> = {}): ClockRemedy {
+  return withEvidence(sealedFacts(world, chainGameId, kind, over));
+}
+
+function sealedFacts(world: World, chainGameId: string, kind: 1 | 2 | 3, over: Partial<ClockRemedy> = {}): ClockRemedy {
   const started = gameOf(world, chainGameId).started_at;
   const overdueMs = (started + 1_200) * 1000 + 250; // a sub-second overdue moment: rounded UP on the wire
   return {
@@ -205,7 +243,7 @@ describe("FP4 remedy pipeline: N-1 approvals", () => {
     assert.equal(await check(BOB, until, "zz"), "the approval is not a 64-byte signature");
   });
 
-  test("a Live foreclosure with a valid N-1 approval is attested with it; one whose approval lapsed falls back to the neutral annulment", async () => {
+  test("a Live foreclosure with a valid N-1 approval is attested with it; one whose approval LAPSED is held unchanged (owner decision required) -- never converted to the neutral annulment", async () => {
     const { world, chainGameId } = await liveWorld();
     const port = pipeline(world);
     const g = gameOf(world, chainGameId);
@@ -227,19 +265,22 @@ describe("FP4 remedy pipeline: N-1 approvals", () => {
       ).toString("hex"),
     });
     advanceTo(world, finalSecs + 10);
-    const lapsed = await port.attest(GAME_A, { ...base, approvals: [approval(finalSecs + 5)] });
+    const lapsed = await port.attest(GAME_A, withEvidence({ ...base, approvals: [approval(finalSecs + 5)] }));
     assert.equal(lapsed.status, "refused");
-    assert.equal(lapsed.fallback, true, "the neutral timeout annulment replaces it");
-    assert.deepEqual(await remedyIntents(world), []);
-    const good = await port.attest(GAME_A, { ...base, approvals: [approval(finalSecs + 3_600)] });
+    assert.deepEqual(lapsed.unlandable, [BOB], "the seat whose approval can no longer land");
+    assert.match(lapsed.detail ?? "", /owner decision required/);
+    assert.equal("fallback" in lapsed, false, "no neutral fallback exists any more");
+    assert.deepEqual(await remedyIntents(world), [], "nothing signed, nothing converted");
+    const valid = withEvidence({ ...base, approvals: [approval(finalSecs + 3_600)] });
+    const good = await port.attest(GAME_A, valid);
     assert.deepEqual([good.status, good.attested], ["submitted", true], JSON.stringify(good));
-    await world.drive(async () => (await port.progress(GAME_A, base)) === "confirmed");
+    await world.drive(async () => (await port.progress(GAME_A, valid)) === "confirmed");
     assert.equal(gameOf(world, chainGameId).remedy?.kind, "live_foreclose");
   });
 });
 
 describe("FP4 remedy pipeline: approvals are re-checked under the CURRENT consent keys before anything is signed", () => {
-  test("a key that moved since the approval: Live falls back to the neutral annulment; an Async N-1 names the seats to renew; staleApprovals finds them in one read", async () => {
+  test("a key that moved since the approval: the sealed decision (Live or Async N-1) is held unchanged with the seat named; staleApprovals finds them in one read", async () => {
     const { world, chainGameId } = await liveWorld();
     const port = pipeline(world);
     const g = gameOf(world, chainGameId);
@@ -261,17 +302,49 @@ describe("FP4 remedy pipeline: approvals are re-checked under the CURRENT consen
     /* Signed under a key the chain no longer holds for BOB's seat (the seat rotated its consent key since). */
     const moved = { seat: BOB, approve_until: until, signature: signedBy(2, sha("an earlier consent key"), until) };
     advanceTo(world, finalSecs + 10);
-    const live = await port.attest(GAME_A, { ...base, approvals: [moved] });
-    assert.deepEqual([live.status, live.fallback], ["refused", true]);
+    const live = await port.attest(GAME_A, withEvidence({ ...base, approvals: [moved] }));
+    assert.deepEqual([live.status, live.unlandable], ["refused", [BOB]]);
     assert.deepEqual(await remedyIntents(world), [], "nothing was signed");
     /* The same check for an N-1 annulment (the pipeline's own branch; the decision's other facts as sealed). */
     const asyncMoved = { seat: BOB, approve_until: until, signature: signedBy(4, sha("an earlier consent key"), until) };
-    const n1 = await port.attest(GAME_A, { ...base, kind: 4, strike: 0, approvals: [asyncMoved] });
-    assert.deepEqual([n1.status, n1.stale], ["refused", [BOB]], JSON.stringify(n1));
+    const n1 = await port.attest(GAME_A, withEvidence({ ...base, kind: 4, strike: 0, approvals: [asyncMoved] }));
+    assert.deepEqual([n1.status, n1.unlandable], ["refused", [BOB]], JSON.stringify(n1));
     assert.deepEqual(await remedyIntents(world), []);
     const facts = { remedy: 2 as const, defaultingSeat: ALICE, strike: base.strike, epoch: 1, logLen: 1, logHash: base.log_hash, overdueMs: base.overdue_ms };
     assert.deepEqual(await port.staleApprovals(GAME_A, facts, [{ seat: BOB, approveUntil: until, signature: moved.signature }]), [BOB]);
     assert.deepEqual(await port.staleApprovals(GAME_A, facts, [{ seat: BOB, approveUntil: until, signature: signedBy(2, seatSecret(1), until) }]), []);
+  });
+});
+
+describe("FP4 remedy pipeline: the SEALED decision is revalidated against its own evidence before anything is signed", () => {
+  test("tampered evidence, a field its seal does not name, or another game's evidence: refused (fail closed), nothing written; an intent carrying another evidence hash is not this decision", async () => {
+    const { world, chainGameId } = await liveWorld();
+    const port = pipeline(world);
+    const good = sealed(world, chainGameId, 1);
+    assert.equal(sealedRemedyProblem(GAME_A, good), null);
+    const cases: Array<[string, ClockRemedy, RegExp]> = [
+      ["another evidence hash", { ...good, evidence_hash: "cd".repeat(32) }, /does not fold to the sealed evidence hash/],
+      ["a stalled position the seal does not name", { ...good, log_len: 2 }, /does not name this decision/],
+      ["a later final moment", { ...good, final_ms: good.final_ms + 60_000 }, /does not name this decision/],
+      ["another defaulting seat", { ...good, seat: BOB }, /does not name this decision/],
+      ["an added approval", { ...good, approvals: [{ seat: BOB, approve_until: 9_999_999_999, signature: "11".repeat(64) }] }, /does not name this decision/],
+      ["no seal at the end", { ...good, evidence: { ...good.evidence, events: [] }, evidence_hash: PREV_HEAD }, /does not end with its seal/],
+      ["another game's evidence", { ...good, evidence: { ...good.evidence, game_id: "g_other" } }, /names another game/],
+      ["a ledger the seal does not sign", { ...good, evidence: { ...good.evidence, ledger: { from: "c3".repeat(32), events: [] } } }, /strike ledger does not match/],
+    ];
+    for (const [name, remedy, why] of cases) {
+      const attempt = await port.attest(GAME_A, remedy);
+      assert.equal(attempt.status, "refused", name);
+      assert.match(attempt.detail ?? "", why, name);
+      assert.match(attempt.detail ?? "", /nothing is attested \(fail closed\)/, name);
+    }
+    assert.deepEqual(await remedyIntents(world), [], "nothing was ever signed");
+    const first = await port.attest(GAME_A, good);
+    assert.deepEqual([first.status, first.attested], ["submitted", true]);
+    const [intent] = await remedyIntents(world);
+    assert.equal(intentCarriesDecision(intent, good), true);
+    const other = withEvidence({ ...good, log_hash: "cd".repeat(32) });
+    assert.equal(intentCarriesDecision(intent, { ...other, log_hash: good.log_hash }), false, "the same instance with another evidence hash is another decision");
   });
 });
 
@@ -309,10 +382,11 @@ function moneyTable(world: World, chainGameId: string, signer = deterministicTes
     return run;
   };
   const port = createRemedyPipeline({ service: world.service, signer, now: () => world.clock.now, warn: () => undefined });
-  const store = createMemoryClockStore();
-  const clock = createClockController({
+  const store: ClockStore = createMemoryClockStore();
+  let serves = true;
+  const make = (authority: string) => createClockController({
     store,
-    authority: "auth-1",
+    authority,
     now: () => world.clock.now,
     timers: {
       set(fire, ms) {
@@ -326,18 +400,33 @@ function moneyTable(world: World, chainGameId: string, signer = deterministicTes
     },
     ops: createMemoryOpsRecorder(),
     warn: () => undefined,
-    runOn: (_g, _l, task) => serial(() => task(game, tx)).then(() => true),
+    /* A process that no longer serves the game (another took it over) runs no task for it -- the pool's own fence. */
+    runOn: (_g, _l, task) => (serves ? serial(() => task(game, tx)).then(() => true) : Promise.resolve(false)),
     onChange: () => undefined,
-    serving: () => true,
+    serving: () => serves,
     closeOffer: async () => ({ ok: false, why: "no offers here" }),
     remedy: () => port,
     moneyStartedAtSecs: async () => gameOf(world, chainGameId).started_at,
   });
+  let clock = make("auth-1");
   const settle = async () => {
     for (let i = 0; i < 6; i += 1) await new Promise((resolve) => setImmediate(resolve));
   };
   return {
-    clock,
+    get clock() {
+      return clock;
+    },
+    /** The server / AWS restart: this process and its timers are gone; a NEW authority serves the same store, the same
+     *  game log and the same chain. */
+    restart(authority: string) {
+      clock.close();
+      pending.clear();
+      clock = make(authority);
+    },
+    /** Whether this process serves the game (a stale actor, taken over, does not). */
+    serving(flag: boolean) {
+      serves = flag;
+    },
     port,
     store,
     async deal() {
@@ -393,7 +482,7 @@ describe("FP4 end to end: the table clock's decision reaches the chain, and only
     await world.drive(async () => (await world.financial.load(GAME_A))?.phase === "closed");
   });
 
-  test("the gate: only the clock's CURRENT authority relays; after a break a sealed (not yet final) remedy is frozen by the SYSTEM PAUSE until every player resumes", async () => {
+  test("the gate: only the clock's CURRENT authority relays; after a takeover the SAME sealed remedy is carried on with NO system pause and NO player vote", async () => {
     let gate: NonNullable<WorldOptions["remedyGate"]> = async () => ({ kind: "wait", why: "not bound yet" });
     const { world, chainGameId } = await liveWorld({ remedyGate: (g, i) => gate(g, i) });
     const table = moneyTable(world, chainGameId);
@@ -408,6 +497,7 @@ describe("FP4 end to end: the table clock's decision reaches the chain, and only
     const sealedRecord = table.record()!;
     await table.store.save({ ...sealedRecord, authority: "auth-other", revision: sealedRecord.revision + 1 }, sealedRecord.revision);
     table.clock.drop(GAME_A);
+    table.serving(false);
     const verdict = await table.clock.remedyGate(GAME_A, intents[0]);
     assert.equal(verdict.kind, "wait");
     assert.match((verdict as { why: string }).why, /not the table clock's current authority/);
@@ -417,29 +507,63 @@ describe("FP4 end to end: the table clock's decision reaches the chain, and only
       await world.relayer.pass();
       world.chain.produceBlock();
     }
-    assert.equal((world.chain.accounts.get(relayer) as { sequence: bigint }).sequence, sequence, "nothing relayed on another authority's word");
-    /* This process adopts the table (a load: a continuity break). The sealed remedy is not final on chain, so the table
-       is SYSTEM-PAUSED: nothing is relayed until every player resumes; the decision itself is never re-decided. */
+    assert.equal((world.chain.accounts.get(relayer) as { sequence: bigint }).sequence, sequence, "nothing relayed on another authority's word (a stale actor cannot carry or alter it)");
+    assert.equal(table.store.load !== undefined && (await table.store.load(GAME_A))?.authority, "auth-other", "the stale actor wrote nothing");
+    /* This process serves the table again and adopts it (a load: a continuity break). The game has ENDED and its remedy
+       is sealed: there is no gameplay to resume, so there is NO system pause and no vote -- the same decision is carried
+       on. */
+    table.serving(true);
     await table.serial(() => table.clock.op(table.game, table.tx, { type: "clock-ack", seat: ALICE }).then(() => undefined));
     const adopted = table.record()!;
-    assert.notEqual(adopted.system, null);
+    assert.equal(adopted.system, null, "no SYSTEM PAUSE after a terminal seal");
     assert.equal(adopted.authority, "auth-1");
-    assert.deepEqual(adopted.remedy?.evidence_hash, remedy.evidence_hash);
-    const paused = await table.clock.remedyGate(GAME_A, intents[0]);
-    assert.equal(paused.kind, "wait");
-    assert.match((paused as { why: string }).why, /SYSTEM PAUSE/);
-    for (let round = 0; round < 2; round += 1) {
+    assert.deepEqual(adopted.remedy?.evidence_hash, remedy.evidence_hash, "the same sealed decision");
+    assert.equal((await table.clock.remedyGate(GAME_A, intents[0])).kind, "ok", "relayed without any player's resume");
+    const resume = await table.serial(() => table.clock.op(table.game, table.tx, { type: "clock-sysresume", seat: ALICE, since: null }));
+    assert.equal(resume.ok, false, "there is nothing to vote on");
+    await world.drive(async () => (await table.port.progress(GAME_A, remedy)) === "confirmed");
+    assert.equal(gameOf(world, chainGameId).state, "annulled");
+  });
+
+  test("POST-TERMINAL OUTAGE: the attestation expires during an AWS/server outage; after the restart the SAME decision is attested AGAIN automatically (no vote, no change) and lands", async () => {
+    let gate: NonNullable<WorldOptions["remedyGate"]> = async () => ({ kind: "wait", why: "not bound yet" });
+    const { world, chainGameId } = await liveWorld({ remedyGate: (g, i) => gate(g, i) });
+    const table = moneyTable(world, chainGameId);
+    gate = (g, i) => table.clock.remedyGate(g, i);
+    await table.deal();
+    const started = gameOf(world, chainGameId).started_at;
+    await table.advance(started * 1000 + LIVE_ACTION_MS + LIVE_CURE_MS - world.clock.now);
+    const sealedRecord = table.record()!;
+    const remedy = sealedRecord.remedy!;
+    assert.deepEqual([sealedRecord.phase, remedy.kind, remedy.attestations], ["ended", 1, 1]);
+    const [first] = await remedyIntents(world);
+    /* The outage: nothing runs for two hours (the attestation's one-hour bearer life passes, unrelayed). */
+    advanceTo(world, world.chain.time + 2 * 3_600);
+    /* The restart: a new authority, the same store, log and chain. */
+    table.restart("auth-2");
+    table.clock.startSweep();
+    await table.serial(() => table.clock.op(table.game, table.tx, { type: "clock-ack", seat: ALICE }).then(() => undefined));
+    const adopted = table.record()!;
+    assert.deepEqual([adopted.authority, adopted.system, adopted.phase], ["auth-2", null, "ended"], "no system pause, nothing to resume");
+    assert.equal(adopted.remedy?.evidence_hash, remedy.evidence_hash);
+    for (let round = 0; round < 24 && (await table.port.progress(GAME_A, remedy)) !== "confirmed"; round += 1) {
       await world.relayer.pass();
       world.chain.produceBlock();
+      await world.service.idle();
+      await table.advance(CLOCK_REMEDY_SWEEP_MS);
     }
-    assert.equal((world.chain.accounts.get(relayer) as { sequence: bigint }).sequence, sequence, "nothing relayed while system-paused");
-    for (const seat of [ALICE, BOB]) {
-      const answer = await table.serial(() => table.clock.op(table.game, table.tx, { type: "clock-sysresume", seat, since: null }));
-      assert.equal(answer.ok, true, JSON.stringify(answer));
-    }
-    assert.equal(table.record()?.system, null);
-    assert.equal((await table.clock.remedyGate(GAME_A, intents[0])).kind, "ok");
-    await world.drive(async () => (await table.port.progress(GAME_A, remedy)) === "confirmed");
+    assert.equal(await table.port.progress(GAME_A, remedy), "confirmed");
+    const all = await remedyIntents(world);
+    assert.equal(all.length, 2, "the expired attestation, and ONE re-attestation");
+    const second = all.find((intent) => intent.intent_id !== first.intent_id)!;
+    const op = (intent: typeof first) => intent.op as { decision: string; expires_at: string; remedy: number; final_at: string };
+    assert.equal(op(second).decision, op(first).decision, "the SAME decision digest (the evidence hash included)");
+    assert.equal(op(second).remedy, 1, "never converted");
+    assert.equal(op(second).final_at, op(first).final_at);
+    assert.ok(BigInt(op(second).expires_at) > BigInt(op(first).expires_at), "only the attestation's time-dependent part is new");
+    assert.equal(intentCarriesDecision(second, remedy), true);
+    const after = table.record()!;
+    assert.deepEqual([after.remedy?.kind, after.remedy?.evidence_hash, after.remedy?.final_ms, after.remedy?.attestations, after.ended?.kind], [1, remedy.evidence_hash, remedy.final_ms, 2, "live-timeout-annul"]);
     assert.equal(gameOf(world, chainGameId).state, "annulled");
   });
 });

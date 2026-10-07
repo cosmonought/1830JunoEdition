@@ -395,20 +395,25 @@ the owner's. Record: Project `claude/PHASE3_ESCROW21_TIMED_REMEDY_PASS_2026-10-0
 docs only, NOT integrated, nothing deployed; design record `docs/phase3/PHASE3_FINAL_CLOCKS_REMEDIES.md`).** Implemented and
 proven by the server clock / FP4 suites (node:test, DynamoDB Local clock conformance included) and the browser clock suites:
 **Live** = a 20-minute clock per REQUIRED action (one responsibility derivation for timer, UI and evidence); the **trade
-response** = 10 minutes, Live only (the owner's train rule; applied to every Live offer kind), the proposer frozen exactly, an
-unanswered expiry closed by the server with no strike and an exact resume; **two directional declines per Operating Round**;
+response** = 10 minutes, Live only, for every inter-player offer that puts its proposer in a waiting state (the owner's train
+rule, generalised by the owner's ruling of 2026-10-06), the proposer frozen exactly, an unanswered expiry closed by the server
+with no strike and an exact resume; **two directional declines per Operating Round, Live only** (Async has no decline limit);
+**no offer count and no history-length rule** (offer churn is bounded only by a transport frequency limit);
 the **first / second overdue** -> a 10-minute cure / resolution window inside the **30-minute** active-action horizon; the
 **N-1 vote only decides the minute-30 foreclosure outcome**, and a **cure defeats it until finality** (otherwise the neutral
 timeout annulment); the **third overdue** -> automatic gameplay foreclosure with the money challengeable on chain; the
 **voluntary pause** unanimous to enter and to resume; the **system pause** entered protectively on unproven continuity and
-left by unanimous resume; **outage time never charged**; **Timed Async** paces 12 h / 24 h / 2 d / 3 d / 7 d, fixed at the
+left by unanimous resume -- only while the game still has playable state; an already-sealed terminal FP4 remedy is carried on
+after infrastructure recovery with no player vote (revalidated, re-attested if its attestation expired, never changed);
+**outage time never charged**; **Timed Async** paces 12 h / 24 h / 2 d / 3 d / 7 d, fixed at the
 deal, with **no additional grace** (overdue only; N-1 annul or foreclose, final at once); **No-deadline** (no clock; the
 owner's disclosure acknowledged and persisted before every ante); the **universal unanimous annulment**; the **FP4 binding**
-(sealed evidence with its strike ledger -> the dedicated REMEDY signature, fail closed -> one durable intent -> the chain, on
-the clock lane's word). Gameplay and settlement versions unchanged (rules 13, settlement `[10, 11, 12, 13]`). **Not marked:**
-2.1 deployed; the canonical 2.1 checksum certified; a KMS remedy signer deployed; mainnet ready. Owner decisions recorded in
-the design record §8 (the unanimous resume of an ended game's unfinal remedy; the response timer and decline limit applied
-beyond train offers; the offer budget).
+(sealed evidence with its strike ledger -> the dedicated REMEDY signature, fail closed: a timed money table is neither opened
+nor funded without it -> one durable intent -> the chain, on the clock lane's word). Gameplay and settlement versions unchanged (rules 13, settlement `[10, 11, 12, 13]`). **Not marked:**
+2.1 deployed; the canonical 2.1 checksum certified; a KMS remedy signer deployed; mainnet ready. The owner's policy
+correction of 2026-10-06 is applied (design record §2, §3, §8). **Owner decision required:** a sealed N-1 remedy whose seat
+approvals can no longer land on escrow 2.1.0 (a horizon passed, or a key rotated) is held unchanged -- the protocol has no
+recovery for it without a new vote or another outcome (design record §3, §8).
 
 **LIVE-4 status (2026-09-29): CLOSED.** Integrated at `6da8a1f` (corpus-gate certified), tooled / documented by L4-6
 (`89a4b5b`) and certified by L4-7 (`f1736bf` on it, plus a documentation-only evidence commit). **LIVE-5 is in progress: L5-1 … L5-6 are done and integrated (`e1f1280`); L5-7 (the AWS runtime convergence: the substrate wired into `GS_STORAGE=aws`) is done on its feature branch `live5/l5-7-aws-runtime`, and L5-8 (the AWS infrastructure and deployment: `infra/aws/`, the bootstrap and verifier; nothing deployed) on `live5/l5-8-aws-infrastructure` on top of it, owner gates pending. LIVE-6 L6-1 (non-primary serving and routing) is done on its feature branch `live6/l6-1-nonprimary-routing` (from the L5-7 head), its owner gate pending; LIVE-6 L6-3 (the AWS operator tooling) is done on its own feature branch `live6/l6-3-dynamodb-operator-tooling` from L5-7, its owner gate pending; L6-2 next.**

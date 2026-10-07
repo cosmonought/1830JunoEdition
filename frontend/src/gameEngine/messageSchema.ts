@@ -918,7 +918,8 @@ const ROOM_OPS: Readonly<Record<string, FrameFields>> = nullTable<FrameFields>({
   /* Phase 3 final clocks (`utils/clockProtocol.ts`): the table clock's ops -- the host's deadline before play, the
      unanimous pause / resume, the system-pause resume vote, the N-1 remedy proposal and vote (a money YES carries the
      seat's REMEDY-APPROVE: its horizon and its consent-key signature), a free table's unanimous annulment, the
-     No-deadline acknowledgement, and an Async money remedy's renewed approval (`clock-reapprove`). Every one names no player: the seat is the caller's own. */
+     No-deadline acknowledgement. Every one names no player: the seat is the caller's own. (No op re-approves a sealed
+     remedy: a sealed decision is never put to a new vote -- owner policy correction, 2026-10-06.) */
   "clock-policy": nullTable({ type: req(str(16)), deadline: req(isDeadlineClass), paceSecs: opt(isClockPace) }),
   "clock-pause": nullTable({ type: req(str(16)), action: req(isPauseAction), kind: req(isPauseKind), id: opt(isClockId) }),
   "clock-sysresume": nullTable({ type: req(str(16)), since: req(isClockMs) }),
@@ -926,7 +927,6 @@ const ROOM_OPS: Readonly<Record<string, FrameFields>> = nullTable<FrameFields>({
   "clock-vote": nullTable({ type: req(str(16)), proposalId: req(isClockId), yes: req(isBool), approveUntil: opt(isClockSecs), signature: opt(isSig64) }),
   "clock-annul": nullTable({ type: req(str(16)), yes: req(isBool) }),
   "clock-ack": nullTable({ type: req(str(16)) }),
-  "clock-reapprove": nullTable({ type: req(str(16)), approveUntil: req(isClockSecs), signature: req(isSig64) }),
 });
 
 export const ROOM_OP_TYPES: readonly string[] = Object.keys(ROOM_OPS);

@@ -54,8 +54,6 @@ export interface ClockControls {
   readonly vote: { readonly id: number; readonly kind: "foreclose" | "annul"; readonly mine: "yes" | "no" | null } | null;
   /** A free table's unanimous annulment (a money table annuls through its escrow: the money panel). */
   readonly annul: { readonly mine: boolean; readonly count: number; readonly needed: number } | null;
-  /** Money, Async N-1: this seat's approval of the sealed outcome must be renewed (it lapsed, or its key moved). */
-  readonly reapprove: { readonly remedy: 4 | 5 } | null;
 }
 
 export interface ClockPresentation {
@@ -79,26 +77,23 @@ export interface ClockPresentation {
   readonly controls: ClockControls;
 }
 
-export const NO_CONTROLS: ClockControls = Object.freeze({ requestPause: false, requestResume: false, answerRequest: null, systemResume: false, propose: Object.freeze([]), vote: null, annul: null, reapprove: null });
+export const NO_CONTROLS: ClockControls = Object.freeze({ requestPause: false, requestResume: false, answerRequest: null, systemResume: false, propose: Object.freeze([]), vote: null, annul: null });
 
-/** Shown to a seat whose approval of a sealed Async outcome must be renewed. */
-export const REAPPROVE_DETAIL = "Your approval of this outcome can no longer be sent to Juno (it lapsed, or your seat's key changed). Approve it again to send it.";
-/** Shown while an ended game's money outcome is held by a SYSTEM PAUSE. */
-export const REMEDY_HELD_DETAIL = "The outcome is recorded but held: nothing is sent to Juno until every player agrees to resume.";
-/** Shown to everyone while some approvals of a sealed Async outcome wait to be renewed. */
-export const REAPPROVE_WAITING_DETAIL = "Some players' approvals of this outcome must be renewed before it can be sent to Juno.";
+/** Shown when a sealed outcome's player approvals can no longer reach Juno (a horizon passed, or a key changed): the
+ *  outcome stays exactly as recorded and waits for the operator -- it is never changed and never voted on again. */
+export const REMEDY_UNLANDABLE_DETAIL = "This outcome is recorded but can't be sent to Juno as signed (an approval expired or a player's key changed). It stays exactly as recorded and waits for the operator's decision.";
 
 export const CLOCK_NOT_CURRENT_DETAIL = "This tab is catching up with the room, so its clock is not shown as current.";
 export const CLOCK_PAUSED_DETAIL = "Paused by every player. Nothing is timed until every player agrees to resume.";
 export const CLOCK_NO_DEADLINE_DETAIL = "This table has no action deadline. It ends when the game is finished or every player agrees to annul it.";
-export const TRADE_NOT_OVERDUE_DETAIL = "Answering a train offer is not an overdue: if it runs out, the offer simply expires.";
+export const TRADE_NOT_OVERDUE_DETAIL = "Answering an offer is not an overdue: if the time runs out, the offer simply expires.";
 export const ASYNC_OVERDUE_DETAIL = "Nothing happens automatically. The other players may all agree to annul the game or to foreclose.";
 export const LIVE_NEUTRAL_OUTCOME = "If it is not cured by then: the game is annulled neutrally (everyone's own stake back).";
 export const LIVE_FORECLOSE_OUTCOME = "If it is not cured by then: foreclosure (every other player agreed).";
 export const STRIKE_ONE_NOTE = "1 of 2 overdue cures used";
 /** What each deadline means, said where the host chooses it and with the table's terms. */
 export const LIVE_DEADLINE_NOTE =
-  "Live: 20:00 for each required action. A train offer gives its recipient 10:00 to answer. A player who runs out is overdue and has until 30:00 to make the move.";
+  "Live: 20:00 for each required action. An offer that pauses its maker's clock (a train offer, for one) gives its recipient 10:00 to answer. A player who runs out is overdue and has until 30:00 to make the move.";
 export const ASYNC_DEADLINE_NOTE =
   "The time each player has for each required action, fixed once play begins. A player who runs out is overdue; nothing happens automatically, and the other players may agree to annul or foreclose.";
 export const NO_DEADLINE_NOTE = "No action deadline: the game ends when it is finished or when every player agrees to annul it.";
@@ -213,7 +208,6 @@ export function presentClock(input: ClockPresentationInput): ClockPresentation {
   if (clock === null || clock === undefined || clock.v !== 2) return HIDDEN;
   const me = input.viewerPlayerId;
   const seated = me !== null && clock.seats.includes(me);
-  const seatedHere = seated;
   const name = (seat: string) => (seat === me ? "You" : input.nameOf(seat));
   const modeLabel = clock.deadline === "live" ? "Live" : clock.deadline === "no-deadline" ? "No deadline" : `Async · ${paceLabel(clock.paceSecs)}`;
   const elapsed = Math.max(0, input.sinceReceiptMs);
@@ -226,20 +220,11 @@ export function presentClock(input: ClockPresentationInput): ClockPresentation {
   if (clock.state === "ended") {
     const kind = clock.ended?.kind;
     const lines = [endedSentence(kind, clock.money)];
-    const stale = clock.money && clock.remedy !== null && Array.isArray(clock.remedy.stale) ? clock.remedy.stale : [];
-    /* An ended game whose money outcome is not final on Juno is held by a SYSTEM PAUSE after a continuity break: the
-       owner's sentences and the resume vote -- only while there IS such an outcome to hold. */
-    const unfinal = clock.money && clock.remedy !== null && clock.remedy.status !== "confirmed" && clock.remedy.status !== "superseded";
-    const held = clock.system !== null && unfinal;
-    if (clock.remedy !== null && clock.money) lines.push(held ? REMEDY_HELD_DETAIL : stale.length > 0 ? REAPPROVE_WAITING_DETAIL : remedyStatusSentence(clock.remedy.status));
-    if (held && clock.system !== null) lines.push(SYSTEM_PAUSE_SENTENCE, SYSTEM_PAUSE_RESUME_SENTENCE, `${clock.system.yes.length} of ${clock.system.needed.length} agreed to resume.`);
-    const remedyKind = clock.remedy?.kind;
-    /* A tab that is not current offers nothing to act on. */
-    const acting = seatedHere && input.current;
-    const reapprove = acting && stale.includes(me as string) && (remedyKind === 4 || remedyKind === 5) ? { remedy: remedyKind as 4 | 5 } : null;
-    if (reapprove !== null) lines.push(REAPPROVE_DETAIL);
-    const endedControls: ClockControls = { ...NO_CONTROLS, systemResume: acting && held && clock.system !== null && !clock.system.yes.includes(me as string), reapprove };
-    return { ...base, banner: held ? `${SYSTEM_PAUSE_SENTENCE} ${SYSTEM_PAUSE_RESUME_SENTENCE}` : null, controls: endedControls, state: "ended", label: kind === "live-strike3-foreclosure" || kind === "live-foreclosure" || kind === "async-foreclosure" ? "Foreclosed" : kind === "game-end" ? "Game over" : "Ended", value: null, lines, tone: "ended", ticking: false };
+    const unlandable = clock.money && clock.remedy !== null && Array.isArray(clock.remedy.stale) && clock.remedy.stale.length > 0;
+    /* An ended game has nothing to resume: no system pause and no vote is shown for it (the owner's ruling) -- its sealed
+       money outcome is carried on by the server as it stands. */
+    if (clock.remedy !== null && clock.money) lines.push(unlandable ? REMEDY_UNLANDABLE_DETAIL : remedyStatusSentence(clock.remedy.status));
+    return { ...base, controls: NO_CONTROLS, state: "ended", label: kind === "live-strike3-foreclosure" || kind === "live-foreclosure" || kind === "async-foreclosure" ? "Foreclosed" : kind === "game-end" ? "Game over" : "Ended", value: null, lines, tone: "ended", ticking: false };
   }
   /* NOT CURRENT: no figure at all -- a stale tab never shows a countdown as the room's. */
   if (!input.current) {
@@ -399,7 +384,6 @@ function controlsOf(clock: RoomClockView, me: string | null, seated: boolean): C
     propose: clock.system === null ? propose : [],
     vote: clock.system === null ? vote : null,
     annul: annulAvailable ? { mine: clock.annul?.yes.includes(me) ?? false, count: clock.annul?.yes.length ?? 0, needed: clock.seats.length } : null,
-    reapprove: null,
   };
 }
 

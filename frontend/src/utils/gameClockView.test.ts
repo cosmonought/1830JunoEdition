@@ -8,7 +8,7 @@
 
 import { parseClientFrame } from "../gameEngine/messageSchema";
 import { STRIKE_TWO_WARNING, SYSTEM_PAUSE_RESUME_SENTENCE, SYSTEM_PAUSE_SENTENCE, type RoomClockView } from "./clockProtocol";
-import { ASYNC_OVERDUE_DETAIL, declinesBlock, formatClockDuration, LIVE_FORECLOSE_OUTCOME, LIVE_NEUTRAL_OUTCOME, presentClock, STRIKE_ONE_NOTE } from "./gameClockView";
+import { ASYNC_OVERDUE_DETAIL, declinesBlock, formatClockDuration, LIVE_FORECLOSE_OUTCOME, LIVE_NEUTRAL_OUTCOME, NO_CONTROLS, presentClock, REMEDY_UNLANDABLE_DETAIL, STRIKE_ONE_NOTE } from "./gameClockView";
 
 const MIN = 60_000;
 const ME = "p-me";
@@ -194,16 +194,21 @@ describe("Phase 3 final clocks: review fixes in the table's words", () => {
     expect(p.lines).toContain(LIVE_NEUTRAL_OUTCOME);
   });
 
-  it("an ended game shows the system pause (and its vote) only while a money outcome is still held; a stale tab gets no controls", () => {
-    const remedy = (status: string) => ({ kind: 1, status, stale: [], overdue: { seat: BOB, strike: 1, epoch: 1, overdueAt: 1, logLen: 3, logHash: "ab".repeat(32) } });
+  it("an ended game never shows a system pause or a vote (its sealed outcome is carried on by the server); an outcome whose approvals can't land says it waits for the operator", () => {
+    const remedy = (status: string, stale: string[] = []) => ({ kind: 1, status, stale, overdue: { seat: BOB, strike: 1, epoch: 1, overdueAt: 1, logLen: 3, logHash: "ab".repeat(32) } });
     const system = { since: 4, preservedAt: 3, yes: [], needed: [ME, BOB, CAROL] };
-    const held = present(view({ state: "ended", money: true, ended: { kind: "live-timeout-annul", at: 1, seat: BOB }, remedy: remedy("sealed"), system }));
-    expect(held.controls.systemResume).toBe(true);
-    expect(held.banner).toBe(`${SYSTEM_PAUSE_SENTENCE} ${SYSTEM_PAUSE_RESUME_SENTENCE}`);
-    const final = present(view({ state: "ended", money: true, ended: { kind: "live-timeout-annul", at: 1, seat: BOB }, remedy: remedy("confirmed"), system }));
-    expect(final.controls.systemResume).toBe(false);
-    expect(final.lines.join(" ")).not.toContain(SYSTEM_PAUSE_SENTENCE);
-    expect(present(view({ state: "ended", money: true, ended: { kind: "live-timeout-annul", at: 1, seat: BOB }, remedy: remedy("sealed"), system }), { current: false }).controls.systemResume).toBe(false);
+    for (const status of ["sealed", "submitted", "refused", "confirmed"]) {
+      const p = present(view({ state: "ended", money: true, ended: { kind: "live-timeout-annul", at: 1, seat: BOB }, remedy: remedy(status), system }));
+      expect(p.controls).toEqual(NO_CONTROLS);
+      expect(p.banner).toBeNull();
+      expect(p.lines.join(" ")).not.toContain(SYSTEM_PAUSE_SENTENCE);
+      expect(p.lines.join(" ")).not.toContain(SYSTEM_PAUSE_RESUME_SENTENCE);
+    }
+    const held = present(view({ state: "ended", money: true, ended: { kind: "async-foreclosure", at: 1, seat: BOB }, remedy: { ...remedy("refused", [CAROL]), kind: 5 } }), { me: CAROL });
+    expect(held.lines).toContain(REMEDY_UNLANDABLE_DETAIL);
+    expect(held.controls).toEqual(NO_CONTROLS);
+    const strike3 = present(view({ state: "ended", money: true, ended: { kind: "live-strike3-foreclosure", at: 1, seat: BOB }, remedy: { ...remedy("sealed"), kind: 3 }, system }));
+    expect(strike3.lines[0]).toMatch(/can be challenged on Juno; play does not resume/);
   });
 
   it("the proposer of a train offer sees its paused clock inline", () => {
@@ -214,12 +219,10 @@ describe("Phase 3 final clocks: review fixes in the table's words", () => {
 
 describe("Phase 3 final clocks: the closed schema of the clock ops", () => {
   const frame = (op: Record<string, unknown>) => parseClientFrame({ kind: "room-op", requestId: "r1", gameId: "g_00000000000000000000000000", op });
-  it("a system-resume YES must name its break; a renewed approval carries its horizon and signature", () => {
+  it("a system-resume YES must name its break; no op re-approves a sealed outcome (it is never put to a new vote)", () => {
     expect(frame({ type: "clock-sysresume" }).ok).toBe(false);
     expect(frame({ type: "clock-sysresume", since: 1_800_000_000_000 }).ok).toBe(true);
-    expect(frame({ type: "clock-reapprove", approveUntil: 1_802_000_000, signature: "ab".repeat(64) }).ok).toBe(true);
-    expect(frame({ type: "clock-reapprove", approveUntil: 1_802_000_000 }).ok).toBe(false);
-    expect(frame({ type: "clock-reapprove", approveUntil: 1_802_000_000, signature: "ab".repeat(64), seat: "p-x" }).ok).toBe(false);
+    expect(frame({ type: "clock-reapprove", approveUntil: 1_802_000_000, signature: "ab".repeat(64) }).ok).toBe(false);
   });
 });
 

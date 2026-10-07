@@ -679,8 +679,9 @@ export async function agreeToAnnul(ctx: TableContext): Promise<ActionOutcome> {
    (strike, epoch, stalled position, its hash, the overdue moment) from the clock. The server verifies it against the
    seat's CURRENT key by quorum before it counts; the contract verifies it again. No amount is computed anywhere. */
 
-/** Live: an approval reaches as far as the contract allows past the overdue (six hours, a minute short) -- a pause
- *  that outlasts it lapses the approval and the outcome falls back to the neutral annulment. Async: seven days. */
+/** Live: an approval reaches as far as the contract allows past the overdue (six hours, a minute short). A pause or an
+ *  outage that outlasts it lapses the approval: a decision already sealed on it is then held unchanged for an owner
+ *  decision (never converted, never re-voted -- owner policy correction, 2026-10-06). */
 export const LIVE_APPROVAL_REACH_SECS = 6 * 3600 - 60;
 /** An Async approval lasts 29 days: long enough for slow N-1 voters (the server refuses one that ends within an hour of
  *  completing), short of the server's 30-day ceiling with a day of clock skew to spare. */

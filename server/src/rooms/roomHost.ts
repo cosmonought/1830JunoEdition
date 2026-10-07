@@ -346,6 +346,7 @@ export function createRoomHost(deps: RoomHostDeps) {
   const clockOps = new KeyedBuckets(rooms.membershipOpsPerPrincipal, now, keys);
   const submitsSeat = new KeyedBuckets(rooms.submitsPerSeat, now, keys);
   const submitsGame = new KeyedBuckets(rooms.submitsPerGame, now, keys);
+  const offersSeat = new KeyedBuckets(rooms.offersPerSeat, now, keys);
   const chatSeat = new KeyedBuckets(rooms.chatPerSeat, now, keys);
   const rotations = new KeyedBuckets(rooms.codeRotationsPerGame, now, keys);
   const denied: Record<string, number> = {};
@@ -1462,7 +1463,7 @@ export function createRoomHost(deps: RoomHostDeps) {
     return { ok: true, first: rescinded.batch[0].index, last: rescinded.batch[rescinded.batch.length - 1].index, before: rescinded.before, after: rescinded.after };
   };
 
-  const CLOCK_OP_TYPES: ReadonlySet<string> = new Set(["clock-policy", "clock-pause", "clock-sysresume", "clock-propose", "clock-vote", "clock-annul", "clock-ack", "clock-reapprove"]);
+  const CLOCK_OP_TYPES: ReadonlySet<string> = new Set(["clock-policy", "clock-pause", "clock-sysresume", "clock-propose", "clock-vote", "clock-annul", "clock-ack"]);
 
   /** A table-clock op: the caller's own seat (the host's for the deadline), checked; a money YES's approval verified
    *  OUTSIDE the game's task (a quorum chain read) against the overdue standing now, then applied INSIDE it (which
@@ -1499,33 +1500,6 @@ export function createRoomHost(deps: RoomHostDeps) {
       case "clock-annul":
         input = { type: "clock-annul", seat, yes: op.yes === true };
         break;
-      case "clock-reapprove": {
-        /* An Async money remedy's renewed approval: verified (a quorum chain read) against the SEALED decision's facts
-           under the seat's CURRENT consent key, then applied in the task (which re-checks the decision still stands). */
-        if (record.money === null) return { ok: false, code: "wrong-state", reason: "There is no outcome waiting for your approval." };
-        if (typeof op.approveUntil !== "number" || typeof op.signature !== "string") return { ok: false, code: "bad-frame", reason: "Renewing needs your signed approval." };
-        const sealed = clock.recordOf(game.gameId)?.remedy ?? null;
-        if (sealed === null || (sealed.kind !== 4 && sealed.kind !== 5) || !sealed.stale.includes(seat)) return { ok: false, code: "wrong-state", reason: "There is no outcome waiting for your approval." };
-        const port = deps.clock?.remedy?.() ?? null;
-        if (port === null) return { ok: false, code: CLOCK_REFUSAL.unavailable, reason: "This server cannot check a money approval right now." };
-        const why = await port.verifyApproval(game.gameId, {
-          remedy: sealed.kind,
-          defaultingSeat: sealed.seat,
-          approvingSeat: seat,
-          strike: sealed.strike,
-          epoch: sealed.epoch,
-          logLen: sealed.log_len,
-          logHash: sealed.log_hash,
-          overdueMs: sealed.overdue_ms,
-          approveUntil: op.approveUntil,
-          signature: op.signature,
-          finalNotBeforeMs: sealed.final_ms,
-          nowMs: now(),
-        });
-        if (why !== null) return { ok: false, code: "bad-approval", reason: why };
-        input = { type: "clock-reapprove", seat, approval: { approve_until: op.approveUntil, signature: op.signature }, verifiedFor: { epoch: sealed.epoch, logLen: sealed.log_len, remedy: sealed.kind } };
-        break;
-      }
       case "clock-propose":
       case "clock-vote": {
         const yes = type === "clock-propose" ? true : op.yes === true;
@@ -2129,6 +2103,14 @@ export function createRoomHost(deps: RoomHostDeps) {
     return 0;
   }
 
+  /** Phase 3 final clocks (owner-policy correction): the per-seat offer FREQUENCY budget -- `0` granted, else the
+   *  wait. Transport only: it never says an offer is illegal, and no count of offers per round exists. */
+  function offerBudget(gameId: string, playerId: string): number {
+    const wait = offersSeat.take(`${gameId}\u0000${playerId}`);
+    if (wait > 0) deny("offers-seat");
+    return wait;
+  }
+
   function hasSubscription(socket: WebSocket): boolean {
     return viewGameOf.has(socket) || listWatchers.has(socket);
   }
@@ -2320,7 +2302,7 @@ export function createRoomHost(deps: RoomHostDeps) {
     publishStatus();
     for (const gameId of [...chats.keys()]) if (!viewSubs.has(gameId)) chats.delete(gameId);
     for (const gameId of [...presence.keys()]) if (!viewSubs.has(gameId)) presence.delete(gameId);
-    for (const buckets of [createsPrincipal, createsGlobal, joinFailPrincipal, joinFailGlobal, membership, clockOps, submitsSeat, submitsGame, chatSeat, rotations]) buckets.prune();
+    for (const buckets of [createsPrincipal, createsGlobal, joinFailPrincipal, joinFailGlobal, membership, clockOps, submitsSeat, submitsGame, offersSeat, chatSeat, rotations]) buckets.prune();
     createsIp.prune();
     joinFailIp.prune();
     const cutoff = now();
@@ -2430,6 +2412,7 @@ export function createRoomHost(deps: RoomHostDeps) {
     canReadLog,
     seatActor,
     submitBudget,
+    offerBudget,
     afterGameplay,
     syncRecord,
     onRecordPublished,

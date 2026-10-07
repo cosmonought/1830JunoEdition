@@ -96,3 +96,50 @@ describe("Money tables: No-deadline acknowledgement before every ante", () => {
     }
   });
 });
+
+describe("Money tables: a TIMED money table fails closed without the dedicated REMEDY signer (owner, 2026-10-06)", () => {
+  test("no signer: a timed money table is neither opened nor funded (no settlement-signer fallback); browsing, watching and free tables are unaffected; with the signer the flow proceeds", async () => {
+    const signer = { on: false };
+    const world = await moneyServer({ clock: true, remedySigner: signer });
+    try {
+      const host = await player(world, "Hana");
+      /* Create: refused for every TIMED money table (Live, an Async pace). */
+      const live = await host.client.op({ type: "create", visibility: "public", exactPlayers: 2, variants: {}, nickname: "Hana", stake: "1000000" });
+      assert.deepEqual([live.ok, live.code], [false, "money-games-disabled"], JSON.stringify(live));
+      assert.match(String(live.reason), /can't enforce a timed deadline with stakes/);
+      const paced = await host.client.op({ type: "create", visibility: "public", exactPlayers: 2, variants: ASYNC, nickname: "Hana", stake: "1000000", deadline: "async-pace", paceSecs: 86_400 });
+      assert.deepEqual([paced.ok, paced.code], [false, "money-games-disabled"]);
+      /* Not timed, or not money: unaffected (No-deadline money; a free Live table, its view, a watcher's view). */
+      const untimed = await openMoneyTable(host, 2, { variants: ASYNC, deadline: "no-deadline", noDeadlineAck: true });
+      assert.equal((await clockOf(host.client, untimed.gameId))?.deadline, "no-deadline");
+      const free = await host.client.op({ type: "create", visibility: "public", exactPlayers: 2, variants: {}, nickname: "Hana" });
+      assert.equal(free.ok, true, JSON.stringify(free));
+      const freeId = (free.data as { gameId: string }).gameId;
+      const watcher = await player(world, "Wes");
+      const watched = await viewOf(watcher.client, freeId);
+      assert.equal(typeof watched, "object", "a watcher still sees a table");
+      /* With the signer: the timed money table opens and its join admission (the deposit's approval) is signed. */
+      signer.on = true;
+      const table = await openMoneyTable(host, 2);
+      const hostWallet = testWallet("host");
+      const hostKey = testConsentKey("host");
+      const linked = await linkWallet(host, table.gameId, hostWallet, hostKey);
+      assert.equal(linked.status, 200, linked.text);
+      await hostCreates(world, host, table.gameId, hostWallet, hostKey, linked.body?.ticket as string);
+      await world.observe();
+      assert.notEqual((await world.financial.load(table.gameId))?.binding?.escrow ?? null, null, "the Live chain game is bound");
+      const joiner = await seatJoiner(world, "Jo", table.code);
+      assert.equal((await linkWallet(joiner.who, table.gameId, testWallet("jo"), testConsentKey("jo"))).status, 200);
+      /* The signer goes away before the joiner funds: no deposit is approved on a deadline nobody can enforce. */
+      signer.on = false;
+      const refused = await joiner.who.api("join-admission", { gameId: table.gameId });
+      assert.equal(refused.status, 503, refused.text);
+      assert.equal(refused.body?.error, "money-unavailable", refused.text);
+      signer.on = true;
+      const admitted = await joiner.who.api("join-admission", { gameId: table.gameId });
+      assert.equal(admitted.status, 200, admitted.text);
+    } finally {
+      await world.close();
+    }
+  });
+});

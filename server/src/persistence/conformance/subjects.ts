@@ -45,6 +45,9 @@ import type { ClockSubject } from "./clockStore.conformance";
 import type { FinancialSubject, IntentSubject, TicketSubject } from "./escrowStores.conformance";
 import type { IdentitySubject, JournalPlant, JournalSubject } from "./identityJournal.conformance";
 import type { GrantSubject, SecuritySubject } from "./identitySecurity.conformance";
+import type { ConductSubject } from "./conductStore.conformance";
+import { conductDirectory, createFileConductCaseStore, createMemoryConductCaseStore } from "../../conduct/conductStore";
+import { CONDUCT_CASE_FORMAT } from "../../conduct/conductCase";
 import { createReferenceLogStore, newReferenceLogBacking } from "./referenceLogStore";
 
 const quiet = { warn: () => undefined };
@@ -607,4 +610,45 @@ export const fileClockSubject: ClockSubject = {
     return read(clockFile(ctx, gameId));
   },
   ...replaceHooks(scriptOf, clockFile),
+};
+
+/* ================================================================== */
+/*  Phase 3 (P3-N035): conduct review cases                            */
+/* ================================================================== */
+
+const memoryConductOf = perCase(createMemoryConductCaseStore);
+const conductFile = (ctx: CaseContext, caseId: string) => path.join(conductDirectory(ctx.dir), `${caseId}.json`);
+
+export const memoryConductSubject: ConductSubject = {
+  name: "memory (createMemoryConductCaseStore)",
+  backend: "memory",
+  capabilities: ["durable", "plant", "validates-shape"],
+  differences: { "CND-09-newer": "the memory store keeps no document bytes, so it cannot hold a newer build's case" },
+  async open(ctx) {
+    return memoryConductOf(ctx);
+  },
+  async stored(ctx, caseId) {
+    const held = memoryConductOf(ctx).cases.get(caseId);
+    return held === undefined ? null : JSON.stringify(held);
+  },
+  async plant(ctx, caseId) {
+    memoryConductOf(ctx).cases.set(caseId, "unreadable");
+  },
+};
+
+export const fileConductSubject: ConductSubject = {
+  name: "file (createFileConductCaseStore)",
+  backend: "file",
+  capabilities: ["durable", "fence", "plant", "fs-faults", "stall-write", "validates-shape", "inject-lost-answer", "inject-transient-failure"],
+  async open(ctx, options) {
+    return createFileConductCaseStore(ctx.dir, { ...quiet, fs: faultFs(ctx), ...writer(options) });
+  },
+  async plant(ctx, caseId, what) {
+    fs.mkdirSync(conductDirectory(ctx.dir), { recursive: true });
+    fs.writeFileSync(conductFile(ctx, caseId), what === "newer" ? `${JSON.stringify({ format: CONDUCT_CASE_FORMAT, version: 99, case_id: caseId })}\n` : `{"format":"${CONDUCT_CASE_FORMAT}",`);
+  },
+  async stored(ctx, caseId) {
+    return read(conductFile(ctx, caseId));
+  },
+  ...replaceHooks(scriptOf, conductFile),
 };

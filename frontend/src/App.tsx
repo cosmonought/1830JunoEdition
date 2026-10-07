@@ -190,6 +190,7 @@ import {
 /* LIVE-2D: the server-owned room protocol -- the room socket, the RoomView the waiting room renders, and the
    refusal sentences. */
 import { InGameHostControl } from "./components/InGameHostControl";
+import { ReportPlayerControl } from "./components/ReportPlayerControl";
 /* ESCROW-4: a real-money table's money line in the bar, and its financial band under the result. */
 import { SettlementBand } from "./components/money/SettlementBand";
 import { roomOp, watchRoom, type RoomLoss } from "./utils/roomLink";
@@ -213,6 +214,7 @@ import {
   supportRefOf,
   withoutSupportRef,
   type RoomOpBody,
+  type RoomOpResult,
   type RoomView,
   type RoomVisibility,
 } from "./utils/roomProtocol";
@@ -13593,6 +13595,17 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
   /** A watcher of a waiting table takes a seat; a seated player gives theirs up and keeps watching. */
   const handleTakeSeat = useCallback(() => void requireAccount(() => void runRoomOp({ type: "take-seat" }), "Log in or create an account to take a seat."), [runRoomOp]);
   const handleReleaseSeat = useCallback(() => void runRoomOp({ type: "release-seat" }), [runRoomOp]);
+  /* Phase 3 (P3-N035): a seated player's conduct report -- the room op on this table's link, answered by the server
+     ("received" / "already received", or its refusal sentence, which the report dialog shows itself: it is not a
+     refusal of anything at the table, so the room's refusal strip stays as it is). A Watch tab sends none. */
+  const handleReportPlayer = useCallback(
+    (body: Extract<RoomOpBody, { type: "report-player" }>): Promise<RoomOpResult> => {
+      const gameIdNow = sandboxRoomRef.current;
+      if (!gameIdNow || watchOnly) return Promise.resolve({ ok: false, code: "forbidden", reason: WATCHING_NO_SEAT });
+      return roomOp(body, gameIdNow);
+    },
+    [watchOnly],
+  );
 
   /* ==================================================================
       LIVE-2D (LIVE-2 §8): START IS ONE OP, AND THE DEAL IS THE SERVER'S
@@ -14217,6 +14230,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
         onSetVisibility={isSandboxHost ? handleSetVisibility : undefined}
         onRotateCode={isSandboxHost ? handleRotateCode : undefined}
         onCancelRoom={isSandboxHost ? handleCancelRoom : undefined}
+        /* Phase 3 (P3-N035): a seated player may report another seat (a Watch tab never). */
+        onReport={!watchOnly && seated ? handleReportPlayer : undefined}
         /* Phase 3 W3-J (OD-19): a Watch tab is read-only -- no "Take a seat" (a seat is taken with Join, or re-entered
            from "Your tables"). */
         onTakeSeat={!watchOnly && !seated && !sandboxRoom.you.kicked && sandboxRoom.joinable ? handleTakeSeat : undefined}
@@ -14697,6 +14712,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
             )}
             {/* LIVE-2E: the host hands the role on mid-game -- the same `transfer-host` op as the waiting room's. */}
             <InGameHostControl room={sandboxRoom} busy={sandboxRoomBusy} onTransferHost={handleTransferHost} />
+            {/* Phase 3 (P3-N035): report a player's conduct to the operator's review (seated players; never a Watch tab). */}
+            <ReportPlayerControl room={sandboxRoom} watchOnly={watchOnly} onReport={handleReportPlayer} />
             {/* ESCROW-4: a real-money table's stake and, only when something is needed, its one action -- handed the
                 LIVE board too, so a Dispute pressed while the epilogue is scrubbed sends the live board's hash. */}
             {sandboxRoom?.money != null && <SettlementBand room={sandboxRoom} compact log={sandboxLogRef.current} board={liveState} />}

@@ -842,6 +842,12 @@ gates.
   no username); key rotation under an explicit "Confirm it's you"; "established" = one completed real-money game. Email recovery is
   intentionally OUT OF SCOPE for this release (not required for Phase 4). Record: `PHASE3_AUDIT_RECONCILIATION.md` "W3-L
   account-policy follow-up status"; `w3l_account_policy_followup` in the JSON.
+- **Player reporting (row P3-N032, 2026-10-06):** COMPLETE on `phase3/preplaytest-player-reporting` (from `caad745`; `c133128`,
+  `3d63979`, `d434eff`, `e9db5c5`; NOT integrated): `room-op report-player` from a seated player; server-derived evidence bound to the
+  committed log; per-account budget, duplicate / re-report handling and a cap on the reporter's own reports; file / memory / DynamoDB
+  conduct stores (conformance CND-01..17); reviewer routes and panel for `GS_CONDUCT_REVIEWERS` accounts. Integration: lands after the
+  W3-L branches; the clock lane (A) may fill `ReportInput.clock`. Record: `PHASE3_AUDIT_RECONCILIATION.md` "Player reporting status";
+  `p3_player_reporting` in the JSON.
 
 ---
 

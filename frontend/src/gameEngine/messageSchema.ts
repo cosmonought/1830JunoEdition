@@ -782,6 +782,19 @@ const isBool: FrameCheck = (value) => typeof value === "boolean";
 /** LIVE-2 §11.3: a chat line is at most 500 characters; longer is refused, not truncated. */
 export const MAX_CHAT_TEXT_LENGTH = 500;
 
+/* ==================================================================
+    PHASE 3 (P3-N035): REPORTING A PLAYER'S CONDUCT -- THE CLOSED ROOM-OP FIELDS
+   ==================================================================
+   A seated player reports another seat of the same table (`room-op report-player`). The categories are a CLOSED list
+   (the wording players see lives in `utils/conductReport.ts`); the note is optional and short on purpose (a sentence or
+   two -- the evidence is the server's, derived from its own records, never the reporter's). A longer note is refused,
+   never truncated. The bound counts characters (code points); the frame allows twice as many UTF-16 units. */
+export const CONDUCT_REPORT_CATEGORIES = ["stalling", "offer-spam", "harassment", "collusion", "other"] as const;
+export type ConductReportCategory = (typeof CONDUCT_REPORT_CATEGORIES)[number];
+export const MAX_REPORT_NOTE_LENGTH = 500;
+export const isConductReportCategory = (value: unknown): value is ConductReportCategory =>
+  typeof value === "string" && (CONDUCT_REPORT_CATEGORIES as readonly string[]).includes(value);
+
 /* ---- presence (LIVE-2 §11.3): closed, <= 4 KiB serialized ---- */
 export const MAX_PRESENCE_BYTES = 4 * 1024;
 const PRESENCE_KEY = /^(?:[0-9]|1[0-5])$/; // train index 0-15
@@ -931,6 +944,15 @@ const ROOM_OPS: Readonly<Record<string, FrameFields>> = nullTable<FrameFields>({
   "clock-vote": nullTable({ type: req(str(16)), proposalId: req(isClockId), yes: req(isBool), approveUntil: opt(isClockSecs), signature: opt(isSig64) }),
   "clock-annul": nullTable({ type: req(str(16)), yes: req(isBool) }),
   "clock-ack": nullTable({ type: req(str(16)) }),
+  /* Phase 3 (P3-N035): report another seat of this table to the operator's review (names the game; seated only). */
+  "report-player": nullTable({
+    type: req(str(16)),
+    playerId: req(str(40, PLAYER_ID_PATTERN)),
+    category: req(isConductReportCategory),
+    /* UTF-16 units here (twice the bound: an emoji is two); the bound itself is in characters, checked by the server's
+       one sanitizer (`checkConductNote`), which refuses -- never cuts -- a longer note. */
+    note: opt(str(MAX_REPORT_NOTE_LENGTH * 2)),
+  }),
 });
 
 export const ROOM_OP_TYPES: readonly string[] = Object.keys(ROOM_OPS);

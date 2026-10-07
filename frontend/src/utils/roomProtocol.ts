@@ -22,7 +22,7 @@
 
 import type { GameVariants } from "../gameEngine/gameVariants";
 import type { UndoPolicy } from "../gameEngine/logRevert";
-import { GAME_ID_PATTERN } from "../gameEngine/messageSchema";
+import { GAME_ID_PATTERN, type ConductReportCategory } from "../gameEngine/messageSchema";
 import type { MyTableMoneySummary, RoomMoneyView, RoomStakeSummary } from "./moneyProtocol";
 import type { ClockDeadlineClass, RoomClockView } from "./clockProtocol";
 import type { PresenceState } from "./presence";
@@ -228,7 +228,9 @@ export type RoomOpBody =
   | { type: "clock-annul"; yes: boolean }
   | { type: "clock-ack" }
   /** LIVE-2F/3D (C9-01): a read -- the caller's own tables, answered `{tables: MyTableSummary[]}`. */
-  | { type: "my-tables" };
+  | { type: "my-tables" }
+  /** Phase 3 (P3-N035): report another seat of this table to the operator's review; answered `{received, message}`. */
+  | { type: "report-player"; playerId: string; category: ConductReportCategory; note?: string };
 
 export type RoomOpType = RoomOpBody["type"];
 

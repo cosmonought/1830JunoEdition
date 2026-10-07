@@ -96,10 +96,16 @@ export type SessionApiPath =
   | "money/consent"
   | "money/annul"
   | "money/escrow-details"
-  | "money/deposits";
+  | "money/deposits"
+  /** Phase 3 (P3-N035): conduct review (`conductApi.ts`) -- whether this account reviews, and the reviewers' routes. */
+  | "conduct/me"
+  | "conduct/review/queue"
+  | "conduct/review/case"
+  | "conduct/review/decide";
 
-/** A `/gs/api/*` body: a closed object of strings (ESCROW-4: and the one boolean a wallet link may carry). */
-export type SessionApiBody = Record<string, string | boolean>;
+/** A `/gs/api/*` body: a closed object of strings (ESCROW-4: and the one boolean a wallet link may carry; P3-N035: a
+ *  review decision's revision, a whole number, and its optional note, which may be null). */
+export type SessionApiBody = Record<string, string | boolean | number | null>;
 
 /** What a `/gs/api/*` call came back with. Never a rejection: "network" when nothing answered, "unavailable" when
  *  this port has no HTTP surface at all (development identity, no game server). */

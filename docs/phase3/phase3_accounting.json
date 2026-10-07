@@ -4228,6 +4228,20 @@
    "p4": "—",
    "notes": "OWNER RULINGS 2026-10-06. Whether \"anted\" also forbids a NEW wallet after a pre-Start withdrawal (the seat no longer holds a deposit) is left as built (allowed: nothing is redirected) -- recorded for owner confirmation.",
    "status": "IMPLEMENTED — `phase3/preplaytest-final-account-wallet-identity`: `RoomHostDeps.freeTables` (false in `start.ts` production and `awsRuntime.ts`) refuses a no-ante create, seat (join / take-seat) and start with `ante-required`; the host card requires the stake and the public list shows a no-ante table as Watch only; `moneyTables.hostAnteOnChain` finds a host's ante under ANY proven ticket (resumable, conclusive or 503) before any other wallet links or the room is cancelled; the restore gate covers money writes. Tests: `identity/p3FinalAccountWallet.test.ts` (§19, §20), `escrow/p3FinalHostAnteBinding.test.ts`."
+  },
+  {
+   "key": "P3-N035",
+   "ids": "owner direction (player conduct reports)",
+   "ref": "pre-playtest player reporting (2026-10-06)",
+   "cls": "[D] conduct / [UX] product",
+   "item": "A seated player has no way to report legal-but-harmful conduct (deliberate stalling / timing abuse, abusive trade-offer spam, harassment, suspected collusion, other) for operator review, and the operator has no preserved, server-derived evidence or small review workflow. Wanted: report from the table only (never anonymous), neutral categories, a short optional note, evidence preserved by the server (never screenshots, never credentials / session ids / IPs / devices / wallet-proof material), durable cases with statuses Open / Under review / No violation / Conduct issue confirmed / Escalated, a minimal reviewer panel; a report never punishes, changes a game, money, escrow or a profile, and never feeds a score or a public count.",
+   "src": "CONFIRMED (`caad745`): no report path, no conduct store, no review route or panel existed.",
+   "slice": "W3-L",
+   "disp": "B",
+   "od": "—",
+   "p4": "—",
+   "notes": "Reporting is conduct REVIEW and evidence preservation, not the first line of defence (the clock / trade lane owns the mechanical two-decline rule). Nothing infers motive from offer values: offers are COUNTED and TIMED, never judged. No trust score; nothing about reports is public; trust facts never read a case.",
+   "status": "IMPLEMENTED — `phase3/preplaytest-player-reporting` (from `caad745`, the account-policy follow-up head, exactly; `c133128`, review fixes `3d63979`, `d434eff`, `e9db5c5` + tracking; NOT integrated): `room-op report-player` (roomAuthz `report`: seated players only; visitors' sockets never carry it); `server/src/conduct/*` (server-derived evidence bound to the committed log by a `logHash` prefix pointer; per-account budget; duplicates / two tabs / re-reports; a cap on the reporter's own reports; file / memory / DynamoDB stores with conformance CND-01..17); reviewer routes `/gs/api/conduct/review/*` for `GS_CONDUCT_REVIEWERS` usernames bound to accounts at startup, decisions under \"Confirm it's you\" with CAS; parties never see their own case. Client: `ReportPlayerControl.tsx`, `ConductReviewPanel.tsx`. Record: `p3_player_reporting`."
   }
  ],
  "bullets": {
@@ -6278,5 +6292,31 @@
    "The internal credential epoch is preserved; no protocol bump."
   ],
   "security_review": "Two independent reviews (identity; financial binding / multi-game / free-mode suppression) and two re-review rounds: no HIGH; every MEDIUM fixed and re-verified (CREATE-mint username oracle; host-ante search orphaning; observer duplicates; operation-book flood). Remaining LOWs recorded in the Project report."
+ },
+ "p3_player_reporting": {
+  "branch": "phase3/preplaytest-player-reporting",
+  "base": "caad7451f9f6e358407ea2b38e58495f96304b8f (phase3/preplaytest-profile-account-policy), exactly -- itself on b8d5246 via W3-L 343fac2; chosen because reviewer identity binds to W3-L usernames",
+  "commits": [
+   "c133128 (implementation + tests)",
+   "3d63979 (independent review round 1 fixes)",
+   "d434eff (review round 2 fixes)",
+   "e9db5c5 (review round 3 fixes)",
+   "(this tracking commit)"
+  ],
+  "status": "COMPLETE on the slice branch; NOT integrated; not merged to main; nothing deployed; no AWS / JUNO / JUNOX mutation; no escrow, contract, rules-version, settlement or financial-protocol change; no hidden trust score",
+  "rows": [
+   "P3-N035"
+  ],
+  "review": "Independent reviews (authorization / privacy; evidence integrity / trust contamination; report spam / review abuse): HIGH and MEDIUM findings fixed over three rounds; final re-reviews report none remaining.",
+  "residuals": [
+   "Single-host Terraform server.env template does not yet plumb GS_CONDUCT_REVIEWERS (ECS task env allow-list does) -- IaC follow-up before conduct review is relied on in single-host AWS.",
+   "A configured reviewer username nobody holds refuses the server start (fails closed; a typo is an outage until fixed).",
+   "Reporter budget is per process (restarts / other pools start afresh); the review queue is unpaginated (whole-store read cached 5 s).",
+   "Clock / responsibility transitions and overdue / foreclosure events are recorded as not captured until the clock lane wires its evidence hook (ReportInput.clock).",
+   "Multi-pool: 'seated now' party hiding sees only tables this pool indexes (seated-at-report time applies everywhere).",
+   "A case at its 64 review events takes no further decision (history is never dropped).",
+   "An unreadable case blocks its (game, reporter, reported, category) tuple ('could not be confirmed'; audited conduct.report-unconfirmed).",
+   "CONDUCT_CASE_VERSION 1: never deployed; clear any pre-e9db5c5 conduct/ data from a test data directory before playtest."
+  ]
  }
 }

@@ -30,6 +30,8 @@
 //   FINKEYS                    FINKEYS                          keys (SS): every identity key that ever had a money game
 //   RELAYQ#<queue>             <created %013d>#<g>#<intent_id>  game_id, intent_id: an intent the relayer must still see
 //   LIST#<kind>                <g>                              game_id: the port listings (kind: log, hold, fin, intent, tickets)
+//   CONDUCT#<case>             CASE                             Phase 3 (P3-N035): one conduct report's review case (body), revision
+//   LIST#conduct               <case>                           case_id: every conduct case (written in the case's own creation)
 //
 // THE FENCE (preflight D-4, §4-§5). There is no lease and no clock. A pool's newest task takes the pool (`POOL#<P>`
 // `writer_epoch` + 1) and CLAIMS each game it serves by stamping the game's HEAD with (pool, epoch). Every write to a game
@@ -110,9 +112,14 @@ export const finIndexKey = (identityKey: string, gameId: string): Item => key(`F
 /** The game is part of the sort key: an intent id is unique per game (`GAME#<g>/INTENT#<id>`), not across games. */
 export const relayQueueKey = (queue: string, createdAt: number, gameId: string, intentId: string): Item => key(`RELAYQ#${queue}`, `${pad(createdAt, 13)}#${gameId}#${intentId}`);
 
-export type ListKind = "log" | "hold" | "fin" | "intent" | "tickets";
+export type ListKind = "log" | "hold" | "fin" | "intent" | "tickets" | "conduct";
 export const listPk = (kind: ListKind): string => `LIST#${kind}`;
 export const listKey = (kind: ListKind, gameId: string): Item => key(listPk(kind), gameId);
+
+/** Phase 3 (P3-N035): a conduct report's review case -- a partition of its own (it names a game, but it is not the game's:
+ *  no game write ever carries it, and its writes carry the POOL fence, `dynamoConductStore.ts`). */
+export const CONDUCT_SK = "CASE";
+export const conductPk = (caseId: string): string => `CONDUCT#${caseId}`;
 
 /** The SHA-256 (hex) of a money game's continuation identity in canonical JSON: its `FINIDX#` partition. */
 export const identityKeyOf = (canonicalIdentityJson: string): string => createHash("sha256").update(canonicalIdentityJson, "utf8").digest("hex");

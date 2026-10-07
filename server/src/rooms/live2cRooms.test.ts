@@ -430,6 +430,8 @@ const ORACLE: Record<RoomOp, Partial<Record<Stage, string>>> = {
   presence: { W: "SH", A: "SH" },
   kick: { W: "H" },
   "transfer-host": { W: "H", A: "H", Hd: "H" },
+  /* Phase 3 (P3-N035): reporting another seat's conduct -- seated only, wherever a seat exists. */
+  report: { W: "SH", A: "SH", C: "SH", Hd: "SH" },
 };
 
 function expected(op: RoomOp, role: Role, stage: Stage): string {

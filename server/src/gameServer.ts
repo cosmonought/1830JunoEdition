@@ -95,6 +95,9 @@ import {
 import { createMoneyLimiter, handleMoneyHttp } from "./escrow/moneyHttpApi";
 import { createTrustFacts } from "./rooms/trustFacts";
 import { createTrustLimiter, handleTrustHttp } from "./rooms/trustHttpApi";
+import { createConductService } from "./conduct/conductService";
+import type { ConductCaseStore } from "./conduct/conductStore";
+import { createConductLimiter, handleConductHttp } from "./conduct/conductHttpApi";
 import type { MoneyTables } from "./escrow/moneyTables";
 import type { EscrowGameplaySeam } from "./rooms/roomHost";
 import { reconcileLoaded } from "./rooms/reconcile";
@@ -162,6 +165,7 @@ import {
   excerpt,
   resolveLimits,
   type BucketName,
+  type BucketSpec,
   type IngressLimitOverrides,
 } from "./ingress/limits";
 
@@ -282,6 +286,17 @@ export interface GameServerOptions {
   holds?: HoldStore;
   /** LIVE-3C: the audit lines and the status snapshot (`persistence/opsRecorder.ts`). Nothing when absent. */
   ops?: OpsRecorder;
+  /** Phase 3 (P3-N035): conduct reports. `store`: the durable case store (`start.ts` the file store, the AWS runtime the
+   *  DynamoDB one); absent or null, every report is refused `unavailable` (never kept in memory only). `reviewers`: the
+   *  canonical login keys of the accounts that may open the review panel (`GS_CONDUCT_REVIEWERS`; none when absent). */
+  conduct?: {
+    readonly store: ConductCaseStore | null;
+    readonly reviewers?: ReadonlySet<string>;
+    readonly reporterBudget?: BucketSpec;
+    /** A READ-ONLY reader of a game's committed log, for re-verifying a case whose game is not resident here (no claim,
+     *  no load, no repair, no write). Absent: such a case says "not loaded here; open the table". */
+    readonly readLog?: (gameId: string) => Promise<readonly ServerLogEntry[] | null>;
+  };
   /** LIVE-3C: the terminal seam ESCROW-3 plugs into (`rooms/lifecycle.ts`). No-money when absent. */
   settlement?: SettlementLifecycle;
   /** LIVE-4 (L4-2): THIS POOL'S DEPLOYMENT CAPABILITY, built once at startup (`start.ts`: `thisDeploymentCapability` over
@@ -521,6 +536,26 @@ export function createGameServer(options: GameServerOptions): {
   }
   const identityNow = identityOptions.now ?? (() => Date.now());
   const identity = identityOptions.service ?? IdentityService.fromSnapshot(createMemoryIdentityStore(), { principals: [], sessions: [] });
+  /* The configured reviewer USERNAMES are bound to the accounts that hold them, at startup, and reviewers are then
+     recognised by their principal, server-side. A configured name NOBODY holds refuses the start: otherwise whoever
+     registered it first (a typo, a name not yet made) would be bound as a reviewer at some later restart. Make the
+     reviewer's account first, then name it. A name held by an inactive account binds nothing (said once). */
+  const conductReviewers = new Set<string>();
+  const unheldReviewers: string[] = [];
+  let inactiveReviewers = 0;
+  for (const key of options.conduct?.reviewers ?? []) {
+    const holder = identity.usernameHolder(key);
+    if (holder.kind === "active") conductReviewers.add(holder.principalId);
+    else if (holder.kind === "inactive") inactiveReviewers += 1;
+    else unheldReviewers.push(key);
+  }
+  if (unheldReviewers.length > 0) {
+    throw new Error(`GS_CONDUCT_REVIEWERS names ${unheldReviewers.length} username(s) no account holds: make each reviewer's account first, then name it (or remove the name)`);
+  }
+  if (inactiveReviewers > 0) {
+    // eslint-disable-next-line no-console
+    console.warn(`  conduct: GS_CONDUCT_REVIEWERS names ${inactiveReviewers} username(s) whose account is not active: not reviewers this run`);
+  }
   /** Who each LOG socket said it was at `hello`, and which room. Identity only: the subscription itself lives on
    *  the room's actor (LIVE-3A), which is what fan-out reads. */
   const sockets = new Map<WebSocket, Attached>();
@@ -1536,8 +1571,22 @@ export function createGameServer(options: GameServerOptions): {
   /* ==================================================================
       LIVE-2C: THE SERVER-OWNED ROOM AUTHORITY (rooms/roomHost.ts)
      ================================================================== */
+  /* Phase 3 (P3-N035): conduct reports -- their own durable store, read by reviewers only, writing nothing else. */
+  const conductSeats: { current: ((gameId: string) => readonly string[]) | null } = { current: null };
+  const conduct = createConductService({
+    store: options.conduct?.store ?? null,
+    build: options.build,
+    now: identityNow,
+    // eslint-disable-next-line no-console
+    warn: (line) => console.warn(line),
+    ...(options.ops !== undefined ? { ops: options.ops } : {}),
+    ...(options.conduct?.reporterBudget !== undefined ? { reporterBudget: options.conduct.reporterBudget } : {}),
+    /* Who is seated at a case's table NOW (a reviewer seated there is a party too): the room host's record, read-only. */
+    seatPrincipalsOf: (gameId) => conductSeats.current?.(gameId) ?? [],
+  });
   const host: RoomHost = createRoomHost({
     build: options.build,
+    conduct,
     /* LIVE-5 L5-3: under POOL ownership the startup discovery writes nothing (it runs before any claim). */
     ...(pooled ? { discoveryReadOnly: true } : {}),
     records: recordStore,
@@ -1605,6 +1654,7 @@ export function createGameServer(options: GameServerOptions): {
       ...(options.statusExtras ? options.statusExtras() : {}),
     }),
   });
+  conductSeats.current = (gameId) => host.seatPrincipalsOf(gameId);
   roomHost = host;
 
   /** LIVE-2C (LIVE-2 §14.3 item 5): a log subscriber of a server-owned game is re-authorized on EVERY push, so a
@@ -1647,6 +1697,25 @@ export function createGameServer(options: GameServerOptions): {
   const moneyLimiter = createMoneyLimiter(identityNow);
   /* P3-ACCT: `/gs/api/trust/*` -- factual trust indicators, derived from the durable records (`rooms/trustFacts.ts`). */
   const trustLimiter = createTrustLimiter(identityNow);
+  /* Phase 3 (P3-N035): `/gs/api/conduct/*` -- the review routes (reviewers only; reporting is the table's room op). */
+  const conductLimiter = createConductLimiter(identityNow);
+  /** A game's committed log, for re-verifying a case's pointer -- READ-ONLY: a resident game's committed view, else the
+   *  configured read-only reader. Never `games.get` (that claims and loads a game, and a load can repair or hold it): a
+   *  reviewer opening a case must not move any game. Null: "not readable here now". */
+  const committedLogOf = async (gameId: string): Promise<readonly ServerLogEntry[] | null> => {
+    const resident = games.peek(gameId);
+    if (resident !== undefined) {
+      const view = resident.view;
+      if (view.record === null || view.incompatible !== null || isMaintenanceHold(view.hold)) return null;
+      return view.entries;
+    }
+    if (options.conduct?.readLog === undefined) return null;
+    try {
+      return await options.conduct.readLog(gameId);
+    } catch {
+      return null;
+    }
+  };
   const trustFacts = createTrustFacts({
     profileFacts: (principalId) => (principalId.startsWith(DEV_PRINCIPAL_PREFIX) ? null : identity.trustProfileFacts(principalId)),
     tablesOf: (principalId) => host.tablesOf(principalId),
@@ -1701,6 +1770,31 @@ export function createGameServer(options: GameServerOptions): {
           },
         },
         trustLimiter,
+      )
+    ) {
+      return;
+    }
+    if (
+      handleConductHttp(
+        req,
+        res,
+        {
+          allowedOrigins,
+          trustedProxyHops: identityOptions.trustedProxyHops,
+          identity,
+          maxBodyBytes: limits.identity.maxApiBodyBytes,
+          now: identityNow,
+          service: conduct,
+          reviewers: conductReviewers,
+          readLog: committedLogOf,
+          onError: (what, error) => {
+            const ref = errorRef();
+            // eslint-disable-next-line no-console
+            console.error(`  conduct: ${what} failed (ref ${ref}) -- ${excerpt(error instanceof Error ? error.message : String(error), 300)}`);
+            return ref;
+          },
+        },
+        conductLimiter,
       )
     ) {
       return;

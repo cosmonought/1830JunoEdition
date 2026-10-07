@@ -27,6 +27,7 @@ import { effectiveActions, dealEntryOf, revertTargetOf } from "../../../frontend
 import { resolveVariants } from "../../../frontend/src/gameEngine/gameVariants";
 import { sanitizeText } from "../../../frontend/src/gameEngine/messageSchema";
 import type { RoomChatEntry } from "../../../frontend/src/utils/roomProtocol";
+import type { ConductService } from "../conduct/conductService";
 import type { PresenceState } from "../../../frontend/src/utils/presence";
 import type { ServerLogEntry } from "../../../frontend/src/utils/roomSession";
 import type { ServerMessage } from "../../../frontend/src/utils/serverProtocol";
@@ -211,6 +212,9 @@ export interface RoomHostDeps {
   clock?: RoomHostClockConfig;
   /** Phase 3 final clocks: run `fn` with every entry the session mints stamped `at` (the clock's decision time). */
   stampAt?: <T>(at: number, fn: () => T) => T;
+  /** Phase 3 (P3-N035): where a seated player's conduct report goes (`conduct/conductService.ts`). Absent: every report
+   *  is refused `unavailable` -- never kept in memory only. It writes its own store and nothing else. */
+  conduct?: ConductService;
 }
 
 /** Phase 3 final clocks: what the room host needs to run the table clock. */
@@ -763,6 +767,12 @@ export function createRoomHost(deps: RoomHostDeps) {
     const verdict = authorize("read-view", { record, facts: factsFromRecord(record), principalId: principalId ?? "", now: now(), held: false });
     if (!verdict.ok) return null;
     return record.seats.map((seat) => ({ playerId: seat.player_id, principalId: seat.principal_id }));
+  }
+
+  /** Phase 3 (P3-N035): who is seated at a table now (server-side only: a conduct reviewer seated there is a party). */
+  function seatPrincipalsOf(gameId: string): readonly string[] {
+    const record = peekLoaded(gameId)?.view.record ?? recordIndex.get(gameId) ?? null;
+    return record === null ? [] : record.seats.map((seat) => seat.principal_id);
   }
 
   /** P3-ACCT (trust indicators): every table the index knows that `principalId` holds a seat at (server-side only). */
@@ -1449,6 +1459,7 @@ export function createRoomHost(deps: RoomHostDeps) {
     }
     if (game === null) return ack(socket, requestId, { ok: false, code: "not-found", reason: "There is no such game." });
     if (type === "start-game") return ack(socket, requestId, await startGame(game, ctx.principalId));
+    if (type === "report-player") return handleReport(socket, ctx, requestId, game, op);
     if (CLOCK_OP_TYPES.has(type)) {
       if (clockOps.take(ctx.principalId) > 0) {
         deny("clock-ops");
@@ -2121,6 +2132,57 @@ export function createRoomHost(deps: RoomHostDeps) {
     deps.send(socket, { kind: "rooms", rooms: summaries() });
   }
 
+  /* ==================================================================
+      PHASE 3 (P3-N035): A SEATED PLAYER REPORTS ANOTHER SEAT OF THIS TABLE
+     ==================================================================
+     Authorized like every room op, from the COMMITTED record (`report`: seated only -- a watcher, visitor, outsider or
+     kicked principal is refused exactly as for any op it may not do, and a private table stays `not-found` to an
+     outsider). The rest -- the reported seat, the category, the note, the evidence -- is the conduct service's, over the
+     committed view this pool serves: the record, the committed log, the table's stored chat and, for a real-money table,
+     its financial standing. Nothing here writes a record, a log entry, a seat, a profile or any money. The answer is the
+     service's sentence: received, or already received -- never a case id, a status or anything about other reports. */
+  async function handleReport(socket: WebSocket, ctx: ConnectionContext, requestId: string, game: GameActor, op: Record<string, unknown>): Promise<void> {
+    const verdict = authorizeNow(game, ctx.principalId, "report");
+    if (!verdict.ok) return ack(socket, requestId, verdict);
+    if (deps.conduct === undefined || !deps.conduct.enabled) return ack(socket, requestId, { ok: false, code: "unavailable", reason: "Reports cannot be received on this server right now. Try again later." });
+    const view = game.view;
+    const record = view.record as GameRecord;
+    const held = heldOf(view);
+    let chat: readonly RoomChatEntry[] | null = chats.get(record.game_id) ?? null;
+    if (chat === null) {
+      try {
+        chat = [...(await deps.loadChat(record.game_id))].slice(-CHAT_HISTORY_LIMIT);
+      } catch {
+        chat = null;
+      }
+    }
+    let money: { phase: string | null; held: boolean } | null = null;
+    if (record.money !== null) {
+      try {
+        const financial = (await deps.money?.()?.financialRecord(record.game_id)) ?? null;
+        money = financial === null ? null : { phase: financial.phase, held: financial.hold !== null };
+      } catch {
+        money = null;
+      }
+    }
+    const answer = await deps.conduct.report({
+      record,
+      facts: factsFromView(view, record),
+      /* A held or incompatible game serves no history: the case says so rather than pretending the log was empty. */
+      entries: held ? [] : view.entries,
+      ...(held ? { unreadableHistory: "The game was held or could not be continued on this server, so its log was not read into the report." } : {}),
+      reporterPrincipalId: ctx.principalId,
+      reportedPlayerId: op.playerId,
+      category: op.category,
+      note: op.note,
+      chat,
+      money,
+    });
+    if (!answer.ok && answer.retryAfterMs !== undefined) return deps.send(socket, { kind: "room-ack", requestId, ok: false, code: answer.code, reason: answer.reason, retryAfterMs: answer.retryAfterMs });
+    if (!answer.ok) return ack(socket, requestId, { ok: false, code: answer.code, reason: answer.reason });
+    return ack(socket, requestId, { ok: true, data: { received: answer.received, message: answer.message } });
+  }
+
   /** LIVE-2F/3D (C9-01): "Your tables" -- every table whose record seats this principal, by what it is NOW
    *  (`classifyNow`: stage one's line for a table not reconciled yet, never the record's claim). Cancelled, expired and
    *  archived tables are gone and not listed; nor is anything a kicked or unseated principal could only watch. */
@@ -2561,6 +2623,7 @@ export function createRoomHost(deps: RoomHostDeps) {
     clock,
     /* P3-ACCT: the trust indicators' reads (server-side only). */
     readableSeats,
+    seatPrincipalsOf,
     tablesOf,
     /* ESCROW-3A (brief §6): the money games the index knows (never a replay; the coordinator loads them). */
     financialGameIds: (): string[] => [...recordIndex.values()].filter((record) => settlement.retentionOf(record).kind === "financial").map((record) => record.game_id),

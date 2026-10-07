@@ -8,7 +8,9 @@
 
 import { useSyncExternalStore } from "react";
 
-export type InfoPage = "terms" | "rules";
+/** Phase 3 (P3-N035): and the conduct reviewers' panel -- opened from the profile menu, for a reviewer account only (the
+ *  server answers anyone else's review calls as routes that do not exist). */
+export type InfoPage = "terms" | "rules" | "conduct-review";
 
 let open: InfoPage | null = null;
 /* Re-review N7: the page this one was opened from (the Terms from the Rules): closing goes back there. */

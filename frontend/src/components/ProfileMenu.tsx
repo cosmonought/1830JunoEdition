@@ -58,6 +58,8 @@ import { renewRoomLinks } from "../utils/roomLink";
 import { ConfirmItsYou } from "./ConfirmItsYou";
 import { KeplrMark } from "./money/KeplrMark";
 import { MyTrustFacts } from "./TrustFacts";
+import { conductRole } from "../utils/conductApi";
+import { openInfoPage } from "../utils/infoPages";
 import { browserConsentKeys } from "../money/consentKeys";
 import { disabledLook, profileStyles as styles } from "./profileStyles";
 import { SANDBOX_INK, SANDBOX_RAISED, SANDBOX_RULE_STRONG, SANDBOX_TEXT } from "../styles/palette";
@@ -116,6 +118,19 @@ function MenuPanel({ port, name, otherSessions, onClose }: { port: SessionPort; 
   useEffect(() => {
     refresh();
   }, [refresh]);
+  /* Phase 3 (P3-N035): only an account the server names as a conduct reviewer sees the review entry. */
+  const [reviewer, setReviewer] = useState(false);
+  useEffect(() => {
+    let live = true;
+    void conductRole(port)
+      .then((answer) => {
+        if (live) setReviewer(answer);
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [port]);
 
   const go = (next: View) => {
     setError(null);
@@ -316,6 +331,19 @@ function MenuPanel({ port, name, otherSessions, onClose }: { port: SessionPort; 
             </div>
           ) : null}
           <MyTrustFacts port={port} />
+          {reviewer ? (
+            <button
+              type="button"
+              style={styles.secondary}
+              onClick={() => {
+                onClose();
+                openInfoPage("conduct-review");
+              }}
+              data-testid="profile-menu-conduct-review"
+            >
+              Review conduct reports
+            </button>
+          ) : null}
           {details !== null ? (
             <button
               type="button"

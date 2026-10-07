@@ -31,9 +31,11 @@ const K = new Uint32Array([
   0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
 ]);
 
-/** UTF-8 bytes of a string. */
+/** UTF-8 bytes of a string. Written into one preallocated buffer (at most three bytes per UTF-16 unit), so a long
+ *  string never becomes an array of boxed numbers. */
 export function utf8Bytes(text: string): Uint8Array {
-  const out: number[] = [];
+  const out = new Uint8Array(text.length * 3);
+  let n = 0;
   for (let at = 0; at < text.length; at += 1) {
     let code = text.charCodeAt(at);
     if (code >= 0xd800 && code <= 0xdbff && at + 1 < text.length) {
@@ -44,88 +46,160 @@ export function utf8Bytes(text: string): Uint8Array {
       }
     }
     if (code >= 0xd800 && code <= 0xdfff) code = 0xfffd; // a lone surrogate, as TextEncoder encodes it
-    if (code < 0x80) out.push(code);
-    else if (code < 0x800) out.push(0xc0 | (code >> 6), 0x80 | (code & 0x3f));
-    else if (code < 0x10000) {
-      out.push(0xe0 | (code >> 12), 0x80 | ((code >> 6) & 0x3f), 0x80 | (code & 0x3f));
+    if (code < 0x80) out[n++] = code;
+    else if (code < 0x800) {
+      out[n++] = 0xc0 | (code >> 6);
+      out[n++] = 0x80 | (code & 0x3f);
+    } else if (code < 0x10000) {
+      out[n++] = 0xe0 | (code >> 12);
+      out[n++] = 0x80 | ((code >> 6) & 0x3f);
+      out[n++] = 0x80 | (code & 0x3f);
     } else {
-      out.push(
-        0xf0 | (code >> 18),
-        0x80 | ((code >> 12) & 0x3f),
-        0x80 | ((code >> 6) & 0x3f),
-        0x80 | (code & 0x3f),
-      );
+      /* A surrogate pair: two UTF-16 units, four bytes -- within the 3-per-unit allowance. */
+      out[n++] = 0xf0 | (code >> 18);
+      out[n++] = 0x80 | ((code >> 12) & 0x3f);
+      out[n++] = 0x80 | ((code >> 6) & 0x3f);
+      out[n++] = 0x80 | (code & 0x3f);
     }
   }
-  return Uint8Array.from(out);
+  return out.slice(0, n);
 }
 
 const rotr = (x: number, n: number): number => (x >>> n) | (x << (32 - n));
 
-/** SHA-256 of the bytes, as 64 lowercase hex characters. */
-export function sha256HexOfBytes(message: Uint8Array): string {
-  const bitLength = message.length * 8;
-  /* PADDING: a 1 bit, zeros to 56 mod 64, then the length as a 64-bit big-endian integer. Messages here are
-     far below 2^53 bits, so the high word of the length is the integer division by 2^32. */
-  const paddedLength = (((message.length + 8) >> 6) + 1) << 6;
-  const padded = new Uint8Array(paddedLength);
-  padded.set(message);
-  padded[message.length] = 0x80;
-  const view = new DataView(padded.buffer);
-  view.setUint32(paddedLength - 8, Math.floor(bitLength / 0x100000000), false);
-  view.setUint32(paddedLength - 4, bitLength >>> 0, false);
+const IV = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19];
 
-  const h = new Uint32Array([
-    0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
-  ]);
-  const w = new Uint32Array(64);
-
-  for (let block = 0; block < paddedLength; block += 64) {
-    for (let t = 0; t < 16; t += 1) w[t] = view.getUint32(block + t * 4, false);
-    for (let t = 16; t < 64; t += 1) {
-      const s0 = rotr(w[t - 15], 7) ^ rotr(w[t - 15], 18) ^ (w[t - 15] >>> 3);
-      const s1 = rotr(w[t - 2], 17) ^ rotr(w[t - 2], 19) ^ (w[t - 2] >>> 10);
-      w[t] = (w[t - 16] + s0 + w[t - 7] + s1) >>> 0;
-    }
-
-    // Indexed rather than destructured: the frontend builds to es5, where a typed array cannot be iterated.
-    let a = h[0];
-    let b = h[1];
-    let c = h[2];
-    let d = h[3];
-    let e = h[4];
-    let f = h[5];
-    let g = h[6];
-    let hh = h[7];
-    for (let t = 0; t < 64; t += 1) {
-      const S1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25);
-      const ch = (e & f) ^ (~e & g);
-      const temp1 = (hh + S1 + ch + K[t] + w[t]) >>> 0;
-      const S0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22);
-      const maj = (a & b) ^ (a & c) ^ (b & c);
-      const temp2 = (S0 + maj) >>> 0;
-      hh = g;
-      g = f;
-      f = e;
-      e = (d + temp1) >>> 0;
-      d = c;
-      c = b;
-      b = a;
-      a = (temp1 + temp2) >>> 0;
-    }
-    h[0] = (h[0] + a) >>> 0;
-    h[1] = (h[1] + b) >>> 0;
-    h[2] = (h[2] + c) >>> 0;
-    h[3] = (h[3] + d) >>> 0;
-    h[4] = (h[4] + e) >>> 0;
-    h[5] = (h[5] + f) >>> 0;
-    h[6] = (h[6] + g) >>> 0;
-    h[7] = (h[7] + hh) >>> 0;
+/** One 64-byte block into the state `h` (FIPS 180-4 §6.2.2). */
+function compress(h: Uint32Array, block: Uint8Array, offset: number, w: Uint32Array): void {
+  for (let t = 0; t < 16; t += 1) {
+    const at = offset + t * 4;
+    w[t] = ((block[at] << 24) | (block[at + 1] << 16) | (block[at + 2] << 8) | block[at + 3]) >>> 0;
+  }
+  for (let t = 16; t < 64; t += 1) {
+    const s0 = rotr(w[t - 15], 7) ^ rotr(w[t - 15], 18) ^ (w[t - 15] >>> 3);
+    const s1 = rotr(w[t - 2], 17) ^ rotr(w[t - 2], 19) ^ (w[t - 2] >>> 10);
+    w[t] = (w[t - 16] + s0 + w[t - 7] + s1) >>> 0;
   }
 
-  let hex = "";
-  for (let i = 0; i < 8; i += 1) hex += h[i].toString(16).padStart(8, "0");
-  return hex;
+  // Indexed rather than destructured: the frontend builds to es5, where a typed array cannot be iterated.
+  let a = h[0];
+  let b = h[1];
+  let c = h[2];
+  let d = h[3];
+  let e = h[4];
+  let f = h[5];
+  let g = h[6];
+  let hh = h[7];
+  for (let t = 0; t < 64; t += 1) {
+    const S1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25);
+    const ch = (e & f) ^ (~e & g);
+    const temp1 = (hh + S1 + ch + K[t] + w[t]) >>> 0;
+    const S0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22);
+    const maj = (a & b) ^ (a & c) ^ (b & c);
+    const temp2 = (S0 + maj) >>> 0;
+    hh = g;
+    g = f;
+    f = e;
+    e = (d + temp1) >>> 0;
+    d = c;
+    c = b;
+    b = a;
+    a = (temp1 + temp2) >>> 0;
+  }
+  h[0] = (h[0] + a) >>> 0;
+  h[1] = (h[1] + b) >>> 0;
+  h[2] = (h[2] + c) >>> 0;
+  h[3] = (h[3] + d) >>> 0;
+  h[4] = (h[4] + e) >>> 0;
+  h[5] = (h[5] + f) >>> 0;
+  h[6] = (h[6] + g) >>> 0;
+  h[7] = (h[7] + hh) >>> 0;
+}
+
+/* ==================================================================
+    PHASE 3 FINAL CLOCKS (owner ruling, 2026-10-07): THE DIGEST, STREAMED
+   ==================================================================
+   A game's history has no length limit, so its log hash is taken INCREMENTALLY: bytes are fed as they come, whole
+   blocks are compressed at once, and the state can be CLONED -- a checkpoint of the cumulative hash after any prefix,
+   from which a longer prefix is finished without reading the shorter one again (`logHash.ts`). The digest is the
+   same SHA-256, bit for bit: one implementation, the FIPS vectors pin it. */
+export class Sha256 {
+  private readonly h: Uint32Array;
+  private readonly block: Uint8Array;
+  private readonly w = new Uint32Array(64);
+  private filled: number;
+  /** Bytes fed so far (well below 2^53). */
+  private total: number;
+
+  constructor(from?: Sha256) {
+    this.h = from === undefined ? new Uint32Array(IV) : new Uint32Array(from.h);
+    this.block = from === undefined ? new Uint8Array(64) : new Uint8Array(from.block);
+    this.filled = from === undefined ? 0 : from.filled;
+    this.total = from === undefined ? 0 : from.total;
+  }
+
+  /** An independent copy of this state (the cumulative hash of everything fed so far). */
+  clone(): Sha256 {
+    return new Sha256(this);
+  }
+
+  /** Bytes fed so far. */
+  get length(): number {
+    return this.total;
+  }
+
+  update(bytes: Uint8Array): this {
+    let at = 0;
+    this.total += bytes.length;
+    if (this.filled > 0) {
+      const take = Math.min(64 - this.filled, bytes.length);
+      this.block.set(bytes.subarray(0, take), this.filled);
+      this.filled += take;
+      at = take;
+      if (this.filled < 64) return this;
+      compress(this.h, this.block, 0, this.w);
+      this.filled = 0;
+    }
+    for (; at + 64 <= bytes.length; at += 64) compress(this.h, bytes, at, this.w);
+    if (at < bytes.length) {
+      this.block.set(bytes.subarray(at), 0);
+      this.filled = bytes.length - at;
+    }
+    return this;
+  }
+
+  /** The digest of everything fed so far, as 64 lowercase hex characters. Leaves this state as it was (the padding
+   *  is applied to a copy), so feeding may continue. */
+  digestHex(): string {
+    const h = new Uint32Array(this.h);
+    const w = new Uint32Array(64);
+    /* PADDING: a 1 bit, zeros to 56 mod 64, then the length as a 64-bit big-endian integer. Messages here are far
+       below 2^53 bits, so the high word of the length is the integer division by 2^32. */
+    const tailLength = this.filled + 9 <= 64 ? 64 : 128;
+    const tail = new Uint8Array(tailLength);
+    tail.set(this.block.subarray(0, this.filled));
+    tail[this.filled] = 0x80;
+    const bitLength = this.total * 8;
+    const high = Math.floor(bitLength / 0x100000000);
+    const low = bitLength >>> 0;
+    tail[tailLength - 8] = (high >>> 24) & 0xff;
+    tail[tailLength - 7] = (high >>> 16) & 0xff;
+    tail[tailLength - 6] = (high >>> 8) & 0xff;
+    tail[tailLength - 5] = high & 0xff;
+    tail[tailLength - 4] = (low >>> 24) & 0xff;
+    tail[tailLength - 3] = (low >>> 16) & 0xff;
+    tail[tailLength - 2] = (low >>> 8) & 0xff;
+    tail[tailLength - 1] = low & 0xff;
+    for (let at = 0; at < tailLength; at += 64) compress(h, tail, at, w);
+    let hex = "";
+    for (let i = 0; i < 8; i += 1) hex += h[i].toString(16).padStart(8, "0");
+    return hex;
+  }
+}
+
+/** SHA-256 of the bytes, as 64 lowercase hex characters. */
+export function sha256HexOfBytes(message: Uint8Array): string {
+  return new Sha256().update(message).digestHex();
 }
 
 /** SHA-256 of a string's UTF-8 bytes, as 64 lowercase hex characters. */

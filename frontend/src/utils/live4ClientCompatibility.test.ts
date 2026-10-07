@@ -906,7 +906,10 @@ describe("the game link speaks client protocol 1", () => {
     last().open();
     void client.submit(PASS);
     const [hello, submit] = last().sent;
-    expect(Object.keys(hello).sort()).toEqual(["baseIndex", "build", "gameId", "kind"]);
+    /* Phase 3 final clocks: `pages: 1` is the one addition -- a transport capability (this link reassembles a long
+       catch-up sent in pages), never an identity or a build. */
+    expect(Object.keys(hello).sort()).toEqual(["baseIndex", "build", "gameId", "kind", "pages"]);
+    expect(hello.pages).toBe(1);
     expect(Object.keys(submit).sort()).toEqual(["baseIndex", "build", "kind", "msg", "submissionId"]);
   });
 });

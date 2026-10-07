@@ -150,11 +150,14 @@ describe("the frame envelope", () => {
     /* IT SKIPPED THE STALENESS CHECK. `RoomSession.submit` compares `baseIndex` with the log's length; a
        non-number made that comparison false, so a client arbitrarily far behind had its move applied on top
        of a board it had never seen. */
-    for (const baseIndex of ["abc", NaN, Infinity, undefined, null, 1.5, -2, 1e300, 10_000_001]) {
+    for (const baseIndex of ["abc", NaN, Infinity, undefined, null, 1.5, -2, 1e300, Number.MAX_SAFE_INTEGER + 1]) {
       expect(validateSubmitEnvelope({ build: "dev", baseIndex, submissionId: "x-1" }).ok).toBe(false);
     }
     expect(validateSubmitEnvelope({ build: "dev", baseIndex: -1, submissionId: "x-1" }).ok).toBe(true);
     expect(validateSubmitEnvelope({ build: "dev", baseIndex: 0, submissionId: "x-1" }).ok).toBe(true);
+    /* Phase 3 final clocks (owner ruling, 2026-10-07): no history length is a transport rule either -- a position past
+       the former 10,000,000 bound is a log position (the room's own watermark is the real bound: `ahead`). */
+    expect(validateSubmitEnvelope({ build: "dev", baseIndex: 10_000_001, submissionId: "x-1" }).ok).toBe(true);
   });
 
   it("rejects a frame with no build, and a non-string submissionId", () => {

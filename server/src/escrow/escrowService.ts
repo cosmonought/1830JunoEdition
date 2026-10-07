@@ -66,7 +66,9 @@ import { freezeEscrowRoster, type EscrowTrustPolicy } from "../../../frontend/sr
 import { variantsDigestV1 } from "../../../frontend/src/gameEngine/escrow/variantsDigest";
 import { canonicalStateText } from "../../../frontend/src/gameEngine/settlementDigest";
 import { annulDigestV1, consentDigestV1 } from "../../../frontend/src/gameEngine/settlementPayload";
-import { logHash } from "../../../frontend/src/gameEngine/logHash";
+/* Phase 3 final clocks: the CUMULATIVE log hash (segment checkpoints) -- exactly `logHash`, without re-reading a long
+   history at every boundary. */
+import { cumulativeLogHash as logHash } from "../../../frontend/src/gameEngine/logHash";
 import type { GameStateResponse } from "../../../frontend/src/gameEngine/gameState";
 import type { GameVariants } from "../../../frontend/src/gameEngine/gameVariants";
 import type { ServerLogEntry } from "../../../frontend/src/utils/roomSession";

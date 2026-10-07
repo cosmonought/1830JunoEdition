@@ -88,14 +88,16 @@ export function createDynamoLogStore(options: GameTableStoreOptions): DynamoLogS
   /** Rooms this instance has validated, and where each continues. Dropped on any outcome that is not definite. */
   const validated = new Map<string, number>();
 
-  async function validatedLoad(room: string): Promise<ServerLogEntry[]> {
-    return (await validatedRead(room)).entries;
+  async function validatedLoad(room: string, onProgress?: () => void): Promise<ServerLogEntry[]> {
+    return (await validatedRead(room, onProgress)).entries;
   }
 
   /** The room's committed log, VALIDATED (see the header): its entries and its exact stored lines. */
-  async function validatedRead(room: string): Promise<{ readonly entries: ServerLogEntry[]; readonly lines: readonly string[] }> {
+  async function validatedRead(room: string, onProgress?: () => void): Promise<{ readonly entries: ServerLogEntry[]; readonly lines: readonly string[] }> {
     const head = headOf(await getItem(client, table, headKey(room)));
-    const items = await queryAll(client, table, gamePk(room), { prefix: LOG_PREFIX, pageSize });
+    /* One item per entry, read a page at a time: each page is reported, so a long history is bounded per page, never
+       as a whole (no length limit -- owner ruling, 2026-10-07). */
+    const items = await queryAll(client, table, gamePk(room), { prefix: LOG_PREFIX, pageSize, ...(onProgress !== undefined ? { onPage: onProgress } : {}) });
     const where = `the log of ${room}`;
     if (items.length === 0) {
       if (head !== null && head.log_next_index !== 0) throw new StoreCorruptError(`${where}: its HEAD counts ${head.log_next_index} entries and none is stored`, where, 0);
@@ -212,7 +214,7 @@ export function createDynamoLogStore(options: GameTableStoreOptions): DynamoLogS
   }
 
   return {
-    loadLog: (room) => validatedLoad(room),
+    loadLog: (room, options) => validatedLoad(room, options?.onProgress),
     appendBatch,
     async appendLog(room, entries) {
       throwUnlessCommitted(await appendBatch(room, entries));

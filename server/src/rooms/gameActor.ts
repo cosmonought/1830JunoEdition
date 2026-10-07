@@ -185,7 +185,8 @@ export interface Tx {
  *  LIVE-3B: writes answer with a classified outcome; a rejection is read as uncertain (`outcomeOf`). */
 export interface GameStorePort {
   /** Rejects `StoreCorruptError` for a log held for an operator (the actor holds the game `corrupt`). */
-  loadLog(gameId: string): Promise<readonly ServerLogEntry[]>;
+  /** `onProgress`: a paged store reports each page read (the deadline then bounds a page, not the whole history). */
+  loadLog(gameId: string, options?: { readonly onProgress?: () => void }): Promise<readonly ServerLogEntry[]>;
   /** One submission's whole burst (L3-4): committed, definitely not written, or uncertain. */
   appendBatch(gameId: string, entries: readonly ServerLogEntry[]): Promise<StoreWriteOutcome>;
   /** LIVE-2C: the GameRecord (`null` for a game that does not exist). */
@@ -459,7 +460,7 @@ export class GameActor {
     let newerLog: string | null = null;
     if (durable === null) {
       try {
-        entries = await this.awaitRead(this.deps.store.loadLog(this.gameId), "load of the log");
+        entries = await this.awaitProgressingRead((onProgress) => this.deps.store.loadLog(this.gameId, { onProgress }), "load of the log");
       } catch (error) {
         /* LIVE-4 (integration, N-3): a log whose complete lines are a NEWER build's format is not damage and was not
            touched by the store: the game is not continued here (derived) -- the version hold a newer GameRecord gets,
@@ -587,6 +588,32 @@ export class GameActor {
       return await Promise.race([pending, late]);
     } finally {
       clearTimeout(timer);
+    }
+  }
+
+  /** E-11 for a read that reports PROGRESS (a log read page by page): the timeout bounds the wait for the NEXT page, so
+   *  a long history -- which has no length limit (Phase 3 final clocks, owner ruling 2026-10-07) -- is never refused
+   *  for its length, while a store that stops answering is still told apart in `storeTimeoutMs`. */
+  private async awaitProgressingRead<T>(call: (onProgress: () => void) => Promise<T>, label: string): Promise<T> {
+    const limit = this.deps.storeTimeoutMs ?? STORE_TIMEOUT_MS;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let fail: ((error: Error) => void) | null = null;
+    const arm = () => {
+      if (timer !== undefined) clearTimeout(timer);
+      timer = setTimeout(() => {
+        this.deps.counters.storeTimeouts += 1;
+        fail?.(new Error(`the store did not answer the ${label} of ${this.gameId} within ${limit} ms`));
+      }, limit);
+    };
+    const late = new Promise<never>((_resolve, reject) => {
+      fail = reject;
+    });
+    arm();
+    try {
+      return await Promise.race([call(arm), late]);
+    } finally {
+      clearTimeout(timer);
+      fail = null;
     }
   }
 
@@ -988,7 +1015,7 @@ export class GameActor {
   private async adoptStore(before: CommittedView): Promise<Adopted> {
     let entries: readonly ServerLogEntry[];
     try {
-      entries = await this.awaitRead(this.deps.store.loadLog(this.gameId), "read-back of the log");
+      entries = await this.awaitProgressingRead((onProgress) => this.deps.store.loadLog(this.gameId, { onProgress }), "read-back of the log");
     } catch (error) {
       return { ok: false, detail: `the store could not be read back: ${describe(error)}` };
     }

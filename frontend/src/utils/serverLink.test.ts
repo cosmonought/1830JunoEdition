@@ -717,3 +717,57 @@ describe("LIVE-2D: access lost is terminal", () => {
     expect(scheduled).toHaveLength(1);
   });
 });
+
+describe("Phase 3 final clocks (owner ruling, 2026-10-07): a long history is caught up in pages", () => {
+  it("says it reassembles pages in its hello", () => {
+    const { wire } = link();
+    wire.open();
+    expect(wire.frames()[0]).toMatchObject({ kind: "hello", pages: 1 });
+  });
+
+  it("holds every page, then hands the WHOLE catch-up over once -- in order, as history, with the last page's digest -- and settles a submission that landed in an early page", async () => {
+    const digests: Array<string | null> = [];
+    const sources: string[] = [];
+    const { client, wire, entries } = link({
+      onEntries: (batch, digest, _fields, source) => {
+        entries.push([...batch]);
+        digests.push(digest);
+        sources.push(source);
+      },
+    });
+    const pending = client.submit({ PassTurn: { game_id: 0 } } as never);
+    wire.open();
+    wire.drop(); // the move was on the wire when the socket dropped: the next hello's catch-up settles it
+    wire.open();
+    wire.deliver({ kind: "catch-up", entries: [entry(0), entry(1, { submission_id: "n1", actor: "p-alice" })], digest: "", build: "b", more: true });
+    wire.deliver({ kind: "catch-up", entries: [entry(2), entry(3)], digest: "", build: "b", more: true });
+    expect(entries).toHaveLength(0);
+    wire.deliver({ kind: "catch-up", entries: [entry(4)], digest: "d-final", build: "b", inFlight: [] });
+    expect(entries).toEqual([[entry(0), entry(1, { submission_id: "n1", actor: "p-alice" }), entry(2), entry(3), entry(4)]]);
+    expect(digests).toEqual(["d-final"]);
+    expect(sources).toEqual(["catch-up"]);
+    await expect(pending).resolves.toBe(1);
+    /* The next hello names the last entry of the reassembled history. */
+    wire.drop();
+    wire.open();
+    const hellos = wire.frames().filter((frame) => frame.kind === "hello");
+    expect(hellos[hellos.length - 1]).toMatchObject({ baseIndex: 4, baseId: "e4", pages: 1 });
+  });
+
+  it("drops the pages of a catch-up cut off with its socket: the next hello's catch-up is taken whole, never appended to a fragment", () => {
+    const { wire, entries } = link();
+    wire.open();
+    wire.deliver({ kind: "catch-up", entries: [entry(0), entry(1)], digest: "", build: "b", more: true });
+    wire.drop();
+    wire.open();
+    wire.deliver({ kind: "catch-up", entries: [entry(0), entry(1), entry(2)], digest: "d", build: "b", inFlight: [] });
+    expect(entries).toEqual([[entry(0), entry(1), entry(2)]]);
+  });
+
+  it("a short history is still one frame (no page)", () => {
+    const { wire, entries } = link();
+    wire.open();
+    wire.deliver({ kind: "catch-up", entries: [entry(0)], digest: "d", build: "b", inFlight: [] });
+    expect(entries).toEqual([[entry(0)]]);
+  });
+});

@@ -79,7 +79,7 @@ export interface LogStore {
   /** Everything durable for this room, in index order, store metadata stripped. Empty for a room never written.
    *  LIVE-3B: rejects with `StoreCorruptError` when the file holds damage that is not a torn final batch. LIVE-4
    *  (N-3): rejects with `StoreIncompatibleError`, touching nothing, when a complete line is a newer build's format. */
-  loadLog(room: string): Promise<readonly ServerLogEntry[]>;
+  loadLog(room: string, options?: LoadLogOptions): Promise<readonly ServerLogEntry[]>;
   /** The legacy throwing form: resolves only once the entries are durable; rejects `StoreDefiniteError` when
    *  nothing was written and anything else when the outcome is unknown. */
   appendLog(room: string, entries: readonly ServerLogEntry[]): Promise<void>;
@@ -102,6 +102,12 @@ export interface LogStore {
    *  scanning, repairing or holding the file. `first` is `null` for an empty file and `undefined` when the first line
    *  is not a whole entry (a torn deal batch is the load's to repair; only the full scan tells it from damage). */
   readHead?(room: string): Promise<LogHeadRead>;
+}
+
+/** Phase 3 final clocks (owner ruling, 2026-10-07: a history has no length limit): a store that reads a log in pages
+ *  says so after each page, so the caller's deadline bounds each page rather than the whole history. */
+export interface LoadLogOptions {
+  readonly onProgress?: () => void;
 }
 
 export interface LogHeadRead {

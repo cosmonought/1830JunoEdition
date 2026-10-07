@@ -313,7 +313,7 @@ export async function snapshot(client: DynamoDBClient, table: string, keys: read
 }
 
 /** Every item of a partition (optionally under a sort-key prefix), in sort order, every page, strongly consistent. */
-export async function queryAll(client: DynamoDBClient, table: string, pk: string, options: { readonly prefix?: string; readonly pageSize?: number } = {}): Promise<Item[]> {
+export async function queryAll(client: DynamoDBClient, table: string, pk: string, options: { readonly prefix?: string; readonly pageSize?: number; readonly onPage?: () => void } = {}): Promise<Item[]> {
   const out: Item[] = [];
   let start: Item | undefined;
   do {
@@ -328,8 +328,9 @@ export async function queryAll(client: DynamoDBClient, table: string, pk: string
       }),
       { abortSignal: deadline() },
     );
-    out.push(...(answer.Items ?? []));
+    for (const item of answer.Items ?? []) out.push(item);
     start = answer.LastEvaluatedKey;
+    options.onPage?.();
   } while (start !== undefined);
   return out;
 }

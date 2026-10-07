@@ -23,7 +23,7 @@
 // BEFORE the actor task that writes a record naming it. Activation that succeeds while the room op then fails
 // leaves a harmless activated principal with no seat; the inverse cannot happen.
 
-import { effectiveActions, dealEntryOf } from "../../../frontend/src/gameEngine/logRevert";
+import { effectiveActions, dealEntryOf, revertTargetOf } from "../../../frontend/src/gameEngine/logRevert";
 import { resolveVariants } from "../../../frontend/src/gameEngine/gameVariants";
 import { sanitizeText } from "../../../frontend/src/gameEngine/messageSchema";
 import type { RoomChatEntry } from "../../../frontend/src/utils/roomProtocol";
@@ -221,8 +221,6 @@ export interface RoomHostClockConfig {
   readonly moneyStartedAtSecs?: (gameId: string) => Promise<number | null>;
   /** The player-reporting lane's hook (safe conduct evidence). */
   readonly conduct?: ClockConductHook;
-  /** The ingress log cap (`gameServer.ts` limits): a table at it takes no move, so its clock is held. */
-  readonly logCap?: number;
 }
 
 /** The board's own end and close, read off a session. */
@@ -250,8 +248,55 @@ export function factsFromRecord(record: Readonly<GameRecord>): LogFacts {
   };
 }
 
+/* ==================================================================
+    PHASE 3 FINAL CLOCKS: THE DEAL OF A LONG HISTORY, FOUND ONCE
+   ==================================================================
+   Every read gate (a push, a presence hint, a chat line, a view) asks which deal stands, and a history has no length
+   limit (owner ruling, 2026-10-07), so the answer is carried forward per history -- keyed by its FIRST entry object,
+   which every committed view of one game shares -- and only the entries appended since it was last asked are read.
+   Only a `RevertTo` that reaches the deal (or anything, while none stands) or a new `SetupGame` can change it; either
+   recomputes it from the whole effective log, exactly as before. A history that is not the remembered one (shorter,
+   or another entry where the remembered last one stood) is recomputed too. */
+interface DealMemo {
+  readonly length: number;
+  readonly lastIndex: number;
+  readonly lastId: string;
+  readonly deal: ServerLogEntry | null;
+}
+const dealMemos = new WeakMap<object, DealMemo>();
+
+function mayMoveTheDeal(entry: ServerLogEntry, deal: ServerLogEntry | null): boolean {
+  if (entry.payload.includes("SetupGame")) return true;
+  if (!entry.payload.includes("RevertTo")) return false;
+  const target = revertTargetOf(entry);
+  return target !== null && (deal === null || target <= deal.index);
+}
+
+/** `dealEntryOf(effectiveActions(entries))`, reading only what was appended since the history was last asked. */
+export function standingDealOf(entries: readonly ServerLogEntry[]): ServerLogEntry | null {
+  const first = entries[0];
+  if (first === undefined) return null;
+  const memo = dealMemos.get(first);
+  let deal: ServerLogEntry | null;
+  const anchor = memo === undefined ? undefined : entries[memo.length - 1];
+  if (memo !== undefined && anchor !== undefined && anchor.index === memo.lastIndex && anchor.id === memo.lastId && entries.length >= memo.length) {
+    deal = memo.deal;
+    for (let at = memo.length; at < entries.length; at += 1) {
+      if (mayMoveTheDeal(entries[at], deal)) {
+        deal = dealEntryOf(effectiveActions(entries));
+        break;
+      }
+    }
+  } else {
+    deal = dealEntryOf(effectiveActions(entries));
+  }
+  const last = entries[entries.length - 1];
+  dealMemos.set(first, { length: entries.length, lastIndex: last.index, lastId: last.id, deal });
+  return deal;
+}
+
 export function factsFromEntries(entries: readonly ServerLogEntry[], ended: boolean, closed: boolean): LogFacts {
-  const deal = dealEntryOf(effectiveActions(entries));
+  const deal = standingDealOf(entries);
   if (deal === null) return { dealt: false, dealAt: null, turnOrder: null, rulesEngineVersion: null, ended: false, closed: false };
   let turnOrder: string[] | null = null;
   let rulesEngineVersion: number | null = null;
@@ -423,12 +468,6 @@ export function createRoomHost(deps: RoomHostDeps) {
           held: (gameId) => {
             const game = peekLoaded(gameId);
             return game !== undefined && (game.view.hold !== null || game.view.incompatible !== null || unreconciled.has(gameId));
-          },
-          /* A full log (the ingress cap) takes no move again: the clock's timers stop (nobody can make the owed move);
-             votes, the annulment and a sealed remedy carry on. */
-          frozen: (gameId) => {
-            const game = peekLoaded(gameId);
-            return game !== undefined && deps.clock?.logCap !== undefined && game.view.entries.length >= deps.clock.logCap;
           },
           ...(deps.clock.remedy !== undefined ? { remedy: deps.clock.remedy } : {}),
           ...(deps.clock.moneyTerminal !== undefined ? { moneyTerminal: deps.clock.moneyTerminal } : {}),

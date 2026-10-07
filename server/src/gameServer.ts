@@ -349,6 +349,13 @@ interface Attached {
    ================================================================== */
 /** §4.1: the store definitely did not take the move (nothing past the committed history), so it was not made. */
 const RECORD_FAILED_REASON = "The server could not record that move, so it was not made. Try again.";
+/** Phase 3 final clocks: a catch-up larger than this (serialized entries) is sent in pages of at most this size. */
+export const CATCH_UP_PAGE_BYTES = 512 * 1024;
+/** The next page is sent once less than this is buffered for the socket. */
+export const CATCH_UP_LOW_WATER_BYTES = 1024 * 1024;
+const CATCH_UP_DRAIN_POLL_MS = 5;
+/** Frames that may wait behind one socket's catch-up pages before it is closed as a slow consumer. */
+const CATCH_UP_QUEUE_BOUND = 4_096;
 /** E-7: the game's queue is full. */
 const BUSY_REASON = "The game server is busy with this game. Try again in a moment.";
 /** E-8: the task was never run -- its deadline passed while it waited behind other work. */
@@ -388,7 +395,6 @@ const SUBMIT_RATE_LIMITED_REASON = "You are sending moves too quickly. Wait a mo
 /** Phase 3 final clocks (owner-policy correction): offer FREQUENCY (transport), never an offer limit of the game. */
 export const OFFER_RATE_LIMITED_REASON = "You are making offers too quickly. Wait a moment and try again.";
 const REVERT_BUDGET_REASON = "Too many undos in the last hour. Play on, and undo again later.";
-const LOG_FULL_REASON = "This game has reached the server's limit on its length and cannot take another move.";
 /** LIVE-2C (LIVE-2 §6.3 #20): the deal of a server-owned game is the server's. */
 const SERVER_DEALS_REASON = "The deal is made by the server \u2014 press Start.";
 /** LIVE-2D (LIVE-2 §13.4 step 4): THE LEGACY ROOM HANDLERS COMPILED INTO THIS BUILD -- none. LIVE-2C registered
@@ -427,9 +433,11 @@ export function createGameServer(options: GameServerOptions): {
     slowConsumerClosed: number;
     keepaliveTerminated: number;
     stripped: number;
-    logFull: number;
     revertBudgetRefused: number;
     internal: number;
+    /** Phase 3 final clocks: long catch-ups sent in pages, and the pages sent. */
+    catchUpStreams: number;
+    catchUpPages: number;
   }>;
   /** LIVE-2A: the limits this server runs with. */
   limits: Readonly<ReturnType<typeof resolveLimits>>;
@@ -523,9 +531,10 @@ export function createGameServer(options: GameServerOptions): {
     slowConsumerClosed: 0,
     keepaliveTerminated: 0,
     stripped: 0,
-    logFull: 0,
     revertBudgetRefused: 0,
     internal: 0,
+    catchUpStreams: 0,
+    catchUpPages: 0,
   };
   /** LIVE-2A (§12.2): reverts per seat per hour -- `${room}\u0000${actor}` -> own actions and others'. In memory;
    *  a restart forgets it, which costs at most one more hour's budget. */
@@ -657,7 +666,90 @@ export function createGameServer(options: GameServerOptions): {
      would otherwise hold every fan-out frame in this process's memory; past the cap it is closed 1013 and sent
      nothing more. */
   const slowConsumers = new WeakSet<WebSocket>();
+  /* ==================================================================
+      PHASE 3 FINAL CLOCKS (owner ruling, 2026-10-07): A LONG HISTORY IS CAUGHT UP IN PAGES
+     ==================================================================
+     A game's log has no length limit, so its catch-up has none either -- and one frame of it could pass the slow-
+     consumer bound by itself (about 43,000 entries at ~200 bytes each), closing every socket that asked for it. To a
+     client whose hello said `pages: 1`, a catch-up larger than `CATCH_UP_PAGE_BYTES` is sent as consecutive pages
+     (`more: true`; the last carries the digest, the fields, `inReplyTo` and `inFlight`), each sent only once the socket
+     has drained below `CATCH_UP_LOW_WATER_BYTES` -- so what is buffered for one socket stays bounded however long the
+     game. Every other frame for that socket waits behind the pages, in order. A socket that stops draining is closed
+     as a slow consumer, exactly as before. The client reassembles the pages into the one catch-up a short history is. */
+  const pagedSockets = new WeakSet<WebSocket>();
+  const catchUpStreams = new WeakMap<WebSocket, { readonly queue: object[] }>();
+  const closeSlow = (socket: WebSocket, why: string) => {
+    slowConsumers.add(socket);
+    ingress.slowConsumerClosed += 1;
+    // eslint-disable-next-line no-console
+    console.warn(`  ingress: closed a slow consumer (${why}) -- 1013`);
+    socket.close(1013, "slow consumer");
+  };
+  const pagesOf = (frame: { entries: readonly ServerLogEntry[] } & Record<string, unknown>): object[] | null => {
+    const sizes = frame.entries.map((entry) => JSON.stringify(entry).length + 1);
+    const total = sizes.reduce((sum, size) => sum + size, 0);
+    if (total <= CATCH_UP_PAGE_BYTES) return null;
+    const pages: object[] = [];
+    let start = 0;
+    let bytes = 0;
+    for (let at = 0; at < frame.entries.length; at += 1) {
+      if (bytes > 0 && bytes + sizes[at] > CATCH_UP_PAGE_BYTES) {
+        pages.push({ kind: "catch-up", entries: frame.entries.slice(start, at), digest: "", build: frame.build, more: true });
+        start = at;
+        bytes = 0;
+      }
+      bytes += sizes[at];
+    }
+    pages.push({ ...frame, entries: frame.entries.slice(start) });
+    return pages;
+  };
+  const streamPages = async (socket: WebSocket, pages: readonly object[]): Promise<void> => {
+    const stream = { queue: [] as object[] };
+    catchUpStreams.set(socket, stream);
+    ingress.catchUpStreams += 1;
+    try {
+      for (const page of pages) {
+        let waited = 0;
+        while (socket.readyState === socket.OPEN && socket.bufferedAmount > CATCH_UP_LOW_WATER_BYTES) {
+          if (waited >= limits.pongTimeoutMs) {
+            closeSlow(socket, `a catch-up page waited ${waited} ms for ${socket.bufferedAmount} bytes to drain`);
+            return;
+          }
+          await new Promise((resolve) => setTimeout(resolve, CATCH_UP_DRAIN_POLL_MS));
+          waited += CATCH_UP_DRAIN_POLL_MS;
+        }
+        if (socket.readyState !== socket.OPEN || slowConsumers.has(socket)) return;
+        sendNow(socket, page);
+        ingress.catchUpPages += 1;
+      }
+    } finally {
+      if (catchUpStreams.get(socket) === stream) catchUpStreams.delete(socket);
+    }
+    /* What waited behind the pages, in order (a queued catch-up starts its own stream; what follows it waits again). */
+    for (const queued of stream.queue) send(socket, queued);
+  };
   const send = (socket: WebSocket, message: ServerFrame | object) => {
+    if (socket.readyState !== socket.OPEN || slowConsumers.has(socket)) return;
+    const stream = catchUpStreams.get(socket);
+    if (stream !== undefined) {
+      if (stream.queue.length >= CATCH_UP_QUEUE_BOUND) {
+        closeSlow(socket, `${stream.queue.length} frames waited behind a catch-up`);
+        return;
+      }
+      stream.queue.push(message);
+      return;
+    }
+    const frame = message as { kind?: unknown; entries?: unknown };
+    if (frame.kind === "catch-up" && Array.isArray(frame.entries) && pagedSockets.has(socket)) {
+      const pages = pagesOf(message as { entries: readonly ServerLogEntry[] } & Record<string, unknown>);
+      if (pages !== null) {
+        void streamPages(socket, pages);
+        return;
+      }
+    }
+    sendNow(socket, message);
+  };
+  const sendNow = (socket: WebSocket, message: ServerFrame | object) => {
     if (socket.readyState !== socket.OPEN || slowConsumers.has(socket)) return;
     if (socket.bufferedAmount > limits.maxOutboundBufferedBytes) {
       slowConsumers.add(socket);
@@ -686,7 +778,7 @@ export function createGameServer(options: GameServerOptions): {
      store with the classified methods (the file store) is asked directly; a legacy store that only resolves or
      rejects is read conservatively: a rejection is uncertain unless it threw `StoreDefiniteError`. */
   const storePort: GameStorePort = {
-    loadLog: async (code) => (store ? await store.loadLog(code) : []),
+    loadLog: async (code, loadOptions) => (store ? await store.loadLog(code, loadOptions) : []),
     appendBatch: async (code, entries) => {
       if (!store || entries.length === 0) return COMMITTED;
       if (store.appendBatch) return store.appendBatch(code, entries);
@@ -930,28 +1022,27 @@ export function createGameServer(options: GameServerOptions): {
       return;
     }
     /* ==================================================================
-        LIVE-2A (LIVE-2 §12.2): THE LOG HAS A LENGTH, AND UNDO HAS A BUDGET
+        LIVE-2A (LIVE-2 §12.2): UNDO HAS A BUDGET; THE LOG HAS NO LENGTH LIMIT
        ==================================================================
-       Both are read off the COMMITTED view, before anything is speculated, and a refusal for either appends
+       The undo budget is read off the COMMITTED view, before anything is speculated, and its refusal appends
        nothing, consumes no nonce and moves no `baseIndex` -- the two properties §12.2 requires of every rate
-       refusal. The cap is 10,000 entries (an alarm at 5,000); the budget is 30 reverts of the seat's own action
-       and 10 of another seat's (the host's reach) per hour, so patient undo churn can neither walk a game back
-       unobserved nor grow its log without bound. */
+       refusal: 30 reverts of the seat's own action and 10 of another seat's (the host's reach) per hour.
+       Phase 3 final clocks (owner ruling, 2026-10-07): A LONG BUT VALID GAME NEVER BECOMES UNPLAYABLE BECAUSE OF ITS
+       LENGTH. The former 10,000-entry cap is gone and nothing replaces it: the history is stored one entry per item
+       (DynamoDB) or line (file), hashed cumulatively, loaded with a progress-bound deadline and caught up in pages,
+       so no single object grows with it. Churn is bounded by FREQUENCY only (the submit, offer and undo buckets --
+       transport, never game legality). The ALARM stays: an operator is told once when a game's log passes
+       `logEntryAlarm` entries -- it changes nothing for the players. */
     const length = tx.view.entries.length;
     if (length >= limits.logEntryAlarm && !logAlarmed.has(attached.room)) {
       logAlarmed.add(attached.room);
       // eslint-disable-next-line no-console
-      console.warn(`  ingress: ${attached.room}'s log has reached ${length} entries (alarm at ${limits.logEntryAlarm}, cap ${limits.logEntryCap})`);
-    }
-    if (length >= limits.logEntryCap) {
-      ingress.logFull += 1;
-      answer({ kind: "refused", code: "log-full", reason: LOG_FULL_REASON, build: options.build });
-      return;
+      console.warn(`  ingress: ${attached.room}'s log has reached ${length} entries (an operator alarm at ${limits.logEntryAlarm}; there is no length limit)`);
     }
     /* Phase 3 final clocks (owner-policy correction): the history's length never changes which offers are legal and no
-       round counts offers. Offer CHURN -- the one optional message a seat can repeat at will, and the one that could
-       grow a timed table's log toward the cap above -- is bounded by FREQUENCY only, as transport: the ordinary
-       `rate-limited` answer with its wait, after which the same offer is taken. Only an offer that lands spends it. */
+       round counts offers. Offer CHURN -- the one optional message a seat can repeat at will -- is bounded by
+       FREQUENCY only, as transport: the ordinary `rate-limited` answer with its wait, after which the same offer is
+       taken. Only an offer that lands spends it. */
     const offering = host.clock !== null && classifyMessage(frame.msg).cls === "propose";
     if (offering) {
       const offerWait = host.offerBudget(attached.room, actor);
@@ -1482,7 +1573,7 @@ export function createGameServer(options: GameServerOptions): {
     ...(options.money !== undefined ? { money: options.money } : {}),
     boardFacts,
     /* Phase 3 final clocks */
-    ...(options.clock !== undefined ? { clock: { ...options.clock, now: clockTime, logCap: limits.logEntryCap } } : {}),
+    ...(options.clock !== undefined ? { clock: { ...options.clock, now: clockTime } } : {}),
     stampAt,
     /* LIVE-4 (L4-3): the room channel's client check. A game this pool does not continue is shown as such by its view
        (`holdKind: "incompatible"`, with its reason), so only a `reload` refuses a room socket. */
@@ -2008,7 +2099,10 @@ export function createGameServer(options: GameServerOptions): {
         }
         sockets.set(socket, { room: gameId, principalId: ctx.principalId });
         reindexGames(socket);
-        const helloFrame = frame as unknown as { baseIndex?: unknown; baseId?: unknown };
+        const helloFrame = frame as unknown as { baseIndex?: unknown; baseId?: unknown; pages?: unknown };
+        /* Phase 3 final clocks: a client that reassembles paged catch-ups says so in its hello. */
+        if (helloFrame.pages === 1) pagedSockets.add(socket);
+        else pagedSockets.delete(socket);
         const fromIndex = Number.isInteger(helloFrame.baseIndex) && (helloFrame.baseIndex as number) >= -1 ? (helloFrame.baseIndex as number) : -1;
         const baseId = typeof helloFrame.baseId === "string" ? helloFrame.baseId : undefined;
         unsubscribeLog(socket);

@@ -838,23 +838,24 @@ describe("LIVE-2A undo and revert authority", () => {
     }
   });
 
-  test("36 (§12.2): the log has a length cap -- a submit past it is refused log-full and appends nothing", async () => {
-    assert.equal(DEFAULT_INGRESS_LIMITS.logEntryCap, 10_000);
+  test("36 (§12.2, Phase 3 final clocks owner ruling 2026-10-07): the log has NO length cap -- past the operator alarm a submit is still applied and appended", async () => {
+    assert.equal("logEntryCap" in DEFAULT_INGRESS_LIMITS, false, "no length limit exists to configure");
     assert.equal(DEFAULT_INGRESS_LIMITS.logEntryAlarm, 5_000);
     const { control, records, gameId } = await ownedGame();
-    const { server, port } = await startServer({ store: control.store, records, limits: { logEntryCap: 2 } });
+    const { server, port } = await startServer({ store: control.store, records, limits: { logEntryAlarm: 2 } });
     try {
-      const { alice, last } = await dealt(port, gameId);
+      const { alice, bob, last } = await dealt(port, gameId);
       alice.submit(BUY, { baseIndex: last, submissionId: "buy" });
       const buy = await alice.answerTo("buy");
       assert.equal(buy.kind, "applied");
       const length = control.indices(gameId).length;
-      assert.ok(length >= 2);
-      alice.submit({ PassTurn: { game_id: 0 } }, { baseIndex: lastIndex(buy), submissionId: "over" });
-      const over = await alice.answerTo("over");
-      assert.equal(over.code, "log-full");
-      assert.equal(control.indices(gameId).length, length);
-      await alice.close();
+      assert.ok(length >= 2, "the log is past the (alarm-only) threshold");
+      /* The next seat's move past it (the old cap answered `log-full` here). */
+      bob.submit(BUY, { baseIndex: lastIndex(buy), submissionId: "past" });
+      const past = await bob.answerTo("past");
+      assert.equal(past.kind, "applied", JSON.stringify(past));
+      assert.ok(control.indices(gameId).length > length, "appended");
+      await Promise.all([alice.close(), bob.close()]);
     } finally {
       await stopServer(server);
     }

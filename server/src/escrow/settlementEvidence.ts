@@ -16,7 +16,9 @@
 // appraisal's own (turn order, keyed by the log's `player_id`s -- no principal); 3B maps them to chain seats through the
 // frozen roster and rebuilds the payload with `buildSettlementCoreV1`, which must agree.
 
-import { logHash } from "../../../frontend/src/gameEngine/logHash";
+/* Phase 3 final clocks: the CUMULATIVE log hash (segment checkpoints) -- exactly `logHash`, without re-reading a long
+   history at every boundary. */
+import { cumulativeLogHash as logHash } from "../../../frontend/src/gameEngine/logHash";
 import { appraiseCommittedState, canonicalStateText, terminalStateHashV1 } from "../../../frontend/src/gameEngine/settlementDigest";
 import { SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS, SettlementAppraisalError } from "../../../frontend/src/gameEngine/settlementAppraisal";
 import type { GameStateResponse } from "../../../frontend/src/gameEngine/gameState";

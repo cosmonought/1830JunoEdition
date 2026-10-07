@@ -308,7 +308,7 @@ describe("Live train offer: the proposer's clock freezes; the recipient has a di
     assert.deepEqual([sat.remaining(), sat.record.strikes, sat.record.declines.counts[`${A}>${B}`]], [15 * MIN, {}, 1]);
   });
 
-  test("LIVE: two declines A -> B (mixed kinds) block a third QUALIFYING A -> B offer that Operating Round; B -> A and A -> C stay open; the next OR clears it", () => {
+  test("LIVE: two declines A -> B (mixed kinds) block a third QUALIFYING A -> B offer in that round instance (operating sub-round 1.1); B -> A and A -> C stay open; the next operating sub-round (1.2) clears it", () => {
     const t = new Table("live");
     t.move(A, offering(offerOf("private", A, B, 1)), "propose");
     t.move(B, facts(turn(A, 0)), "reject");
@@ -326,7 +326,7 @@ describe("Live train offer: the proposer's clock freezes; the recipient has a di
     assert.equal(t.record.obligation?.trade?.proposer, B, "B -> A is a qualifying offer of its own");
     t.move(A, facts(turn(B, 1)), "reject");
     assert.deepEqual([t.record.declines.counts[`${B}>${A}`], t.record.declines.counts[`${A}>${B}`]], [1, 2]);
-    /* The next Operating Round clears every count. */
+    /* The next operating sub-round (a new round instance) clears every count. */
     t.move(B, facts(turn(A, 2), { roundKey: "OperatingRound/1/2" }));
     assert.deepEqual(t.record.declines, { round_key: "OperatingRound/1/2", counts: {}, offers: [] });
     assert.equal(t.refusal(A, "propose", { trainRecipient: B }), null);
@@ -564,7 +564,7 @@ describe("Live train offer: the proposer's clock freezes; the recipient has a di
     assert.equal(t.record.phase, "overdue");
   });
 
-  test("two declines (one rejection, one expiry) (train) block a third A -> B proposal until the next Operating Round", () => {
+  test("two declines (one rejection, one expiry) (train) block a third A -> B proposal until the next operating sub-round (round instance)", () => {
     const t = new Table("live");
     t.move(A, offering(offer), "propose", { trainRecipient: B });
     t.move(B, facts(turn(A, 0)), "reject");
@@ -579,7 +579,7 @@ describe("Live train offer: the proposer's clock freezes; the recipient has a di
     assert.equal(t.refusal(A, "propose", { trainRecipient: C }), null);
     assert.equal(t.refusal(B, "propose", { trainRecipient: A }), null);
     assert.equal(t.refusal(A, "move"), null);
-    /* The next Operating Round clears it. */
+    /* The next operating sub-round (OR 1.1 -> OR 1.2) clears it. */
     t.move(A, facts(turn(B, 1), { roundKey: "OperatingRound/1/2" }));
     assert.deepEqual(t.record.declines, { round_key: "OperatingRound/1/2", counts: {}, offers: [] });
     assert.equal(t.refusal(A, "propose", { trainRecipient: B }), null);

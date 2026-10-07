@@ -19,13 +19,14 @@ import { RoomSession, type ServerLogEntry } from "../../../../frontend/src/utils
 import type { MapGridResponse } from "../../../../frontend/src/components/hexContractTypes";
 import { CLOCK_REFUSAL, declinesReachedSentence } from "../../../../frontend/src/utils/clockProtocol";
 import { createMemoryOpsRecorder } from "../../persistence/opsRecorder";
-import { remedyTimes, type RemedyPort } from "../../escrow/remedyPipeline";
+import { remedyTimes, sealedRemedyProblem, type RemedyPort } from "../../escrow/remedyPipeline";
 import type { ChainIntentRecord } from "../../escrow/chainIntents";
 import type { GameActor, Tx } from "../gameActor";
 import { createClockController, rescindExpiredOffer, type GateResult } from "./clockController";
 import { createMemoryClockStore } from "./clockStore";
 import { fakeTime } from "./clockTestSupport";
 import { LIVE_ACTION_MS, LIVE_CURE_MS, LIVE_TRADE_MS, type GameClockRecord } from "./clockRecord";
+import { logHash } from "../../../../frontend/src/gameEngine/logHash";
 
 const SEC = 1_000;
 const MIN = 60 * SEC;
@@ -38,7 +39,7 @@ const proposeTrain = (seller: number, model: string, price: string) => ({
 });
 const answerTrain = (seller: number, accept: boolean) => ({ AnswerTrainPurchase: { game_id: 1, seller_protocol_id: seller, accept } });
 
-function harness(options: { money?: boolean; remedy?: RemedyPort; loadFails?: { n: number }; held?: { on: boolean }; frozen?: { on: boolean }; closeFails?: { n: number }; pins?: boolean[] } = {}) {
+function harness(options: { money?: boolean; remedy?: RemedyPort; loadFails?: { n: number }; held?: { on: boolean }; closeFails?: { n: number }; pins?: boolean[] } = {}) {
   const time = fakeTime(T0);
   let stamp: number | null = null;
   const stampAt = <T>(at: number, fn: () => T): T => {
@@ -90,7 +91,6 @@ function harness(options: { money?: boolean; remedy?: RemedyPort; loadFails?: { 
     authority: "auth-1",
     conduct: (input) => conduct.push(input.event.kind),
     ...(options.held !== undefined ? { held: () => (options.held as { on: boolean }).on } : {}),
-    ...(options.frozen !== undefined ? { frozen: () => (options.frozen as { on: boolean }).on } : {}),
     now: time.now,
     timers: time.timers,
     ops,
@@ -488,19 +488,47 @@ describe("Controller review fixes (third pass)", () => {
 });
 
 describe("Controller review fixes (fourth pass)", () => {
-  test("a FROZEN table (its log at the cap) runs no timer, but its votes still work", async () => {
-    const frozen = { on: false };
-    const h = harness({ frozen });
+  test("NO GAMEPLAY HISTORY CAP (owner ruling, 2026-10-07): a money table past 10,000 log entries keeps its clock -- offers stay legal, the overdue still comes naming the cumulative log hash, and its sealed remedy's evidence verifies", async () => {
+    const port = {
+      configured: true,
+      annulOpen: async () => false,
+      attest: async () => ({ status: "sealed", detail: null, attested: false }),
+      progress: async () => "none",
+      fence: () => undefined,
+      staleApprovals: async () => [],
+    } as unknown as RemedyPort;
+    const h = harness({ money: true, remedy: port });
     await h.deal();
+    /* 10,200 entries of real, legal play: PRR's president offers to buy the D&H and takes it back, again and again.
+       Each offer suspends the proposer (Live) and each rescission resumes the same remainder. */
+    const offer = (price: string) => ({ ProposePrivatePurchase: { game_id: 1, private_id: DH, private_name: "x", owner: P2, buyer_protocol_id: PRR, buyer_ticker: "PRR", price } });
+    const rescind = { RescindPrivatePurchase: { game_id: 1, private_id: DH } };
+    for (let i = 0; h.room.entries.length < 10_200; i += 1) {
+      const made = await h.submit(P1, i % 2 === 0 ? offer(String(40 + (i % 7))) : rescind);
+      assert.equal(made.ok, true, `move ${i} at ${h.room.entries.length}: ${JSON.stringify(made)}`);
+    }
+    assert.ok(h.room.entries.length > 10_000);
+    /* An offer is still legal past 10,000, and the clock still runs: the overdue comes at 20:00 as on move one. */
+    assert.equal((await h.submit(P1, offer("50"))).ok, true);
+    assert.equal((await h.submit(P1, rescind)).ok, true);
     await h.time.advance(LIVE_ACTION_MS);
     await h.clock.idle();
-    assert.equal(h.record().phase, "overdue");
-    frozen.on = true;
-    await h.time.advance(LIVE_CURE_MS + MIN);
+    const r = h.record();
+    assert.equal(r.phase, "overdue", "the clock is not frozen by the history's length");
+    assert.equal(r.overdue?.log_len, h.room.entries.length);
+    assert.equal(r.overdue?.log_hash, logHash(h.room.entries), "the overdue names the cumulative log hash of exactly that history");
+    /* The N-1 vote and minute 30: the sealed decision's evidence verifies on its own, at this length. */
+    const approval = (byte: string) => ({ approve_until: 9_999_999_999, signature: byte.repeat(64) });
+    assert.equal((await h.serial(() => h.clock.op(h.game, h.tx, { type: "clock-propose", seat: P2, kind: "foreclose", approval: approval("22"), verifiedFor: null, stale: [] }))).ok, true);
+    const id = h.record().overdue?.proposal?.id as number;
+    assert.equal((await h.serial(() => h.clock.op(h.game, h.tx, { type: "clock-vote", seat: P3, proposalId: id, yes: true, approval: approval("33"), verifiedFor: null, stale: [], renew: false }))).ok, true);
+    await h.time.advance(LIVE_CURE_MS);
     await h.clock.idle();
-    assert.equal(h.record().phase, "overdue", "no finality while nobody can make the owed move");
-    const voted = await h.serial(() => h.clock.op(h.game, h.tx, { type: "clock-propose", seat: P2, kind: "foreclose", approval: null, verifiedFor: null, stale: [] }));
-    assert.equal(voted.ok, true, JSON.stringify(voted));
+    const sealed = h.record().remedy;
+    assert.ok(sealed !== null);
+    assert.equal(sealed.kind, 2);
+    assert.deepEqual([sealed.log_len, sealed.log_hash], [h.room.entries.length, logHash(h.room.entries)]);
+    assert.equal(sealedRemedyProblem(GAME, sealed), null, "the sealed evidence folds to its hash and names this decision");
   });
 
   test("an Async overdue keeps nothing running: no residency, no heartbeat writes", async () => {

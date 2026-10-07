@@ -210,6 +210,11 @@ export interface CatchUpResponse {
    *  entry arrives or when `abandoned` names it. ALWAYS present on a LIVE-3A server's hello answer, empty or not:
    *  its presence is how a client knows the server answers by `inReplyTo`. */
   inFlight?: string[];
+  /** Phase 3 final clocks (owner ruling, 2026-10-07: a history has no length limit): a PAGE of a long catch-up, sent
+   *  only to a client whose hello said `pages: 1`. Its entries are the next ones of the history, in order; more pages
+   *  follow, and the catch-up is the concatenation of every page up to and including the first one without `more`
+   *  (which alone carries the digest, the fields, `inReplyTo` and `inFlight`). A page's `digest` is "" (no verdict). */
+  more?: true;
 }
 
 /** The two halves are not running the same code.

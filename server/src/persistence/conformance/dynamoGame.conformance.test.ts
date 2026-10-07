@@ -29,7 +29,12 @@ import * as path from "path";
 import { GetItemCommand, ListTablesCommand, PutItemCommand, ScanCommand, type AttributeValue, type DynamoDBClient } from "@aws-sdk/client-dynamodb";
 
 import { createDynamoDbClient, deadline, dynamoLocalTargetFromEnv, DYNAMODB_LOCAL_ENV } from "../../aws/awsClients";
-import { DIRKEYS_KEY, FINKEYS_KEY, gamePk, headKey, queryAll, readHead, SIZE_POLICY, type Item } from "../../aws/game/gameTable";
+import { attributeValueSize, DIRKEYS_KEY, FINKEYS_KEY, gamePk, headKey, queryAll, readHead, SIZE_POLICY, type Item } from "../../aws/game/gameTable";
+import { RoomSession, type ServerLogEntry } from "../../../../frontend/src/utils/roomSession";
+import { sandboxReplayProviders } from "../../../../frontend/src/gameEngine/replayProviders";
+import { DH, operatingBoard, P1, P2, PRR } from "../../../../frontend/src/utils/offerFixtures74";
+import { cumulativeLogHash, logHash } from "../../../../frontend/src/gameEngine/logHash";
+import type { MapGridResponse } from "../../../../frontend/src/components/hexContractTypes";
 import { claimGame, readPool, releaseGame, takeOverPool } from "../../aws/game/ownership";
 import { createDynamoLogStore, DYNAMO_LOG_MAX_BATCH } from "../../aws/game/dynamoLogStore";
 import { createDynamoRecordStore } from "../../aws/game/dynamoRecordStore";
@@ -608,6 +613,53 @@ describe("L5-2 DynamoDB game table: the write engine, the size guards and the in
     assert.equal((await fin.create(huge)).outcome.kind, "definite");
     assert.equal(sent(), before, "no oversized request was ever sent");
     assert.deepEqual((await log.loadLog(G)).map((entry) => entry.index), [0]);
+  });
+
+  test("NO HISTORY CAP (owner ruling, 2026-10-07): 10,300 entries of real play append in bounded batches, load page by page (each page reported), round-trip exactly, hash to the same cumulative log hash, take the next append past them, and no item grows with the history", async () => {
+    const b = await open("longhistory");
+    const G = gameId(17);
+    await own(b, G);
+    /* The history: the real engine's entries for a PRR president offering to buy the D&H and taking it back. */
+    let minted = 0;
+    let at = 1_780_000_000_000;
+    const session = new RoomSession({ providers: { ...sandboxReplayProviders(), initialGrid: { game_id: 1, tiles: [] } as unknown as MapGridResponse }, seed: { state: operatingBoard(), waterfall: null }, build: "b", mintId: () => `m${(minted += 1)}`, now: () => (at += 1_000) });
+    for (let i = 0; session.entries.length < 10_300; i += 1) {
+      const msg = i % 2 === 0 ? { ProposePrivatePurchase: { game_id: 1, private_id: DH, private_name: "x", owner: P2, buyer_protocol_id: PRR, buyer_ticker: "PRR", price: String(40 + (i % 7)) } } : { RescindPrivatePurchase: { game_id: 1, private_id: DH } };
+      assert.equal(session.submit({ actor: P1, build: "b", host: P1, msg: msg as never, baseIndex: session.nextIndex - 1 }).kind, "applied");
+    }
+    const history: readonly ServerLogEntry[] = session.entries.slice();
+    const log = createDynamoLogStore({ client: b.client, table: b.table, fence: b.fence, timing: TIMING, pageSize: 1_000 });
+    for (let from = 0; from < history.length; from += DYNAMO_LOG_MAX_BATCH) {
+      assert.equal((await log.appendBatch(G, history.slice(from, from + DYNAMO_LOG_MAX_BATCH))).kind, "committed", `batch at ${from}`);
+    }
+    assert.equal((await readHead(admin, b.table, G))?.log_next_index, history.length);
+    /* A fresh store (a restart) loads it page by page, and says so per page. */
+    let pages = 0;
+    const fresh = createDynamoLogStore({ client: b.client, table: b.table, fence: b.fence, timing: TIMING, pageSize: 1_000 });
+    const loaded = await fresh.loadLog(G, { onProgress: () => (pages += 1) });
+    assert.ok(pages >= 10, `${pages} pages reported`);
+    assert.equal(loaded.length, history.length);
+    assert.deepEqual(loaded.map((entry) => [entry.index, entry.id, entry.payload, entry.at ?? null]), history.map((entry) => [entry.index, entry.id, entry.payload, entry.at ?? null]));
+    const full = logHash(history);
+    assert.equal(logHash(loaded), full, "the commitment survives the round trip");
+    assert.equal(cumulativeLogHash(loaded), full, "the cumulative (checkpointed) hash is the same digest");
+    /* The replay is deterministic: the loaded history restores to the same board. */
+    const replayed = new RoomSession({ providers: { ...sandboxReplayProviders(), initialGrid: { game_id: 1, tiles: [] } as unknown as MapGridResponse }, seed: { state: operatingBoard(), waterfall: null }, build: "b", mintId: () => "unused", now: () => at });
+    replayed.restore(loaded);
+    assert.deepEqual(replayed.state, session.state);
+    /* The next append lands past the whole history. */
+    const next = session.submit({ actor: P1, build: "b", host: P1, msg: { ProposePrivatePurchase: { game_id: 1, private_id: DH, private_name: "x", owner: P2, buyer_protocol_id: PRR, buyer_ticker: "PRR", price: "50" } } as never, baseIndex: session.nextIndex - 1 });
+    assert.equal(next.kind, "applied");
+    assert.equal((await fresh.appendBatch(G, session.entries.slice(history.length))).kind, "committed");
+    assert.equal((await fresh.loadLog(G)).length, history.length + 1);
+    /* No item grows with the history: every item of the game (each entry, the HEAD, its listing) stays small. */
+    const items = await queryAll(admin, b.table, gamePk(G));
+    const sizeOf = (item: Item) => Object.entries(item).reduce((sum, [name, value]) => sum + Buffer.byteLength(name, "utf8") + attributeValueSize(value), 0);
+    const largest = items.reduce((max, item) => Math.max(max, sizeOf(item)), 0);
+    assert.ok(items.length >= history.length + 1, `${items.length} items`);
+    assert.ok(largest < 4 * 1024, `the largest item is ${largest} bytes, far under the ${SIZE_POLICY.itemBytes}-byte item bound`);
+    const head = items.find((item) => item.sk?.S === "HEAD");
+    assert.ok(head !== undefined && sizeOf(head) < 1024, "the HEAD holds counters, never history");
   });
 
   test("a batch AT the DynamoDB bound commits in one transaction (the HEAD and every entry together)", async () => {

@@ -34,8 +34,9 @@ export interface IngressLimits {
   pongTimeoutMs: number;
   /** Consecutive `rate-limited` answers on one socket before it is closed 4429. */
   maxConsecutiveRateLimited: number;
-  /** Entries per game; a submit that would begin past this is refused `log-full`. The alarm is logged at half. */
-  logEntryCap: number;
+  /** An OPERATOR ALARM, logged once per game when its log reaches this many entries. Never a limit: no move is ever
+   *  refused for a game's length (Phase 3 final clocks, owner ruling 2026-10-07 -- the 10,000-entry cap is gone and
+   *  nothing replaces it). */
   logEntryAlarm: number;
   /** Reverts per seat per hour: of the seat's own action, and (the host) of another seat's. */
   selfRevertsPerHour: number;
@@ -158,7 +159,6 @@ export const DEFAULT_INGRESS_LIMITS: IngressLimits = Object.freeze({
   pingIntervalMs: 25_000,
   pongTimeoutMs: 60_000,
   maxConsecutiveRateLimited: 20,
-  logEntryCap: 10_000,
   logEntryAlarm: 5_000,
   selfRevertsPerHour: 30,
   hostRevertsOfOthersPerHour: 10,

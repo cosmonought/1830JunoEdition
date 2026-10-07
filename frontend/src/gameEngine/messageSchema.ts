@@ -687,9 +687,11 @@ export function validateGameplayMessage(msg: unknown): MessageValidation {
 export const SUBMISSION_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 export const REQUEST_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 export const BUILD_PATTERN = /^[A-Za-z0-9._-]{1,64}$/;
-/** LIVE-2 §11.3: `baseIndex` is a safe integer in [-1, 10,000,000]. The upper bound "<= the room's watermark" is
- *  LIVE-3's two-sided staleness (`ahead`), already enforced by `RoomSession`. */
-export const MAX_BASE_INDEX = 10_000_000;
+/** LIVE-2 §11.3: `baseIndex` is a safe integer from -1. Its real upper bound, "<= the room's watermark", is LIVE-3's
+ *  two-sided staleness (`ahead`), already enforced by `RoomSession`. Phase 3 final clocks (owner ruling, 2026-10-07):
+ *  a game's history has no length limit, so the transport bound is no longer 10,000,000 -- only the safe-integer
+ *  range every index already lives in. */
+export const MAX_BASE_INDEX = Number.MAX_SAFE_INTEGER;
 /** An entry id the client holds at `baseIndex`. Opaque (legacy rooms minted other shapes), bounded. */
 export const MAX_BASE_ID_LENGTH = 128;
 
@@ -949,6 +951,9 @@ const CONTROL_FRAMES: Readonly<Record<string, FrameFields>> = nullTable<FrameFie
        either -- a seat is the principal's, bound in the GameRecord. */
     baseIndex: opt(isBaseIndex),
     baseId: opt((value) => typeof value === "string" && value.length > 0 && value.length <= MAX_BASE_ID_LENGTH),
+    /* Phase 3 final clocks (owner ruling, 2026-10-07): this client reassembles a long catch-up sent in pages. Only the
+       value 1 (the one paging protocol) is a frame. */
+    pages: opt((value) => value === 1),
   }),
   /* The submit ENVELOPE is closed; its `msg` is a gameplay body, parsed (and stripped) by `parseGameplayMessage`. */
   submit: nullTable({

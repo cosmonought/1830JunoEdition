@@ -123,3 +123,66 @@ describe("the log hash, #1251", () => {
     expect(doubled.logHash).toBeNull();
   });
 });
+
+describe("Phase 3 final clocks (owner ruling, 2026-10-07): the streamed and cumulative log hash is the same commitment", () => {
+  const { Sha256, sha256HexOfBytes } = require("../gameEngine/sha256") as typeof import("../gameEngine/sha256");
+  const { LogHashCursor, LOG_HASH_SEGMENT, cumulativeLogHash } = require("../gameEngine/logHash") as typeof import("../gameEngine/logHash");
+
+  it("feeding SHA-256 in any chunks, and cloning midway, gives the one-shot digest", () => {
+    const bytes = utf8Bytes("x".repeat(1_000) + "héllo ✓ 𝄞".repeat(50));
+    const whole = sha256HexOfBytes(bytes);
+    for (const step of [1, 7, 63, 64, 65, 500]) {
+      const hasher = new Sha256();
+      for (let at = 0; at < bytes.length; at += step) hasher.update(bytes.subarray(at, at + step));
+      expect(hasher.digestHex()).toBe(whole);
+    }
+    const half = new Sha256().update(bytes.subarray(0, 333));
+    const fork = half.clone();
+    half.update(bytes.subarray(333));
+    expect(half.digestHex()).toBe(whole);
+    /* A clone is independent of what follows; a digest leaves the state as it was. */
+    expect(fork.digestHex()).toBe(sha256HexOfBytes(bytes.subarray(0, 333)));
+    expect(half.digestHex()).toBe(whole);
+  });
+
+  const history = (n: number, tag = "a") =>
+    Array.from({ length: n }, (_, index) => ({ index, id: `${tag}${index}`, actor: index % 2 === 0 ? "p1" : "p2", payload: JSON.stringify({ PassTurn: { game_id: 0, n: index } }), at: 1_700_000_000_000 + index }));
+
+  it("a cursor answers exactly logHash for every prefix, past segment boundaries, re-reading only from its nearest checkpoint", () => {
+    const log = history(LOG_HASH_SEGMENT * 2 + 37);
+    const cursor = new LogHashCursor();
+    for (const n of [0, 1, 5, LOG_HASH_SEGMENT - 1, LOG_HASH_SEGMENT, LOG_HASH_SEGMENT + 1, LOG_HASH_SEGMENT * 2 + 37, 17, LOG_HASH_SEGMENT * 2]) {
+      expect(cursor.hash(log, n)).toBe(logHash(log, n));
+    }
+    /* Growing one entry at a time, as a game does. */
+    const grown = [...log];
+    for (let k = 0; k < 5; k += 1) {
+      grown.push(history(grown.length + 1)[grown.length]);
+      expect(cursor.hash(grown)).toBe(logHash(grown));
+    }
+  });
+
+  it("a history rolled back and appended again (other ids) is never answered from the old checkpoints", () => {
+    const log = history(LOG_HASH_SEGMENT + 100);
+    const cursor = new LogHashCursor();
+    expect(cursor.hash(log)).toBe(logHash(log));
+    /* (The id is not hashed -- the rewrite also changes what was played, as a real one does.) */
+    const rewritten = [...log.slice(0, 50), ...history(LOG_HASH_SEGMENT + 100, "b").slice(50).map((entry) => ({ ...entry, actor: "p3" }))];
+    expect(cursor.hash(rewritten)).toBe(logHash(rewritten));
+    expect(cursor.hash(rewritten)).not.toBe(logHash(log));
+  });
+
+  it("an unordered log or a repeated index falls back to logHash's own ordering and refusal", () => {
+    const cursor = new LogHashCursor();
+    expect(cursor.hash(ENTRIES as never)).toBe(logHash(ENTRIES));
+    const dup = [...history(3), { ...history(3)[2], id: "other" }];
+    expect(() => cursor.hash(dup)).toThrow(/two entries claim index 2/);
+  });
+
+  it("cumulativeLogHash keeps one cursor per history (its first entry object)", () => {
+    const log = history(LOG_HASH_SEGMENT + 3);
+    expect(cumulativeLogHash(log)).toBe(logHash(log));
+    expect(cumulativeLogHash(log.slice(0, 10))).toBe(logHash(log, 10));
+    expect(cumulativeLogHash([])).toBe(logHash([]));
+  });
+});

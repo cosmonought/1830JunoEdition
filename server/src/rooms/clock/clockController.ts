@@ -37,7 +37,7 @@
 
 import type { GameStateResponse } from "../../../../frontend/src/gameEngine/gameState";
 import { requiredDecisionOf, roundInstanceKeyOf, standingOfferOf } from "../../../../frontend/src/gameEngine/clockResponsibility";
-import { logHash } from "../../../../frontend/src/gameEngine/logHash";
+import { cumulativeLogHash } from "../../../../frontend/src/gameEngine/logHash";
 import { sellerPresident } from "../../../../frontend/src/gameEngine/trainSaleAuthority";
 import type { ClockDeadlineClass, RoomClockView } from "../../../../frontend/src/utils/clockProtocol";
 import { CLOCK_REFUSAL, declinesReachedSentence } from "../../../../frontend/src/utils/clockProtocol";
@@ -174,9 +174,8 @@ export interface ClockControllerDeps {
   /** Whether the table is HELD (LIVE-3C: held, incompatible or awaiting reconciliation): nobody can move, so its clock
    *  neither advances nor proves continuity, and nothing of it is relayed. */
   held?(gameId: string): boolean;
-  /** Whether the table is FROZEN: it takes no more moves for good (its log reached the ingress cap). Its timers stop
-   *  (nobody can make the owed move), but its votes, annulment and any sealed remedy carry on. */
-  frozen?(gameId: string): boolean;
+  /* (No "frozen" table any more: the 10,000-entry log cap that froze one is gone -- owner ruling, 2026-10-07. A long
+     game's clock runs exactly like a short one's.) */
 }
 
 export type ClockAnswer = { readonly ok: true; readonly data?: Record<string, unknown> } | { readonly ok: false; readonly code: string; readonly reason: string };
@@ -578,8 +577,6 @@ export function createClockController(deps: ClockControllerDeps) {
   async function checkStall(entry: Entry, gameId: string): Promise<void> {
     const record = entry.record;
     if (record === null || record.authority !== deps.authority) return;
-    /* A frozen table runs no timer for good: there is no continuity to prove. */
-    if (isFrozen(gameId)) return;
     /* (An Async overdue runs nothing: no timer, so no continuity to prove.) */
     const running = (record.phase === "active" || (record.phase === "overdue" && record.policy.class === "live")) && record.system === null && record.pause.paused_at === null && record.policy.class !== "no-deadline";
     if (!running) return;
@@ -671,7 +668,7 @@ export function createClockController(deps: ClockControllerDeps) {
       record.system === null &&
       record.pause.paused_at === null &&
       record.policy.class !== "no-deadline";
-    if (timed && (isHeld(entry.gameId) || isFrozen(entry.gameId))) {
+    if (timed && isHeld(entry.gameId)) {
       /* HELD: nobody can move, so nothing advances and no continuity is proven; looked at again later. A Live table
          stays resident meanwhile (its held time is judged by the stall rule when the hold lifts). */
       pinFor(entry, true);
@@ -713,7 +710,7 @@ export function createClockController(deps: ClockControllerDeps) {
          beside a transition), and only after the stall check: a heartbeat never papers over a gap. */
       void track(
         deps.runOn(entry.gameId, "clock-heartbeat", async (game, tx) => {
-          if (entry.lost || entry.record === null || isHeld(game.gameId) || isFrozen(game.gameId)) return;
+          if (entry.lost || entry.record === null || isHeld(game.gameId)) return;
           const before = entry.record;
           const record = await ensure(game, tx);
           if (record === null) return;
@@ -755,14 +752,6 @@ export function createClockController(deps: ClockControllerDeps) {
     }
   }
 
-  function isFrozen(gameId: string): boolean {
-    try {
-      return deps.frozen?.(gameId) === true;
-    } catch {
-      return true;
-    }
-  }
-
   /** Every clock task this controller started and has not seen finish (`idle`). */
   const inFlight = new Set<Promise<unknown>>();
   function track<T>(task: Promise<T>): Promise<T> {
@@ -791,7 +780,8 @@ export function createClockController(deps: ClockControllerDeps) {
   function positionOf(game: GameActor): () => { readonly len: number; readonly hash: string } {
     return () => {
       const entriesNow = game.view.entries;
-      return { len: entriesNow.length, hash: logHash(entriesNow, entriesNow.length) };
+      /* The cumulative hash (segment checkpoints): the same digest as `logHash`, without re-reading the history. */
+      return { len: entriesNow.length, hash: cumulativeLogHash(entriesNow, entriesNow.length) };
     };
   }
 
@@ -873,7 +863,7 @@ export function createClockController(deps: ClockControllerDeps) {
   /** A timer fired: process what is due, write, re-arm, re-broadcast. */
   async function tick(game: GameActor, tx: Tx): Promise<void> {
     const entry = entryOf(game.gameId);
-    if (isHeld(game.gameId) || isFrozen(game.gameId)) {
+    if (isHeld(game.gameId)) {
       arm(entry);
       return;
     }
@@ -1053,8 +1043,7 @@ export function createClockController(deps: ClockControllerDeps) {
     const record = await ensure(game, tx);
     if (record === null) return { ok: false, code: CLOCK_REFUSAL.unavailable, reason: "This table's clock is not available right now." };
     const at = Math.max(now(), record.updated_at);
-    /* A frozen table's timers do not run (nobody can make the owed move): its ops act on the clock as it stands. */
-    if (input.type !== "clock-ack" && !isFrozen(game.gameId)) {
+    if (input.type !== "clock-ack") {
       const expired = await catchUp(entry, game, tx, at);
       if (expired) await settle(entry, game.gameId);
     }
@@ -1298,7 +1287,7 @@ export function createClockController(deps: ClockControllerDeps) {
         entry.pinned = false;
         const record = await ensure(game, tx, true);
         if (record === null) return;
-        if (!isHeld(gameId) && !isFrozen(gameId)) await catchUp(entry, game, tx, now());
+        if (!isHeld(gameId)) await catchUp(entry, game, tx, now());
         await settle(entry, gameId);
       })).catch((error) => deps.warn(`  clock: ${gameId}: the clock load failed -- ${describe(error)}`));
   }

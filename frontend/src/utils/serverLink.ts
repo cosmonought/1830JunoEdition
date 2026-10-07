@@ -392,6 +392,9 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
    *  just been given; the shell accumulates without deduplicating (App.tsx #1213), and an entry handed over twice
    *  would be applied twice. By id, not index, so a legacy log whose indices repeat still arrives whole. */
   let delivered = new Set<string>();
+  /** Phase 3 final clocks: the pages of a long catch-up received so far on THIS socket (the server sends one catch-up's
+   *  pages back to back, and every other frame for this socket after them). Dropped with the socket. */
+  let catchUpPages: ReplayEntry[] = [];
 
   /* ==================================================================
       LIVE-4 (L4-3): THE ANNOUNCEMENT, AND THE ANSWERS THAT END THE LINK
@@ -429,6 +432,8 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
       build: options.build,
       baseIndex: appliedIndex,
       baseId: appliedIndex >= 0 ? appliedId : undefined,
+      /* Phase 3 final clocks: this client reassembles a long catch-up sent in pages (`more`). */
+      pages: 1,
     });
   };
 
@@ -780,6 +785,7 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
       open = false;
       awaitingHello = false;
       hellosInFlight = 0;
+      catchUpPages = []; // a catch-up cut off with its socket is asked for again whole by the next hello
       const closeCode = (event as { code?: unknown } | null)?.code;
       /* LIVE-4 (L4-3): this link closed its own socket to follow a route to another path: reconnect there now. The
          server's 4426 behind the route frame, if it gets here first, is the same close. */
@@ -876,6 +882,18 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
         return;
       }
       case "catch-up": {
+        /* Phase 3 final clocks (owner ruling, 2026-10-07): A LONG HISTORY ARRIVES IN PAGES. Each page is held, nothing
+           of it applied or settled, until the last one (no `more`) completes the catch-up -- which is then exactly the
+           one frame a short history would have been, with the last page's digest, `inReplyTo` and `inFlight`. */
+        if (message.more === true) {
+          for (const entry of message.entries) catchUpPages.push(entry);
+          return;
+        }
+        if (catchUpPages.length > 0) {
+          const whole = catchUpPages.concat(message.entries);
+          catchUpPages = [];
+          message = { ...message, entries: whole };
+        }
         /* #1253: THE HELLO'S CATCH-UP IS NOT AN ANSWER TO ANY SUBMISSION. It reconciles whatever was in
            flight when the previous socket dropped, and then the submissions queued while the wire was down
            go out -- after it, so their `baseIndex` and the server's idea of this client agree. */

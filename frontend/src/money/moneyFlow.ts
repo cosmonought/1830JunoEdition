@@ -450,7 +450,7 @@ export function reviewSentence(policy: string | null | undefined): string {
     : `${base} It is meant for a catastrophic failure (for example, the game can't be recovered); ordinary lateness is handled by the action clock.`;
 }
 export function reviewPendingSentence(requestedAt: number, now: number): string {
-  return `An exceptional review was requested ${formatMoneyTime(requestedAt, { now })}. The resolver may decide no sooner than 7 days after it; play continues meanwhile.`;
+  return `An exceptional review was requested ${formatMoneyTime(requestedAt, { now })}. The resolver may decide no sooner than 7 days after it. If play goes on and a later round is recorded on Juno, the request is withdrawn (the game is evidently not stuck).`;
 }
 
 /** On a device without Keplr (a phone's browser, say): only what this device's own key signs is offered, and the

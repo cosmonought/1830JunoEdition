@@ -112,7 +112,11 @@ export interface ClockPause {
   /** When the unanimous pause began (`null`: not paused). */
   readonly paused_at: number | null;
   readonly request: { readonly id: number; readonly kind: "pause" | "resume"; readonly by: string; readonly at: number; readonly yes: readonly string[] } | null;
+  /** The request id counter (never capped: it only names requests). */
   readonly requests: number;
+  /** PAUSE requests made during the current obligation (`key`): bounded per obligation, reset when it changes. A
+   *  RESUME request is never bounded (a paused game can always be asked to resume). */
+  readonly window: { readonly key: string | null; readonly count: number };
 }
 
 export interface ClockSystemPause {
@@ -156,6 +160,9 @@ export interface ClockRemedy {
   readonly attestations: number;
   /** A neutral fallback sealed because this decision could no longer land (Live foreclosure whose approvals lapsed). */
   readonly replaces: RemedyKind | null;
+  /** Async N-1 remedies: the approving seats whose REMEDY-APPROVE can no longer land (lapsed, or the seat's consent key
+   *  moved since) -- each is asked to approve the SAME decision again (`reapprove`); nothing is attested until none is. */
+  readonly stale: readonly string[];
 }
 
 export interface ClockSnapshot {
@@ -165,6 +172,8 @@ export interface ClockSnapshot {
   /** As of `at`, frozen (re-anchored when restored). */
   readonly obligation: ClockObligation | null;
   readonly parked: readonly ClockParked[];
+  /** The decline counts as of `at` (an undo across an Operating Round boundary restores them: they never go back). */
+  readonly declines: { readonly or_key: string | null; readonly counts: Readonly<Record<string, number>> };
 }
 
 export type ClockPhase = "setup" | "active" | "overdue" | "ended";
@@ -291,7 +300,7 @@ function isEvidenceEvent(value: unknown): value is ClockEvidenceEvent {
 function isRemedy(value: unknown): value is ClockRemedy {
   if (
     !isObject(value) ||
-    !exact(value, ["kind", "seat", "strike", "epoch", "log_len", "log_hash", "allowance_secs", "overdue_ms", "final_ms", "approvals", "evidence", "evidence_hash", "sealed_at", "status", "detail", "attestations", "replaces"])
+    !exact(value, ["kind", "seat", "strike", "epoch", "log_len", "log_hash", "allowance_secs", "overdue_ms", "final_ms", "approvals", "evidence", "evidence_hash", "sealed_at", "status", "detail", "attestations", "replaces", "stale"])
   ) {
     return false;
   }
@@ -300,6 +309,7 @@ function isRemedy(value: unknown): value is ClockRemedy {
   if (!["sealed", "submitted", "confirmed", "superseded", "refused"].includes(value.status as string)) return false;
   if (!(value.detail === null || (typeof value.detail === "string" && value.detail.length <= 500))) return false;
   if (!(value.replaces === null || [1, 2, 3, 4, 5].includes(value.replaces as number))) return false;
+  if (!Array.isArray(value.stale) || value.stale.length > 7 || !value.stale.every(seat)) return false;
   const approvals = value.approvals;
   if (!Array.isArray(approvals) || approvals.length > 7 || !approvals.every((a) => isObject(a) && exact(a, ["seat", "approve_until", "signature"]) && seat(a.seat) && time(a.approve_until) && typeof a.signature === "string" && /^[0-9a-f]{128}$/.test(a.signature))) return false;
   const evidence = value.evidence;
@@ -369,7 +379,9 @@ export function isGameClockRecord(value: unknown): value is GameClockRecord {
   if (!isObject(declines) || !exact(declines, ["or_key", "counts"]) || !(declines.or_key === null || text(declines.or_key, 80)) || !isObject(declines.counts)) return false;
   if (Object.keys(declines.counts).length > 64 || !Object.entries(declines.counts).every(([k, v]) => text(k, 130) && time(v))) return false;
   const pause = value.pause;
-  if (!isObject(pause) || !exact(pause, ["paused_at", "request", "requests"]) || !(pause.paused_at === null || time(pause.paused_at)) || !time(pause.requests)) return false;
+  if (!isObject(pause) || !exact(pause, ["paused_at", "request", "requests", "window"]) || !(pause.paused_at === null || time(pause.paused_at)) || !time(pause.requests)) return false;
+  const window = pause.window;
+  if (!isObject(window) || !exact(window, ["key", "count"]) || !(window.key === null || text(window.key, 200)) || !time(window.count)) return false;
   const request = pause.request;
   if (!(request === null || (isObject(request) && exact(request, ["id", "kind", "by", "at", "yes"]) && time(request.id) && (request.kind === "pause" || request.kind === "resume") && seat(request.by) && time(request.at) && Array.isArray(request.yes) && request.yes.length <= 8 && request.yes.every(seat)))) return false;
   const system = value.system;
@@ -379,7 +391,8 @@ export function isGameClockRecord(value: unknown): value is GameClockRecord {
   if (!int(value.undo_floor) || (value.undo_floor as number) < -1) return false;
   if (!Array.isArray(value.snapshots) || value.snapshots.length > CLOCK_SNAPSHOT_LIMIT) return false;
   for (const snap of value.snapshots as unknown[]) {
-    if (!isObject(snap) || !exact(snap, ["index", "at", "obligation", "parked"]) || !time(snap.index) || !time(snap.at) || !(snap.obligation === null || isObligation(snap.obligation)) || !Array.isArray(snap.parked)) return false;
+    if (!isObject(snap) || !exact(snap, ["index", "at", "obligation", "parked", "declines"]) || !time(snap.index) || !time(snap.at) || !(snap.obligation === null || isObligation(snap.obligation)) || !Array.isArray(snap.parked)) return false;
+    if (!isObject(snap.declines) || !exact(snap.declines, ["or_key", "counts"]) || !isObject(snap.declines.counts)) return false;
   }
   const ended = value.ended;
   if (!(ended === null || (isObject(ended) && exact(ended, ["kind", "at", "seat"]) && END_KINDS.includes(ended.kind as string) && time(ended.at) && (ended.seat === null || seat(ended.seat))))) return false;

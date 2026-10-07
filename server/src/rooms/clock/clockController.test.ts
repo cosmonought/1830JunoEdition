@@ -38,7 +38,7 @@ const proposeTrain = (seller: number, model: string, price: string) => ({
 });
 const answerTrain = (seller: number, accept: boolean) => ({ AnswerTrainPurchase: { game_id: 1, seller_protocol_id: seller, accept } });
 
-function harness(options: { money?: boolean; remedy?: RemedyPort } = {}) {
+function harness(options: { money?: boolean; remedy?: RemedyPort; loadFails?: { n: number }; held?: { on: boolean }; closeFails?: { n: number } } = {}) {
   const time = fakeTime(T0);
   let stamp: number | null = null;
   const stampAt = <T>(at: number, fn: () => T): T => {
@@ -67,6 +67,17 @@ function harness(options: { money?: boolean; remedy?: RemedyPort } = {}) {
   const tx = { session: room } as unknown as Tx;
   const ops = createMemoryOpsRecorder();
   const store = createMemoryClockStore();
+  const conduct: string[] = [];
+  const loading = {
+    load: async (gameId: string) => {
+      if (options.loadFails !== undefined && options.loadFails.n > 0) {
+        options.loadFails.n -= 1;
+        throw new Error("the store did not answer");
+      }
+      return store.load(gameId);
+    },
+    save: (record: Parameters<typeof store.save>[0], expected: number | null) => store.save(record, expected),
+  };
   let chain: Promise<unknown> = Promise.resolve();
   /* The game's serialization: every task (a submit, a timer, an op) runs alone, in order. */
   const serial = <T>(task: () => Promise<T>): Promise<T> => {
@@ -75,8 +86,10 @@ function harness(options: { money?: boolean; remedy?: RemedyPort } = {}) {
     return run;
   };
   const clock = createClockController({
-    store,
+    store: loading,
     authority: "auth-1",
+    conduct: (input) => conduct.push(input.event.kind),
+    ...(options.held !== undefined ? { held: () => (options.held as { on: boolean }).on } : {}),
     now: time.now,
     timers: time.timers,
     ops,
@@ -86,6 +99,10 @@ function harness(options: { money?: boolean; remedy?: RemedyPort } = {}) {
     serving: () => true,
     ...(options.remedy !== undefined ? { remedy: () => options.remedy as RemedyPort } : {}),
     closeOffer: async (_game, _tx, input) => {
+      if (options.closeFails !== undefined && options.closeFails.n > 0) {
+        options.closeFails.n -= 1;
+        return { ok: false, why: "the expiry could not be committed", kind: "store" };
+      }
       const closed = rescindExpiredOffer(room, { proposer: input.proposer, at: input.at, build: "b", host: P1, hostUndo: "last-action" }, stampAt);
       if (!closed.ok) return closed;
       return { ok: true, first: closed.batch[0].index, last: closed.batch[closed.batch.length - 1].index, before: closed.before, after: closed.after };
@@ -122,7 +139,7 @@ function harness(options: { money?: boolean; remedy?: RemedyPort } = {}) {
     assert.ok(ob?.timer);
     return ob.timer.since === null ? ob.timer.remaining_ms : ob.timer.remaining_ms - (time.now() - ob.timer.since);
   };
-  return { time, room, clock, ops, store, submit, deal, record, remaining, serial };
+  return { time, room, clock, ops, store, submit, deal, record, remaining, serial, conduct };
 }
 
 describe("Live train offers through the controller (real engine offers)", () => {
@@ -190,14 +207,14 @@ describe("Live train offers through the controller (real engine offers)", () => 
     assert.equal(h.record().obligation?.seat, P3);
   });
 
-  test("an accepted offer refreshes the proposer's allowance (a completed trade is progress); a rescission resumes exactly", async () => {
+  test("an accepted offer refreshes the proposer's allowance (a completed trade is progress); a rescission is charged the time its offer stood", async () => {
     const h = harness();
     await h.deal();
     await h.time.advance(6 * MIN);
     await h.submit(P1, proposeTrain(NYC, "2", "50"));
     await h.time.advance(2 * MIN);
     await h.submit(P1, { RescindTrainPurchase: { game_id: 1, seller_protocol_id: NYC } });
-    assert.deepEqual([h.record().obligation?.seat, h.remaining()], [P1, 14 * MIN], "a rescission resumes exactly (the trade time never charged)");
+    assert.deepEqual([h.record().obligation?.seat, h.remaining()], [P1, 12 * MIN], "the proposer's own rescission never stops its clock: the 2:00 the offer stood is charged");
     assert.equal(h.record().declines.counts[`${P1}>${P2}`] ?? 0, 0, "a rescission is not a decline");
     await h.submit(P1, proposeTrain(NYC, "2", "50"));
     await h.time.advance(3 * MIN);
@@ -274,5 +291,65 @@ describe("Live train offers through the controller (real engine offers)", () => 
     await h.serial(async () => undefined);
     const r = h.record();
     assert.deepEqual([r.phase, r.overdue, r.strikes, r.remedy], ["active", null, {}, null]);
+  });
+});
+
+describe("Controller review fixes: reads, durability, holds, retries", () => {
+  test("a store that does not answer: no move is judged without the clock, and nothing is fabricated in its place", async () => {
+    const loadFails = { n: 0 };
+    const h = harness({ loadFails });
+    await h.deal();
+    h.clock.drop(GAME); // the next decision must read the store again
+    loadFails.n = 1;
+    const refused = await h.submit(P1, proposeTrain(NYC, "2", "50"));
+    assert.equal(refused.ok, false);
+    assert.equal((refused as { code: string }).code, CLOCK_REFUSAL.unavailable);
+    assert.equal(h.room.entries.length, 0, "nothing was played");
+    const stored = h.store.clocks.get(GAME) as { revision: number };
+    const again = await h.submit(P1, proposeTrain(NYC, "2", "50"));
+    assert.equal(again.ok, true, JSON.stringify(again));
+    assert.ok((h.store.clocks.get(GAME) as { revision: number }).revision > stored.revision, "the stored record went on (never replaced by a fresh one)");
+  });
+
+  test("evidence is reported only once its record is DURABLE: a write that did not land reports nothing; the next one reports it all", async () => {
+    const h = harness();
+    await h.deal();
+    const before = h.conduct.length;
+    h.store.failSaves.push("definite");
+    await h.submit(P1, proposeTrain(NYC, "2", "50"));
+    assert.equal(h.conduct.length, before, "the trade's evidence waits for its record");
+    assert.equal(h.record().obligation?.trade?.proposer, P1, "the decided record stands in memory (written on the next attempt)");
+    await h.time.advance(30 * SEC); // a heartbeat writes it
+    assert.ok(h.conduct.slice(before).includes("trade-begin"), "reported once durable");
+    assert.equal((h.store.clocks.get(GAME) as { obligation: { trade: unknown } }).obligation.trade !== null, true);
+  });
+
+  test("a HELD table's clock does not run; when the hold lifts, the held time is a continuity break (SYSTEM PAUSE), never an overdue", async () => {
+    const held = { on: false };
+    const h = harness({ held });
+    await h.deal();
+    await h.time.advance(5 * MIN);
+    held.on = true;
+    await h.time.advance(40 * MIN);
+    await h.clock.idle();
+    assert.deepEqual([h.record().phase, h.record().strikes], ["active", {}], "no overdue while nobody could move");
+    held.on = false;
+    const refused = await h.submit(P1, proposeTrain(NYC, "2", "50"));
+    assert.equal((refused as { code: string }).code, CLOCK_REFUSAL.systemPaused);
+    assert.ok(h.record().obligation?.timer && h.record().obligation!.timer!.remaining_ms >= 14 * MIN, "the held time is never charged");
+  });
+
+  test("an expiry whose commit did not land is retried (the clock is not re-derived from a board that did not change)", async () => {
+    const closeFails = { n: 1 };
+    const h = harness({ closeFails });
+    await h.deal();
+    await h.submit(P1, proposeTrain(NYC, "2", "50"));
+    await h.time.advance(LIVE_TRADE_MS);
+    await h.clock.idle();
+    assert.equal(h.record().obligation?.trade?.proposer, P1, "still the standing offer's response time (ran out, not re-derived)");
+    await h.time.advance(5 * SEC);
+    await h.clock.idle();
+    assert.equal(h.room.state.train_purchase_offer ?? null, null, "the retry closed it");
+    assert.deepEqual([h.record().obligation?.seat, h.record().declines.counts[`${P1}>${P2}`]], [P1, 1]);
   });
 });

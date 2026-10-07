@@ -67,7 +67,8 @@ import {
   type MyTableSummary,
 } from "./gameRecord";
 import { createMemoryHoldStore, type HoldStore } from "./holdStore";
-import { createClockController, rescindExpiredOffer, type ClockAnswer, type ClockController, type ClockOpInput, type ClockTimers, type CloseOffer } from "./clock/clockController";
+import { createClockController, rescindExpiredOffer, type ClockAnswer, type ClockController, type ClockOpInput, type ClockTimers, type ClockVerifiedFor, type CloseOffer } from "./clock/clockController";
+import { projectedFinalityMs } from "./clock/clockModel";
 import type { ClockStore } from "./clock/clockStore";
 import type { ClockConductHook } from "./clock/clockEvidence";
 import type { RemedyPort } from "../escrow/remedyPipeline";
@@ -414,6 +415,11 @@ export function createRoomHost(deps: RoomHostDeps) {
             }
           },
           closeOffer: (game, tx, input) => closeExpiredOffer(game, tx, input),
+          /* LIVE-3C: a held, incompatible or unreconciled table takes no move -- its clock does not run either. */
+          held: (gameId) => {
+            const game = peekLoaded(gameId);
+            return game !== undefined && (game.view.hold !== null || game.view.incompatible !== null || unreconciled.has(gameId));
+          },
           ...(deps.clock.remedy !== undefined ? { remedy: deps.clock.remedy } : {}),
           ...(deps.clock.moneyTerminal !== undefined ? { moneyTerminal: deps.clock.moneyTerminal } : {}),
           ...(deps.clock.moneyStartedAtSecs !== undefined ? { moneyStartedAtSecs: deps.clock.moneyStartedAtSecs } : {}),
@@ -1166,6 +1172,13 @@ export function createRoomHost(deps: RoomHostDeps) {
       if (deadline === null) return ack(socket, requestId, { ok: false, code: "bad-frame", reason: "Choose the table's pace (12 hours to 7 days) or No deadline before opening it with stakes." });
       if (deadline === "no-deadline" && op.noDeadlineAck !== true) return ack(socket, requestId, { ok: false, code: "acknowledge-no-deadline", reason: `${NO_DEADLINE_DISCLOSURE} Acknowledge this before opening the table.` });
     }
+    if (isMoney && clock !== null && (deadline ?? "live") !== "no-deadline") {
+      /* A TIMED money table's deadline is enforced on chain only through a dedicated REMEDY signer: without one, every
+         remedy would be refused (fail closed) and an abandoned table's funds would wait on a unanimous annulment or the
+         exceptional review. Such a table is not opened. */
+      const port = deps.clock?.remedy?.() ?? null;
+      if (port === null || !port.configured) return ack(socket, requestId, { ok: false, code: "money-games-disabled", reason: "This server can't enforce a timed deadline with stakes right now, so the table was not opened." });
+    }
     if (isMoney) {
       const money = deps.money?.() ?? null;
       if (money === null) return ack(socket, requestId, { ok: false, code: "money-games-disabled", reason: "Games with stakes are not open on this server." });
@@ -1430,18 +1443,18 @@ export function createRoomHost(deps: RoomHostDeps) {
     const rescinded = rescindExpiredOffer(tx.session, { proposer: input.proposer, at: input.at, build: deps.build, host: record.host_player_id, hostUndo: record.policy.host_undo }, deps.stampAt);
     if (!rescinded.ok) {
       tx.rollback();
-      return rescinded;
+      return { ok: false, why: rescinded.why, kind: "engine" };
     }
     const settled = await tx.commitBatch(rescinded.batch, (s) =>
       s.kind === "committed" ? { fanout: { kind: "applied", entries: s.entries, digest: s.view.digest, ...(s.view.fields ? { fields: { ...s.view.fields } } : {}), build: deps.build } } : {},
     );
-    if (settled.kind !== "committed") return { ok: false, why: "the expiry could not be committed" };
+    if (settled.kind !== "committed") return { ok: false, why: "the expiry could not be committed", kind: "store" };
     ops.audit("clock.trade-expired", { game_id: game.gameId, proposer: input.proposer, at: input.at, index: rescinded.batch[0]?.index ?? null });
     afterGameplay(game, rescinded.after.over, rescinded.after.closed, rescinded.board);
     return { ok: true, first: rescinded.batch[0].index, last: rescinded.batch[rescinded.batch.length - 1].index, before: rescinded.before, after: rescinded.after };
   };
 
-  const CLOCK_OP_TYPES: ReadonlySet<string> = new Set(["clock-policy", "clock-pause", "clock-sysresume", "clock-propose", "clock-vote", "clock-annul", "clock-ack"]);
+  const CLOCK_OP_TYPES: ReadonlySet<string> = new Set(["clock-policy", "clock-pause", "clock-sysresume", "clock-propose", "clock-vote", "clock-annul", "clock-ack", "clock-reapprove"]);
 
   /** A table-clock op: the caller's own seat (the host's for the deadline), checked; a money YES's approval verified
    *  OUTSIDE the game's task (a quorum chain read) against the overdue standing now, then applied INSIDE it (which
@@ -1460,6 +1473,7 @@ export function createRoomHost(deps: RoomHostDeps) {
     switch (type) {
       case "clock-policy":
         if (seat !== record.host_player_id) return { ok: false, code: "forbidden", reason: "Only the host chooses the table's deadline." };
+        if (record.money !== null) return { ok: false, code: "wrong-state", reason: "A money table's deadline is fixed when the table is created." };
         if ((record.variants as { mode?: string }).mode !== "async" && op.deadline !== "live") return { ok: false, code: "bad-frame", reason: "A Live table always plays the Live action clock." };
         if ((record.variants as { mode?: string }).mode === "async" && op.deadline === "live") return { ok: false, code: "bad-frame", reason: "An Async table chooses a pace or no deadline." };
         input = { type: "clock-policy", seat, deadline: op.deadline as "live" | "async-pace" | "no-deadline", paceSecs: typeof op.paceSecs === "number" ? op.paceSecs : null };
@@ -1471,47 +1485,74 @@ export function createRoomHost(deps: RoomHostDeps) {
         input = { type: "clock-pause", seat, action: op.action as "request" | "yes" | "no", kind: op.kind as "pause" | "resume", id: typeof op.id === "number" ? op.id : null };
         break;
       case "clock-sysresume":
-        input = { type: "clock-sysresume", seat };
+        input = { type: "clock-sysresume", seat, since: typeof op.since === "number" ? op.since : null };
         break;
       case "clock-annul":
         input = { type: "clock-annul", seat, yes: op.yes === true };
         break;
+      case "clock-reapprove": {
+        /* An Async money remedy's renewed approval: verified (a quorum chain read) against the SEALED decision's facts
+           under the seat's CURRENT consent key, then applied in the task (which re-checks the decision still stands). */
+        if (record.money === null) return { ok: false, code: "wrong-state", reason: "There is no outcome waiting for your approval." };
+        if (typeof op.approveUntil !== "number" || typeof op.signature !== "string") return { ok: false, code: "bad-frame", reason: "Renewing needs your signed approval." };
+        const sealed = clock.recordOf(game.gameId)?.remedy ?? null;
+        if (sealed === null || (sealed.kind !== 4 && sealed.kind !== 5) || !sealed.stale.includes(seat)) return { ok: false, code: "wrong-state", reason: "There is no outcome waiting for your approval." };
+        const port = deps.clock?.remedy?.() ?? null;
+        if (port === null) return { ok: false, code: CLOCK_REFUSAL.unavailable, reason: "This server cannot check a money approval right now." };
+        const why = await port.verifyApproval(game.gameId, {
+          remedy: sealed.kind,
+          defaultingSeat: sealed.seat,
+          approvingSeat: seat,
+          strike: sealed.strike,
+          epoch: sealed.epoch,
+          logLen: sealed.log_len,
+          logHash: sealed.log_hash,
+          overdueMs: sealed.overdue_ms,
+          approveUntil: op.approveUntil,
+          signature: op.signature,
+          finalNotBeforeMs: sealed.final_ms,
+          nowMs: now(),
+        });
+        if (why !== null) return { ok: false, code: "bad-approval", reason: why };
+        input = { type: "clock-reapprove", seat, approval: { approve_until: op.approveUntil, signature: op.signature }, verifiedFor: { epoch: sealed.epoch, logLen: sealed.log_len, remedy: sealed.kind } };
+        break;
+      }
       case "clock-propose":
       case "clock-vote": {
         const yes = type === "clock-propose" ? true : op.yes === true;
         let approval: { approve_until: number; signature: string } | null = null;
-        let verifiedFor: { epoch: number; logLen: number } | null = null;
+        let verifiedFor: ClockVerifiedFor | null = null;
+        let stale: readonly string[] = [];
         if (yes && record.money !== null) {
           if (typeof op.approveUntil !== "number" || typeof op.signature !== "string") return { ok: false, code: "bad-frame", reason: "On a money table, a YES needs your signed approval." };
           const standing = clock.recordOf(game.gameId);
           const od = standing?.overdue ?? null;
           if (standing === null || od === null) return { ok: false, code: "wrong-state", reason: "Nobody is overdue." };
-          const kind = type === "clock-propose" ? (op.kind as "foreclose" | "annul") : (od.proposal?.kind ?? "foreclose");
+          const proposal = type === "clock-vote" ? od.proposal : null;
+          if (type === "clock-vote" && (proposal === null || proposal.id !== op.proposalId)) return { ok: false, code: CLOCK_REFUSAL.stale, reason: "That proposal is no longer open." };
+          const kind = type === "clock-propose" ? (op.kind as "foreclose" | "annul") : (proposal as NonNullable<typeof proposal>).kind;
           const remedyKind = standing.policy.class === "live" ? 2 : kind === "foreclose" ? 5 : 4;
           const port = deps.clock?.remedy?.() ?? null;
           if (port === null) return { ok: false, code: CLOCK_REFUSAL.unavailable, reason: "This server cannot check a money approval right now." };
-          const why = await port.verifyApproval(game.gameId, {
-            remedy: remedyKind,
-            defaultingSeat: od.seat,
-            approvingSeat: seat,
-            strike: od.strike,
-            epoch: od.epoch,
-            logLen: od.log_len,
-            logHash: od.log_hash,
-            overdueMs: od.at,
-            approveUntil: op.approveUntil,
-            signature: op.signature,
-            finalNotBeforeMs: od.at + clock.cureMs,
-            nowMs: now(),
-          });
+          const at = now();
+          /* Live: the approval must outlive minute 30 AS IT STANDS (a pause in the cure window moves it later). */
+          const finalNotBeforeMs = projectedFinalityMs(standing, at) ?? od.at + clock.cureMs;
+          const facts = { remedy: remedyKind as 2 | 4 | 5, defaultingSeat: od.seat, strike: od.strike, epoch: od.epoch, logLen: od.log_len, logHash: od.log_hash, overdueMs: od.at };
+          const why = await port.verifyApproval(game.gameId, { ...facts, approvingSeat: seat, approveUntil: op.approveUntil, signature: op.signature, finalNotBeforeMs, nowMs: at });
           if (why !== null) return { ok: false, code: "bad-approval", reason: why };
+          /* The other standing YES approvals, re-checked under their seats' CURRENT keys: one that no longer verifies is
+             set aside (that seat is asked again) rather than completing a consensus that could not land. */
+          const others = (proposal?.votes ?? []).filter((v) => v.yes && v.seat !== seat && v.approval !== null).map((v) => ({ seat: v.seat, approveUntil: (v.approval as { approve_until: number }).approve_until, signature: (v.approval as { signature: string }).signature }));
+          const found = await port.staleApprovals(game.gameId, facts, others);
+          if (found === null) return { ok: false, code: CLOCK_REFUSAL.unavailable, reason: "The escrow could not be read to check the other approvals. Try again." };
+          stale = found;
           approval = { approve_until: op.approveUntil, signature: op.signature };
-          verifiedFor = { epoch: od.epoch, logLen: od.log_len };
+          verifiedFor = { epoch: od.epoch, logLen: od.log_len, proposalId: proposal?.id ?? null, kind };
         }
         input =
           type === "clock-propose"
-            ? { type: "clock-propose", seat, kind: op.kind as "foreclose" | "annul", approval, verifiedFor }
-            : { type: "clock-vote", seat, proposalId: typeof op.proposalId === "number" ? op.proposalId : 0, yes, approval, verifiedFor };
+            ? { type: "clock-propose", seat, kind: op.kind as "foreclose" | "annul", approval, verifiedFor, stale }
+            : { type: "clock-vote", seat, proposalId: typeof op.proposalId === "number" ? op.proposalId : 0, yes, approval, verifiedFor, stale };
         break;
       }
       default:

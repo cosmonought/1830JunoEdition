@@ -36,6 +36,7 @@ import {
   type RemedyKindByte,
 } from "../../../frontend/src/gameEngine/escrow/junoRemedyV1";
 import type { ClockRemedy, RemedyKind, RemedyStatus } from "../rooms/clock/clockRecord";
+import { LIVE_FINALITY_APPROVAL_MARGIN_SECS } from "../rooms/clock/clockModel";
 import { isLiveAttempt, type ChainIntentRecord } from "./chainIntents";
 import type { EscrowService, RemedyChainContext } from "./escrowService";
 import { remedyChainIntent, RemedyIntentError } from "./juno/remedyIntents";
@@ -50,6 +51,9 @@ export interface RemedyAttempt {
   readonly attested: boolean;
   /** Live foreclosure only: its approvals can no longer land -- the clock should seal the neutral fallback. */
   readonly fallback?: boolean;
+  /** Async N-1 remedy only: the seats whose approvals can no longer land (lapsed, or their consent key moved since they
+   *  signed) -- the clock asks each to approve the same decision again (`remedyStale`). */
+  readonly stale?: readonly string[];
 }
 
 /** What the clock asks of the money side. */
@@ -63,6 +67,9 @@ export interface RemedyPort {
   /** A seat's REMEDY-APPROVE for an overdue instance: `null` when it verifies under the seat's CURRENT consent key (a
    *  quorum chain read) and its horizon is acceptable, else why not. */
   verifyApproval(gameId: string, input: ApprovalCheck): Promise<string | null>;
+  /** The seats among `approvals` whose REMEDY-APPROVE no longer verifies under their CURRENT consent key (one quorum
+   *  read; `null`: the chain could not be read now). */
+  staleApprovals(gameId: string, facts: ApprovalFacts, approvals: readonly { readonly seat: string; readonly approveUntil: number; readonly signature: string }[]): Promise<readonly string[] | null>;
   /** The chain seat of each player (the frozen roster), for the clock's money view. */
   chainSeats(gameId: string): Promise<Readonly<Record<string, number>> | null>;
   /** Post a fencing checkpoint (a cure ended an overdue instance). */
@@ -72,6 +79,9 @@ export interface RemedyPort {
   /** The chain's Start time (seconds) of a bound money game, read by quorum within `timeoutMs` (`null`: unknown now). */
   startedAtSecs(gameId: string, timeoutMs?: number): Promise<number | null>;
 }
+
+/** The overdue instance (and remedy kind) an approval binds to. */
+export type ApprovalFacts = Pick<ApprovalCheck, "remedy" | "defaultingSeat" | "strike" | "epoch" | "logLen" | "logHash" | "overdueMs">;
 
 export interface ApprovalCheck {
   readonly remedy: RemedyKind;
@@ -90,8 +100,9 @@ export interface ApprovalCheck {
   readonly nowMs: number;
 }
 
-/** Live approvals must outlive finality by this much (seconds) and may not reach further than `LIVE_APPROVAL_MAX_SECS`. */
-export const APPROVAL_MARGIN_SECS = 120;
+/** Live approvals must outlive finality by this much (seconds) -- the clock's own margin, so an approval the server
+ *  accepts can decide minute 30 -- and may not reach further than `LIVE_APPROVAL_MAX_SECS`. */
+export const APPROVAL_MARGIN_SECS = LIVE_FINALITY_APPROVAL_MARGIN_SECS;
 export const LIVE_APPROVAL_MAX_SECS = 6 * 60 * 60;
 /** Async approvals: at least an hour of life, at most 30 days. */
 export const ASYNC_APPROVAL_MIN_SECS = 60 * 60;
@@ -124,6 +135,38 @@ export interface RemedyPipelineDeps {
 const matches = (intent: ChainIntentRecord, remedy: ClockRemedy): boolean =>
   intent.op.kind === "remedy" && intent.op.remedy === remedy.kind && intent.op.overdue_epoch === String(remedy.epoch) && intent.op.log_len === String(remedy.log_len) && intent.op.strike === remedy.strike;
 
+function progressOf(intents: readonly ChainIntentRecord[]): "none" | "open" | "confirmed" | "dead" {
+  if (intents.some((intent) => intent.status === "confirmed")) return "confirmed";
+  if (intents.some((intent) => intent.status === "pending" || intent.status === "in-flight" || (intent.status === "held" && intent.attempts.some(isLiveAttempt)))) return "open";
+  return intents.length === 0 ? "none" : "dead";
+}
+
+/** Whether a seat's REMEDY-APPROVE verifies under the chain seat's CURRENT consent key. */
+function approvalVerifies(ctx: RemedyChainContext, remedy: Pick<ClockRemedy, "kind" | "strike" | "epoch" | "log_len" | "log_hash" | "overdue_ms">, defaulting: number, approving: number, approveUntil: number, signature: string): boolean {
+  const key = ctx.consentPubkeys[approving];
+  if (typeof key !== "string" || !/^0[23][0-9a-f]{64}$/.test(key) || !/^[0-9a-f]{128}$/.test(signature)) return false;
+  try {
+    const digest = remedyApproveDigestV1(
+      {
+        domain: ctx.domain,
+        chain_game_id: BigInt(ctx.chainGameId),
+        remedy: remedy.kind as RemedyKindByte,
+        defaulting_seat: defaulting,
+        strike: remedy.strike,
+        overdue_epoch: BigInt(remedy.epoch),
+        log_len: BigInt(remedy.log_len),
+        log_hash: remedy.log_hash,
+        overdue_at: secsUp(remedy.overdue_ms),
+      },
+      BigInt(approveUntil),
+      approving,
+    );
+    return verifyDigest(Buffer.from(key, "hex"), Buffer.from(digest, "hex"), Buffer.from(signature, "hex"));
+  } catch {
+    return false;
+  }
+}
+
 export function createRemedyPipeline(deps: RemedyPipelineDeps): RemedyPort {
   const audit = (event: string, fields: Record<string, unknown>) => deps.audit?.(event, fields);
 
@@ -139,16 +182,23 @@ export function createRemedyPipeline(deps: RemedyPipelineDeps): RemedyPort {
     async attest(gameId, remedy) {
       const signer = deps.signer;
       if (signer === null) return { status: "refused", detail: "no dedicated REMEDY key is configured on this server: no remedy is attested (fail closed)", attested: false };
+      /* What the FP4 intents already say comes first: a confirmed or in-flight attestation needs no new chain read. */
+      const intents = (await deps.service.intentsOf(gameId)).filter((intent) => matches(intent, remedy));
+      const progress = progressOf(intents);
+      if (progress === "confirmed") return { status: "confirmed", detail: null, attested: false };
+      if (progress === "open") return { status: "submitted", detail: null, attested: false };
       const found = await context(gameId);
       if ("refused" in found) return { status: remedy.status === "submitted" ? "submitted" : "refused", detail: found.refused, attested: false };
       const ctx = found;
       if (ctx.remedyKey === null || !ctx.remedyKey.active || ctx.remedyKey.pubkey !== signer.publicKeyHex) {
         return { status: "refused", detail: `the chain's REMEDY key ${signer.remedyKeyId} is not this server's active key: nothing is attested`, attested: false };
       }
-      const progress = await this.progress(gameId, remedy);
-      if (progress === "confirmed") return { status: "confirmed", detail: null, attested: false };
-      if (progress === "open") return { status: "submitted", detail: null, attested: false };
-      if (ctx.remedy !== null) return { status: "superseded", detail: `another remedy (${ctx.remedy.kind}) is on chain`, attested: false };
+      if (ctx.remedy !== null) {
+        /* A remedy is on chain: ours (one of this decision's attestations, by its digest) or another's. */
+        const chainDigest = ctx.remedy.remedyDigest;
+        const ours = intents.some((intent) => intent.op.kind === "remedy" && intent.op.remedy_digest === chainDigest);
+        return ours ? { status: "confirmed", detail: null, attested: false } : { status: "superseded", detail: `another remedy (${ctx.remedy.kind}) is on chain`, attested: false };
+      }
       if (ctx.state !== "IN_PROGRESS") return { status: "superseded", detail: `the escrow is ${ctx.state}: the game ended another way`, attested: false };
       if (ctx.policy !== "timed_remedy_v1") return { status: "refused", detail: `the escrow's exit policy is ${String(ctx.policy)}, which has no timed remedies`, attested: false };
       if (ctx.allowanceSecs !== remedy.allowance_secs) return { status: "refused", detail: `the escrow was funded with a ${ctx.allowanceSecs} s allowance; the clock's is ${remedy.allowance_secs} s`, attested: false };
@@ -162,16 +212,19 @@ export function createRemedyPipeline(deps: RemedyPipelineDeps): RemedyPort {
       const attestedAt = block > finalAt ? block : finalAt;
       const expiresAt = attestedAt + BigInt(MAX_REMEDY_TTL_SECS);
       const approvals: Array<{ seat_index: number; approve_until: bigint; signature: string }> = [];
+      const invalid: string[] = [];
       for (const approval of remedy.approvals) {
         const seat = ctx.seatOf[approval.seat];
         if (seat === undefined) return { status: "refused", detail: `an approving player (${approval.seat}) is not in the frozen roster`, attested: false };
+        /* Checked HERE, before anything is signed: an approval that lapsed by the attestation time, or that no longer
+           verifies under the seat's CURRENT consent key (it rotated since), could never land with it. */
+        if (BigInt(approval.approve_until) <= attestedAt || !approvalVerifies(ctx, remedy, defaulting, seat, approval.approve_until, approval.signature)) invalid.push(approval.seat);
         approvals.push({ seat_index: seat, approve_until: BigInt(approval.approve_until), signature: approval.signature });
       }
-      /* An approval whose horizon is at or before the attestation time could never land with it. */
-      if (approvals.some((approval) => approval.approve_until <= attestedAt)) {
-        return remedy.kind === 2
-          ? { status: "refused", detail: "an approval of the foreclosure lapsed before it could land: the neutral timeout annulment replaces it", attested: false, fallback: true }
-          : { status: "refused", detail: "an approval lapsed before the remedy could land: the seats must approve again", attested: false };
+      if (invalid.length > 0) {
+        if (remedy.kind === 2) return { status: "refused", detail: "an approval of the foreclosure can no longer land (lapsed, or its consent key changed): the neutral timeout annulment replaces it", attested: false, fallback: true };
+        if (remedy.kind === 4 || remedy.kind === 5) return { status: "refused", detail: "an approval can no longer land (lapsed, or its consent key changed): those players must approve again", attested: false, stale: [...invalid].sort() };
+        return { status: "refused", detail: "an approval can no longer land", attested: false };
       }
       const attestation: RemedyAttestationV1 = {
         version: 1,
@@ -218,10 +271,7 @@ export function createRemedyPipeline(deps: RemedyPipelineDeps): RemedyPort {
     },
 
     async progress(gameId, remedy) {
-      const intents = (await deps.service.intentsOf(gameId)).filter((intent) => matches(intent, remedy));
-      if (intents.some((intent) => intent.status === "confirmed")) return "confirmed";
-      if (intents.some((intent) => intent.status === "pending" || intent.status === "in-flight" || (intent.status === "held" && intent.attempts.some(isLiveAttempt)))) return "open";
-      return intents.length === 0 ? "none" : "dead";
+      return progressOf((await deps.service.intentsOf(gameId)).filter((intent) => matches(intent, remedy)));
     },
 
     async verifyApproval(gameId, input) {
@@ -263,6 +313,20 @@ export function createRemedyPipeline(deps: RemedyPipelineDeps): RemedyPort {
       );
       if (!verifyDigest(Buffer.from(key, "hex"), Buffer.from(digest, "hex"), Buffer.from(input.signature, "hex"))) return "the approval does not verify under your seat's current consent key (for this overdue and horizon)";
       return null;
+    },
+
+    async staleApprovals(gameId, facts, approvals) {
+      if (approvals.length === 0) return [];
+      const found = await context(gameId);
+      if ("refused" in found) return null;
+      const defaulting = found.seatOf[facts.defaultingSeat];
+      const decision = { kind: facts.remedy, strike: facts.strike, epoch: facts.epoch, log_len: facts.logLen, log_hash: facts.logHash, overdue_ms: facts.overdueMs };
+      const stale: string[] = [];
+      for (const approval of approvals) {
+        const approving = found.seatOf[approval.seat];
+        if (defaulting === undefined || approving === undefined || approving === defaulting || !approvalVerifies(found, decision, defaulting, approving, approval.approveUntil, approval.signature)) stale.push(approval.seat);
+      }
+      return stale.sort();
     },
 
     async chainSeats(gameId) {

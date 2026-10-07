@@ -152,7 +152,33 @@ describe("Phase 3 final clocks: the clock chip", () => {
     expect(text).toContain("All players must agree to resume.");
     expect(text).toContain("6:12");
     await click("game-clock-system-resume");
-    expect(sent[0].op).toEqual({ type: "clock-sysresume" });
+    expect(sent[0].op).toEqual({ type: "clock-sysresume", since: 2 });
+  });
+
+  it("an Async outcome whose approval by this seat must be renewed: 'Approve again' signs the SAME decision on this device", async () => {
+    const facts = { seat: "p-bob", strike: 0, epoch: 3, overdueAt: 1_800_000_000_000, logLen: 9, logHash: "ab".repeat(32) };
+    const asked: Array<Parameters<ClockApprovalSigner>[0]> = [];
+    const signer: ClockApprovalSigner = async (input) => {
+      asked.push(input);
+      return { ok: true, approveUntil: 1_802_000_000, signature: "ef".repeat(64) };
+    };
+    render(
+      view({ deadline: "async-pace", paceSecs: 86_400, money: true, state: "ended", action: null, ended: { kind: "async-foreclosure", at: 1, seat: "p-bob" }, remedy: { kind: 5, status: "refused", stale: ["p-me"], overdue: facts } }),
+      { signApproval: signer },
+    );
+    await click("game-clock-toggle");
+    expect(q("game-clock-panel")?.textContent).toMatch(/Approve it again/);
+    await click("game-clock-reapprove");
+    expect(asked[0]).toEqual({ remedy: 5, overdue: facts, live: false });
+    expect(sent[0].op).toEqual({ type: "clock-reapprove", approveUntil: 1_802_000_000, signature: "ef".repeat(64) });
+  });
+
+  it("an ended game held by a SYSTEM PAUSE (its money outcome not yet final) still offers the resume vote", async () => {
+    render(view({ money: true, state: "ended", action: null, ended: { kind: "live-timeout-annul", at: 1, seat: "p-bob" }, remedy: { kind: 1, status: "sealed", stale: [], overdue: { seat: "p-bob", strike: 1, epoch: 1, overdueAt: 1, logLen: 3, logHash: "ab".repeat(32) } }, system: { since: 5, preservedAt: 4, yes: [], needed: ["p-me", "p-bob", "p-carol"] } }));
+    await click("game-clock-toggle");
+    expect(q("game-clock-panel")?.textContent).toContain("Game paused because server continuity was interrupted.");
+    await click("game-clock-system-resume");
+    expect(sent[0].op).toEqual({ type: "clock-sysresume", since: 5 });
   });
 
   it("a free table's vote needs no signature; a money table's YES is signed on this device first", async () => {

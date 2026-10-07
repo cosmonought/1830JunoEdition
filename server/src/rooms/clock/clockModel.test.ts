@@ -26,8 +26,10 @@ import {
   nextDue,
   pauseOp,
   propose,
+  reapprove,
   recoverGap,
   remainingAt,
+  remedyStale,
   sealNeutralFallback,
   systemResumeVote,
   vote,
@@ -274,14 +276,20 @@ describe("Live train offer: the proposer's clock freezes; the recipient has a di
     assert.equal(t.remaining(), LIVE_ACTION_MS);
   });
 
-  test("the proposer's own rescission is no decline, and resumes its exact remainder (a propose-and-rescind never gives time)", () => {
+  test("the proposer's own rescission is no decline, and is charged the time its offer stood (a propose-and-rescind never gives time)", () => {
     const t = new Table("live");
     t.advance(18 * MIN);
     t.move(A, offering(offer), "propose", { trainRecipient: B });
-    t.advance(4 * MIN);
+    t.advance(1 * MIN);
     t.move(A, facts(turn(A, 0)), "rescind");
-    assert.equal(t.remaining(), 2 * MIN, "exactly the 2:00 A had");
+    assert.equal(t.remaining(), 1 * MIN, "the 2:00 A had, less the 1:00 its offer stood: rescinding never stops A's own clock");
     assert.equal(t.record.declines.counts[`${A}>${B}`] ?? 0, 0);
+    /* Repeated propose-and-rescind cannot stall: the stood time keeps running out A's clock, to an overdue. */
+    t.move(A, offering(offerOf("train", A, B, 2)), "propose", { trainRecipient: B });
+    t.advance(1 * MIN + 1);
+    t.move(A, facts(turn(A, 0)), "rescind");
+    t.advance(0);
+    assert.equal(t.record.phase, "overdue");
   });
 
   test("two declines (one rejection, one expiry) block a third A -> B proposal until the next Operating Round", () => {
@@ -949,5 +957,141 @@ describe("Canonical clock evidence", () => {
     assert.deepEqual(classifyMessage({ RevertTo: { index: 4 } }), { cls: "revert", revertTarget: 4, closeRoom: false });
     assert.deepEqual(classifyMessage({ CloseRoom: {} }).closeRoom, true);
     assert.equal(classifyMessage({ SetupGame: {} }).cls, "deal");
+  });
+});
+
+/* ==================================================================
+    REVIEW FIXES (final pass): bounded pause requests, the system-pause YES bound to its break, gap recovery that never
+    hands out time, an overdue seat's offer, optional powers, approvals that must outlive finality, stale approvals
+   ================================================================== */
+
+describe("Review fixes: requests, breaks, gaps, offers, approvals", () => {
+  const sig = (until: number, byte = "44") => ({ approve_until: until, signature: byte.repeat(64) });
+
+  test("PAUSE requests are bounded per obligation (a new obligation opens a new window); a RESUME request never is", () => {
+    const t = new Table("live");
+    for (let i = 0; i < 16; i += 1) {
+      t.ok(pauseOp(t.record, A, { action: "request", kind: "pause", id: null }, t.t));
+      t.ok(pauseOp(t.record, B, { action: "no", kind: "pause", id: t.record.pause.request?.id ?? null }, t.t));
+    }
+    const refused = pauseOp(t.record, A, { action: "request", kind: "pause", id: null }, t.t);
+    assert.equal("code" in refused ? refused.code : null, "rate-limited");
+    t.move(A, facts(turn(B, 1)));
+    t.ok(pauseOp(t.record, B, { action: "request", kind: "pause", id: null }, t.t));
+    for (const seat of [A, C]) t.ok(pauseOp(t.record, seat, { action: "yes", kind: "pause", id: t.record.pause.request?.id ?? null }, t.t));
+    assert.notEqual(t.record.pause.paused_at, null);
+    for (let i = 0; i < 40; i += 1) {
+      t.ok(pauseOp(t.record, A, { action: "request", kind: "resume", id: null }, t.t));
+      t.ok(pauseOp(t.record, C, { action: "no", kind: "resume", id: t.record.pause.request?.id ?? null }, t.t));
+    }
+    t.ok(pauseOp(t.record, A, { action: "request", kind: "resume", id: null }, t.t));
+    assert.equal(t.record.pause.request?.kind, "resume", "a paused table can always ask to resume");
+  });
+
+  test("a system-pause YES names the break it saw; a later break needs a fresh look", () => {
+    const t = new Table("live");
+    t.advance(5 * MIN);
+    t.ok(continuityBreak(t.record, { now: t.t + MIN, preservedAt: t.t, reason: "restart", authority: "auth-2" }));
+    const first = t.record.system?.since as number;
+    t.ok(systemResumeVote(t.record, A, t.t, first));
+    t.ok(continuityBreak(t.record, { now: t.t + 2 * MIN, preservedAt: t.t, reason: "again", authority: "auth-3" }));
+    const second = t.record.system?.since as number;
+    assert.ok(second > first);
+    const stale = systemResumeVote(t.record, B, t.t, first);
+    assert.equal("code" in stale ? stale.code : null, CLOCK_REFUSAL.stale);
+    for (const seat of [A, B, C]) t.ok(systemResumeVote(t.record, seat, t.t, second));
+    assert.equal(t.record.system, null);
+  });
+
+  test("a recovered gap never hands out time: a seat that still owes and did not act continues; a parked proposer keeps its remainder", () => {
+    const t = new Table("live");
+    t.advance(15 * MIN);
+    /* Off-turn moves by B (never folded): A still owes, did not act -- 5:00 left, not a fresh 20:00. */
+    const kept = recoverGap(t.record, { now: t.t, lastIndex: 3, lastAt: t.t, actors: [B], facts: facts(turn(A, 0)) });
+    t.take(kept);
+    assert.equal(t.remaining(), 5 * MIN);
+    /* A's train offer to B stands; the gap folded nothing more: A's parked 5:00 and B's response time are kept. */
+    t.move(A, offering(offerOf("train", A, B, 7)), "propose", { trainRecipient: B });
+    t.advance(3 * MIN);
+    t.take(recoverGap(t.record, { now: t.t, lastIndex: 9, lastAt: t.t, actors: [], facts: offering(offerOf("train", A, B, 7)) }));
+    assert.deepEqual(t.record.parked.map((p) => [p.seat, p.remaining_ms]), [[A, 5 * MIN]]);
+    assert.equal(t.remaining(), LIVE_TRADE_MS - 3 * MIN, "the same offer keeps its response time");
+    /* The gap closed the offer by rescission (A acted -- not a REQUIRED action): A resumes its parked remainder. */
+    t.take(recoverGap(t.record, { now: t.t, lastIndex: 12, lastAt: t.t, actors: [], facts: facts(turn(A, 0)) }));
+    assert.equal(t.remaining(), 5 * MIN);
+  });
+
+  test("an overdue seat's own offer is refused (it cannot cure); the M&H exchange is optional: it neither refreshes nor cures", () => {
+    const t = new Table("live");
+    t.advance(LIVE_ACTION_MS);
+    assert.equal(t.record.phase, "overdue");
+    assert.equal(t.refusal(A, "propose", { trainRecipient: B })?.code, CLOCK_REFUSAL.interrupted);
+    t.move(A, facts(turn(A, 0)), "optional");
+    assert.equal(t.record.phase, "overdue", "an optional power is not the owed action");
+    assert.equal(classifyMessage({ ExchangePrivate: {} }).cls, "optional");
+    t.move(A, facts(turn(A, 0)));
+    assert.equal(t.record.phase, "active");
+    t.advance(5 * MIN);
+    t.move(A, facts(turn(A, 0)), "optional");
+    assert.equal(t.remaining(), 15 * MIN, "an optional power never refreshes the clock");
+  });
+
+  test("Live money: a complete foreclosure decides minute 30 only if every approval outlives the finality by the margin", () => {
+    const t = new Table("live", { money: true });
+    t.advance(LIVE_ACTION_MS);
+    const finalSecs = Math.ceil((T0 + LIVE_ACTION_MS + LIVE_CURE_MS) / 1000);
+    t.ok(propose(t.record, B, "foreclose", sig(finalSecs + 301), t.t));
+    t.ok(vote(t.record, C, t.record.overdue?.proposal?.id as number, true, sig(finalSecs + 300, "55"), t.t));
+    assert.equal(clockViewOf(t.record, t.t).overdue?.outcomeIfUncured, "timeout-annul", "C's approval ends exactly at the margin: it cannot decide minute 30");
+    t.advance(LIVE_CURE_MS);
+    assert.equal(t.record.ended?.kind, "live-timeout-annul");
+    assert.equal(t.record.remedy?.kind, 1);
+  });
+
+  test("a money YES checked for one kind never counts toward the other; a seat whose key moved is set aside", () => {
+    const t = new Table("async-pace", { pace: 86_400, money: true });
+    t.advance(86_400 * SEC);
+    const nowSecs = Math.floor(t.t / 1000);
+    t.ok(propose(t.record, B, "annul", sig(nowSecs + 7 * 86_400), t.t));
+    const id = t.record.overdue?.proposal?.id as number;
+    const wrongKind = vote(t.record, C, id, true, sig(nowSecs + 7 * 86_400, "55"), t.t, { kind: "foreclose" });
+    assert.equal("code" in wrongKind ? wrongKind.code : null, CLOCK_REFUSAL.stale);
+    t.ok(vote(t.record, C, id, true, sig(nowSecs + 7 * 86_400, "55"), t.t, { kind: "annul", stale: [B] }));
+    assert.equal(t.record.phase, "overdue", "B's YES no longer verifies: no consensus");
+    assert.deepEqual(t.record.overdue?.proposal?.votes.map((v) => v.seat), [C]);
+    assert.ok(t.events.includes("vote-stale"));
+    t.ok(vote(t.record, B, id, true, sig(nowSecs + 7 * 86_400, "66"), t.t, { kind: "annul" }));
+    assert.equal(t.record.ended?.kind, "async-annul");
+  });
+
+  test("Async money: an approval with under an hour left never completes the consensus", () => {
+    const t = new Table("async-pace", { pace: 86_400, money: true });
+    t.advance(86_400 * SEC);
+    const nowSecs = Math.floor(t.t / 1000);
+    t.ok(propose(t.record, B, "foreclose", sig(nowSecs + 3_600), t.t));
+    t.ok(vote(t.record, C, t.record.overdue?.proposal?.id as number, true, sig(nowSecs + 7 * 86_400, "55"), t.t));
+    assert.equal(t.record.phase, "overdue");
+    assert.deepEqual(t.record.overdue?.proposal?.votes.map((v) => v.seat), [C], "B's lapsing YES is set aside; B is asked again");
+  });
+
+  test("Async money: approvals found stale after sealing are renewed by their seats, then the SAME decision is sealed again", () => {
+    const t = new Table("async-pace", { pace: 86_400, money: true });
+    t.advance(86_400 * SEC);
+    const nowSecs = Math.floor(t.t / 1000);
+    t.ok(propose(t.record, B, "foreclose", sig(nowSecs + 7 * 86_400), t.t));
+    t.ok(vote(t.record, C, t.record.overdue?.proposal?.id as number, true, sig(nowSecs + 7 * 86_400, "55"), t.t));
+    const sealed = t.record.remedy as NonNullable<GameClockRecord["remedy"]>;
+    assert.equal(sealed.kind, 5);
+    t.take(remedyStale(t.record, [C], t.t));
+    assert.deepEqual([t.record.remedy?.status, t.record.remedy?.stale], ["refused", [C]]);
+    assert.deepEqual(clockViewOf(t.record, t.t).remedy?.stale, [C]);
+    assert.equal(clockViewOf(t.record, t.t).remedy?.overdue.logLen, sealed.log_len, "the view carries what a renewed approval binds to");
+    const notStale = reapprove(t.record, B, sig(nowSecs + 9 * 86_400), t.t);
+    assert.equal("code" in notStale, true);
+    t.ok(reapprove(t.record, C, sig(nowSecs + 9 * 86_400, "77"), t.t));
+    const resealed = t.record.remedy as NonNullable<GameClockRecord["remedy"]>;
+    assert.deepEqual([resealed.kind, resealed.epoch, resealed.log_len, resealed.status, resealed.stale], [5, sealed.epoch, sealed.log_len, "sealed", []]);
+    assert.notEqual(resealed.evidence_hash, sealed.evidence_hash, "a new seal of the same decision");
+    assert.equal(resealed.approvals.find((a) => a.seat === C)?.approve_until, nowSecs + 9 * 86_400);
   });
 });

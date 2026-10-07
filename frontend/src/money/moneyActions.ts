@@ -680,7 +680,9 @@ export async function agreeToAnnul(ctx: TableContext): Promise<ActionOutcome> {
 /** Live: an approval reaches as far as the contract allows past the overdue (six hours, a minute short) -- a pause
  *  that outlasts it lapses the approval and the outcome falls back to the neutral annulment. Async: seven days. */
 export const LIVE_APPROVAL_REACH_SECS = 6 * 3600 - 60;
-export const ASYNC_APPROVAL_REACH_SECS = 7 * 86_400;
+/** An Async approval lasts 29 days: long enough for slow N-1 voters (the server refuses one that ends within an hour of
+ *  completing), short of the server's 30-day ceiling with a day of clock skew to spare. */
+export const ASYNC_APPROVAL_REACH_SECS = 29 * 86_400;
 
 export async function signRemedyApproval(
   ctx: TableContext,
@@ -702,7 +704,11 @@ export async function signRemedyApproval(
   const details = await escrowDetails(ctx.gameId, ctx.port);
   if (!details.ok) return { ok: false, outcome: fromApi(details, services) };
   const defaulting = details.value.roster?.find((seat) => seat.playerId === input.overdue.seat)?.chainSeatIndex ?? null;
-  if (defaulting === null) return { ok: false, outcome: refuse("The overdue player's seat on Juno isn't known, so nothing was signed.") };
+  if (defaulting === null || !Number.isSafeInteger(defaulting) || defaulting < 0 || defaulting >= facts.value.seats.length) return { ok: false, outcome: refuse("The overdue player's seat on Juno isn't known, so nothing was signed.") };
+  /* The server's roster must place THIS seat where Juno does (by this device's own key): a roster that disagrees could
+     name the wrong defaulting seat, so nothing is signed on it. */
+  const mineOnRoster = details.value.roster?.find((seat) => seat.playerId === you.playerId)?.chainSeatIndex ?? null;
+  if (mineOnRoster !== own.index) return { ok: false, outcome: refuse("The table's roster doesn't match Juno for your seat, so nothing was signed.") };
   if (defaulting === own.index) return { ok: false, outcome: refuse("You can't approve a remedy against your own seat.") };
   /* Whole seconds, rounded UP (as the server and the contract read the overdue moment). Integers only. */
   const overdueAtSecs = Math.floor((input.overdue.overdueAt + 999) / 1000);

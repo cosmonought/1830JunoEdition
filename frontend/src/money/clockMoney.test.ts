@@ -125,7 +125,7 @@ describe("Phase 3 final clocks: a REMEDY-APPROVE binds one overdue instance", ()
 import { Secp256k1, Secp256k1Signature } from "@cosmjs/crypto";
 import { fromHex, toHex } from "@cosmjs/encoding";
 import { createConsentKeys, memoryConsentKeyVault } from "./consentKeys";
-import { LIVE_APPROVAL_REACH_SECS, signRemedyApproval, type TableContext } from "./moneyActions";
+import { ASYNC_APPROVAL_REACH_SECS, LIVE_APPROVAL_REACH_SECS, signRemedyApproval, type TableContext } from "./moneyActions";
 import { installMoneyServicesForTests } from "./moneySession";
 import { scriptedPort, testKey, testServices, TEST_CONTRACT } from "./moneyTestSupport";
 
@@ -179,6 +179,17 @@ describe("Phase 3 final clocks: this seat's REMEDY-APPROVE, signed on this devic
     const own = await signRemedyApproval(ctx, { remedy: 2, overdue: { ...overdue, seat: "p-me" }, live: true });
     expect(own.ok).toBe(false);
     expect((own as { outcome: { reason: string } }).outcome.reason).toMatch(/your own seat/);
+    /* A roster that places this seat somewhere Juno does not: nothing is signed on it. */
+    port.answer("money/escrow-details", 200, { ok: true, checkpoint: null, settlement: null, chain: null, roster: [{ playerId: "p-me", chainSeatIndex: 0 }, { playerId: "p-host", chainSeatIndex: 1 }] });
+    const swapped = await signRemedyApproval(ctx, { remedy: 2, overdue, live: true });
+    expect(swapped.ok).toBe(false);
+    expect((swapped as { outcome: { reason: string } }).outcome.reason).toMatch(/roster doesn't match Juno/);
+    /* Async: the approval reaches 29 days from now (slow N-1 voters; inside the server's 30-day ceiling). */
+    port.answer("money/escrow-details", 200, { ok: true, checkpoint: null, settlement: null, chain: null, roster: [{ playerId: "p-host", chainSeatIndex: 0 }, { playerId: "p-me", chainSeatIndex: 1 }] });
+    const n1 = await signRemedyApproval(ctx, { remedy: 4, overdue: { ...overdue, strike: 0 }, live: false });
+    if (!n1.ok) throw new Error(JSON.stringify(n1.outcome));
+    expect(n1.approveUntil).toBe(Math.floor(T0 / 1000) + ASYNC_APPROVAL_REACH_SECS);
+    expect(ASYNC_APPROVAL_REACH_SECS).toBe(29 * 86_400);
     services.wallet.game = { ...services.wallet.game, seats: [services.wallet.game.seats[0]] };
     const noKey = await signRemedyApproval(ctx, { remedy: 2, overdue, live: true });
     expect(noKey.ok).toBe(false);

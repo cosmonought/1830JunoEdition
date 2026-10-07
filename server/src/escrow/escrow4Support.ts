@@ -32,6 +32,8 @@ import { createMemoryWalletTicketStore, createWalletTicketLedger } from "./walle
 import { addressOfPublicKey } from "./juno/cosmosTx";
 import { FakeJunoChain, type FakeDeadline } from "./juno/fakeJunoChain";
 import { createMemoryClockStore } from "../rooms/clock/clockStore";
+import { createRemedyPipeline, type RemedyPort } from "./remedyPipeline";
+import { deterministicTestRemedySigner } from "./juno/remedySigner";
 import { DEFAULT_GAS_POLICY } from "./juno/gasPolicy";
 import { junoJoinAdmissionSigner } from "./juno/joinAdmission";
 import { createJunoRelayer, type Relayer } from "./juno/relayer";
@@ -179,6 +181,7 @@ export async function moneyServer(options: MoneyServerOptions = {}): Promise<Mon
     settlementSigner: junoSettlementSigner(settlementKeyConfig(), JUNO_CODEC_V1, developmentDigestSigner(SETTLEMENT_SECRET, "settlement", GUARD), journal),
   };
   let relayer: Relayer | null = null;
+  let remedyPort: RemedyPort | null = null;
   const service = createEscrowService({
     backend,
     financial,
@@ -202,6 +205,7 @@ export async function moneyServer(options: MoneyServerOptions = {}): Promise<Mon
         }
       : {}),
   });
+  remedyPort = createRemedyPipeline({ service, signer: deterministicTestRemedySigner(1, Buffer.alloc(32, 7)), now: () => clock.now, warn: (line) => warnings.push(line) });
   relayer = createJunoRelayer({
     rest: chain,
     store: intents,
@@ -257,7 +261,19 @@ export async function moneyServer(options: MoneyServerOptions = {}): Promise<Mon
     rosterSource: { plan: (record, ctx) => (record.money === null ? noMoney.plan(record, ctx) : service.rosterSource.plan(record, ctx)) },
     money: () => refs.money,
     escrow: { onGameplayCommitted: (input) => service.onGameplayCommitted(input), isRosterFrozen: (gameId) => service.isRosterFrozen(gameId) },
-    ...(options.clock === true ? { clock: { store: createMemoryClockStore(), authority: "auth-money", now: () => clock.now, timers: { set: () => null, clear: () => undefined } } } : {}),
+    ...(options.clock === true
+      ? {
+          clock: {
+            store: createMemoryClockStore(),
+            authority: "auth-money",
+            now: () => clock.now,
+            timers: { set: () => null, clear: () => undefined },
+            /* A configured REMEDY signer (its key is not registered on this chain: every attestation is refused there),
+               so timed money tables open as on a production server with a remedy key. */
+            remedy: () => remedyPort,
+          },
+        }
+      : {}),
   });
   refs.server = started.server;
   /* As `start.ts` (LIVE-4 integration): when the chain facts every verdict reads change, every resident game's

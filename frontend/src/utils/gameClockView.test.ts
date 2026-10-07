@@ -105,7 +105,7 @@ describe("Phase 3 final clocks: OVERDUE, strikes and the third expiry", () => {
   });
 
   it("the third expiry: game ended by foreclosure, the money result challengeable -- never another cure clock", () => {
-    const p = present(view({ state: "ended", money: true, ended: { kind: "live-strike3-foreclosure", at: 1, seat: BOB }, remedy: { kind: 3, status: "submitted" } }));
+    const p = present(view({ state: "ended", money: true, ended: { kind: "live-strike3-foreclosure", at: 1, seat: BOB }, remedy: { kind: 3, status: "submitted", stale: [], overdue: { seat: BOB, strike: 3, epoch: 3, overdueAt: 1, logLen: 4, logHash: "ab".repeat(32) } } }));
     expect(p).toMatchObject({ state: "ended", label: "Foreclosed", value: null, ticking: false });
     expect(p.lines[0]).toMatch(/third action-clock expiry.*challenged on Juno; play does not resume/);
   });

@@ -23,7 +23,11 @@ import { roomOp, roomViewReceivedAt, watchRoomLink } from "../utils/roomLink";
 import type { RoomOpBody, RoomViewPlayer } from "../utils/roomProtocol";
 
 /** A money table's YES: the seat's REMEDY-APPROVE for the standing overdue instance (`moneyActions.signRemedyApproval`). */
-export type ClockApprovalSigner = (input: { readonly remedy: 2 | 4 | 5; readonly overdue: NonNullable<RoomClockView["overdue"]>; readonly live: boolean }) => Promise<{ readonly ok: true; readonly approveUntil: number; readonly signature: string } | { readonly ok: false; readonly reason: string }>;
+export type ClockApprovalSigner = (input: {
+  readonly remedy: 2 | 4 | 5;
+  readonly overdue: Pick<NonNullable<RoomClockView["overdue"]>, "seat" | "strike" | "epoch" | "overdueAt" | "logLen" | "logHash">;
+  readonly live: boolean;
+}) => Promise<{ readonly ok: true; readonly approveUntil: number; readonly signature: string } | { readonly ok: false; readonly reason: string }>;
 
 export interface GameClockChipProps {
   gameId: string;
@@ -172,8 +176,35 @@ export function GameClockChip({ gameId, clock, players, viewerPlayerId, current,
     });
   };
 
+  /* An Async N-1 outcome whose approval by this seat must be renewed: the SAME decision, signed again here. */
+  const approveAgain = (remedy: 4 | 5) => {
+    if (busy) return;
+    const facts = clock.remedy?.overdue ?? null;
+    if (signApproval === undefined || facts === null) {
+      setRefusal("This device can't sign the approval a table with stakes needs. Open the table's money panel on the device that holds your seat's key.");
+      return;
+    }
+    setBusy(true);
+    setRefusal(null);
+    void signApproval({ remedy, overdue: facts, live: false }).then((signed) => {
+      setBusy(false);
+      if (!signed.ok) {
+        setRefusal(signed.reason);
+        return;
+      }
+      send({ type: CLOCK_OPS.reapprove, approveUntil: signed.approveUntil, signature: signed.signature });
+    });
+  };
+
   const hasControls =
-    controls.requestPause || controls.requestResume || controls.answerRequest !== null || controls.systemResume || controls.propose.length > 0 || controls.vote !== null || controls.annul !== null;
+    controls.requestPause ||
+    controls.requestResume ||
+    controls.answerRequest !== null ||
+    controls.systemResume ||
+    controls.propose.length > 0 ||
+    controls.vote !== null ||
+    controls.annul !== null ||
+    controls.reapprove !== null;
   const detail = [presentation.warning, ...presentation.lines, refusal].filter((line): line is string => line !== null && line !== "");
   const title = detail.join(" ") || undefined;
 
@@ -233,8 +264,13 @@ export function GameClockChip({ gameId, clock, players, viewerPlayerId, current,
               </>
             )}
             {controls.systemResume && (
-              <button type="button" style={buttonStyle} disabled={busy} onClick={() => send({ type: CLOCK_OPS.systemResume })} data-testid="game-clock-system-resume">
+              <button type="button" style={buttonStyle} disabled={busy} onClick={() => send({ type: CLOCK_OPS.systemResume, ...(clock.system !== null ? { since: clock.system.since } : {}) })} data-testid="game-clock-system-resume">
                 Agree to resume
+              </button>
+            )}
+            {controls.reapprove !== null && (
+              <button type="button" style={buttonStyle} disabled={busy} onClick={() => approveAgain(controls.reapprove!.remedy)} data-testid="game-clock-reapprove">
+                Approve again
               </button>
             )}
             {controls.propose.map((kind) => (

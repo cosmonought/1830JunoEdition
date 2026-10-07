@@ -1648,6 +1648,9 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
 
   async function remedyContext(gameId: string, remedyKeyId: number | null): Promise<RemedyChainContext | ServiceRefusal> {
     if (!ready()) return refuseRemedy("not-verified", "financial mode is not verified against the chain");
+    /* A restored money game is read-only until verified against the chain: no remedy is attested meanwhile. */
+    const restoring = restoreRefusal(gameId);
+    if (restoring !== null) return restoring;
     const found = await servingOf(gameId);
     const record = found.record;
     const bound = boundOf(record);
@@ -1715,10 +1718,14 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
     remedyContext,
 
     prepareRemedy(gameId, candidate, chainTimeSecs) {
+      const restoring = restoreRefusal(gameId);
+      if (restoring !== null) return Promise.resolve({ kind: "hold" as const, why: restoring.detail });
       return exclusive(`remedy|${gameId}`, () => prepareRemedyIntent(deps.intents, candidate, { poke: (game, intent) => deps.relayer()?.poke(game, intent), now: deps.now(), chainTime: chainTimeSecs }));
     },
 
     fenceCheckpoint(gameId) {
+      /* A restored game posts nothing until verified (its own restore check re-derives the trusted position). */
+      if (restoreRefusal(gameId) !== null) return;
       void enqueue(gameId, "a fencing checkpoint (a cured overdue)", async () => {
         const entries = await deps.readLog(gameId);
         const L = entries.length;

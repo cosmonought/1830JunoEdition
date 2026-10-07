@@ -54,6 +54,8 @@ export interface ClockControls {
   readonly vote: { readonly id: number; readonly kind: "foreclose" | "annul"; readonly mine: "yes" | "no" | null } | null;
   /** A free table's unanimous annulment (a money table annuls through its escrow: the money panel). */
   readonly annul: { readonly mine: boolean; readonly count: number; readonly needed: number } | null;
+  /** Money, Async N-1: this seat's approval of the sealed outcome must be renewed (it lapsed, or its key moved). */
+  readonly reapprove: { readonly remedy: 4 | 5 } | null;
 }
 
 export interface ClockPresentation {
@@ -74,7 +76,12 @@ export interface ClockPresentation {
   readonly controls: ClockControls;
 }
 
-export const NO_CONTROLS: ClockControls = Object.freeze({ requestPause: false, requestResume: false, answerRequest: null, systemResume: false, propose: Object.freeze([]), vote: null, annul: null });
+export const NO_CONTROLS: ClockControls = Object.freeze({ requestPause: false, requestResume: false, answerRequest: null, systemResume: false, propose: Object.freeze([]), vote: null, annul: null, reapprove: null });
+
+/** Shown to a seat whose approval of a sealed Async outcome must be renewed. */
+export const REAPPROVE_DETAIL = "Your approval of this outcome can no longer be sent to Juno (it lapsed, or your seat's key changed). Approve it again to send it.";
+/** Shown to everyone while some approvals of a sealed Async outcome wait to be renewed. */
+export const REAPPROVE_WAITING_DETAIL = "Some players' approvals of this outcome must be renewed before it can be sent to Juno.";
 
 export const CLOCK_NOT_CURRENT_DETAIL = "This tab is catching up with the room, so its clock is not shown as current.";
 export const CLOCK_PAUSED_DETAIL = "Paused by every player. Nothing is timed until every player agrees to resume.";
@@ -195,6 +202,7 @@ export function presentClock(input: ClockPresentationInput): ClockPresentation {
   if (clock === null || clock === undefined || clock.v !== 2) return HIDDEN;
   const me = input.viewerPlayerId;
   const seated = me !== null && clock.seats.includes(me);
+  const seatedHere = seated;
   const name = (seat: string) => (seat === me ? "You" : input.nameOf(seat));
   const modeLabel = clock.deadline === "live" ? "Live" : clock.deadline === "no-deadline" ? "No deadline" : `Async · ${paceLabel(clock.paceSecs)}`;
   const elapsed = Math.max(0, input.sinceReceiptMs);
@@ -207,8 +215,16 @@ export function presentClock(input: ClockPresentationInput): ClockPresentation {
   if (clock.state === "ended") {
     const kind = clock.ended?.kind;
     const lines = [endedSentence(kind, clock.money)];
-    if (clock.remedy !== null && clock.money) lines.push(remedyStatusSentence(clock.remedy.status));
-    return { ...base, state: "ended", label: kind === "live-strike3-foreclosure" || kind === "live-foreclosure" || kind === "async-foreclosure" ? "Foreclosed" : kind === "game-end" ? "Game over" : "Ended", value: null, lines, tone: "ended", ticking: false };
+    const stale = clock.money && clock.remedy !== null && Array.isArray(clock.remedy.stale) ? clock.remedy.stale : [];
+    if (clock.remedy !== null && clock.money) lines.push(stale.length > 0 ? REAPPROVE_WAITING_DETAIL : remedyStatusSentence(clock.remedy.status));
+    /* An ended game whose money outcome is not final on Juno is held by a SYSTEM PAUSE after a continuity break: the
+       owner's sentences, and the resume vote. */
+    if (clock.system !== null) lines.push(SYSTEM_PAUSE_SENTENCE, SYSTEM_PAUSE_RESUME_SENTENCE, `${clock.system.yes.length} of ${clock.system.needed.length} agreed to resume.`);
+    const remedyKind = clock.remedy?.kind;
+    const reapprove = seatedHere && stale.includes(me as string) && (remedyKind === 4 || remedyKind === 5) ? { remedy: remedyKind as 4 | 5 } : null;
+    if (reapprove !== null) lines.push(REAPPROVE_DETAIL);
+    const endedControls: ClockControls = { ...NO_CONTROLS, systemResume: seatedHere && clock.system !== null && !clock.system.yes.includes(me as string), reapprove };
+    return { ...base, controls: endedControls, state: "ended", label: kind === "live-strike3-foreclosure" || kind === "live-foreclosure" || kind === "async-foreclosure" ? "Foreclosed" : kind === "game-end" ? "Game over" : "Ended", value: null, lines, tone: "ended", ticking: false };
   }
   /* NOT CURRENT: no figure at all -- a stale tab never shows a countdown as the room's. */
   if (!input.current) {
@@ -361,6 +377,7 @@ function controlsOf(clock: RoomClockView, me: string | null, seated: boolean): C
     propose: clock.system === null ? propose : [],
     vote: clock.system === null ? vote : null,
     annul: annulAvailable ? { mine: clock.annul?.yes.includes(me) ?? false, count: clock.annul?.yes.length ?? 0, needed: clock.seats.length } : null,
+    reapprove: null,
   };
 }
 

@@ -222,11 +222,12 @@ export type RoomOpBody =
   /** Phase 3 final clocks (`clockProtocol.ts` CLOCK_OPS): the table clock's ops. */
   | { type: "clock-policy"; deadline: ClockDeadlineClass; paceSecs?: number | null }
   | { type: "clock-pause"; action: "request" | "yes" | "no"; kind: "pause" | "resume"; id?: number }
-  | { type: "clock-sysresume" }
+  | { type: "clock-sysresume"; since?: number }
   | { type: "clock-propose"; kind: "foreclose" | "annul"; approveUntil?: number; signature?: string }
   | { type: "clock-vote"; proposalId: number; yes: boolean; approveUntil?: number; signature?: string }
   | { type: "clock-annul"; yes: boolean }
   | { type: "clock-ack" }
+  | { type: "clock-reapprove"; approveUntil: number; signature: string }
   /** LIVE-2F/3D (C9-01): a read -- the caller's own tables, answered `{tables: MyTableSummary[]}`. */
   | { type: "my-tables" };
 

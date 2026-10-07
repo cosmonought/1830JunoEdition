@@ -874,6 +874,7 @@ const isProposalKind: FrameCheck = (value) => value === "foreclose" || value ===
 const isClockId: FrameCheck = (value) => Number.isSafeInteger(value) && (value as number) >= 1 && (value as number) <= 1_000_000;
 const isClockSecs: FrameCheck = (value) => Number.isSafeInteger(value) && (value as number) >= 1 && (value as number) <= 99_999_999_999;
 const isSig64: FrameCheck = (value) => typeof value === "string" && /^[0-9a-f]{128}$/.test(value);
+const isClockMs: FrameCheck = (value) => Number.isSafeInteger(value) && (value as number) >= 0;
 
 /** Every room-op body, CLOSED (LIVE-2 Appendix B). No op names a record field, a host id (but `transfer-host`'s
  *  target), a seat's owner or a partial document. Transfer and reclaim are LIVE-2E's and are not here. */
@@ -916,15 +917,16 @@ const ROOM_OPS: Readonly<Record<string, FrameFields>> = nullTable<FrameFields>({
   "my-tables": nullTable({ type: req(str(16)) }),
   /* Phase 3 final clocks (`utils/clockProtocol.ts`): the table clock's ops -- the host's deadline before play, the
      unanimous pause / resume, the system-pause resume vote, the N-1 remedy proposal and vote (a money YES carries the
-     seat's REMEDY-APPROVE: its horizon and its consent-key signature), a free table's unanimous annulment and the
-     No-deadline acknowledgement. Every one names no player: the seat is the caller's own. */
+     seat's REMEDY-APPROVE: its horizon and its consent-key signature), a free table's unanimous annulment, the
+     No-deadline acknowledgement, and an Async money remedy's renewed approval (`clock-reapprove`). Every one names no player: the seat is the caller's own. */
   "clock-policy": nullTable({ type: req(str(16)), deadline: req(isDeadlineClass), paceSecs: opt(isClockPace) }),
   "clock-pause": nullTable({ type: req(str(16)), action: req(isPauseAction), kind: req(isPauseKind), id: opt(isClockId) }),
-  "clock-sysresume": nullTable({ type: req(str(16)) }),
+  "clock-sysresume": nullTable({ type: req(str(16)), since: opt(isClockMs) }),
   "clock-propose": nullTable({ type: req(str(16)), kind: req(isProposalKind), approveUntil: opt(isClockSecs), signature: opt(isSig64) }),
   "clock-vote": nullTable({ type: req(str(16)), proposalId: req(isClockId), yes: req(isBool), approveUntil: opt(isClockSecs), signature: opt(isSig64) }),
   "clock-annul": nullTable({ type: req(str(16)), yes: req(isBool) }),
   "clock-ack": nullTable({ type: req(str(16)) }),
+  "clock-reapprove": nullTable({ type: req(str(16)), approveUntil: req(isClockSecs), signature: req(isSig64) }),
 });
 
 export const ROOM_OP_TYPES: readonly string[] = Object.keys(ROOM_OPS);

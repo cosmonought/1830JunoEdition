@@ -82,6 +82,7 @@ function sealed(world: World, chainGameId: string, kind: 1 | 2 | 3, over: Partia
     detail: null,
     attestations: 0,
     replaces: null,
+    stale: [],
     ...over,
   };
 }
@@ -230,6 +231,43 @@ describe("FP4 remedy pipeline: N-1 approvals", () => {
     assert.deepEqual([good.status, good.attested], ["submitted", true], JSON.stringify(good));
     await world.drive(async () => (await port.progress(GAME_A, base)) === "confirmed");
     assert.equal(gameOf(world, chainGameId).remedy?.kind, "live_foreclose");
+  });
+});
+
+describe("FP4 remedy pipeline: approvals are re-checked under the CURRENT consent keys before anything is signed", () => {
+  test("a key that moved since the approval: Live falls back to the neutral annulment; an Async N-1 names the seats to renew; staleApprovals finds them in one read", async () => {
+    const { world, chainGameId } = await liveWorld();
+    const port = pipeline(world);
+    const g = gameOf(world, chainGameId);
+    const base = sealed(world, chainGameId, 2);
+    const finalSecs = Number(remedyTimes(base).finalAt);
+    const signedBy = (kind: number, secret: Buffer, until: number) =>
+      signDigest(
+        secret,
+        Buffer.from(
+          remedyApproveDigestV1(
+            { domain: g.domain, chain_game_id: BigInt(chainGameId), remedy: kind as RemedyKindByte, defaulting_seat: 0, strike: base.strike, overdue_epoch: BigInt(1), log_len: BigInt(1), log_hash: base.log_hash, overdue_at: secsUp(base.overdue_ms) },
+            BigInt(until),
+            1,
+          ),
+          "hex",
+        ),
+      ).toString("hex");
+    const until = finalSecs + 3_600;
+    /* Signed under a key the chain no longer holds for BOB's seat (the seat rotated its consent key since). */
+    const moved = { seat: BOB, approve_until: until, signature: signedBy(2, sha("an earlier consent key"), until) };
+    advanceTo(world, finalSecs + 10);
+    const live = await port.attest(GAME_A, { ...base, approvals: [moved] });
+    assert.deepEqual([live.status, live.fallback], ["refused", true]);
+    assert.deepEqual(await remedyIntents(world), [], "nothing was signed");
+    /* The same check for an N-1 annulment (the pipeline's own branch; the decision's other facts as sealed). */
+    const asyncMoved = { seat: BOB, approve_until: until, signature: signedBy(4, sha("an earlier consent key"), until) };
+    const n1 = await port.attest(GAME_A, { ...base, kind: 4, strike: 0, approvals: [asyncMoved] });
+    assert.deepEqual([n1.status, n1.stale], ["refused", [BOB]], JSON.stringify(n1));
+    assert.deepEqual(await remedyIntents(world), []);
+    const facts = { remedy: 2 as const, defaultingSeat: ALICE, strike: base.strike, epoch: 1, logLen: 1, logHash: base.log_hash, overdueMs: base.overdue_ms };
+    assert.deepEqual(await port.staleApprovals(GAME_A, facts, [{ seat: BOB, approveUntil: until, signature: moved.signature }]), [BOB]);
+    assert.deepEqual(await port.staleApprovals(GAME_A, facts, [{ seat: BOB, approveUntil: until, signature: signedBy(2, seatSecret(1), until) }]), []);
   });
 });
 
@@ -392,7 +430,7 @@ describe("FP4 end to end: the table clock's decision reaches the chain, and only
     }
     assert.equal((world.chain.accounts.get(relayer) as { sequence: bigint }).sequence, sequence, "nothing relayed while system-paused");
     for (const seat of [ALICE, BOB]) {
-      const answer = await table.serial(() => table.clock.op(table.game, table.tx, { type: "clock-sysresume", seat }));
+      const answer = await table.serial(() => table.clock.op(table.game, table.tx, { type: "clock-sysresume", seat, since: null }));
       assert.equal(answer.ok, true, JSON.stringify(answer));
     }
     assert.equal(table.record()?.system, null);

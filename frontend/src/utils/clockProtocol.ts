@@ -114,6 +114,15 @@ export interface ClockPauseView {
   readonly request: { readonly kind: "pause" | "resume"; readonly id: number; readonly by: string; readonly yes: readonly string[]; readonly needed: readonly string[] } | null;
 }
 
+/** Money tables: the sealed remedy decision's progress, and (Async N-1) the seats whose approvals must be renewed --
+ *  with the overdue facts a renewed REMEDY-APPROVE binds to. */
+export interface ClockRemedyView {
+  readonly kind: number;
+  readonly status: string;
+  readonly stale: readonly string[];
+  readonly overdue: Pick<ClockOverdueView, "seat" | "strike" | "epoch" | "overdueAt" | "logLen" | "logHash">;
+}
+
 export interface ClockSystemPauseView {
   readonly since: number;
   /** The last instant the server could prove it was in continuous control (the timers shown are as of then). */
@@ -146,7 +155,7 @@ export interface RoomClockView {
   readonly system: ClockSystemPauseView | null;
   readonly ended: { readonly kind: ClockEndKind; readonly at: number; readonly seat: string | null } | null;
   /** Money tables: the financial remedy's progress (the chain decides the money). */
-  readonly remedy: { readonly kind: number; readonly status: string } | null;
+  readonly remedy: ClockRemedyView | null;
   /** Live: the current Operating Round's train-offer declines, per direction. */
   readonly declines: readonly { readonly from: string; readonly to: string; readonly count: number }[];
   /** A free table's unanimous annulment in progress (a money table's runs through its escrow). */
@@ -174,6 +183,8 @@ export const CLOCK_OPS = Object.freeze({
   annul: "clock-annul",
   /** No-deadline money tables: acknowledge the indefinite-lock disclosure before the ante. */
   ackNoDeadline: "clock-ack",
+  /** Async money remedy: a seat whose approval of the sealed outcome lapsed (or whose consent key moved) renews it. */
+  reapprove: "clock-reapprove",
 } as const);
 
 /** The owner's No-deadline disclosure, shown conspicuously before the ante (and persisted per player per table). */

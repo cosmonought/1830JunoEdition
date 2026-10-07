@@ -88,14 +88,17 @@ export interface SessionVerifier {
 const describe = (error: unknown): string => (error instanceof IdentityRecordUnreadableError ? error.message : `a read failed (${(error as { name?: string } | null)?.name ?? "error"})`);
 
 /** Whether an active principal is profiled -- the writer's `activeProfileOf`, with the one extra consistency check the
- *  writer's snapshot load makes (the profile names this principal). Throws when the records disagree. */
-async function profiledOf(reader: IdentityRecordReader, principal: Principal): Promise<boolean> {
-  if (principal.status !== "active" || principal.kind !== "profile") return false;
+ *  writer's snapshot load makes (the profile names this principal). Throws when the records disagree.
+ *  PHASE 3 FINAL: `retired` -- the principal belongs to a LEGACY profile (schema 1 or 2, made before Authorization
+ *  Wallets), which the writer neither signs in nor serves (`IdentityService.retired`: its sessions end `retired`). */
+async function profiledOf(reader: IdentityRecordReader, principal: Principal): Promise<"profiled" | "unprofiled" | "retired"> {
+  if (principal.status !== "active" || principal.kind !== "profile") return "unprofiled";
   if (principal.account_link === null) throw new IdentityRecordUnreadableError("a profiled principal names no profile");
   const profile = await reader.profile(principal.account_link);
   if (profile === null) throw new IdentityRecordUnreadableError("a profiled principal's profile is not in the records");
   if (profile.principal_id !== principal.principal_id) throw new IdentityRecordUnreadableError("a principal's profile names another principal");
-  return profile.status === "active";
+  if (profile.schema !== 3) return "retired";
+  return profile.status === "active" ? "profiled" : "unprofiled";
 }
 
 /** The verifier over a reader (the DynamoDB one in production; a snapshot one in the tests). */
@@ -119,6 +122,8 @@ export function createSessionVerifier(reader: IdentityRecordReader): SessionVeri
         if (session.revoked_at !== null || now >= session.expires_at) return { kind: "refused", why: "ended" };
         if (family.revoked_at !== null) return { kind: "refused", why: "ended" };
         const profiled = await profiledOf(reader, principal);
+        /* PHASE 3 FINAL: the writer refuses a retired (legacy) account's session as ended -- so does this. */
+        if (profiled === "retired") return { kind: "refused", why: "ended" };
         return {
           kind: "ok",
           principalId: principal.principal_id,
@@ -126,7 +131,7 @@ export function createSessionVerifier(reader: IdentityRecordReader): SessionVeri
           /* The DURABLE expiry: no touch, no write-behind (see the header -- never later than the writer's). */
           sessionExpiresAt: session.expires_at,
           provisional: principal.activated_at === null,
-          profiled,
+          profiled: profiled === "profiled",
         };
       } catch (error) {
         return { kind: "unavailable", detail: describe(error) };
@@ -148,7 +153,11 @@ export function createSessionVerifier(reader: IdentityRecordReader): SessionVeri
         if (family.principal_id !== session.principal_id) return { kind: "unavailable", detail: "a session's family belongs to another principal" };
         if (family.revoked_at !== null) return { kind: "revoked" };
         if (principal.status !== "active") return { kind: "revoked" };
-        return { kind: "ok", profiled: await profiledOf(reader, principal) };
+        /* PHASE 3 FINAL: a retired (legacy) account's socket is refused (stricter than the writer, whose upgrade already
+           refuses it -- never looser). */
+        const profiled = await profiledOf(reader, principal);
+        if (profiled === "retired") return { kind: "revoked" };
+        return { kind: "ok", profiled: profiled === "profiled" };
       } catch (error) {
         return { kind: "unavailable", detail: describe(error) };
       }

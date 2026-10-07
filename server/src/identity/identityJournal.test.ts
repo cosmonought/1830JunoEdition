@@ -2,8 +2,9 @@
 //
 // LIVE-3C (LIVE-2E review M3): the identity store as a snapshot and a journal -- the load, every crash point of a
 // commit and of a compaction, the preconditions, the incremental check against the whole-set check, the migration
-// from LIVE-2E's file, and the LIVE-2E account flows (profile, link, recovery rotation, revocation, several devices)
-// across restarts over the real HTTP surface.
+// from LIVE-2E's file, and the account flows (PHASE 3 FINAL: an account with its Authorization Wallet, a password
+// change, an Authorization Wallet replacement, a recovery by it, several devices by login, a revocation) across restarts
+// over the real HTTP surface.
 
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
@@ -13,7 +14,9 @@ import * as path from "path";
 
 import { nodeStoreFs, type StoreFileHandle, type StoreFs } from "../fileLogStore";
 import { StoreDefiniteError, StoreUncertainError } from "../persistence/storeResult";
-import { apiRequest, bootstrapCookie, cookieFromAnswer, cookieRead, PROD_ORIGIN, quietConsole, startServer, stopServer } from "../rooms/testSupport";
+import { accountBrowser, apiRequest, bootstrapCookie, cookieFromAnswer, cookieRead, loginOnFreshBrowser, PROD_ORIGIN, quietConsole, startServer, stopServer } from "../rooms/testSupport";
+import { TEST_PASSWORD_KDF } from "../escrow/escrow4Support";
+import { keplrAccount, type KeplrAccount } from "../testSupport/authorizationWallets";
 import { createFileIdentityStore, IDENTITY_FILE } from "./fileStore";
 import { familyIdOf, mintPrincipalId, mintProfileId, mintRecoveryKey, mintSecret, mintSessionId, secretHash } from "./ids";
 import {
@@ -560,20 +563,33 @@ describe("LIVE-3C identity journal: O(change) validation", () => {
 });
 
 /* ==================================================================
-    THE LIVE-2E ACCOUNT FLOWS OVER THE JOURNAL, ACROSS RESTARTS
+    THE ACCOUNT FLOWS OVER THE JOURNAL, ACROSS RESTARTS
    ================================================================== */
 
-describe("LIVE-3C identity journal: the LIVE-2E account across restarts", () => {
+describe("LIVE-3C identity journal: the account across restarts", () => {
   const post = (port: number, pathname: string, cookie?: string, body: object = {}) => apiRequest(port, pathname, { cookie, body });
 
   async function journalServer(dir: string, compactAfterRecords = COMPACT_AFTER_RECORDS) {
     const store = createJournalIdentityStore(dir, { ...quiet, compactAfterRecords });
-    const service = await IdentityService.open(store);
+    const service = await IdentityService.open(store, { policy: { passwordKdf: TEST_PASSWORD_KDF } });
     const started = await startServer({ identity: { mode: "production", allowedOrigins: [PROD_ORIGIN], trustedProxyHops: 0, service } });
     return { ...started, store, service };
   }
 
-  test("profile, two devices, a rotated recovery key, a revoked session, a consumed and an outstanding link code -- all as they were after each restart, through a compaction", () =>
+  /** "Forgot password?" over HTTP on a fresh browser: the RECOVER text for (username, wallet), signed by `wallet`. */
+  async function recoverOnFreshBrowser(port: number, username: string, wallet: KeplrAccount, newPassword: string) {
+    const browser = await bootstrapCookie(port);
+    const minted = await post(port, "/gs/api/account/authorization", browser, { purpose: "recover", username, wallet: wallet.address });
+    assert.equal(minted.status, 200, "RECOVER looks nothing up: a text is always minted");
+    const text = (minted.body as { texts: Array<{ text: string }> }).texts[0].text;
+    return post(port, "/gs/api/account/recover", browser, { operation: (minted.body as { operation: string }).operation, ...wallet.sign(text), newPassword });
+  }
+
+  /* PHASE 3 FINAL: LIVE-2E's flows (a profile, link codes, a recovery-key rotation) are retired with the recovery key;
+     the same durability is asserted for the account's own operations -- a create with its Authorization Wallet, a
+     password change, an Authorization Wallet replacement, a recovery by the (new) Authorization Wallet, two devices
+     signed in by login, a revoked session. */
+  test("an account with its Authorization Wallet, a password change, a wallet replacement, a recovery, two devices by login, a revoked session -- all as they were after each restart, through a compaction", () =>
     withDir("flows", async (dir) => {
       let run = await journalServer(dir, 4);
       try {
@@ -582,28 +598,48 @@ describe("LIVE-3C identity journal: the LIVE-2E account across restarts", () => 
         await stopServer(run.server).catch(() => undefined);
       }
       async function flows(): Promise<void> {
-      const deviceA = await bootstrapCookie(run.port);
-      const created = await post(run.port, "/gs/api/profile", deviceA, { name: "Ann" });
-      assert.equal(created.status, 201);
-      const firstKey = (created.body as { recoveryKey: string }).recoveryKey;
-      // A second device, by a link code (consumed); then a third code left outstanding.
-      const code1 = (await post(run.port, "/gs/api/profile/link-code", deviceA)).body as { code: string };
-      const deviceBBoot = await bootstrapCookie(run.port);
-      const linked = await post(run.port, "/gs/api/profile/link", deviceBBoot, { code: code1.code });
-      assert.equal(linked.status, 200);
-      const deviceB = cookieFromAnswer(linked) as string;
-      // A third device signs in and is signed out again (its cookie is revoked).
-      const code2 = (await post(run.port, "/gs/api/profile/link-code", deviceA)).body as { code: string };
-      const deviceCBoot = await bootstrapCookie(run.port);
-      const deviceC = cookieFromAnswer(await post(run.port, "/gs/api/profile/link", deviceCBoot, { code: code2.code })) as string;
+      const username = "ann-journal";
+      const [firstPassword, secondPassword, thirdPassword] = ["first correct horse", "second correct horse", "third correct horse"];
+      const firstWallet = keplrAccount("identityJournal/first");
+      const secondWallet = keplrAccount("identityJournal/second");
+      const created = await accountBrowser(run.port, username, firstPassword, "Ann", PROD_ORIGIN, firstWallet);
+      const original = created.cookie;
+      // "Change password": this browser goes on with a fresh cookie (same family); the one it replaced ends.
+      const changed = await post(run.port, "/gs/api/account/password", original, { currentPassword: firstPassword, newPassword: secondPassword });
+      assert.equal(changed.status, 200);
+      const changer = cookieFromAnswer(changed) as string;
+      assert.ok(changer && changer !== original);
+      // "Change Authorization Wallet": "Confirm it's you" (the password), then the CURRENT wallet approves and the NEW one accepts.
+      assert.equal((await post(run.port, "/gs/api/profile/reauth", changer, { password: secondPassword })).status, 200);
+      const challenge = await post(run.port, "/gs/api/account/authorization-wallet/challenge", changer, { newWallet: secondWallet.address });
+      assert.equal(challenge.status, 200);
+      const texts = (challenge.body as { texts: Array<{ purpose: string; text: string }> }).texts;
+      assert.deepEqual(texts.map((text) => text.purpose), ["REPLACE-APPROVE", "REPLACE-ACCEPT"]);
+      const approve = firstWallet.sign(texts[0].text);
+      const accept = secondWallet.sign(texts[1].text);
+      const replaced = await post(run.port, "/gs/api/account/authorization-wallet/replace", changer, {
+        operation: (challenge.body as { operation: string }).operation,
+        approvePubKey: approve.pubKey,
+        approveSignature: approve.signature,
+        acceptPubKey: accept.pubKey,
+        acceptSignature: accept.signature,
+      });
+      assert.equal(replaced.status, 200);
+      const designation = (replaced.body as { authorizationWallet: { address: string; since: number } }).authorizationWallet;
+      assert.equal(designation.address, secondWallet.address);
+      // "Forgot password?" by the NEW Authorization Wallet: every earlier session of the account ends; device A is the recovering browser.
+      const recovered = await recoverOnFreshBrowser(run.port, username, secondWallet, thirdPassword);
+      assert.equal(recovered.status, 200);
+      assert.equal((recovered.body as { signedOut: number }).signedOut, 1, "the changer's browser was signed out");
+      const deviceA = cookieFromAnswer(recovered) as string;
+      // A second device logs in (username + password -- never a wallet).
+      const loggedIn = await loginOnFreshBrowser(run.port, username, thirdPassword);
+      assert.equal(loggedIn.answer.status, 200);
+      const deviceB = loggedIn.cookie as string;
+      // A third device logs in and is signed out again (its cookie is revoked).
+      const third = await loginOnFreshBrowser(run.port, username, thirdPassword);
+      const deviceC = third.cookie as string;
       assert.equal((await post(run.port, "/gs/api/session/revoke", deviceC)).status, 204);
-      // The recovery key is rotated (after re-authenticating with it -- ESCROW-3A).
-      assert.equal((await post(run.port, "/gs/api/profile/reauth", deviceA, { recoveryKey: firstKey })).status, 200);
-      const rotated = await post(run.port, "/gs/api/profile/recovery-key", deviceA);
-      assert.equal(rotated.status, 200);
-      const secondKey = (rotated.body as { recoveryKey: string }).recoveryKey;
-      // An outstanding code, issued last (after the rotation retired every earlier one).
-      const outstanding = (await post(run.port, "/gs/api/profile/link-code", deviceA)).body as { code: string };
       assert.ok(run.store.stats.compactions >= 1, "at least one compaction happened along the way");
       const principalA = run.service.authenticate(cookieRead(deviceA), Date.now());
       await stopServer(run.server);
@@ -614,21 +650,28 @@ describe("LIVE-3C identity journal: the LIVE-2E account across restarts", () => 
         assert.equal(who.kind, "ok", `device A's session is still valid (restart ${restart})`);
         assert.equal(run.service.authenticate(cookieRead(deviceB), Date.now()).kind, "ok", "device B too");
         assert.deepEqual(who.kind === "ok" && principalA.kind === "ok" ? who.principalId === principalA.principalId : false, true, "the same principal");
-        assert.deepEqual((await post(run.port, "/gs/api/session", deviceC)).status, 401, "the revoked cookie stays ended");
-        const oldKey = await post(run.port, "/gs/api/profile/recover", await bootstrapCookie(run.port), { recoveryKey: firstKey });
-        assert.equal(oldKey.status, 403, "the rotated-away key stays dead");
-        const replay = await post(run.port, "/gs/api/profile/link", await bootstrapCookie(run.port), { code: code1.code });
-        assert.equal(replay.status, 403, "the consumed code stays consumed");
+        assert.equal((await post(run.port, "/gs/api/session", deviceC)).status, 401, "the revoked cookie stays ended");
+        assert.equal((await post(run.port, "/gs/api/session", original)).status, 401, "the cookie the password change replaced stays ended");
+        assert.equal((await post(run.port, "/gs/api/session", changer)).status, 401, "the browser the recovery signed out stays signed out");
+        const me = await post(run.port, "/gs/api/account/me", deviceA);
+        assert.equal(me.status, 200);
+        assert.deepEqual((me.body as { account: { authorizationWallet: unknown } }).account.authorizationWallet, designation, "the replaced Authorization Wallet stays designated");
+        for (const retired of [firstPassword, secondPassword]) {
+          const old = await loginOnFreshBrowser(run.port, username, retired);
+          assert.equal(old.answer.status, 403, "a replaced password stays dead");
+        }
+        const oldWallet = await recoverOnFreshBrowser(run.port, username, firstWallet, "fourth correct horse");
+        assert.equal(oldWallet.status, 403, "the replaced Authorization Wallet recovers nothing");
         await stopServer(run.server);
       }
       run = await journalServer(dir, 4);
-      const redeemed = await post(run.port, "/gs/api/profile/link", await bootstrapCookie(run.port), { code: outstanding.code });
-      assert.equal(redeemed.status, 200, "the outstanding code, issued before two restarts, still signs a device in");
-      const recovered = await post(run.port, "/gs/api/profile/recover", await bootstrapCookie(run.port), { recoveryKey: secondKey });
-      assert.equal(recovered.status, 200, "the rotated key works");
+      const login = await loginOnFreshBrowser(run.port, username, thirdPassword);
+      assert.equal(login.answer.status, 200, "the recovered password, set before two restarts, still signs a device in");
+      const again = await recoverOnFreshBrowser(run.port, username, secondWallet, "fifth correct horse");
+      assert.equal(again.status, 200, "the designated Authorization Wallet still recovers the account");
       await stopServer(run.server);
       const files = [IDENTITY_FILE, IDENTITY_JOURNAL_FILE].map((name) => fs.readFileSync(path.join(dir, name), "utf8")).join("\n");
-      for (const secret of [firstKey, secondKey, code1.code, outstanding.code, deviceA.split(".")[2], deviceB.split(".")[2]]) {
+      for (const secret of [firstPassword, secondPassword, thirdPassword, "fifth correct horse", ...[original, changer, deviceA, deviceB, deviceC].map((cookie) => cookie.split(".")[2])]) {
         assert.ok(!files.includes(secret), "no credential in the clear on disk");
       }
       }

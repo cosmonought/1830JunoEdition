@@ -63,7 +63,7 @@ import { CLIENT_ANSWER_CLOSE_CODE, CLIENT_ANSWER_CLOSE_REASON, clientAnswerFor }
 export const ROUTER_UNAVAILABLE_SENTENCE = "This game server is not serving tables right now. Reload the page to continue.";
 /** The legacy wire's sentence when protocol 0 is no longer accepted (the game server's, word for word). */
 const LEGACY_REFUSED_SENTENCE = "This page is out of date for this game server. Reload the page to continue.";
-const PROFILE_REQUIRED_SENTENCE = "Create or sign in to a profile to play.";
+const PROFILE_REQUIRED_SENTENCE = "Log in or create an account to do that.";
 const NOT_FOUND = { code: "not-found", reason: "There is no such game." } as const;
 
 export interface RouterServerOptions {
@@ -413,8 +413,9 @@ export function createRouterServer(options: RouterServerOptions): RouterServer {
         notServed(socket, frame, ROUTER_UNAVAILABLE_SENTENCE);
         return;
       }
-      /* LIVE-2E: DEFENCE IN DEPTH -- no frame is handled for a principal without a profile. */
-      if (!verdict.profiled) {
+      /* LIVE-2E: DEFENCE IN DEPTH -- and P3-ACCT's signed-out allow-list (`gameServer.ts`): without a profile, only the
+         public reads (a table's view or log, authorized per frame as for any watcher) are answered. */
+      if (!verdict.profiled && frame.kind !== "hello" && frame.kind !== "room-hello") {
         notServed(socket, frame, PROFILE_REQUIRED_SENTENCE, "profile-required");
         return;
       }

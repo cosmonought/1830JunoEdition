@@ -7,7 +7,8 @@
 // The host setup card's ante row. It becomes a real choice only when BOTH ends agree: the server says real-money tables
 // can open (`POST /gs/api/money/config`: enabled -- the operator's switch, never mainnet, a verified escrow, rules
 // certified for settlement) AND the server's escrow is the one pinned into this bundle. Otherwise the row is what it
-// was (antes off). The ante is typed in the token's display unit and read by a STRICT parser: a malformed amount is
+// was (antes off) -- PHASE 3 FINAL (§13): in the product the stake is REQUIRED (`required`; no toggle), and with no offer
+// the host card says no game can be hosted (`utils/tablePolicy.ts`). The ante is typed in the token's display unit and read by a STRICT parser: a malformed amount is
 // refused, never turned into zero (`parseAmountToBase`, integers only). A real-money table needs an exact player
 // count (the escrow is full only when every seat has deposited). Creating the table moves no money: the host opens it
 // on Juno with their own deposit from the waiting room.
@@ -19,6 +20,7 @@ import { deploymentMismatch, pinnedDeployment } from "../../money/escrowDeployme
 import { moneyConfig, type MoneyConfig } from "../../money/moneyApi";
 import { bpsText } from "./MoneyPanel";
 import { moneyStyles as styles } from "./moneyStyles";
+import { TermsLink } from "../InfoPages"; // P3-ACCT (AUD-20.08): every money surface links the Terms
 
 /** What the server offers this build (null: no real-money tables here). */
 export function useMoneyTableOffer(): MoneyConfig | null {
@@ -53,17 +55,25 @@ export function stakeChoice(offer: MoneyConfig | null, on: boolean, typed: strin
   return { base, problem: null };
 }
 
-export function HostStakeSection({ offer, on, onToggle, typed, onType, choice }: { offer: MoneyConfig; on: boolean; onToggle: (on: boolean) => void; typed: string; onType: (text: string) => void; choice: StakeChoice }): JSX.Element {
+/** PHASE 3 FINAL (§13): `required` -- every player game is anted, so the stake is not a choice: no "play for real"
+ *  toggle and no "played for fun" line, just the amount (the internal development-identity build alone passes false). */
+export function HostStakeSection({ offer, on, onToggle, typed, onType, choice, required = false }: { offer: MoneyConfig; on: boolean; onToggle: (on: boolean) => void; typed: string; onType: (text: string) => void; choice: StakeChoice; required?: boolean }): JSX.Element {
   const d = offer.deployment;
   const network = `${d.networkClass === "testnet" ? "Juno testnet" : d.networkClass === "local" ? "local Juno" : "Juno"} (${d.chainId})`;
   const fee = offer.feeBps === null || choice.base === null ? null : feeOf(choice.base, offer.feeBps);
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "8px" }} data-testid="host-stake">
-      <label style={styles.optIn}>
-        <input type="checkbox" checked={on} onChange={(event) => onToggle(event.target.checked)} data-testid="host-stake-on" />
-        Play for real {d.symbol} on {network}
-      </label>
-      {on ? (
+      {required ? (
+        <p style={styles.detail} data-testid="host-stake-required">
+          Every game here is played for a real ante: each seat deposits the stake in {d.symbol} on {network}.
+        </p>
+      ) : (
+        <label style={styles.optIn}>
+          <input type="checkbox" checked={on} onChange={(event) => onToggle(event.target.checked)} data-testid="host-stake-on" />
+          Play for real {d.symbol} on {network}
+        </label>
+      )}
+      {on || required ? (
         <>
           <input
             type="text"
@@ -88,7 +98,7 @@ export function HostStakeSection({ offer, on, onToggle, typed, onType, choice }:
           ) : null}
           <p style={styles.faint}>
             Creating the table moves no money: you open it on Juno with your own deposit from the waiting room, and every player deposits with Keplr. Winnings are paid to each
-            depositing wallet. Deposits on Juno are public.
+            depositing wallet. Deposits on Juno are public. <TermsLink testId="host-stake-terms-link" />
           </p>
         </>
       ) : (

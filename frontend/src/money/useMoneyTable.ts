@@ -20,6 +20,7 @@ import type { RoomClockView } from "../utils/clockProtocol";
 import type { SessionPort } from "../utils/sessionBootstrap";
 import {
   agreeToAnnul,
+  anteNow,
   approveDeposit,
   disputeChainFacts,
   approvePayout,
@@ -39,10 +40,35 @@ import {
 } from "./moneyActions";
 import { proofAgedOut, seatFlow, WALLET_PROOF_MAX_AGE_MS, settlementFlow, type ActionKind, type DisputeRead, type SeatFlow, type SettlementActionKind, type SettlementFlow, type WalletState } from "./moneyFlow";
 import { bumpLocal, isConfirmed, moneyServices, moneySession, proofKey, updateMoneySession, useMoneySession, type MoneyServices } from "./moneySession";
+import { browserKeplrLock, KEPLR_BUSY_SENTENCE } from "./keplrLock";
 import type { PendingWalletTx } from "./pendingTx";
 
 /** `replace-confirmed`: the player answered "Replace wallet" to the question "Change wallet" asked first (W2-M). */
 export type MoneyActionKind = ActionKind | SettlementActionKind | "replace-confirmed";
+
+/** W1-K (AUD-19.02): the actions that may open Keplr (a connect, a message signature, a transaction) -- each runs
+ *  inside the cross-tab Keplr lock. The rest (local signing keys, the review, Start, a re-send of kept bytes) don't. */
+export const KEPLR_ACTIONS: ReadonlySet<MoneyActionKind> = new Set<MoneyActionKind>([
+  "connect",
+  "link",
+  "relink",
+  "reprove",
+  "replace-link",
+  "replace-confirmed",
+  "approve",
+  "ante",
+  "verify",
+  "withdraw",
+  "cancel-escrow",
+  "refund-after-deadline",
+  "move-signing-key",
+  "challenge",
+  "release-payout",
+  "liveness-settle",
+]);
+
+/** How often Ante looks at the newest view while it waits for the server to show a link. */
+const VIEW_POLL_MS = 150;
 
 export interface MoneyTableInput {
   readonly gameId: string;
@@ -75,6 +101,8 @@ export interface MoneyTable {
   readonly verification: Verification | null;
   /** The action in flight (single flight), or null. */
   readonly busy: MoneyActionKind | null;
+  /** P3-ACCT: where a running Ante is ("Connecting wallet…", "Verifying wallet…", "Waiting for deposit…"), or null. */
+  readonly progress: string | null;
   readonly notice: string | null;
   readonly error: string | null;
   /** A step the player must take before the action can run: "Confirm it's you", or the wallet replacement question
@@ -103,6 +131,7 @@ export function useMoneyTable(input: MoneyTableInput): MoneyTable {
   const session = useMoneySession();
   const view = input.view;
   const [busy, setBusy] = useState<MoneyActionKind | null>(null);
+  const [progress, setProgress] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [needs, setNeeds] = useState<MoneyTable["needs"]>(null);
@@ -266,6 +295,9 @@ export function useMoneyTable(input: MoneyTableInput): MoneyTable {
             ? "aged"
             : null;
 
+  /* P3-ACCT: what the Ante reads of the proof when it runs (a ref: the action outlives the render that started it). */
+  const proofNow = useRef(proof);
+  proofNow.current = proof;
   const confirmedNow = isConfirmed(session, now);
   const flow = useMemo(
     () => (view === null ? null : seatFlow({ view, isHost: input.isHost, wallet, confirmed: confirmedNow, pending, holdsChainKey, ui: busy === "approve" ? "approving" : reviewing ? "review" : "idle", now, proof })),
@@ -357,6 +389,26 @@ export function useMoneyTable(input: MoneyTableInput): MoneyTable {
           if (outcome.ok) setReviewing(false);
           return outcome;
         }
+        case "ante":
+        case "verify":
+          /* P3-ACCT: the one button. The hooks give it the newest view as the server pushes it (this table's only), and
+             its status line; "verify" stops at the wallet's proof (money review M2). */
+          return anteNow(ctx, {
+            status: setProgress,
+            latest: () => (latest.current.gameId === ctx.gameId ? latest.current.view : null),
+            proof: proofNow.current,
+            verifyOnly: kind === "verify",
+            onReproved: () => setProofRefusedFor(null),
+            waitFor: async (predicate, ms) => {
+              /* Counted in polls, not read off a clock (a test's clock may stand still). */
+              for (let polls = Math.ceil(ms / VIEW_POLL_MS); ; polls -= 1) {
+                const current = latest.current.gameId === ctx.gameId ? latest.current.view : null;
+                if (current !== null && predicate(current)) return current;
+                if (polls <= 0) return null;
+                await new Promise((resolve) => setTimeout(resolve, VIEW_POLL_MS));
+              }
+            },
+          });
         case "resend": {
           const record = pending;
           return record === null ? { ok: true } : resendPending(record, services, ctx.port);
@@ -389,13 +441,22 @@ export function useMoneyTable(input: MoneyTableInput): MoneyTable {
 
   const run = useCallback(
     async (kind: MoneyActionKind) => {
-      if (busyRef.current !== null) return; // single flight
+      if (busyRef.current !== null) return; // single flight (this panel)
       busyRef.current = kind;
       setBusy(kind);
       setError(null);
       setNotice(null);
+      setProgress(null);
       try {
-        const outcome = await perform(kind);
+        /* W1-K (AUD-19.02): one Keplr conversation at a time across every tab of this site. Another tab holding it is
+           said at once (never queued): pressing again later re-reads everything. */
+        let outcome: ActionOutcome;
+        if (KEPLR_ACTIONS.has(kind)) {
+          const locked = await (services.keplrLock ?? browserKeplrLock()).withLock(() => perform(kind));
+          outcome = locked.kind === "ran" ? locked.value : { ok: false, reason: KEPLR_BUSY_SENTENCE };
+        } else {
+          outcome = await perform(kind);
+        }
         if (outcome.ok) {
           if (outcome.notice) setNotice(outcome.notice);
           /* "Change wallet" opens its question (the replacement); every other success closes any. */
@@ -435,10 +496,11 @@ export function useMoneyTable(input: MoneyTableInput): MoneyTable {
       } finally {
         busyRef.current = null;
         setBusy(null);
+        setProgress(null);
         bumpLocal();
       }
     },
-    [perform],
+    [perform, services],
   );
 
   /* Named apart from `seatFlow`'s `confirmed:` input above: the flow memo passes `confirmedNow` under that KEY and
@@ -465,6 +527,7 @@ export function useMoneyTable(input: MoneyTableInput): MoneyTable {
     holdsChainKey,
     verification: checked,
     busy,
+    progress,
     notice,
     error,
     needs,

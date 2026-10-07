@@ -17,6 +17,10 @@
 //                                     rotation retired it, `retired_at`. Never deleted. The one derived item the
 //                                     adapter keeps -- `selector-unused` names a selector, not a profile, and only an
 //                                     item keyed by the selector can make that term an atomic condition.
+//   USER#<login key>       / USER     (P3-ACCT) the UNIQUENESS item of a username (its canonical login key): which
+//                                     profile holds it. Written in the same transaction as the profile that takes the
+//                                     username; never deleted (a username never changes or goes). `login-unused` is its
+//                                     absence -- the same reason SEL# exists.
 //   GRANT#<se>             / GRANT    a sensitive-auth grant (identity/grants.ts), TTL `expires_at` + 1 h
 //   ROLE#identity-writer   / ROLE     the identity-writer role: `epoch` is ROLE_ID, checked inside every identity write;
 //                                     `claim` is the token of the takeover that set it (`takeOverIdentityWriter`)
@@ -51,6 +55,7 @@
 import type { AttributeValue } from "@aws-sdk/client-dynamodb";
 
 import { isSensitiveAuthGrant, type SensitiveAuthGrant } from "../../identity/grants";
+import { isLoginKey } from "../../identity/accountCredentials";
 import { FAMILY_ID_PATTERN, PRINCIPAL_ID_PATTERN, PROFILE_ID_PATTERN, RECOVERY_SELECTOR_PATTERN, SESSION_ID_PATTERN } from "../../identity/ids";
 import { isLinkCredential, isPrincipal, isProfile, isSession, isSessionFamily, type LinkCredential, type Principal, type Profile, type Session, type SessionFamily } from "../../identity/store";
 
@@ -77,6 +82,8 @@ export const keys = Object.freeze({
   family: (id: string): ItemKey => ({ pk: `FAM#${id}`, sk: "META" }),
   link: (hash: string): ItemKey => ({ pk: `LINK#${hash}`, sk: "LINK" }),
   selector: (selector: string): ItemKey => ({ pk: `SEL#${selector}`, sk: "SEL" }),
+  /** P3-ACCT: a username's uniqueness item, keyed by its canonical login key. */
+  user: (loginKey: string): ItemKey => ({ pk: `USER#${loginKey}`, sk: "USER" }),
   grant: (sessionId: string): ItemKey => ({ pk: `GRANT#${sessionId}`, sk: "GRANT" }),
   /** One review record per (profile, restore): a later restore never overwrites an earlier one's. */
   review: (profileId: string, restoreId: string): ItemKey => ({ pk: `REVIEW#${profileId}`, sk: `REVIEW#${restoreId}` }),
@@ -116,6 +123,27 @@ export const PROFILE_FIELDS: FieldSpec = [
   ["recovery_rotated_at", "N"],
   ["schema", "N"],
 ];
+/** P3-ACCT: a schema-2 profile's fields -- schema 1's, then the six it adds (every one present, NULL when unset). */
+export const PROFILE_FIELDS_V2: FieldSpec = [
+  ...PROFILE_FIELDS,
+  ["login_key", "S?"],
+  ["login_name", "S?"],
+  ["password_hash", "S?"],
+  ["password_set_at", "N?"],
+  ["wallet_address", "S?"],
+  ["wallet_verified_at", "N?"],
+];
+/** P3-ACCT: the username uniqueness item. */
+export const USER_FIELDS: FieldSpec = [
+  ["login_key", "S"],
+  ["profile_id", "S"],
+];
+
+/** P3-ACCT: the uniqueness item of a username. */
+export interface UserRecord {
+  readonly login_key: string;
+  readonly profile_id: string;
+}
 export const SESSION_FIELDS: FieldSpec = [
   ["session_id", "S"],
   ["principal_id", "S"],
@@ -331,7 +359,8 @@ function decodeRecord(item: Item, fields: FieldSpec, extra: readonly string[] = 
 /* ------------------------------------------------------------------ */
 
 export const principalItem = (record: Principal): Item => encodeRecord(keys.principal(record.principal_id), PRINCIPAL_FIELDS, record);
-export const profileItem = (record: Profile): Item => encodeRecord(keys.profile(record.profile_id), PROFILE_FIELDS, record);
+export const profileItem = (record: Profile): Item => encodeRecord(keys.profile(record.profile_id), record.schema === 1 ? PROFILE_FIELDS : PROFILE_FIELDS_V2, record);
+export const userItem = (record: UserRecord): Item => encodeRecord(keys.user(record.login_key), USER_FIELDS, record);
 export const sessionItem = (record: Session): Item => encodeRecord(keys.session(record.session_id), SESSION_FIELDS, record);
 export const familyItem = (record: SessionFamily): Item => encodeRecord(keys.family(record.family_id), FAMILY_FIELDS, record);
 export const linkItem = (record: LinkCredential): Item => encodeRecord(keys.link(record.link_hash), LINK_FIELDS, record);
@@ -356,6 +385,7 @@ export type DecodedItem =
   | { readonly kind: "family"; readonly record: SessionFamily }
   | { readonly kind: "link"; readonly record: LinkCredential }
   | { readonly kind: "selector"; readonly record: SelectorRecord }
+  | { readonly kind: "user"; readonly record: UserRecord }
   | { readonly kind: "grant"; readonly record: SensitiveAuthGrant }
   | { readonly kind: "role"; readonly record: RoleRecord }
   | { readonly kind: "marker"; readonly record: { readonly token: string; readonly at: number } }
@@ -378,6 +408,7 @@ export function classOfKey(pk: string, sk: string): ItemClass | null {
     FAM: ["family", "META"],
     LINK: ["link", "LINK"],
     SEL: ["selector", "SEL"],
+    USER: ["user", "USER"],
     GRANT: ["grant", "GRANT"],
     TXN: ["marker", "TXN"],
     RESTORE: ["restore", "RESTORE"],
@@ -410,8 +441,16 @@ export function decodeItem(item: Item): DecodedItem | { readonly problem: string
       return record !== null && isPrincipal(record) && record.principal_id === suffix ? { kind, record } : bad;
     }
     case "profile": {
-      const record = decodeRecord(item, PROFILE_FIELDS);
+      /* P3-ACCT: the record's own `schema` says which field set it carries (exactly that set, nothing else). PHASE 3
+         FINAL: schema 3 (the Authorization Wallet model) carries schema 2's field set, every field set. */
+      const schema = decodeValue(item.schema, "N");
+      const record = decodeRecord(item, schema.ok && (schema.value === 2 || schema.value === 3) ? PROFILE_FIELDS_V2 : PROFILE_FIELDS);
       return record !== null && isProfile(record) && record.profile_id === suffix ? { kind, record } : bad;
+    }
+    case "user": {
+      const record = decodeRecord(item, USER_FIELDS);
+      const ok = record !== null && isLoginKey(record.login_key) && record.login_key === suffix && typeof record.profile_id === "string" && PROFILE_ID_PATTERN.test(record.profile_id);
+      return ok ? { kind, record: record as unknown as UserRecord } : bad;
     }
     case "session": {
       const record = decodeRecord(item, SESSION_FIELDS);

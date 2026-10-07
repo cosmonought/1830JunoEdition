@@ -59,6 +59,13 @@ import { ModalLayerHost } from "./ModalPortal";
 
 import HostSetupCard from "./HostSetupCard";
 
+/* PHASE 3 FINAL (§13): every player game is anted, so outside a development-identity build a card with no real-money
+   offer disables "Create Room" (`host-ante-unavailable`) -- and a disabled control leaves the Tab ring. THIS FILE'S
+   SUBJECT IS ESCAPE, FOCUS AND THE TAB RING, not the ante policy, so it runs the card as the development-identity build
+   does (no-ante tables offered: Create enabled). The ante-required product behaviour is pinned in
+   `p3FinalAccountWallet.test.tsx`. */
+jest.mock("../utils/tablePolicy", () => ({ ...jest.requireActual("../utils/tablePolicy"), FREE_TABLES_OFFERED: true }));
+
 declare global {
   // eslint-disable-next-line no-var
   var IS_REACT_ACT_ENVIRONMENT: boolean;

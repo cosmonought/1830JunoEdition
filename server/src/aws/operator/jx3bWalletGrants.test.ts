@@ -88,7 +88,7 @@ describe("JX-3B C-4a: gamesDoctor aws wallet-grants", () => {
       assert.ok(tables.sent.every((line) => line.startsWith("GetItemCommand ")), `reads only, no scan: ${tables.sent.join(", ")}`);
       const identityReads = tables.sent.filter((line) => line.endsWith(DOC.identity_table)).length;
       assert.ok(identityReads <= 2 * 2 + 3, `only the contexts' principal, profile and family items (${identityReads} reads)`);
-      assertRedacted(answered.out.join("\n"), [e.families.laptop, e.families.phone, document.grants[0].ticket, e.joiner.browser.recoveryKey]);
+      assertRedacted(answered.out.join("\n"), [e.families.laptop, e.families.phone, document.grants[0].ticket, e.joiner.browser.password]);
       /* The text form. */
       const text = await run(tables.client, e.table.gameId, e.world.clock.now);
       assert.match(text.out.join("\n"), /wallet grants \(READ-ONLY, aws\)/);

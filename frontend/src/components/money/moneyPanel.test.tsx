@@ -2,8 +2,9 @@
 //
 // ESCROW-4 (brief §14, §24): the waiting room's money panel, rendered. Each stage shows its own words and only its
 // legal buttons; a device without Keplr says why it can't fund (and can still play); "Confirm it's you" names this app
-// and site; the review card shows the terms in full before "Approve in Keplr"; the waiting room routes a money table
-// to this panel (no Ready, no "refunds ante"); the result's placeholder payout is gone; signing out warns about keys.
+// and site; the terms are on the panel in full before the Ante (P3-ACCT: the one button); the waiting room routes a
+// money table to this panel (no Ready, no "refunds ante"); the result's placeholder payout is gone; signing out warns
+// about keys.
 
 import React from "react";
 import { act } from "react";
@@ -98,59 +99,64 @@ describe("ESCROW-4: the money panel", () => {
     expect(byTestId("money-action-connect")).toBeNull();
   });
 
-  it("Connect -> Confirm it's you (this app, this site) -> Link", async () => {
+  it("P3-ACCT: one Ante press -- Keplr connects, and only when the server asks (a NEW wallet) 'Confirm it's you' (this app, this site) with the PASSWORD; then the Ante carries on by itself", async () => {
     const services = testServices();
     installMoneyServicesForTests(services);
     act(() => updateMoneySession({ wallet: "disconnected", address: null, confirmedUntil: null }));
     const port = scriptedPort();
+    port.answer("money/wallet-challenge", 403, { error: "reauth-required", reason: "Confirm it's you first." });
+    /* PHASE 3 FINAL: "Confirm it's you" is the password alone -- it no longer reads the account to choose a method. */
     port.answer("profile/reauth", 200, { ok: true, expiresAt: T0 + 5 * 60 * 1000 });
-    await render(<MoneyPanel room={room(moneyView())} onStart={() => undefined} services={services} port={port} />);
+    const view = moneyView({ escrow: { chainGameId: "7", state: "FUNDING", fundingDeadline: T0 + 3_600_000 } });
+    await render(<MoneyPanel room={room(view)} onStart={() => undefined} services={services} port={port} />);
     expect(byTestId("money-headline")?.textContent).toMatch(/A real-money table: 1 JUNOX per seat/);
-    /* W2-K (OD-9(b)): the official Keplr logo is pending, so the connect button is its words alone -- no stand-in mark. */
-    expect(byTestId("money-action-connect")?.textContent).toBe("Connect wallet");
+    /* W2-K (OD-9(b)): the official Keplr logo is pending -- the button is its words alone, no stand-in mark. */
+    expect(byTestId("money-action-ante")?.textContent).toBe("Ante 1 JUNOX");
     expect(container.querySelector('[data-testid="keplr-mark"]')).toBeNull();
-    await click(byTestId("money-action-connect"));
+    /* The terms are on the panel before the press, with the Terms page linked (AUD-20.08). */
+    expect(byTestId("money-compact-terms")?.textContent).toMatch(/You send 1 JUNOX · escrow fee 0\.01 JUNOX \(not refunded\)/);
+    expect(byTestId("money-compact-terms")?.querySelector('[data-testid="terms-link"]')?.textContent).toBe("Terms");
+    await click(byTestId("money-action-ante"));
     expect(services.wallet.calls).toContain("connect");
-    expect(byTestId("money-action-confirm")).toBeTruthy();
-    await click(byTestId("money-action-confirm"));
-    expect(byTestId("money-reauth-origin")?.textContent).toMatch(/This is Project 18XX at http:\/\/localhost/);
-    expect(container.textContent).toContain("To link a wallet to this table, paste your current recovery key.");
+    expect(byTestId("money-reauth-origin")?.textContent).toMatch(/This is Project 18XX at http:\/\/localhost\. Only enter your password on this site\./);
+    expect(container.textContent).toContain("To use this wallet here, enter your password.");
     const key = byTestId("money-reauth-key") as HTMLInputElement;
+    expect(key.type).toBe("password");
+    expect(byTestId("money-reauth-form")?.querySelectorAll("input")).toHaveLength(1);
+    expect(byTestId("money-reauth-form")?.textContent).not.toMatch(/recovery key/i);
     act(() => {
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(key, "recovery words");
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(key, "correct horse battery");
       key.dispatchEvent(new Event("input", { bubbles: true }));
     });
     await click(byTestId("money-reauth-confirm"));
-    /* The key went once, in the POST body; the panel moved on to Link (nothing ran by itself). */
-    expect(port.requests.map((request) => request.path)).toEqual(["profile/reauth"]);
+    /* The password went once, in the POST body; the Ante then carried on by itself: a fresh challenge. */
+    expect(port.requests.map((request) => request.path)).toEqual(["money/wallet-challenge", "profile/reauth", "money/wallet-challenge"]);
+    expect(port.requests[1].body).toEqual({ password: "correct horse battery" });
+    expect(port.requests[2].body).toEqual({ gameId: "g_table", wallet: TEST_WALLET });
     expect(byTestId("money-reauth-form")).toBeNull();
-    await click(byTestId("money-action-link"));
-    expect(port.requests.map((request) => request.path)).toEqual(["profile/reauth", "money/wallet-challenge"]);
-    expect(port.requests[1].body).toEqual({ gameId: "g_table", wallet: TEST_WALLET });
-    /* Nothing scripted for the challenge: the panel says the server didn't answer; Keplr was never asked to sign. */
+    /* Nothing scripted for that challenge: the panel says the server didn't answer; Keplr was never asked to sign. */
     expect(byTestId("money-error")?.textContent).toMatch(/didn't answer/);
     expect(services.wallet.calls.some((call) => call.startsWith("signLink"))).toBe(false);
+    expect(container.innerHTML).not.toContain("correct horse battery");
     act(() => updateMoneySession({ confirmedUntil: null }));
   });
 
-  it("a joiner's review card shows every term before Approve in Keplr", async () => {
+  it("a joiner's full terms show every term before the Ante (the compact line above them; Keplr shows the transaction)", async () => {
     const services = testServices();
     installMoneyServicesForTests(services);
     updateMoneySession({ wallet: "connected", address: TEST_WALLET });
     const view = moneyView({ escrow: { chainGameId: "7", state: "FUNDING", fundingDeadline: T0 + 3_600_000 }, terms: { anteNet: "990000", pot: "1980000" }, you: linked([], { actions: ["deposit", "link-wallet"] }) });
     await render(<MoneyPanel room={room(view)} onStart={() => undefined} services={services} />);
-    expect(byTestId("money-action-open-review")?.textContent).toBe("Deposit 1 JUNOX");
-    await click(byTestId("money-action-open-review"));
+    expect(byTestId("money-action-ante")?.textContent).toBe("Ante 1 JUNOX");
+    expect(byTestId("money-compact-terms")?.textContent).toMatch(/You send 1 JUNOX · escrow fee 0\.01 JUNOX \(not refunded\) · pot when full 1\.98 JUNOX · winnings go to juno12gdm…783a/);
     const review = byTestId("money-review");
+    expect(review?.closest("details")?.getAttribute("data-testid")).toBe("money-full-terms");
     expect(review?.textContent).toMatch(/You send1 JUNOX from juno12gdm…783a/);
     expect(review?.textContent).toMatch(/Into the pot0\.99 JUNOX/);
     expect(byTestId("money-review-fee")?.textContent).toBe("0.01 JUNOX — not refunded");
     expect(review?.textContent).toMatch(/Pot when full1\.98 JUNOX \(2 seats\)/);
     expect(byTestId("money-review-contract")?.textContent).toBe(TEST_CONTRACT);
     expect(review?.textContent).toMatch(/Deposits on Juno are public/);
-    expect(byTestId("money-action-approve")?.textContent).toBe("Approve in Keplr");
-    await click(byTestId("money-review-close"));
-    expect(byTestId("money-review")).toBeNull();
   });
 
   it("funded: withdraw asks first and says what comes back; the host's Start is the room's own Start", async () => {
@@ -164,7 +170,7 @@ describe("ESCROW-4: the money panel", () => {
       you: linked([], { funding: "funded", payoutWallet: TEST_WALLET, chainSeatIndex: 0, actions: ["withdraw", "cancel-escrow", "start"] }),
     });
     await render(<MoneyPanel room={room(view, "host")} onStart={() => (started += 1)} services={services} />);
-    expect(byTestId("money-headline")?.textContent).toMatch(/^Funded — 1 JUNOX from juno12gdm…783a/);
+    expect(byTestId("money-headline")?.textContent).toMatch(/^Ante confirmed — 1 JUNOX from juno12gdm…783a/);
     await click(byTestId("money-action-withdraw"));
     expect(byTestId("money-exit-confirm")?.textContent).toMatch(/You get 0\.99 JUNOX back to juno12gdm…783a; 0\.01 JUNOX isn't returned/);
     await click(Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "Keep it") ?? null);
@@ -252,7 +258,6 @@ describe("PHASE 3 W2-K: money times and the panel's place in the waiting room", 
     const local = formatMoneyTime(deadline, { now: T0 });
     expect(local).not.toBe("");
     expect(byTestId("money-stake-strip")?.textContent).toContain(`· funding closes ${local}`);
-    await click(byTestId("money-action-open-review"));
     expect(byTestId("money-review")?.textContent).toContain(`Funding closes${local}`);
     /* A bare clock -- minutes followed by nothing, a full stop or the strip's separator -- appears nowhere. */
     expect(container.textContent).not.toMatch(/closes ?(at )?\d{1,2}:\d\d(?:$|[.·]|\s*(?:·|$))/m);

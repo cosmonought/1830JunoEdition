@@ -224,7 +224,7 @@ export function createKeplrWallet(win: unknown = typeof window === "undefined" ?
   async function sameAccount(pin: PinnedEscrowDeployment, wallet: string): Promise<WalletFailure | null> {
     const now = await account(pin);
     if (!now.ok) return now;
-    if (now.value.address !== wallet) return fail("wrong-account", `Keplr is on ${now.value.address}, but this seat uses ${wallet}. Switch accounts in Keplr to continue.`);
+    if (now.value.address !== wallet) return fail("wrong-account", `Switch Keplr to ${wallet} to sign this action. (Keplr is on ${now.value.address}.)`);
     return null;
   }
 

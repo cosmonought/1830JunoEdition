@@ -4,8 +4,9 @@
 //  ESCROW-4: REAL-MONEY TABLES END TO END -- PRODUCTION IDENTITY, KEPLR-EXACT WALLET PROOFS, THE OFFLINE JUNO
 // ==================================================================
 //
-// Every step a player takes goes through the production surface: a profiled browser's cookie, "Confirm it's you"
-// (`/gs/api/profile/reauth`), `/gs/api/money/*`, the room socket's ops and views. The chain is `FakeJunoChain`, which
+// Every step a player takes goes through the production surface: a profiled browser's cookie (PHASE 3 FINAL: an account
+// with its Authorization Wallet; a second device signs in with the username and password), "Confirm it's you"
+// (`/gs/api/profile/reauth`, the password), `/gs/api/money/*`, the room socket's ops and views. The chain is `FakeJunoChain`, which
 // verifies the relayer's real transactions and the server's real Join admissions; the players' wallets sign ADR-036
 // exactly as Keplr's `signArbitrary` does. What is asserted is what the brief's §26 names: the wallet proof and its
 // replays, W-13, the Join admission and R-J1, W-2 in-flight protection, the funding observer, Start and its rollback,
@@ -178,6 +179,9 @@ describe("ESCROW-4: the wallet proof (ADR-036), its bindings and its replays", (
       const host = await player(world, "Hana");
       const table = await openMoneyTable(host);
       const wallet = testWallet("host");
+      /* PHASE 3 FINAL: creating the account signs it in, and a sign-in IS a recent authentication (a 5-minute grant):
+         past it, only a live session is left. */
+      world.advance(6 * 60_000);
       const stolen = await host.api("wallet-challenge", { gameId: table.gameId, wallet: wallet.address });
       assert.equal(stolen.status, 403);
       assert.equal(stolen.body?.error, "reauth-required", "a live session alone (a stolen cookie) cannot bind a wallet");
@@ -266,8 +270,12 @@ describe("ESCROW-4: the wallet proof (ADR-036), its bindings and its replays", (
       const table = await openMoneyTable(host);
       const wallet = testWallet("host");
       await host.confirm();
+      /* PHASE 3 FINAL: the account holds an Authorization Wallet, so the cheap pre-check at LINK time no longer refuses
+         first; the challenge is asked late in the grant, so it is still live (5 minutes) when the grant lapses. */
+      world.advance(4 * 60_000);
       const challenge = await host.api("wallet-challenge", { gameId: table.gameId, wallet: wallet.address });
-      world.advance(6 * 60_000); // the 5-minute grant lapses
+      assert.equal(challenge.status, 200, challenge.text);
+      world.advance(2 * 60_000); // the 5-minute grant lapses; the challenge (5 minutes from its own issue) does not
       const signed = wallet.signArbitrary(challenge.body?.text as string);
       const late = await host.api("wallet-link", { gameId: table.gameId, nonce: challenge.body?.nonce, pubKey: signed.pubKey, signature: signed.signature, consentKey: testConsentKey("h").pubkey });
       assert.equal(late.body?.error, "reauth-required");
@@ -576,13 +584,15 @@ describe("ESCROW-4: security events push, and a deposit is relinked (never reass
       await joinerFunds(world, joiner.who, table.gameId, jWallet, jKey, linked.body?.ticket as string);
       await world.observe();
       assert.equal(moneyOf(await viewOf(joiner.who.client, table.gameId)).you?.funding, "funded");
-      /* The same profile on a phone signs out every other device (including the one that linked). */
-      const { apiRequest } = await import("../rooms/testSupport");
-      const phoneCookie = (await apiRequest(world.port, "/gs/api/session", {})).headers["set-cookie"]![0].split(";")[0];
-      const recovered = await apiRequest(world.port, "/gs/api/profile/recover", { cookie: phoneCookie, body: { recoveryKey: joiner.who.browser.recoveryKey } });
-      assert.equal(recovered.status, 200, recovered.text);
-      const phone = recovered.headers["set-cookie"]![0].split(";")[0];
-      assert.equal((await apiRequest(world.port, "/gs/api/profile/reauth", { cookie: phone, body: { recoveryKey: joiner.who.browser.recoveryKey } })).status, 200);
+      /* The same account on a phone signs out every other device (including the one that linked). PHASE 3 FINAL: the
+         phone signs in with the username and password (the recovery-key route is retired: 410). */
+      const { apiRequest, loginOnFreshBrowser } = await import("../rooms/testSupport");
+      const retired = await apiRequest(world.port, "/gs/api/profile/recover", { cookie: (await apiRequest(world.port, "/gs/api/session", {})).headers["set-cookie"]![0].split(";")[0], body: {} });
+      assert.deepEqual([retired.status, retired.body?.error], [410, "retired"]);
+      const signedIn = await loginOnFreshBrowser(world.port, joiner.who.browser.username, joiner.who.browser.password);
+      assert.equal(signedIn.answer.status, 200, signedIn.answer.text);
+      const phone = signedIn.cookie as string;
+      assert.equal((await apiRequest(world.port, "/gs/api/profile/reauth", { cookie: phone, body: { password: joiner.who.browser.password } })).status, 200);
       assert.equal((await apiRequest(world.port, "/gs/api/profile/sign-out-others", { cookie: phone, body: {} })).status, 200);
       await world.money.idle();
       await world.observe();
@@ -789,10 +799,12 @@ describe("ESCROW-4: reloads -- every stage is rebuilt from the server's truth on
     try {
       const { table, joiner } = await hostOpened(world);
       await linkWallet(joiner.who, table.gameId, testWallet("jo"), testConsentKey("jo"));
-      const { apiRequest } = await import("../rooms/testSupport");
-      const phoneCookie = (await apiRequest(world.port, "/gs/api/session", {})).headers["set-cookie"]![0].split(";")[0];
-      const phone = (await apiRequest(world.port, "/gs/api/profile/recover", { cookie: phoneCookie, body: { recoveryKey: joiner.who.browser.recoveryKey } })).headers["set-cookie"]![0].split(";")[0];
-      assert.equal((await apiRequest(world.port, "/gs/api/profile/reauth", { cookie: phone, body: { recoveryKey: joiner.who.browser.recoveryKey } })).status, 200);
+      const { apiRequest, loginOnFreshBrowser } = await import("../rooms/testSupport");
+      /* PHASE 3 FINAL: the phone signs in with the username and password (its own session family). */
+      const signedIn = await loginOnFreshBrowser(world.port, joiner.who.browser.username, joiner.who.browser.password);
+      assert.equal(signedIn.answer.status, 200, signedIn.answer.text);
+      const phone = signedIn.cookie as string;
+      assert.equal((await apiRequest(world.port, "/gs/api/profile/reauth", { cookie: phone, body: { password: joiner.who.browser.password } })).status, 200);
       assert.equal((await apiRequest(world.port, "/gs/api/profile/sign-out-others", { cookie: phone, body: {} })).status, 200);
       const refused = await apiRequest(world.port, "/gs/api/money/join-admission", { cookie: phone, body: { gameId: table.gameId } });
       assert.equal(refused.status, 409);
@@ -831,14 +843,14 @@ describe("ESCROW-4: source pins", () => {
 });
 
 describe("ESCROW-4 review fixes (security S-*, reachability R-*)", () => {
-  /** A second session of the joiner's profile (a phone): it recovers, confirms, and signs out every other device. */
+  /** A second session of the joiner's account (a phone): it signs in (PHASE 3 FINAL: username + password), confirms,
+   *  and signs out every other device. */
   async function phoneSignsOutOthers(world: MoneyServer, who: Player) {
-    const { apiRequest, Client } = await import("../rooms/testSupport");
-    const fresh = (await apiRequest(world.port, "/gs/api/session", {})).headers["set-cookie"]![0].split(";")[0];
-    const recovered = await apiRequest(world.port, "/gs/api/profile/recover", { cookie: fresh, body: { recoveryKey: who.browser.recoveryKey } });
-    assert.equal(recovered.status, 200, recovered.text);
-    const phone = recovered.headers["set-cookie"]![0].split(";")[0];
-    const confirm = async () => assert.equal((await apiRequest(world.port, "/gs/api/profile/reauth", { cookie: phone, body: { recoveryKey: who.browser.recoveryKey } })).status, 200);
+    const { apiRequest, Client, loginOnFreshBrowser } = await import("../rooms/testSupport");
+    const signedIn = await loginOnFreshBrowser(world.port, who.browser.username, who.browser.password);
+    assert.equal(signedIn.answer.status, 200, signedIn.answer.text);
+    const phone = signedIn.cookie as string;
+    const confirm = async () => assert.equal((await apiRequest(world.port, "/gs/api/profile/reauth", { cookie: phone, body: { password: who.browser.password } })).status, 200);
     await confirm();
     assert.equal((await apiRequest(world.port, "/gs/api/profile/sign-out-others", { cookie: phone, body: {} })).status, 200);
     await world.money.idle();

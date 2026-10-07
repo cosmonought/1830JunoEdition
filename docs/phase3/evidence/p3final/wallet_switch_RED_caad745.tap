@@ -1,0 +1,41 @@
+TAP version 13
+# Subtest: §9 RED → GREEN: linking Wallet A at Game 1 and Wallet B at Game 2 never changes the account's own wallet
+not ok 1 - §9 RED → GREEN: linking Wallet A at Game 1 and Wallet B at Game 2 never changes the account's own wallet
+  ---
+  duration_ms: …
+  type: 'test'
+  location: '<caad745-worktree>/server/dist/server/src/identity/p3FinalWalletSwitch.test.js:29:22'
+  failureType: 'testCodeFailure'
+  error: |-
+    the account's own wallet must not follow the wallet a seat linked (before null; Wallet A juno1wv8ma4wwyvtec2zzqcwz9nr89m2am2gshttdw2; Wallet B juno1x3r4f25q0urfyqq0eze02klnugs9e4fza7kgdl)
+    + actual - expected
+      {
+    +   afterGame1: 'juno1wv8ma4wwyvtec2zzqcwz9nr89m2am2gshttdw2',
+    +   afterGame2: 'juno1x3r4f25q0urfyqq0eze02klnugs9e4fza7kgdl'
+    -   afterGame1: null,
+    -   afterGame2: null
+      }
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    afterGame1: ~
+    afterGame2: ~
+  actual:
+    afterGame1: 'juno1wv8ma4wwyvtec2zzqcwz9nr89m2am2gshttdw2'
+    afterGame2: 'juno1x3r4f25q0urfyqq0eze02klnugs9e4fza7kgdl'
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (<caad745-worktree>/server/dist/server/src/identity/p3FinalWalletSwitch.test.js:51:26)
+    process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 358.140581

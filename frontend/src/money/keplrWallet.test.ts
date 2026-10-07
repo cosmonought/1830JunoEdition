@@ -182,7 +182,7 @@ describe("JX-3B C-1: createKeplrWallet -- the ADR-036 link signature", () => {
     const wallet = createKeplrWallet(fake.win);
     fake.switchTo(K2.address);
     const answer = await wallet.signLink(TEST_PIN, K1.address, challenge(K1.address));
-    expect(answer).toEqual({ ok: false, code: "wrong-account", reason: `Keplr is on ${K2.address}, but this seat uses ${K1.address}. Switch accounts in Keplr to continue.` });
+    expect(answer).toEqual({ ok: false, code: "wrong-account", reason: `Switch Keplr to ${K1.address} to sign this action. (Keplr is on ${K2.address}.)` });
     expect(fake.names()).toEqual(["getKey"]);
     expect(fake.names()).not.toContain("signArbitrary");
   });

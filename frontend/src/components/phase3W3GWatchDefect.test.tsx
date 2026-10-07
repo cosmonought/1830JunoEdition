@@ -140,7 +140,9 @@ describe("AUD-25.16 (A): Watch identity", () => {
     const shell = readShell();
     expect(shell).toContain("() => (watchOnly ? watcherRoomView(sandboxRoomServerView) : sandboxRoomServerView),");
     expect(shell).toContain('const localId = sandboxRoomDoc?.you.playerId ?? "";');
-    expect(shell).toContain("const viewerAddress = sandbox ? localId : wallet.address;");
+    /* PHASE 3 FINAL (§12): structurally -- no wallet address can be the viewer. */
+    expect(shell).toContain("const viewerAddress = localId;");
+    expect(shell).not.toContain("wallet.address");
   });
 
   it("BY DESIGN (W3-J): the log hello carries no Watch field -- read-only Watch is enforced where the tab sends, not by a new hello field", () => {

@@ -47,6 +47,8 @@ import { HostStakeSection, stakeChoice, useMoneyTableOffer } from "./money/HostS
 /* Phase 3 final clocks: the Async action deadline and the No-deadline disclosure. */
 import { CLOCK_ASYNC_PACES_SECS, NO_DEADLINE_DISCLOSURE } from "../utils/clockProtocol";
 import { ASYNC_DEADLINE_NOTE, LIVE_DEADLINE_NOTE, NO_DEADLINE_NOTE, paceLabel } from "../utils/gameClockView";
+/* PHASE 3 FINAL (§13): every player game is anted. */
+import { ANTE_UNAVAILABLE_SENTENCE, FREE_TABLES_OFFERED } from "../utils/tablePolicy";
 
 /** The type boxes' sentences, as asked. `GAME_TYPE_COPY`'s blurbs are the waiting room's and the Lobby's older
  *  form's; these are the host's first screen, which reads them side by side. */
@@ -130,15 +132,25 @@ export function HostSetupCard({ busy, error, onClose, onCreate }: HostSetupCardP
   const moneyOffer = useMoneyTableOffer();
   const [stakeOn, setStakeOn] = useState(false);
   const [stakeText, setStakeText] = useState("");
-  const stake = stakeChoice(moneyOffer, stakeOn, stakeText, playerCount);
-  const stakeBlocks = stakeOn && moneyOffer !== null && stake.problem !== null;
+  /* PHASE 3 FINAL (§13): every player game is anted -- the stake is REQUIRED (no "play for fun" choice), and with no
+     real-money tables on this server nothing can be hosted. Only the internal development-identity build keeps the
+     no-ante choice, for fixtures (`utils/tablePolicy.ts`); the server refuses a no-ante table outside development. */
+  const anteRequired = !FREE_TABLES_OFFERED;
+  const stakeActive = anteRequired || stakeOn;
+  const anteUnavailable = anteRequired && moneyOffer === null;
+  const stake = stakeChoice(moneyOffer, stakeActive, stakeText, playerCount);
+  const stakeBlocks = anteUnavailable || (stakeActive && moneyOffer !== null && stake.problem !== null);
+  /* A real-money table needs an exact count: default to two seats once the stake is required. */
+  useEffect(() => {
+    if (anteRequired && moneyOffer !== null) setPlayerCount((current) => current ?? MIN_PLAYERS);
+  }, [anteRequired, moneyOffer]);
   /* Phase 3 final clocks: an Async table's action deadline -- the host's pace (12 h .. 7 d) or No deadline, fixed once
      play begins (a table with stakes: fixed with its escrow). A No-deadline table with stakes needs the host's
      acknowledgement of the owner's disclosure before it can be opened. */
   const [deadline, setDeadline] = useState<"async-pace" | "no-deadline">("async-pace");
   const [paceSecs, setPaceSecs] = useState<number>(86_400);
   const [noDeadlineAck, setNoDeadlineAck] = useState(false);
-  const moneyTable = stakeOn && moneyOffer !== null;
+  const moneyTable = stakeActive && moneyOffer !== null;
   const deadlineBlocks = mode === "async" && deadline === "no-deadline" && moneyTable && !noDeadlineAck;
   /* #1447: a card whose artwork cannot be fetched or decoded falls back to the text-only box this step
      used before -- an empty black well would read as a broken card. */
@@ -290,7 +302,7 @@ export function HostSetupCard({ busy, error, onClose, onCreate }: HostSetupCardP
       {
         visibility,
         playerCount,
-        anteUjuno: stakeOn && moneyOffer !== null && stake.base !== null ? stake.base : DEFAULT_ROOM_SETUP.anteUjuno,
+        anteUjuno: stakeActive && moneyOffer !== null && stake.base !== null ? stake.base : DEFAULT_ROOM_SETUP.anteUjuno,
         ...(mode === "async" ? { deadline, paceSecs: deadline === "async-pace" ? paceSecs : null, ...(deadline === "no-deadline" && moneyTable ? { noDeadlineAck } : {}) } : {}),
       },
     );
@@ -465,7 +477,8 @@ export function HostSetupCard({ busy, error, onClose, onCreate }: HostSetupCardP
               {moneyOffer !== null ? (
                 <HostStakeSection
                   offer={moneyOffer}
-                  on={stakeOn}
+                  required={anteRequired}
+                  on={stakeActive}
                   onToggle={(on) => {
                     setStakeOn(on);
                     /* A real-money table needs an exact count: default to two seats rather than leave it "any". */
@@ -475,6 +488,10 @@ export function HostSetupCard({ busy, error, onClose, onCreate }: HostSetupCardP
                   onType={setStakeText}
                   choice={stake}
                 />
+              ) : anteUnavailable ? (
+                <p style={styles.warning} role="status" data-testid="host-ante-unavailable">
+                  {ANTE_UNAVAILABLE_SENTENCE}
+                </p>
               ) : (
                 <>
                   <div style={styles.row}>

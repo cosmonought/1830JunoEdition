@@ -35,6 +35,33 @@
 //                        QUARANTINE key nobody holds (a selector and a digest derived from the restore and the profile, the
 //                        digest of a text far longer than a key, so no key can match it). Either way no selector whose
 //                        outcome is unknown is accepted, and nothing the player asked to end comes back.
+//   USERNAMES (P3-ACCT)  a username is unique. Each is WON by the profile the restored table gives it, else by the
+//                        profile a CONFIRMED event gives it (two different ones: refused), else by the profile of its LAST
+//                        unconfirmed claim (journal order: time, then event id) -- an earlier claimant's write could not
+//                        have committed (the username's uniqueness is checked inside every write). A creation or a
+//                        `credentials-established` whose username another profile won was never committed: not installed.
+//   credentials-established (P3-ACCT)
+//                        a legacy profile's username and password: the confirmed one, else the last, installed on a
+//                        profile that has none (a table profile holding a different one than a confirmed event: refused).
+//   password-replaced (P3-ACCT POLICY: change / forgot password)
+//                        the password's generations are a CHAIN by hash. From the hash the profile holds (the table's,
+//                        or the one `credentials-established` / a creation installs here) the replay follows it: at each
+//                        hash, the confirmed replacement from it (two different ones: refused), else its LAST one in
+//                        journal order (time, then event id), confirmed or not -- as `credentials-established` (the
+//                        account's Authorization Wallet -- PHASE 3 FINAL -- is the remedy for a wrong guess: no review). A hash a replacement retired
+//                        is never installed again; a cycle is refused. A table hash that no replacement names while
+//                        replacements of this profile exist is refused (the table contradicts the journal). Its
+//                        `family_ids` are closed like `signed-out-others`.
+//   WALLETS (P3-ACCT)    a LEGACY (schema-2) profile's persisted convenience wallet is CLEARED (it was never journaled).
+//   authorization-wallet-replaced (PHASE 3 FINAL)
+//                        a schema-3 profile's Authorization Wallet: a CHAIN of designations (wallet, since) -- `since`
+//                        strictly increases, so it never cycles even when a wallet comes back. From the designation the
+//                        profile holds (the table's, or its creation's) the replay follows it: at each designation the
+//                        confirmed replacement from it (two different ones: refused), else its LAST one in journal order,
+//                        confirmed or not (both wallets signed every replacement: no review). A designation a replacement
+//                        retired is never installed again; a table designation that no replacement names while
+//                        replacements of this profile exist is refused (the table contradicts the journal). The internal
+//                        credential epoch is not part of it (no current action moves the epoch).
 //
 // THE PROPERTIES (what the tests pin):
 //   deterministic   a function of (the table's identity set, the journal as a SET, the restore id, the replay's fixed
@@ -57,7 +84,7 @@ import { createHash } from "crypto";
 
 import { base32Lower, ID_BYTES } from "./ids";
 import { isSecurityEvent, securityEventBody, securityEventSortKey, type SecurityEvent } from "./securityEvents";
-import type { FullIdentitySnapshot, IdentityChange, IdentityPrecondition, Principal, Profile, RevokeReason, Session, SessionFamily } from "./store";
+import { asSchema2, loginOf, walletOf, type FullIdentitySnapshot, type IdentityChange, type IdentityPrecondition, type Principal, type Profile, type RevokeReason, type Session, type SessionFamily } from "./store";
 
 export class SecurityReplayError extends Error {
   constructor(message: string) {
@@ -118,6 +145,14 @@ export interface ReplayReport {
   readonly links_dropped: number;
   /** Families named by the journal that the restored table never held (created after T): nothing to end. */
   readonly families_unknown_to_table: number;
+  /** P3-ACCT: legacy profiles whose username and password the journal installed. */
+  readonly credentials_installed: number;
+  /** P3-ACCT: profiles whose persisted wallet the restore cleared. */
+  readonly wallets_cleared: number;
+  /** P3-ACCT POLICY: profiles whose password the journal's replacements advanced. */
+  readonly passwords_advanced: number;
+  /** PHASE 3 FINAL: profiles whose Authorization Wallet the journal's replacements advanced. */
+  readonly authorization_wallets_advanced: number;
 }
 
 export interface ReplayPlan {
@@ -172,9 +207,31 @@ export function quarantineKeyOf(restoreId: string, profileId: string): { readonl
 
 type Rotation = Extract<SecurityEvent, { kind: "recovery-key-rotated" }>;
 type Creation = Extract<SecurityEvent, { kind: "profile-created" }>;
+type Establishment = Extract<SecurityEvent, { kind: "credentials-established" }>;
+type Replacement = Extract<SecurityEvent, { kind: "password-replaced" }>;
+type WalletReplacement = Extract<SecurityEvent, { kind: "authorization-wallet-replaced" }>;
 
 const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
 const byText = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+
+/** P3-ACCT POLICY: whether `to` is `from` or a password some chain of journaled replacements leads to from it. */
+function passwordChainReaches(events: readonly SecurityEvent[], from: string, to: string): boolean {
+  const next = new Map<string, string[]>();
+  for (const event of events) if (event.kind === "password-replaced") next.set(event.from_hash, [...(next.get(event.from_hash) ?? []), event.to_hash]);
+  const seen = new Set<string>([from]);
+  const queue = [from];
+  while (queue.length > 0) {
+    const hash = queue.shift() as string;
+    if (hash === to) return true;
+    for (const following of next.get(hash) ?? []) {
+      if (!seen.has(following)) {
+        seen.add(following);
+        queue.push(following);
+      }
+    }
+  }
+  return false;
+}
 
 /** The replay plan (see the header). Throws `SecurityReplayError` when the journal, or the journal against the table,
  *  cannot be read without guessing. */
@@ -196,7 +253,46 @@ export function planSecurityReplay(input: ReplayInput): ReplayPlan {
 
   const byKind: Record<string, number> = {};
   for (const event of journal.events) byKind[event.kind] = (byKind[event.kind] ?? 0) + 1;
-  const counters = { withdrawn: 0, changes: 0, created: 0, advanced: 0, disabled: 0, familiesClosed: 0, signedOut: 0, links: 0, unknownFamilies: 0, unconfirmed: 0 };
+  const counters = { withdrawn: 0, changes: 0, created: 0, advanced: 0, disabled: 0, familiesClosed: 0, signedOut: 0, links: 0, unknownFamilies: 0, unconfirmed: 0, credentials: 0, wallets: 0, passwords: 0, authorizationWallets: 0 };
+
+  /* ---- P3-ACCT: who wins each username (the header's rule), over the whole journal ---- */
+  const confirmedAnywhere = new Set<string>();
+  {
+    const kindOf = new Map(journal.events.map((event) => [`${event.principal_id}|${event.event_id}`, event.kind] as const));
+    for (const event of journal.events) {
+      if (event.kind === "confirmed" && kindOf.get(`${event.principal_id}|${event.confirms}`) === event.confirmed_kind) confirmedAnywhere.add(`${event.principal_id}|${event.confirms}`);
+    }
+  }
+  const loginClaims = new Map<string, Array<{ readonly profileId: string; readonly confirmed: boolean; readonly order: string; readonly eventId: string }>>();
+  for (const event of journal.events) {
+    const claim =
+      event.kind === "profile-created" ? (() => {
+        const login = loginOf(event.profile);
+        return login === null ? null : { key: login.key, profileId: event.profile.profile_id };
+      })()
+      : event.kind === "credentials-established" ? { key: event.login_key, profileId: event.profile_id }
+      : null;
+    if (claim === null) continue;
+    loginClaims.set(claim.key, [...(loginClaims.get(claim.key) ?? []), { profileId: claim.profileId, confirmed: confirmedAnywhere.has(`${event.principal_id}|${event.event_id}`), order: `${securityEventSortKey(event)}#${event.principal_id}`, eventId: event.event_id }]);
+  }
+  const tableLogins = new Map<string, string>();
+  for (const record of snapshot.profiles) {
+    const login = loginOf(record);
+    if (login !== null) tableLogins.set(login.key, record.profile_id);
+  }
+  const loginWinner = (key: string): string | undefined => {
+    const held = tableLogins.get(key);
+    const claims = loginClaims.get(key) ?? [];
+    const confirmedBy = [...new Set(claims.filter((claim) => claim.confirmed).map((claim) => claim.profileId))];
+    if (held !== undefined) {
+      if (confirmedBy.some((profileId) => profileId !== held)) throw new SecurityReplayError(`a confirmed event gives a username the restored table holds to another profile (${claims.find((claim) => claim.confirmed && claim.profileId !== held)?.eventId})`);
+      return held;
+    }
+    if (confirmedBy.length > 1) throw new SecurityReplayError(`two profiles' confirmed events claim one username (${claims.filter((claim) => claim.confirmed).map((claim) => claim.eventId).join(", ")})`);
+    if (confirmedBy.length === 1) return confirmedBy[0];
+    const last = [...claims].sort((a, b) => byText(a.order, b.order)).pop();
+    return last?.profileId;
+  };
   const out: PrincipalReplay[] = [];
   const reviews: ReviewDraft[] = [];
 
@@ -226,7 +322,13 @@ export function planSecurityReplay(input: ReplayInput): ReplayPlan {
     const creations = events.filter((event): event is Creation => event.kind === "profile-created");
     const confirmedCreations = creations.filter((event) => confirmed.has(event.event_id));
     if (new Set(confirmedCreations.map((event) => event.profile.profile_id)).size > 1) throw new SecurityReplayError(`principal has two confirmed profile creations (${confirmedCreations.map((event) => event.event_id).join(", ")})`);
-    const chosen: Creation | undefined = confirmedCreations[0] ?? creations[creations.length - 1];
+    let chosen: Creation | undefined = confirmedCreations[0] ?? creations[creations.length - 1];
+    /* P3-ACCT: a creation whose username another profile won never committed (a confirmed one losing it is refused). */
+    const chosenLogin = chosen === undefined ? null : loginOf(chosen.profile);
+    if (chosen !== undefined && chosenLogin !== null && tableProfile === undefined && loginWinner(chosenLogin.key) !== chosen.profile.profile_id) {
+      if (confirmed.has(chosen.event_id)) throw new SecurityReplayError(`creation ${chosen.event_id}: its username is another profile's`);
+      chosen = undefined;
+    }
     let principal: Principal | undefined = tablePrincipal;
     let profile: Profile | undefined = tableProfile;
     let created = false;
@@ -253,6 +355,10 @@ export function planSecurityReplay(input: ReplayInput): ReplayPlan {
     let keyAdvanced = false;
     if (rotations.length > 0) {
       if (profile === undefined) throw new SecurityReplayError(`key rotation ${rotations[0].event_id} names a profile this principal does not have`);
+      /* PHASE 3 FINAL: an Authorization Wallet account (schema 3) never had a recovery key -- its epoch is sealed and no
+         build that made one rotates it. A rotation naming one is a damaged or forged journal: refused here, up front,
+         rather than late by the store. */
+      if (profile.schema === 3) throw new SecurityReplayError(`key rotation ${rotations[0].event_id} names an Authorization Wallet account, which has no recovery key`);
       const profileId = profile.profile_id;
       for (const rotation of rotations) if (rotation.profile_id !== profileId) throw new SecurityReplayError(`key rotation ${rotation.event_id} names another profile than this principal's`);
       const toCount = new Map<string, number>();
@@ -338,6 +444,101 @@ export function planSecurityReplay(input: ReplayInput): ReplayPlan {
       keyAdvanced = head !== profile.recovery_selector;
       profile = { ...profile, recovery_selector: head, recovery_hash: digest, recovery_rotated_at: rotatedAt };
     }
+    /* ---- P3-ACCT: a legacy profile's username and password (the header's rule) ---- */
+    const establishments = events.filter((event): event is Establishment => event.kind === "credentials-established");
+    let credentialsInstalled: string | null = null;
+    if (establishments.length > 0) {
+      if (profile === undefined) throw new SecurityReplayError(`credentials ${establishments[0].event_id} name a profile this principal does not have`);
+      const profileId = profile.profile_id;
+      for (const event of establishments) if (event.profile_id !== profileId) throw new SecurityReplayError(`credentials ${event.event_id} name another profile than this principal's`);
+      const confirmedEstablishments = establishments.filter((event) => confirmed.has(event.event_id));
+      if (new Set(confirmedEstablishments.map((event) => `${event.login_key}|${event.password_hash}`)).size > 1) throw new SecurityReplayError(`two different confirmed credentials (${confirmedEstablishments.map((event) => event.event_id).join(", ")})`);
+      const held = loginOf(profile);
+      if (held !== null) {
+        const first = confirmedEstablishments[0];
+        /* P3-ACCT POLICY (security review M1): the table may hold a LATER password than the establishment's -- one a
+           `password-replaced` chain reaches from it (a migrated profile that has since changed or reset its password).
+           The username never moves, so it is compared strictly; the password only has to lie on that chain. */
+        if (first !== undefined && (first.login_key !== held.key || !passwordChainReaches(events, first.password_hash, held.hash))) throw new SecurityReplayError(`credentials ${first.event_id} are not the ones the profile holds`);
+      } else {
+        const pick = confirmedEstablishments[0] ?? establishments[establishments.length - 1];
+        if (loginWinner(pick.login_key) === profileId) {
+          profile = { ...asSchema2(profile), login_key: pick.login_key, login_name: pick.login_name, password_hash: pick.password_hash, password_set_at: pick.set_at };
+          credentialsInstalled = pick.login_key;
+        } else if (confirmed.has(pick.event_id)) {
+          throw new SecurityReplayError(`credentials ${pick.event_id}: the username is another profile's`);
+        }
+      }
+    }
+    /* ---- P3-ACCT POLICY: the password's chain of replacements (the header's rule) ---- */
+    const replacements = events.filter((event): event is Replacement => event.kind === "password-replaced");
+    let passwordFrom: string | null = null;
+    if (replacements.length > 0) {
+      if (profile === undefined) throw new SecurityReplayError(`password replacement ${replacements[0].event_id} names a profile this principal does not have`);
+      const profileId = profile.profile_id;
+      for (const event of replacements) if (event.profile_id !== profileId) throw new SecurityReplayError(`password replacement ${event.event_id} names another profile than this principal's`);
+      const held = loginOf(profile);
+      if (held === null) throw new SecurityReplayError(`password replacement ${replacements[0].event_id} names a profile with no password`);
+      const from = new Map<string, Replacement[]>();
+      for (const event of replacements) from.set(event.from_hash, [...(from.get(event.from_hash) ?? []), event]); // journal order kept
+      const named = new Set(replacements.flatMap((event) => [event.from_hash, event.to_hash]));
+      if (!named.has(held.hash) && credentialsInstalled === null && !created) throw new SecurityReplayError("the restored table's password is on none of the journal's replacements");
+      let hash = held.hash;
+      let setAt = profile.password_set_at as number;
+      const seen = new Set<string>([hash]);
+      for (let steps = from.get(hash); steps !== undefined && steps.length > 0; steps = from.get(hash)) {
+        const confirmedSteps = steps.filter((event) => confirmed.has(event.event_id));
+        if (new Set(confirmedSteps.map((event) => event.to_hash)).size > 1) throw new SecurityReplayError(`two confirmed password replacements start from one password (${confirmedSteps.map((event) => event.event_id).join(", ")})`);
+        const step = confirmedSteps[0] ?? steps[steps.length - 1];
+        if (seen.has(step.to_hash)) throw new SecurityReplayError(`the password replacements form a cycle (${step.event_id})`);
+        seen.add(step.to_hash);
+        hash = step.to_hash;
+        setAt = step.set_at;
+      }
+      if (hash !== held.hash) {
+        passwordFrom = held.hash;
+        profile = { ...profile, password_hash: hash, password_set_at: setAt };
+      }
+    }
+    /* ---- PHASE 3 FINAL: the Authorization Wallet's chain of replacements (the header's rule) ---- */
+    const walletSteps = events.filter((event): event is WalletReplacement => event.kind === "authorization-wallet-replaced");
+    let authorizationFrom: { address: string; since: number } | null = null;
+    if (walletSteps.length > 0) {
+      if (profile === undefined) throw new SecurityReplayError(`wallet replacement ${walletSteps[0].event_id} names a profile this principal does not have`);
+      const profileId = profile.profile_id;
+      for (const event of walletSteps) if (event.profile_id !== profileId) throw new SecurityReplayError(`wallet replacement ${event.event_id} names another profile than this principal's`);
+      if (profile.schema !== 3 || typeof profile.wallet_address !== "string" || typeof profile.wallet_verified_at !== "number") throw new SecurityReplayError(`wallet replacement ${walletSteps[0].event_id} names a profile with no Authorization Wallet`);
+      const node = (wallet: string, since: number): string => `${wallet}@${since}`;
+      const from = new Map<string, WalletReplacement[]>();
+      for (const event of walletSteps) from.set(node(event.from_wallet, event.from_since), [...(from.get(node(event.from_wallet, event.from_since)) ?? []), event]); // journal order kept
+      const named = new Set(walletSteps.flatMap((event) => [node(event.from_wallet, event.from_since), node(event.to_wallet, event.to_since)]));
+      const tableNode = node(profile.wallet_address, profile.wallet_verified_at);
+      if (!named.has(tableNode) && !created) throw new SecurityReplayError("the restored table's Authorization Wallet is on none of the journal's replacements");
+      let wallet = profile.wallet_address;
+      let since = profile.wallet_verified_at;
+      const seen = new Set<string>([tableNode]);
+      for (let steps = from.get(node(wallet, since)); steps !== undefined && steps.length > 0; steps = from.get(node(wallet, since))) {
+        const confirmedSteps = steps.filter((event) => confirmed.has(event.event_id));
+        if (new Set(confirmedSteps.map((event) => node(event.to_wallet, event.to_since))).size > 1) throw new SecurityReplayError(`two confirmed wallet replacements start from one designation (${confirmedSteps.map((event) => event.event_id).join(", ")})`);
+        const step = confirmedSteps[0] ?? steps[steps.length - 1];
+        const next = node(step.to_wallet, step.to_since);
+        if (seen.has(next)) throw new SecurityReplayError(`the wallet replacements form a cycle (${step.event_id})`);
+        seen.add(next);
+        wallet = step.to_wallet;
+        since = step.to_since;
+      }
+      if (node(wallet, since) !== tableNode) {
+        authorizationFrom = { address: profile.wallet_address as string, since: profile.wallet_verified_at as number };
+        profile = { ...profile, wallet_address: wallet, wallet_verified_at: since };
+      }
+    }
+    /* ---- P3-ACCT: a LEGACY profile's persisted convenience wallet is cleared (`walletOf`: schema 2 only) ---- */
+    let walletCleared = false;
+    if (profile !== undefined && walletOf(profile) !== null) {
+      profile = { ...profile, wallet_address: null, wallet_verified_at: null };
+      walletCleared = true;
+    }
+
     /* The profile's status: disabled under review. When the journal no longer calls for a review that THIS restore opened
        earlier (a confirmation arrived since), the replay withdraws its own review record and the profile gets back
        exactly the status it had before that review (recorded in the record) -- never more. Any other status stays. */
@@ -356,7 +557,7 @@ export function planSecurityReplay(input: ReplayInput): ReplayPlan {
       const listed: Array<[readonly string[], Exclude<RevokeReason, "rotated">]> =
         event.kind === "family-revoked"
           ? [[event.family_ids, event.reason as Exclude<RevokeReason, "rotated">]]
-          : event.kind === "signed-out-others"
+          : event.kind === "signed-out-others" || event.kind === "password-replaced"
             ? [[event.family_ids, "signed-out-remotely"]]
             : event.kind === "principal-disabled"
               ? [[event.family_ids, "principal-disabled"]]
@@ -380,10 +581,29 @@ export function planSecurityReplay(input: ReplayInput): ReplayPlan {
     if (created && principal !== undefined && profile !== undefined) {
       expect.push(tablePrincipal === undefined ? { kind: "principal-absent", principal_id: principalId } : { kind: "principal-unprofiled", principal_id: principalId });
       expect.push({ kind: "profile-absent", profile_id: profile.profile_id }, { kind: "selector-unused", recovery_selector: profile.recovery_selector });
+      const login = loginOf(profile);
+      if (login !== null) expect.push({ kind: "login-unused", login_key: login.key });
       counters.created += 1;
     } else if (profile !== undefined && tableProfile !== undefined && profile.recovery_selector !== tableProfile.recovery_selector) {
       expect.push({ kind: "profile-selector", profile_id: profile.profile_id, recovery_selector: tableProfile.recovery_selector }, { kind: "selector-unused", recovery_selector: profile.recovery_selector });
     }
+    if (credentialsInstalled !== null && profile !== undefined && !created) {
+      expect.push({ kind: "profile-no-login", profile_id: profile.profile_id }, { kind: "login-unused", login_key: credentialsInstalled });
+    }
+    /* P3-ACCT POLICY: the password the table holds is pinned (a profile created or given its first password here is
+       pinned by those preconditions instead). */
+    if (passwordFrom !== null && !created && credentialsInstalled === null && profile !== undefined) {
+      expect.push({ kind: "profile-password", profile_id: profile.profile_id, password_hash: passwordFrom });
+    }
+    if (passwordFrom !== null) counters.passwords += 1;
+    /* PHASE 3 FINAL: the Authorization Wallet the table holds is pinned (a profile created here is pinned by its creation). */
+    if (authorizationFrom !== null && !created && profile !== undefined) {
+      /* Review L3: the designation (address AND since) the table holds. */
+      expect.push({ kind: "profile-authorization-wallet", profile_id: profile.profile_id, wallet_address: authorizationFrom.address, wallet_since: authorizationFrom.since });
+      counters.authorizationWallets += 1;
+    }
+    if (credentialsInstalled !== null) counters.credentials += 1;
+    if (walletCleared) counters.wallets += 1;
     if (keyAdvanced) counters.advanced += 1;
     if (principal !== undefined && !same(principal, tablePrincipal)) {
       change.principals = [principal];
@@ -441,6 +661,10 @@ export function planSecurityReplay(input: ReplayInput): ReplayPlan {
       sessions_signed_out: counters.signedOut,
       links_dropped: counters.links,
       families_unknown_to_table: counters.unknownFamilies,
+      credentials_installed: counters.credentials,
+      wallets_cleared: counters.wallets,
+      passwords_advanced: counters.passwords,
+      authorization_wallets_advanced: counters.authorizationWallets,
     },
   };
 }

@@ -13,6 +13,7 @@ import { withClientAnnouncement } from "./clientAnnouncement";
 import { connectServerLink, type SocketLike } from "./serverLink";
 import { resetRoomLinks, setRoomSocketFactory, watchRoom, type SocketLike as RoomSocketLike } from "./roomLink";
 import { httpSessionPort, installSessionPort, readySessionPort, sessionEndedSentence, sessionEndpointFor, sessionPort } from "./sessionBootstrap";
+import { readStripped } from "./sourceScan";
 
 /** LIVE-2E: a bootstrap answer for a PROFILED browser -- the only kind a socket opens for. */
 const PROFILED = { ok: true, expiresAt: 1, profile: { name: "Brad", otherSessions: 0 } };
@@ -209,8 +210,8 @@ describe("the hosted session bootstrap (LIVE-2B)", () => {
   });
 });
 
-describe("mandatory profiles (LIVE-2E)", () => {
-  it("an unprofiled browser is 'unprofiled': no socket opens, and the links wait without asking the server again", async () => {
+describe("public first (P3-ACCT; LIVE-2E's mandatory profiles superseded)", () => {
+  it("a signed-out browser is 'unprofiled': its sockets open (the public, read-only surface) without asking the server again", async () => {
     const http = manualFetch();
     const session = httpSessionPort({ endpoint: "https://play.example/gs/api/session", fetch: http.fetch });
     installSessionPort(session);
@@ -235,17 +236,15 @@ describe("mandatory profiles (LIVE-2E)", () => {
       later.shift()?.();
       await flush();
     }
-    expect(wire.made).toHaveLength(0);
-    expect(http.calls).toHaveLength(1); // the first answer stands until a profile action forces the next bootstrap
-    /* A profile is created: the forced bootstrap says so, and the next attempt opens the socket. */
+    /* P3-ACCT: a visitor's sockets open at once (the server answers them the public list, a public table's view and
+       log, and `profile-required` to everything else). */
+    expect(wire.made.length).toBeGreaterThanOrEqual(1);
+    expect(http.calls).toHaveLength(1); // the first answer stands until a sign-in forces the next bootstrap
+    /* A sign-in: the forced bootstrap says so. */
     const forced = session.ensure(true);
     await http.answer(200, { ok: true, expiresAt: 1, profile: { name: "Brad", otherSessions: 2 } });
     expect(await forced).toBe("ready");
     expect(session.account).toEqual({ name: "Brad", otherSessions: 2 });
-    later.shift()?.();
-    await flush();
-    expect(wire.made.length).toBeGreaterThanOrEqual(1);
-    expect(wire.made.every((made) => made.url === withClientAnnouncement("wss://play.example/gs"))).toBe(true);
     link.close();
     stop();
   });
@@ -264,6 +263,18 @@ describe("mandatory profiles (LIVE-2E)", () => {
     expect(await second).toBe("ready");
     expect(session.account).toEqual({ name: "Brad", otherSessions: 0 });
     expect(notified).toBe(2);
+    /* PHASE 3 FINAL: the account's username rides along (told only to its own session) -- an open table compares it to
+       notice another tab changed this browser's account; anything but a short string is left out, never guessed. */
+    const named = session.ensure(true);
+    await http.answer(200, { ok: true, expiresAt: 1, profile: { name: "Brad", otherSessions: 0, username: "Brad.Player" } });
+    expect(await named).toBe("ready");
+    expect(session.account).toEqual({ name: "Brad", otherSessions: 0, username: "Brad.Player" });
+    for (const username of [7, null, "u".repeat(257)]) {
+      const odd = session.ensure(true);
+      await http.answer(200, { ok: true, expiresAt: 1, profile: { name: "Brad", otherSessions: 0, username } });
+      expect(await odd).toBe("ready");
+      expect(session.account).toEqual({ name: "Brad", otherSessions: 0 });
+    }
     /* A malformed profile is no profile: the gate, never a guessed one. */
     const third = session.ensure(true);
     await http.answer(200, { ok: true, profile: { name: 7 } });
@@ -310,10 +321,57 @@ describe("mandatory profiles (LIVE-2E)", () => {
   });
 
   it("names the LIVE-2E reasons a session ends", () => {
-    expect(sessionEndedSentence("replaced")).toBe("This browser signed in to a profile, which replaced its earlier session.");
+    expect(sessionEndedSentence("replaced")).toBe("This browser signed in to an account, which replaced its earlier session.");
     expect(sessionEndedSentence("signed-out-remotely")).toBe("It was signed out from another of your devices.");
-    for (const reason of ["expired", "logout", "evicted", "operator", "principal-disabled", "rotated", "unreadable", "replaced", "signed-out-remotely", null]) {
-      expect(sessionEndedSentence(reason)).not.toMatch(/guest/i);
+    /* PHASE 3 FINAL: an account made before Authorization Wallets is retired -- its sessions end `retired`. */
+    expect(sessionEndedSentence("retired")).toBe("It belonged to an account made before Authorization Wallets. That account is retired: create a new account to keep playing.");
+    for (const reason of ["expired", "logout", "evicted", "operator", "principal-disabled", "rotated", "unreadable", "replaced", "signed-out-remotely", "retired", null]) {
+      expect(sessionEndedSentence(reason)).not.toMatch(/guest|recovery key/i);
     }
+  });
+
+  it("PHASE 3 FINAL: the closed list of account routes names the Authorization-Wallet account's routes, and none of the retired ones", () => {
+    const code = readStripped("utils/sessionBootstrap.ts");
+    for (const path of ["account/authorization", "account/recover", "account/authorization-wallet/challenge", "account/authorization-wallet/replace", "account/create", "account/login", "account/password", "account/me", "profile/reauth", "profile/sign-out-others"]) {
+      expect([path, code.includes(`| "${path}"`)]).toEqual([path, true]);
+    }
+    for (const path of ["profile", "profile/recover", "profile/link", "profile/link-code", "profile/recovery-key", "profile/key-received", "account/credentials", "account/forget-wallet", "account/reset"]) {
+      expect([path, code.includes(`"${path}"`)]).toEqual([path, false]);
+    }
+  });
+});
+
+describe("PHASE 3 FINAL (§9, re-review NEW-1): the account changes THIS page made, and the account each was for", () => {
+  it("records the username a sign-in carried (never whatever the next bootstrap says); RECOVER's username; the current account for a password change; 'visitor' for a sign-out; nothing for a refusal", async () => {
+    const answers: Array<{ status: number; body?: unknown }> = [];
+    const session = httpSessionPort({
+      endpoint: "https://play.example/gs/api/session",
+      fetch: async () => {
+        const next = answers.shift() ?? { status: 500 };
+        return { status: next.status, json: async () => next.body ?? null };
+      },
+    });
+    expect(session.localAccount).toEqual({ changes: 0, key: null });
+    answers.push({ status: 403, body: { error: "invalid-credential" } });
+    await session.api("account/login", { username: "Brad.Player", password: "wrong one" });
+    expect(session.localAccount).toEqual({ changes: 0, key: null });
+    answers.push({ status: 200, body: { ok: true, profile: { name: "Brad" } } });
+    await session.api("account/login", { username: "  BRAD.player ", password: "the right one" });
+    expect(session.localAccount).toEqual({ changes: 1, key: "account:brad.player" });
+    /* The page re-reads its account. */
+    answers.push({ status: 200, body: { ok: true, profile: { name: "Brad", otherSessions: 0, username: "Brad.Player" } } });
+    await session.ensure(true);
+    answers.push({ status: 200, body: { ok: true, signedOut: 1 } });
+    await session.api("account/password", { currentPassword: "the right one", newPassword: "another right one" });
+    expect(session.localAccount).toEqual({ changes: 2, key: "account:brad.player" });
+    answers.push({ status: 204 });
+    await session.api("session/revoke", {});
+    expect(session.localAccount).toEqual({ changes: 3, key: "visitor" });
+    answers.push({ status: 200, body: { ok: true, operation: "0".repeat(32), texts: [], expiresAt: 1 } });
+    await session.api("account/authorization", { purpose: "recover", username: "Ann.Player", wallet: "juno1x" });
+    expect(session.localAccount?.changes).toBe(3);
+    answers.push({ status: 200, body: { ok: true, profile: { name: "Ann" }, signedOut: 0 } });
+    await session.api("account/recover", { operation: "0".repeat(32), pubKey: "k", signature: "s", newPassword: "a brand new password" });
+    expect(session.localAccount).toEqual({ changes: 4, key: "account:ann.player" });
   });
 });

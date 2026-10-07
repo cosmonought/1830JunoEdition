@@ -19,6 +19,8 @@
 //   GS_MODE=development BUILD_ID=$(git rev-parse --short HEAD) node dist/server/src/start.js
 //   node dist/server/src/start.js --mode development --build dev          (PowerShell / cmd)
 
+/* P3-ACCT (review M1): FIRST -- libuv's thread pool is sized when first used (`threadPool.ts`). */
+import "./threadPool";
 import * as path from "path";
 
 import { createGameServer, GAME_SERVER_BIND_HOST } from "./gameServer";
@@ -223,6 +225,7 @@ async function main(): Promise<void> {
       onRestartRequired: (detail) => failFast("the identity store", detail),
       onCompacted: (info) => ops.audit("identity.compacted", { seq: info.seq, records: info.records, bytes: info.bytes }),
     });
+    /* PHASE 3 FINAL: accounts are username + password + an Authorization Wallet; no recovery key exists anywhere. */
     identity = await IdentityService.open(identityStore);
   } catch (error) {
     // eslint-disable-next-line no-console
@@ -414,6 +417,9 @@ async function main(): Promise<void> {
             : Promise.resolve({ refusal: "wrong-state" as const, code: "wrong-state" as const, reason: "This server has no Juno escrow configured." }),
     },
     money: () => moneyRef.current,
+    /* PHASE 3 FINAL (owner ruling: PLAYER GAMES ARE ANTED GAMES): the player product has no free game. Development mode
+       (loopback-only, never a playtest) keeps free tables as internal engine tooling. */
+    freeTables: config.mode === "development",
     ...(escrow !== null ? { escrow: { onGameplayCommitted: (input) => escrow?.service.onGameplayCommitted(input), isRosterFrozen: (gameId) => escrow?.service.isRosterFrozen(gameId) ?? false } } : {}),
     /* LIVE-4 (L4-2): the pool's capability, and the settlement index's money facts -- judged for every money table at
        every rebuild, whatever build dealt it (ESCROW-3A's build-keyed `continuationPolicyOf` is retired). */
@@ -593,8 +599,8 @@ function identityBanner(): string {
         "  rooms: the server-owned protocol (room-op, GameRecords in games/) -- the same one production runs\n" +
         "  remote playtests: run GS_MODE=production behind the tunnel (see PLAYTEST_TRANSPORT.md), never this mode\n"
       : `  PRODUCTION IDENTITY: the ${SESSION_COOKIE_NAME} cookie (Secure; HttpOnly; SameSite=Strict), bootstrapped at POST /gs/api/session; trusted proxy hops ${config.trustedProxyHops}\n` +
-        "  profiles: REQUIRED to play (LIVE-2E) -- create, recover (recovery key) or link a device at /gs/api/profile/*; an unprofiled browser opens no game socket\n" +
-        "  rooms: the server-owned protocol (room-op, GameRecords in games/)\n";
+        "  accounts: REQUIRED to play -- username + password + an Authorization Wallet (create, log in, Forgot password? by the wallet) at /gs/api/account/*; a visitor watches and reads only\n" +
+        "  rooms: the server-owned protocol (room-op, GameRecords in games/); every player game is anted (no free tables)\n";
   return (
     posture +
     `  allowed origins: ${config.allowedOrigins.join(", ")}${config.notes.length > 0 ? ` (${config.notes.join("; ")})` : ""}\n` +

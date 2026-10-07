@@ -196,6 +196,14 @@ import { roomOp, watchRoom, type RoomLoss } from "./utils/roomLink";
 import { DEV_IDENTITY_BUILD } from "./utils/devIdentity";
 /* LIVE-2E: a create names the host's seat after the profile when nobody chose a name. */
 import { profileNickname } from "./utils/profileApi";
+/* P3-ACCT (public first): the shell's own Host, Join and "Take a seat" ask for an account first, then carry on. */
+import { requireAccount } from "./utils/accountPrompt";
+/* PHASE 3 FINAL (§9): an open table never becomes somebody else silently. */
+import { ACCOUNT_CHANGED_NO_SEND, useTableAccountGuard, type TableAccountChange } from "./utils/tableAccountGuard";
+import { useSession } from "./utils/useSession";
+import { sessionPort } from "./utils/sessionBootstrap";
+import { FREE_TABLES_OFFERED } from "./utils/tablePolicy";
+import { TableAccountNotice } from "./components/TableAccountNotice";
 import {
   JOIN_CODE_EXAMPLE,
   holdNoticeFor,
@@ -1244,10 +1252,24 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
    *  without it. Terminal; the shell says so and offers the lobby. */
   const [roomLost, setRoomLost] = useState<RoomLoss | null>(null);
   const localId = sandboxRoomDoc?.you.playerId ?? "";
+  /* ==================================================================
+      PHASE 3 FINAL (§9 / §12): WHO THIS TAB PLAYS AS IS THE SESSION'S ACCOUNT -- AND A CHANGE OF IT IS ASKED ABOUT
+     ==================================================================
+     The seat above is the server's answer for this browser's session; no wallet answers it (switching Keplr changes
+     nothing here). The one thing that can change it under an open table is the BROWSER's account -- another tab signing
+     in, out or recovering -- and then the table says so and asks (`utils/tableAccountGuard.ts`) instead of silently
+     showing the new account's seat. A Watch tab has no seat to lose, so it is not asked. */
+  const sessionView = useSession();
+  const tableAccount = useTableAccountGuard(sessionView, sandbox && sandboxRoomCode !== null && !watchOnly, { gameId: sandboxRoomCode, local: sessionPort().localAccount });
+  const tableAccountChangeRef = useRef<TableAccountChange | null>(null);
+  tableAccountChangeRef.current = tableAccount.change;
 
   /* In a room this browser is one person with one id, which makes every existing turn/president gate correct at once.
      See docs/ai_architecture/session_keys_wallet.md - App.tsx #534 */
-  const viewerAddress = sandbox ? localId : wallet.address;
+  /* PHASE 3 FINAL (§12): who this tab is at the table is the SERVER's answer for the session (`localId`), never a wallet
+     address -- the parked on-chain branch that read `wallet.address` here is gone, so no path can derive a viewer from
+     the Keplr account this browser has selected. */
+  const viewerAddress = localId;
   /** LIVE-2D: the seat id, for callbacks that must not rebuild when the view does. */
   const localIdRef = useRef(localId);
   localIdRef.current = localId;
@@ -3352,7 +3374,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
   } = useRoomChat(
     sandbox ? sandboxRoomCode : roomId,
     /* LIVE-2D: the seat decides only whether Send is offered (a spectator may not chat); the server signs the line. */
-    sandbox ? (localId || null) : wallet.address,
+    localId || null, // PHASE 3 FINAL (§12): the session's seat, never a wallet address
     // Design note #765: the roster nickname in a sandbox room, the lobby name outside one.
     sandboxChatName,
   );
@@ -13419,7 +13441,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
       log: sandboxLogRef.current,
       catchingUpNotice: CATCHING_UP_BANNER,
     });
-  boardSendRefusalRef.current = () => boardSendRefusal({ watchOnly, currency: syncBoardCurrency() });
+  /* PHASE 3 FINAL (§9): while the browser's account changed under this table and the player has not chosen, nothing is
+     sent -- not as the old account (the server would not take it) and not as the new one (the player hasn't agreed). */
+  boardSendRefusalRef.current = () => (tableAccountChangeRef.current !== null ? ACCOUNT_CHANGED_NO_SEND : boardSendRefusal({ watchOnly, currency: syncBoardCurrency() }));
   /* The settle point writes its verdict into `divergenceReportedAtRef` (R5) inside the drain's pass, and the pass's own
      state updates render; this mirrors the standing verdict into state after that render, so the surfaces follow it.
      EVERY RENDER ON PURPOSE: a ref cannot be a dependency, and the functional update returns `current` unchanged when
@@ -13567,7 +13591,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
   const handleRotateCode = useCallback(() => void runRoomOp({ type: "rotate-code" }), [runRoomOp]);
   const handleCancelRoom = useCallback(() => void runRoomOp({ type: "cancel-room" }), [runRoomOp]);
   /** A watcher of a waiting table takes a seat; a seated player gives theirs up and keeps watching. */
-  const handleTakeSeat = useCallback(() => void runRoomOp({ type: "take-seat" }), [runRoomOp]);
+  const handleTakeSeat = useCallback(() => void requireAccount(() => void runRoomOp({ type: "take-seat" }), "Log in or create an account to take a seat."), [runRoomOp]);
   const handleReleaseSeat = useCallback(() => void runRoomOp({ type: "release-seat" }), [runRoomOp]);
 
   /* ==================================================================
@@ -14112,8 +14136,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
             available={isBackendConfigured()}
             error={sandboxRoomError}
             busy={sandboxRoomBusy}
-            onHost={handleHostSandboxRoom}
-            onJoin={handleJoinSandboxRoom}
+            /* PHASE 3 FINAL (§13): this gate's Host makes a NO-ANTE room, which the product does not offer -- a game is
+               hosted from the Lobby's host card, with its ante. The internal development-identity build keeps it. */
+            onHost={FREE_TABLES_OFFERED ? () => void requireAccount(() => void handleHostSandboxRoom(), "Log in or create an account to host a game.") : undefined}
+            onJoin={(raw) => void requireAccount(() => void handleJoinSandboxRoom(raw), "Log in or create an account to join a game.")}
           />
           <button type="button" style={styles.sandboxGateQuiet} onClick={onLeaveGame}>
             Back to the lobby
@@ -14165,6 +14191,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
   if (sandbox && sandboxRoomCode && sandboxRoom?.lifecycle === "waiting") {
     const seated = localId !== "";
     return (
+      <>
+      {/* PHASE 3 FINAL (§9): the waiting room is where a seat antes -- an account change under it is asked about too. */}
+      <TableAccountNotice change={tableAccount.change} onContinue={tableAccount.accept} onLeave={handleLeaveTableToLobby} />
       <SandboxWaitingRoom
         roomCode={sandboxRoom.code ?? "Private game"}
         room={sandboxRoom}
@@ -14197,6 +14226,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
           onLeaveGame();
         }}
       />
+      </>
     );
   }
 
@@ -16414,6 +16444,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
 
       {/* PHASE 3 W3-J (AUD-25.16, OD-19): a board that is not the room's is never offered as live -- a forced notice
           (a native modal: everything behind it is inert) whose remedy is a reload. */}
+      {/* PHASE 3 FINAL (§9): the browser's account changed under this table -- asked, never assumed. */}
+      <TableAccountNotice change={tableAccount.change} onContinue={tableAccount.accept} onLeave={handleLeaveTableToLobby} />
       <BoardBehindNotice
         notice={sandbox && sandboxRoomCode && !boardCurrency.current ? boardCurrency.notice : null}
         onReload={() => window.location.reload()}

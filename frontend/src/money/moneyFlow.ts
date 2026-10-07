@@ -14,9 +14,16 @@
 //   4. this tab's wallet connection and "Confirm it's you" grant -- the two things that are not durable (Keplr
 //      re-enables silently; the grant lives five minutes on the server).
 //
-// The progression is the brief's, one state per step and no state standing for two:
+// The progression underneath is ESCROW-4's, one state per step and no state standing for two:
 //
 //   Connect -> Confirm -> Link -> Review -> Approve in Keplr -> Sent -> Funded -> Seats locked
+//
+// PHASE 3 (P3-ACCT, owner 2026-10-05): THE PLAYER PRESSES ONE BUTTON -- "Ante X JUNO" (`ante`). It runs the steps the
+// seat still needs, in order, and only those (`moneyActions.anteNow`): Connecting wallet… -> Verifying wallet… (the
+// free link signature, or the free re-proof W2-M asks for) -> Waiting for deposit… (Keplr's transaction) -> Ante
+// confirmed. "Confirm it's you" is no longer a step of its own: the server asks for it only when it must (a NEW wallet
+// more than five minutes after signing in), and a returning player whose account already proved this wallet is never
+// asked for a password. So the display collapses to five steps (`FUNDING_STEPS`), each covering the underlying states.
 //
 // Every button offered here is one the server's `you.actions` allows (the server still decides each), or a purely
 // local step (connect, confirm, review, re-send). A funded seat is only ever funded because the server read the chain.
@@ -28,16 +35,27 @@ import { formatMoneyTime } from "./moneyTime";
 
 export type StepKey = "connect" | "confirm" | "link" | "review" | "approve" | "sent" | "funded" | "locked";
 
-export const FUNDING_STEPS: readonly { readonly key: StepKey; readonly label: string }[] = Object.freeze([
-  { key: "connect", label: "Connect" },
-  { key: "confirm", label: "Confirm" },
-  { key: "link", label: "Link" },
-  { key: "review", label: "Review" },
-  { key: "approve", label: "Approve in Keplr" },
-  { key: "sent", label: "Sent" },
-  { key: "funded", label: "Funded" },
-  { key: "locked", label: "Seats locked" },
+/** P3-ACCT: what the panel's progress line shows -- five steps, each covering the underlying states it stands for. */
+export const FUNDING_STEPS: readonly { readonly key: StepKey; readonly label: string; readonly covers: readonly StepKey[] }[] = Object.freeze([
+  { key: "connect", label: "Connect wallet", covers: ["connect"] },
+  { key: "link", label: "Verify wallet", covers: ["confirm", "link"] },
+  { key: "review", label: "Deposit", covers: ["review", "approve", "sent"] },
+  { key: "funded", label: "Ante confirmed", covers: ["funded"] },
+  { key: "locked", label: "Seats locked", covers: ["locked"] },
 ]);
+
+/** P3-ACCT: the progress line's index for a seat's step (-1: none). */
+export function fundingStepIndex(step: StepKey | null): number {
+  return step === null ? -1 : FUNDING_STEPS.findIndex((entry) => entry.covers.includes(step));
+}
+
+/** P3-ACCT: what the Ante button says while it runs -- the owner's words, one at a time. */
+export const ANTE_STATUS = Object.freeze({
+  connecting: "Connecting wallet…",
+  verifying: "Verifying wallet…",
+  depositing: "Waiting for deposit…",
+  confirmed: "Ante confirmed.",
+});
 
 export type WalletState =
   /** This build has no pinned escrow (or it is mainnet): it signs nothing. */
@@ -66,7 +84,12 @@ export type ActionKind =
   | "liveness-settle"
   | "annul"
   /* W2-M (AUD-20.02): prove the SAME linked wallet again (free) -- a deposit needs a proof from the last 24 hours. */
-  | "reprove";
+  | "reprove"
+  /* P3-ACCT: the one button -- connect, verify (link or re-prove) and deposit, each only if still needed. */
+  | "ante"
+  /* P3-ACCT (money review M2): before the host opens the table, the same steps up to the wallet's proof -- and never a
+     deposit, whatever happens meanwhile ("Verify wallet (free)" means exactly that). */
+  | "verify";
 
 export interface FlowAction {
   readonly kind: ActionKind;
@@ -197,7 +220,7 @@ const isDepositKind = (kind: string): boolean => kind === "create" || kind === "
 function walletBlocker(wallet: WalletState, need: string | null): string | null {
   if (wallet.kind === "no-pin") return wallet.reason;
   if (wallet.kind === "unavailable") return "Keplr isn't available in this browser. You can keep playing here; deposits need Keplr (the desktop extension or the Keplr app's browser) on a device where you're signed in to this profile.";
-  if (wallet.kind === "connected" && need !== null && wallet.address !== need) return `Keplr is on ${shortWallet(wallet.address)}, but this seat uses ${shortWallet(need)}. Switch accounts in Keplr to continue.`;
+  if (wallet.kind === "connected" && need !== null && wallet.address !== need) return `Switch Keplr to ${shortWallet(need)} to sign this action. (Keplr is on ${shortWallet(wallet.address)}; this seat's wallet is ${shortWallet(need)} — your account and seat don't change.)`;
   return null;
 }
 
@@ -272,18 +295,19 @@ export function seatFlow(input: FlowInput): SeatFlow {
       ]
         .filter(Boolean)
         .join(" ") + rolledBack;
-    return { stage: "funding", step: "funded", headline: `Funded — ${ante} from ${shortWallet(you.payoutWallet ?? needWallet)} is in this table's escrow.`, detail, primary, others, blocker: null };
+    return { stage: "funding", step: "funded", headline: `Ante confirmed — ${ante} from ${shortWallet(you.payoutWallet ?? needWallet)} is in this table's escrow.`, detail, primary, others, blocker: null };
   }
   if (funding === "unlinked") {
     offer("withdraw", WITHDRAW_FLOW);
     offer("cancel-escrow", CANCEL_FLOW);
     const deposit = you.unlinkedDeposit?.wallet ?? null;
-    const needs = wallet.kind !== "connected" ? { kind: "connect" as const, label: "Connect wallet", tone: "primary" as const } : !confirmed ? { kind: "confirm" as const, label: "Confirm it's you", tone: "primary" as const } : { kind: "relink" as const, label: "Relink deposit (free)", tone: "primary" as const };
+    /* P3-ACCT: no "Confirm it's you" before the relink -- the server asks for it only when it must. */
+    const needs = wallet.kind !== "connected" ? { kind: "connect" as const, label: "Connect wallet", tone: "primary" as const } : { kind: "relink" as const, label: "Relink deposit (free)", tone: "primary" as const };
     return {
       stage: "funding",
-      step: needs.kind === "connect" ? "connect" : needs.kind === "confirm" ? "confirm" : "link",
+      step: needs.kind === "connect" ? "connect" : "link",
       headline: "Your deposit isn't linked to your seat anymore.",
-      detail: `A sign-out or a new recovery key ended the link to ${shortWallet(deposit)}. Relink it — free, Keplr signs a message — or ${isHost ? "cancel the table on Juno" : "withdraw it"}.${rolledBack}`,
+      detail: `A sign-out or a change to how this account signs in ended the link to ${shortWallet(deposit)}. Relink it — free, Keplr signs a message — or ${isHost ? "cancel the table on Juno" : "withdraw it"}.${rolledBack}`,
       primary: has(view, "relink") ? needs : null,
       others,
       blocker: walletBlocker(wallet, deposit),
@@ -308,7 +332,7 @@ export function seatFlow(input: FlowInput): SeatFlow {
   if (funding === "linked" && link !== null) {
     const bound = view.escrow.chainGameId !== null;
     const canDeposit = isHost ? has(view, "open-escrow") : has(view, "deposit");
-    if (has(view, "link-wallet")) others.push({ kind: "replace-link", label: "Change wallet", tone: "secondary", title: "Link another wallet to this seat (Confirm it's you, then Keplr signs)." });
+    if (has(view, "link-wallet")) others.push({ kind: "replace-link", label: "Change wallet", tone: "secondary", title: "Link another wallet to this seat (Keplr signs; a new wallet may ask you to confirm it's you)." });
     offer("cancel-escrow", CANCEL_FLOW);
     offer("refund-after-deadline", REFUND_FLOW);
     const blocker = walletBlocker(wallet, link.wallet);
@@ -322,32 +346,33 @@ export function seatFlow(input: FlowInput): SeatFlow {
        decides; `refused` is the server's own answer, so it does not. The host's CreateGame needs no approval. */
     /* `aged` yields to a deposit the player chose to try (the review, then Keplr); `refused` holds until re-proven. */
     if (canDeposit && !isHost && (input.proof === "refused" ? ui !== "approving" : input.proof === "aged" && ui === "idle")) {
-      const needs: FlowAction =
-        wallet.kind !== "connected" ? { kind: "connect", label: "Connect wallet", tone: "primary" } : !confirmed ? { kind: "confirm", label: "Confirm it's you", tone: "primary" } : { kind: "reprove", label: "Re-prove wallet (free)", tone: "primary", title: "Keplr signs a message proving you still control this wallet. It moves no funds." };
+      /* P3-ACCT: the Ante button re-proves first when the server's word says it must ("refused"), and lets the server
+         decide when it is only this page's inference ("aged": a re-proof made elsewhere keeps the link's own time) --
+         asking for the free signature only if the server then refuses for want of it. Re-prove alone stays beside it. */
       const why =
         input.proof === "refused"
-          ? "The server needs a fresh proof that you control this wallet before it approves a deposit."
-          : "This wallet was linked more than a day ago. A deposit needs a proof from the last 24 hours that you control it, so unless you've re-proven it since, prove it again first.";
-      const depositAnyway: FlowAction[] = input.proof === "aged" ? [{ kind: "open-review", label: `Deposit ${ante}`, tone: "secondary", title: "If this wallet was re-proven in the last 24 hours, the deposit goes ahead; if not, the server says so." }] : [];
+          ? "The server needs a fresh proof that you control this wallet before it approves a deposit: Ante asks Keplr to sign one first (free, nothing moves)."
+          : "This wallet was linked more than a day ago. A deposit needs a proof from the last 24 hours that you control it: if the server asks, Ante has Keplr sign one first (free, nothing moves).";
+      const reprove: FlowAction = { kind: "reprove", label: "Re-prove wallet (free)", tone: "secondary", title: "Keplr signs a message proving you still control this wallet. It moves no funds." };
       return {
         stage: "funding",
-        step: needs.kind === "connect" ? "connect" : needs.kind === "confirm" ? "confirm" : "link",
+        step: "link",
         headline: `Re-prove ${shortWallet(link.wallet)} to deposit`,
-        detail: `${why} Re-proving is free: Keplr signs a message and nothing moves.${closes === null ? "" : ` ${closes}`}${rolledBack}`,
-        primary: needs,
-        others: [...depositAnyway, ...others],
-        blocker,
+        detail: `${why}${closes === null ? "" : ` ${closes}`}${rolledBack}`,
+        primary: { kind: "ante", label: `Ante ${ante}`, tone: "primary", title: "Proves this wallet again if needed, then deposits. Keplr asks you to approve each signature." },
+        others: [reprove, ...others],
+        blocker: wallet.kind === "connected" ? blocker : walletBlocker(wallet, null),
       };
     }
     if (!canDeposit) {
       return {
         stage: "funding",
         step: "review",
-        headline: `Wallet linked · ${shortWallet(link.wallet)}`,
+        headline: `Wallet verified · ${shortWallet(link.wallet)}`,
         detail: !bound
           ? isHost
             ? startBlockerSentence(view, view.start.blocker, now)
-            : "Waiting for the host to open the table on Juno. Your deposit button appears then."
+            : "Waiting for the host to open the table on Juno. Your Ante button appears then."
           : view.escrow.state !== "FUNDING" && view.escrow.state !== "FUNDED"
             ? /* Juno can't be read just now (or the escrow moved on): say that, never guess what it holds. */
               (startBlockerSentence(view, view.start.blocker, now) ?? startBlockerSentence(view, "chain-unavailable", now))
@@ -359,7 +384,6 @@ export function seatFlow(input: FlowInput): SeatFlow {
         blocker: others.some((action) => action.kind === "cancel-escrow" || action.kind === "refund-after-deadline") ? walletBlocker(wallet, null) : null,
       };
     }
-    const label = isHost ? `Open the table on Juno — deposit ${ante}` : `Deposit ${ante}`;
     if (ui === "approving") {
       return { stage: "funding", step: "approve", headline: "Approve in Keplr…", detail: "Keplr shows the transaction. Nothing is sent until you approve it there.", primary: null, others: [], blocker: null };
     }
@@ -369,36 +393,32 @@ export function seatFlow(input: FlowInput): SeatFlow {
     return {
       stage: "funding",
       step: "review",
-      headline: `Wallet linked · ${shortWallet(link.wallet)}`,
-      detail: `${isHost ? "Open the table on Juno with your deposit; the others deposit once it's open." : "Deposit to take your seat's place in the escrow."}${closes === null ? "" : ` ${closes}`}${rolledBack}`,
-      primary: { kind: "open-review", label, tone: "primary" },
+      headline: `Wallet verified · ${shortWallet(link.wallet)}`,
+      detail: `${isHost ? "Ante to open the table on Juno; the others ante once it's open." : "Ante to take your seat's place in the escrow."} Keplr shows the transaction before anything moves.${closes === null ? "" : ` ${closes}`}${rolledBack}`,
+      primary: { kind: "ante", label: `Ante ${ante}`, tone: "primary", title: isHost ? "Opens the table on Juno with your deposit." : "Deposits your ante to this table's escrow." },
       others,
-      blocker,
+      /* Keplr not connected yet is no blocker: the Ante button connects it. */
+      blocker: wallet.kind === "connected" ? blocker : walletBlocker(wallet, null),
     };
   }
-  /* No standing link: Connect -> Confirm -> Link. */
+  /* No standing link. P3-ACCT: one button -- Ante connects Keplr if needed, verifies the wallet (a free signature)
+     and deposits; "Confirm it's you" only if the server asks (a new wallet, more than five minutes after signing in). */
+  void confirmed;
   const blocker = walletBlocker(wallet, null);
-  const noteFirst = isHost ? "You open this table on Juno with your own deposit." : view.escrow.chainGameId === null ? "The host opens the table on Juno first; you can link your wallet now." : "Link your wallet, then deposit.";
-  if (wallet.kind === "connected") {
-    if (!confirmed) {
-      return { stage: "funding", step: "confirm", headline: `Keplr: ${shortWallet(wallet.address)}`, detail: `Confirm it's you (your recovery key), then link this wallet to your seat. ${noteFirst}`, primary: { kind: "confirm", label: "Confirm it's you", tone: "primary" }, others: [], blocker: null };
-    }
-    return {
-      stage: "funding",
-      step: "link",
-      headline: `Keplr: ${shortWallet(wallet.address)}`,
-      detail: `Keplr will ask you to sign a message. It's free and moves no funds. ${noteFirst}`,
-      primary: has(view, "link-wallet") ? { kind: "link", label: "Link wallet", tone: "primary" } : null,
-      others: [],
-      blocker: null,
-    };
-  }
+  const hostOpensFirst = !isHost && view.escrow.chainGameId === null;
+  const noteFirst = isHost ? "You open this table on Juno with your own deposit." : hostOpensFirst ? "The host opens the table on Juno first; you can verify your wallet now and ante once it's open." : "";
+  const anteButton: FlowAction | null =
+    wallet.kind === "unavailable" || wallet.kind === "no-pin" || !has(view, "link-wallet")
+      ? null
+      : hostOpensFirst
+        ? { kind: "verify", label: "Verify wallet (free)", tone: "primary", title: "Connects Keplr and signs a free message proving you control the wallet. Nothing moves." }
+        : { kind: "ante", label: `Ante ${ante}`, tone: "primary", title: "Connects Keplr, verifies your wallet (a free signature), then deposits. Keplr asks you to approve each step." };
   return {
     stage: "funding",
-    step: "connect",
-    headline: `A real-money table: ${ante} per seat.`,
-    detail: `Connect Keplr to fund your seat. ${noteFirst}`,
-    primary: wallet.kind === "unavailable" || wallet.kind === "no-pin" ? null : { kind: "connect", label: wallet.kind === "connecting" ? "Connecting…" : "Connect wallet", tone: "primary", title: "Keplr asks to share your Juno address with this site." },
+    step: wallet.kind === "connected" ? "link" : "connect",
+    headline: wallet.kind === "connected" ? `Keplr: ${shortWallet(wallet.address)}` : `A real-money table: ${ante} per seat.`,
+    detail: `${hostOpensFirst ? "" : "Ante connects Keplr, verifies your wallet with a free signature, then deposits — Keplr shows each before you approve it. "}${noteFirst}`.trim() || null,
+    primary: anteButton,
     others: [],
     blocker,
   };

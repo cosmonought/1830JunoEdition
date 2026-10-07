@@ -28,7 +28,7 @@ import { payoutPreview } from "../gameEngine/settlementPreview";
 import type { GameStateResponse } from "../gameEngine/gameState";
 import { sha256Hex } from "../gameEngine/sha256";
 import type { MoneyDepositEntry, RoomMoneyView } from "../utils/moneyProtocol";
-import { reauthenticate } from "../utils/profileApi";
+import { reauthenticateWithPassword } from "../utils/profileApi";
 import { sessionPort, type SessionPort } from "../utils/sessionBootstrap";
 import type { PinnedEscrowDeployment } from "./escrowDeployment";
 import { txBytesToBase64 } from "./keplrWallet";
@@ -43,7 +43,7 @@ import {
   walletLink,
   type MoneyFailure,
 } from "./moneyApi";
-import { linkRequestEndedSentence, reconfirmSentence, type DisputeRead } from "./moneyFlow";
+import { ANTE_STATUS, linkRequestEndedSentence, reconfirmSentence, type DisputeRead } from "./moneyFlow";
 import { bumpLocal, moneyServices, moneySession, recordProofRenewed, updateMoneySession, type MoneyServices } from "./moneySession";
 import type { PendingWalletTx } from "./pendingTx";
 import { checkTerminalSettlement, type SealedReplay } from "./settlementCheck";
@@ -138,10 +138,10 @@ export async function connectWallet(services: MoneyServices = moneyServices()): 
   return done();
 }
 
-/** "Confirm it's you": the recovery key goes to the server once (`/gs/api/profile/reauth`) and is dropped here. */
-export async function confirmItsYou(recoveryKey: string, port: SessionPort = sessionPort(), now: () => number = () => Date.now()): Promise<ActionOutcome> {
-  const result = await reauthenticate(recoveryKey, port);
-  if (!result.ok) return refuse(result.error === "invalid-credential" ? "That recovery key doesn't work for this profile. Check it and try again." : "The game server couldn't confirm it just now. Try again.");
+/** "Confirm it's you": the account's password goes to the server once (`/gs/api/profile/reauth`) and is dropped here. */
+export async function confirmItsYou(password: string, port: SessionPort = sessionPort(), now: () => number = () => Date.now()): Promise<ActionOutcome> {
+  const result = await reauthenticateWithPassword(password, port);
+  if (!result.ok) return refuse(result.error === "invalid-credential" ? "That password doesn't match this account. Check it and try again." : "The game server couldn't confirm it just now. Try again.");
   /* Believe the grant for no longer than the server's window from THIS clock (the server has the last word). */
   updateMoneySession({ confirmedUntil: Math.min(result.expiresAt, now() + 5 * 60 * 1000) });
   return done();
@@ -195,6 +195,9 @@ export interface LinkOptions {
    *  no longer that wallet -- by the server's challenge answer, or by the view from a server that doesn't say -- nothing
    *  is signed and the player is asked again. */
   readonly expectReplaces?: string;
+  /** P3-ACCT: told the server's link answer (its wallet and ticket) when a link is accepted -- the Ante waits for the
+   *  view to show THAT link before it builds a deposit on it. */
+  readonly onLinked?: (linked: { readonly wallet: string; readonly ticket: string; readonly epoch: number; readonly consentKey: string }) => void;
 }
 
 /** Link the Keplr account to this seat: challenge -> this browser reads it -> Keplr signs it (ADR-036) -> link. */
@@ -256,6 +259,7 @@ export async function linkWallet(ctx: TableContext, options: LinkOptions = {}): 
   }
   /* Every accepted link (issued, relinked, or the same wallet again) carries a proof the server verified just now. */
   recordProofRenewed(ctx.gameId, you.playerId, linked.value.wallet, sentAt);
+  options.onLinked?.({ wallet: linked.value.wallet, ticket: linked.value.ticket, epoch: linked.value.epoch, consentKey });
   if (linked.value.mode === "unchanged") return done(options.reprove === true ? "Wallet proof renewed: you can deposit now. Nothing was charged." : "That wallet is already linked to your seat.");
   return done(linked.value.mode === "relinked" ? "Your deposit is linked to your seat again. Nothing was charged." : `Wallet linked: ${linked.value.wallet}.`);
 }
@@ -292,7 +296,7 @@ export interface SendTarget {
 export async function signKeepSend(services: MoneyServices, pin: PinnedEscrowDeployment, target: SendTarget, message: WalletMessage, port?: SessionPort): Promise<ActionOutcome> {
   const account = await currentAccount(services, pin);
   if (!account.ok) return account.outcome;
-  if (account.address !== target.wallet) return refuse(`Keplr is on ${account.address}, but this needs ${target.wallet}. Switch accounts in Keplr, then try again.`);
+  if (account.address !== target.wallet) return refuse(`Switch Keplr to ${target.wallet} to sign this action. (Keplr is on ${account.address}.)`);
   const deployment = await services.wallet.verifyDeployment(pin);
   if (!deployment.ok) return refuse(deployment.reason);
   /* Single flight: a transaction of this wallet on this table that may still land blocks another of the same kind
@@ -431,7 +435,7 @@ export async function approveDeposit(ctx: TableContext): Promise<ActionOutcome> 
   }
   const account = await currentAccount(services, pin);
   if (!account.ok) return account.outcome;
-  if (account.address !== you.link.wallet) return refuse(`Keplr is on ${account.address}, but this seat is linked to ${you.link.wallet}. Switch accounts in Keplr to continue.`, "connect");
+  if (account.address !== you.link.wallet) return refuse(`Switch Keplr to ${you.link.wallet} to sign this action. (Keplr is on ${account.address}; this seat is linked to ${you.link.wallet}.)`, "connect");
   const deployment = await services.wallet.verifyDeployment(pin);
   if (!deployment.ok) return refuse(deployment.reason);
   const key = await registeredLocalKey(ctx, services, pin, you.link.wallet);
@@ -461,6 +465,161 @@ export async function approveDeposit(ctx: TableContext): Promise<ActionOutcome> 
   const message = joinMessage(pin, view, asked.value, key.pubkey);
   if (!message.ok) return refuse(message.reason);
   return signKeepSend(services, pin, target, message.value, ctx.port);
+}
+
+/* ==================================================================
+    PHASE 3 (P3-ACCT): "ANTE X JUNO" -- ONE BUTTON, ONLY THE STEPS STILL NEEDED, IN ORDER
+   ==================================================================
+   The owner's one-button ante. Each step below is the SAME function the separate buttons ran (so every check, the
+   challenge's single use, the W2-M replacement question and the ticket rules are exactly theirs); this only decides,
+   from the newest view, which of them the seat still needs, and says where it is:
+
+     Connecting wallet…   Keplr connected on this page? If not, `connectWallet` (Keplr asks once per site).
+     Verifying wallet…    no link for this seat -> `linkWallet` (Keplr signs the server's single-use challenge: free);
+                          the server's own word that the proof is too old -> the free re-proof of the SAME wallet.
+                          A link to ANOTHER wallet is never replaced here: the W2-M question is asked first.
+     Waiting for deposit… `approveDeposit` (Keplr shows the transaction). If the server refuses its approval for want of
+                          a fresh proof, the free re-proof of the SAME wallet runs once and the deposit is asked again
+                          (the server's approval re-reads the proof itself; nothing waits on a view for it).
+     Ante confirmed.      the server's view shows the deposit funded (Juno read by the server; never assumed here).
+
+   KEPLR PROMPTS. Every table: connect (once per site), one link signature (the server's challenge names this table and
+   seat and is single-use -- it cannot be skipped without changing the protocol) and one transaction. "Confirm it's you"
+   (the password) is asked only for a wallet that is not the account's Authorization Wallet, and only more than five
+   minutes after signing in. The Authorization Wallet is never required here: each table uses whatever wallet the player
+   antes with, and THAT wallet is the table's payout wallet from the deposit on. Signatures are never combined: a message
+   signature and a transaction are different things to Keplr and to Juno.
+
+   STOPPING IS SAFE AT EVERY STEP. A refusal returns at once with its sentence and the step that cures it (`needs`):
+   "Confirm it's you" (the server asked: a new wallet, more than five minutes after signing in -- once confirmed, the
+   Ante carries on by itself), the W2-M replacement question (answered, it links; the player then presses Ante again,
+   a decision the button never makes for them), Keplr not connected. Nothing is retried behind the player's back, and
+   pressing Ante again re-reads everything and skips what is already done. */
+
+export interface AnteHooks {
+  /** Say where the ante is (the button's words while it runs). */
+  readonly status: (text: string) => void;
+  /** The newest server view (pushes arrive while this runs). */
+  readonly latest: () => RoomMoneyView | null;
+  /** Wait (bounded) for the server's view to satisfy `predicate`; the view, or null when it didn't in time. */
+  readonly waitFor: (predicate: (view: RoomMoneyView) => boolean, ms: number) => Promise<RoomMoneyView | null>;
+  /** W2-M (AUD-20.02): this seat's proof as the panel judges it (`refused` is the server's word). */
+  readonly proof: "aged" | "refused" | null;
+  /** Money review M2: the player pressed "Verify wallet (free)": verify, and STOP -- never a deposit, whatever the
+   *  table did meanwhile (the host may open the escrow while Keplr is signing). */
+  readonly verifyOnly?: boolean;
+  /** Money review L1: a free re-proof was accepted (the panel's "the server refused the proof" state ends). */
+  readonly onReproved?: () => void;
+}
+
+/** How long Ante waits for the server's view to show a link it just accepted. */
+export const ANTE_VIEW_WAIT_MS = 15_000;
+
+const canDepositIn = (view: RoomMoneyView, isHost: boolean, wallet: string): boolean => view.you?.link?.wallet === wallet && view.you.actions.includes(isHost ? "open-escrow" : "deposit");
+
+/** What a link the server just accepted is known by: its ticket and the signing key it registered (null: not said). */
+interface AcceptedLink {
+  ticket: string | null;
+  consentKey: string | null;
+}
+
+/** The same-wallet re-proof the Ante runs -- free, Keplr signs a message -- returning what the server accepted. */
+async function reproveFor(ctx: TableContext, view: RoomMoneyView, wallet: string, hooks: AnteHooks): Promise<{ ok: true; accepted: AcceptedLink } | { ok: false; outcome: ActionOutcome }> {
+  const accepted: AcceptedLink = { ticket: null, consentKey: null };
+  const again = await linkWallet({ ...ctx, view }, { expectWallet: wallet, reprove: true, onLinked: (linked) => Object.assign(accepted, { ticket: linked.ticket, consentKey: linked.consentKey }) });
+  if (!again.ok) return { ok: false, outcome: again };
+  hooks.onReproved?.();
+  return { ok: true, accepted };
+}
+
+/** Wait for the server's view to show the link just accepted: its ticket and the key it registered for this browser
+ *  (so the deposit that follows signs with a key the seat already has -- never a separate, sensitive key registration). */
+function showsLink(wallet: string, accepted: AcceptedLink): (view: RoomMoneyView) => boolean {
+  return (view) =>
+    view.you?.link?.wallet === wallet &&
+    (accepted.ticket === null || view.you.link.ticket === accepted.ticket) &&
+    (accepted.consentKey === null || view.you.link.consentKeys.includes(accepted.consentKey));
+}
+
+export async function anteNow(ctx: TableContext, hooks: AnteHooks): Promise<ActionOutcome> {
+  const services = ctx.services ?? moneyServices();
+  const pinned = pinOf(services);
+  if (!pinned.ok) return pinned.outcome;
+  let view = hooks.latest() ?? ctx.view;
+  if (view.you === null) return refuse("You don't have a seat at this table.");
+  const table = tableSigningProblem(pinned.pin, view);
+  if (table !== null) return refuse(table);
+
+  /* 1. Keplr on this page. */
+  const session = moneySession();
+  if (session.wallet !== "connected" || session.address === null) {
+    hooks.status(ANTE_STATUS.connecting);
+    const connected = await connectWallet(services);
+    if (!connected.ok) return connected;
+  }
+  const account = await currentAccount(services, pinned.pin);
+  if (!account.ok) return account.outcome;
+  const wallet = account.address;
+
+  /* 2. The wallet, verified for this seat. */
+  view = hooks.latest() ?? view;
+  const you = view.you;
+  if (you === null) return refuse("You don't have a seat at this table.");
+  const link = you.link ?? null;
+  let verified = false;
+  let accepted: AcceptedLink = { ticket: null, consentKey: null };
+  if (link !== null && link.wallet !== wallet) {
+    /* Never a silent replacement: the seat's wallet changes only through the W2-M question ("Change wallet"). */
+    return refuse(`Switch Keplr to ${link.wallet} to sign this action — it is this seat's linked wallet (Keplr is on ${wallet}). To ante from another wallet, use Change wallet first.`, "connect");
+  }
+  /* Money review L2: a seat linked from ANOTHER device has no signing key on this one; registering one outside a link
+     is a sensitive step (the password). A same-wallet re-proof registers this browser's key with the link instead --
+     the wallet's own signature, free -- so the Ante never asks for a password just because the device changed. */
+  const registered = new Set(link?.consentKeys ?? []);
+  const holdsKey = link === null || (await services.keys.forSeat(ctx.gameId, you.playerId)).some((record) => registered.has(record.pubkey));
+  if (link === null) {
+    hooks.status(ANTE_STATUS.verifying);
+    const linked = await linkWallet({ ...ctx, view }, { expectWallet: wallet, onLinked: (answer) => (accepted = { ticket: answer.ticket, consentKey: answer.consentKey }) });
+    if (!linked.ok) return linked;
+    verified = true;
+  } else if ((hooks.proof === "refused" && !ctx.isHost) || !holdsKey) {
+    hooks.status(ANTE_STATUS.verifying);
+    const again = await reproveFor(ctx, view, wallet, hooks);
+    if (!again.ok) return again.outcome;
+    accepted = again.accepted;
+    verified = true;
+  }
+  if (verified) {
+    /* The server's next view shows the link just accepted -- its ticket -- (and, once the escrow is open, the deposit
+       it allows). Money review L5: never a deposit built on a link the view hasn't caught up with. */
+    const shown = await hooks.waitFor(showsLink(wallet, accepted), ANTE_VIEW_WAIT_MS);
+    if (shown === null) return done("Wallet verified. The table hasn't caught up yet — press Ante again in a moment.");
+    view = shown;
+  }
+  if (hooks.verifyOnly === true) return done(verified ? "Wallet verified. Nothing was charged." : "This wallet is already verified for your seat. Nothing was charged.");
+  view = hooks.latest() ?? view;
+  if (!canDepositIn(view, ctx.isHost, wallet)) {
+    if (!ctx.isHost && view.escrow.chainGameId === null) return done("Wallet verified. Ante once the host opens the table on Juno — the button says so.");
+    return done("Wallet verified. This table isn't taking deposits right now; the panel says why.");
+  }
+
+  /* 3. The deposit (Keplr shows the transaction). */
+  hooks.status(ANTE_STATUS.depositing);
+  let deposited = await approveDeposit({ ...ctx, view });
+  if (!deposited.ok && deposited.needs === "reprove" && !verified && !ctx.isHost) {
+    /* The server's word: the proof is too old. The free re-proof of the SAME wallet, once, then the deposit again --
+       on the view that shows the re-proven link (its ticket may be new). */
+    hooks.status(ANTE_STATUS.verifying);
+    const again = await reproveFor(ctx, view, wallet, hooks);
+    /* A re-proof that couldn't run leaves the server's word standing: the seat still needs one ("reprove"). */
+    if (!again.ok) return again.outcome.ok || again.outcome.needs !== undefined ? again.outcome : { ...again.outcome, needs: "reprove" };
+    const shown = await hooks.waitFor(showsLink(wallet, again.accepted), ANTE_VIEW_WAIT_MS);
+    if (shown === null) return done("Wallet proof renewed. The table hasn't caught up yet — press Ante again in a moment.");
+    view = shown;
+    hooks.status(ANTE_STATUS.depositing);
+    deposited = await approveDeposit({ ...ctx, view });
+  }
+  return deposited;
 }
 
 /* ==================================================================
@@ -524,7 +683,7 @@ export async function moveSigningKeyHere(ctx: TableContext): Promise<ActionOutco
   /* Keplr on the seat's wallet first: a device that can't send the SetConsentKey makes and registers no key (M3). */
   const account = await currentAccount(services, pin);
   if (!account.ok) return account.outcome;
-  if (account.address !== wallet) return refuse(`Keplr is on ${account.address}, but your seat's wallet is ${wallet}. Switch accounts in Keplr, then try again.`, "connect");
+  if (account.address !== wallet) return refuse(`Switch Keplr to ${wallet} to sign this action. (Keplr is on ${account.address}; that is your seat's wallet.)`, "connect");
   const made = await services.keys.create({ chainId: pin.chainId, contract: pin.contract, gameId: ctx.gameId, playerId: you.playerId, wallet });
   bumpLocal();
   if (!made.ok) return refuse(made.reason);

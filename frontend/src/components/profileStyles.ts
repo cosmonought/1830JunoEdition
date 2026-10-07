@@ -1,6 +1,6 @@
 // frontend/src/components/profileStyles.ts
 //
-// LIVE-2E: one look for the profile screens (the gate, the recovery-key reveal, the profile menu) -- the lobby's
+// LIVE-2E: one look for the account screens (the account dialog, the profile menu) -- the lobby's
 // dark sandbox palette, its type scale and its radii. A typed sheet (`sheet` below) rather than a
 // `Record<string, CSSProperties>`, so a misspelled key is a type error instead of a style that spreads to nothing.
 

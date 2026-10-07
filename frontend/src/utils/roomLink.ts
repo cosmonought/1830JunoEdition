@@ -239,9 +239,13 @@ function scheduleReconnect(channel: Channel): void {
 }
 
 /** Opens (or reopens) the channel's socket -- once the session is bootstrapped (LIVE-2 §4.3). */
+/** P3-ACCT (public first): a signed-out visitor's session opens sockets too -- the server answers it the public,
+ *  read-only surface only (the list, a public table's view and log) and `profile-required` to everything else. */
+const canOpen = (state: string): boolean => state === "ready" || state === "unprofiled";
+
 function attach(channel: Channel): void {
   const session = sessionPort();
-  if (session.state === "ready" && !(channel.rebootstrap && session.refreshable)) {
+  if (canOpen(session.state) && !(channel.rebootstrap && session.refreshable)) {
     channel.rebootstrap = false;
     attachNow(channel);
     return;
@@ -251,12 +255,63 @@ function attach(channel: Channel): void {
   channel.socket = NO_SOCKET_YET;
   void session.ensure(force).then((state) => {
     if (channel.retired || channels.get(channel.key) !== channel) return;
-    if (state === "ready") attachNow(channel);
-    /* LIVE-2E: "unprofiled" waits like "unknown" -- the upgrade refuses a browser with no profile, so no socket opens
-       until `ProfileGate` has one (a profile action forces the next bootstrap). */
-    else if (state === "unknown" || state === "unprofiled") scheduleReconnect(channel);
+    /* Review L1: a socket opened meanwhile (a renewal's own attach answered first) is the channel's; never a second. */
+    if (channel.socket !== NO_SOCKET_YET) return;
+    if (canOpen(state)) attachNow(channel);
+    else if (state === "unknown") scheduleReconnect(channel);
     /* "ended": terminal for this page -- `SessionEndedNotice` asks the player; nothing reconnects. */
   });
+}
+
+let renewals = 0;
+const renewalListeners = new Set<() => void>();
+
+/** How many times this page's links were renewed (an answer to an op sent before a renewal belongs to the old session). */
+export function roomLinkRenewals(): number {
+  return renewals;
+}
+
+/** Told after every renewal (the lobby re-asks what it read on the old session: review M2). */
+export function onRoomLinksRenewed(listener: () => void): () => void {
+  renewalListeners.add(listener);
+  return () => {
+    renewalListeners.delete(listener);
+  };
+}
+
+/** P3-ACCT: this browser just signed in (or out): its session was REPLACED, and every socket on the old one is about to
+ *  be closed 4401 by the server. Re-open every channel now on the session the port holds, re-stating its standing
+ *  subscriptions, so the action the player was resuming goes out on the new session rather than the dying socket. An
+ *  op SENT on the old socket and still unanswered is told the connection was renewed (it may or may not have landed:
+ *  the view pushed after the re-open says which). Review M2: an op that never left this page (still in the backlog,
+ *  waiting for a socket) is not ambiguous at all -- it stays queued and goes out on the new socket. */
+export function renewRoomLinks(): void {
+  renewals += 1;
+  for (const channel of Array.from(channels.values())) {
+    if (channel.retired) continue;
+    const old = channel.socket;
+    channel.open = false;
+    const unsent = new Set(channel.backlog.map((queued) => queued.requestId).filter((id): id is string => id !== undefined));
+    channel.pending.forEach((settle, requestId) => {
+      if (unsent.has(requestId)) return;
+      settle({ ok: false, code: "unavailable", reason: "The connection to the game server was renewed for your account. Check the table and try again." });
+      channel.pending.delete(requestId);
+    });
+    if (channel.reconnect !== null) {
+      clearTimeout(channel.reconnect);
+      channel.reconnect = null;
+    }
+    channel.rebootstrap = false;
+    channel.failedOpens = 0;
+    channel.socket = NO_SOCKET_YET;
+    attach(channel);
+    try {
+      old.close();
+    } catch {
+      /* already closed */
+    }
+  }
+  renewalListeners.forEach((listener) => listener());
 }
 
 /** A loss is said once, to every view listener, and the channel stops for good. */

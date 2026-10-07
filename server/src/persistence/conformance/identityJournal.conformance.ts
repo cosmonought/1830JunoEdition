@@ -6,10 +6,10 @@
 
 import assert from "node:assert/strict";
 
-import type { IdentityChange, IdentityPrecondition, IdentityStore } from "../../identity/store";
+import type { IdentityChange, IdentityPrecondition, IdentityStore, Profile } from "../../identity/store";
 import type { InspectableSigningJournal } from "../../escrow/signingJournal";
 import type { Gate } from "./faults";
-import { anotherSession, identitySet, type IdentitySet } from "./fixtures";
+import { accountProfile, anotherSession, authorizationProfile, FIXTURE_PASSWORD_HASH, FIXTURE_PASSWORD_HASH_2, FIXTURE_WALLET, FIXTURE_WALLET_2, identitySet, type IdentitySet } from "./fixtures";
 import { T0, hook, rejection, stalledAt, type CaseContext, type ConformanceCase, type SubjectBase } from "./harness";
 
 /* ================================================================== */
@@ -398,6 +398,102 @@ export const IDENTITY_CASES: readonly ConformanceCase<IdentitySubject>[] = [
         ["a record list holding a non-record", { sessions: [null as unknown as typeof extra] }],
       ];
       for (const [label, change] of cases) await refused(subject, ctx, store, change, label);
+    },
+  },
+  {
+    id: "ID-21",
+    title: "P3-ACCT: a schema-2 profile (username + password hash + wallet) loads back exactly; a username is unique, never changes or goes; login-unused, profile-no-login and profile-wallet each refuse DEFINITE when they do not hold",
+    /* As ID-08: a relation (here, a username's uniqueness and history) refused DEFINITE -- every production store. */
+    needs: ["validates-shape"],
+    async run(subject, ctx) {
+      const store = await subject.open(ctx);
+      await store.load();
+      /* A new ACCOUNT: the profile is created at schema 2 with its username (and claims it). */
+      const a = identitySet(21);
+      const accountA = accountProfile(a, { login: "Brad.Player" });
+      await store.commit({ ...profileCreation(a), expect: [...(profileCreation(a).expect ?? []), { kind: "login-unused", login_key: "brad.player" }], profiles: [accountA] });
+      assert.deepEqual((await store.load()).profiles, [accountA], "the schema-2 record loads back field for field");
+      /* A LEGACY profile (schema 1) of another principal. */
+      const b = identitySet(22);
+      await store.commit(profileCreation(b));
+      /* The same username, any spelling, cannot be taken by another profile: by its precondition, or by the relation. */
+      const taken = accountProfile(b, { login: "BRAD.PLAYER" });
+      await refused(subject, ctx, store, { expect: [{ kind: "login-unused", login_key: "brad.player" }], profiles: [taken] }, "login-unused (another profile holds it)");
+      await refused(subject, ctx, store, { profiles: [taken] }, "a second profile claiming a held username");
+      /* The legacy profile establishes ITS username, once (profile-no-login), and it then never changes or goes. */
+      const establishedB = accountProfile(b, { login: "Second" });
+      await store.commit({ expect: [{ kind: "profile-no-login", profile_id: b.profile.profile_id }, { kind: "login-unused", login_key: "second" }], profiles: [establishedB] });
+      await refused(subject, ctx, store, { expect: [{ kind: "profile-no-login", profile_id: b.profile.profile_id }], profiles: [accountProfile(b, { login: "Third" })] }, "profile-no-login (it has one now)");
+      await refused(subject, ctx, store, { profiles: [accountProfile(b, { login: "Third" })] }, "a username changed");
+      await refused(subject, ctx, store, { profiles: [accountProfile(b, { login: null })] }, "a username dropped");
+      await refused(subject, ctx, store, { profiles: [b.profile] }, "a schema-2 profile returned to schema 1");
+      await refused(subject, ctx, store, { expect: [{ kind: "profile-no-login", profile_id: identitySet(23).profile.profile_id }], profiles: [establishedB] }, "profile-no-login (no such profile)");
+      /* The persisted wallet: a compare-and-swap from none, then from the one it holds. */
+      const withWallet = accountProfile(b, { login: "Second", wallet: FIXTURE_WALLET, at: T0 + 5 });
+      await store.commit({ expect: [{ kind: "profile-wallet", profile_id: b.profile.profile_id, wallet_address: null }], profiles: [withWallet] });
+      await refused(subject, ctx, store, { expect: [{ kind: "profile-wallet", profile_id: b.profile.profile_id, wallet_address: null }], profiles: [accountProfile(b, { login: "Second", wallet: FIXTURE_WALLET_2 })] }, "profile-wallet (it holds a wallet now)");
+      await refused(subject, ctx, store, { expect: [{ kind: "profile-wallet", profile_id: a.profile.profile_id, wallet_address: FIXTURE_WALLET }], profiles: [accountProfile(a, { login: "Brad.Player", wallet: FIXTURE_WALLET_2 })] }, "profile-wallet (another wallet than it holds)");
+      const replaced = accountProfile(b, { login: "Second", wallet: FIXTURE_WALLET_2, at: T0 + 6 });
+      await store.commit({ expect: [{ kind: "profile-wallet", profile_id: b.profile.profile_id, wallet_address: FIXTURE_WALLET }], profiles: [replaced] });
+      const reopened = await (await subject.open(ctx)).load();
+      assert.deepEqual(reopened.profiles.find((profile) => profile.profile_id === b.profile.profile_id), replaced, "a restart loads the replaced wallet and the username");
+      assert.deepEqual(reopened.profiles.find((profile) => profile.profile_id === a.profile.profile_id), accountA);
+    },
+  },
+  {
+    id: "ID-23",
+    title: "PHASE 3 FINAL: a schema-3 (Authorization Wallet) account loads back exactly; it never moves to or from the legacy schemas and never exists without its wallet; profile-authorization-wallet pins the designation (address AND since), so A -> B -> A cannot fool a stale replacement",
+    needs: ["validates-shape"],
+    async run(subject, ctx) {
+      const store = await subject.open(ctx);
+      await store.load();
+      const a = identitySet(41);
+      const accountA = authorizationProfile(a, { login: "Ana.Wallet", wallet: FIXTURE_WALLET, since: T0 });
+      await store.commit({ ...profileCreation(a), expect: [...(profileCreation(a).expect ?? []), { kind: "login-unused", login_key: "ana.wallet" }], profiles: [accountA] });
+      assert.deepEqual((await store.load()).profiles, [accountA], "the schema-3 record loads back field for field");
+      /* Never back to a legacy schema; never a legacy profile made into one; never one without its wallet. */
+      await refused(subject, ctx, store, { profiles: [accountProfile(a, { login: "Ana.Wallet", wallet: FIXTURE_WALLET })] }, "a schema-3 profile returned to schema 2");
+      const b = identitySet(42);
+      await store.commit(profileCreation(b));
+      await refused(subject, ctx, store, { profiles: [authorizationProfile(b, { login: "Legacy.Upgrade", wallet: FIXTURE_WALLET_2, since: T0 })] }, "a legacy profile given an Authorization Wallet");
+      await refused(subject, ctx, store, { profiles: [{ ...accountA, wallet_address: null, wallet_verified_at: null }] }, "a schema-3 profile without its wallet");
+      /* The designation's compare-and-swap. */
+      const toB = authorizationProfile(a, { login: "Ana.Wallet", wallet: FIXTURE_WALLET_2, since: T0 + 1 });
+      await refused(subject, ctx, store, { expect: [{ kind: "profile-authorization-wallet", profile_id: a.profile.profile_id, wallet_address: FIXTURE_WALLET, wallet_since: T0 + 7 }], profiles: [toB] }, "profile-authorization-wallet (the right wallet, another designation time)");
+      await refused(subject, ctx, store, { expect: [{ kind: "profile-authorization-wallet", profile_id: b.profile.profile_id, wallet_address: FIXTURE_WALLET, wallet_since: T0 }], profiles: [toB] }, "profile-authorization-wallet (a legacy profile holds no Authorization Wallet)");
+      await store.commit({ expect: [{ kind: "profile-authorization-wallet", profile_id: a.profile.profile_id, wallet_address: FIXTURE_WALLET, wallet_since: T0 }], profiles: [toB] });
+      const backToA = authorizationProfile(a, { login: "Ana.Wallet", wallet: FIXTURE_WALLET, since: T0 + 2 });
+      await store.commit({ expect: [{ kind: "profile-authorization-wallet", profile_id: a.profile.profile_id, wallet_address: FIXTURE_WALLET_2, wallet_since: T0 + 1 }], profiles: [backToA] });
+      /* A -> B -> A: a replacement decided against the FIRST designation of A is stale, though the address matches. */
+      await refused(subject, ctx, store, { expect: [{ kind: "profile-authorization-wallet", profile_id: a.profile.profile_id, wallet_address: FIXTURE_WALLET, wallet_since: T0 }], profiles: [authorizationProfile(a, { login: "Ana.Wallet", wallet: FIXTURE_WALLET_2, since: T0 + 1 })] }, "profile-authorization-wallet (A -> B -> A: a stale designation)");
+      const reopened = await (await subject.open(ctx)).load();
+      assert.deepEqual(reopened.profiles.find((profile) => profile.profile_id === a.profile.profile_id), backToA, "a restart loads the current designation");
+    },
+  },
+  {
+    id: "ID-22",
+    title: "P3-ACCT POLICY: the password generation's compare-and-swap (profile-password) -- a replacement pinned to the password the profile holds lands; pinned to a superseded one, or to a profile with no password or none at all, it is refused DEFINITE and nothing is written",
+    needs: ["validates-shape"],
+    async run(subject, ctx) {
+      const store = await subject.open(ctx);
+      await store.load();
+      const a = identitySet(24);
+      const first = accountProfile(a, { login: "Ann.Fence" });
+      await store.commit({ ...profileCreation(a), expect: [...(profileCreation(a).expect ?? []), { kind: "login-unused", login_key: "ann.fence" }], profiles: [first] });
+      const next: Profile = { ...first, password_hash: FIXTURE_PASSWORD_HASH_2, password_set_at: T0 + 7 };
+      /* Pinned to a hash the profile does not hold: refused, nothing written. */
+      await refused(subject, ctx, store, { expect: [{ kind: "profile-password", profile_id: a.profile.profile_id, password_hash: FIXTURE_PASSWORD_HASH_2 }], profiles: [next] }, "profile-password (a superseded generation)");
+      /* Pinned to the one it holds: lands. */
+      await store.commit({ expect: [{ kind: "profile-password", profile_id: a.profile.profile_id, password_hash: FIXTURE_PASSWORD_HASH }], profiles: [next] });
+      /* The replaced generation can never be pinned again (a second, stale replacement): refused. */
+      await refused(subject, ctx, store, { expect: [{ kind: "profile-password", profile_id: a.profile.profile_id, password_hash: FIXTURE_PASSWORD_HASH }], profiles: [{ ...first, password_set_at: T0 + 8 }] }, "profile-password (the old generation, again)");
+      /* A legacy profile with no password, and no profile at all. */
+      const b = identitySet(25);
+      await store.commit(profileCreation(b));
+      await refused(subject, ctx, store, { expect: [{ kind: "profile-password", profile_id: b.profile.profile_id, password_hash: FIXTURE_PASSWORD_HASH }], profiles: [accountProfile(b, { login: "Bea.Fence" })] }, "profile-password (no password)");
+      await refused(subject, ctx, store, { expect: [{ kind: "profile-password", profile_id: identitySet(26).profile.profile_id, password_hash: FIXTURE_PASSWORD_HASH }], profiles: [next] }, "profile-password (no such profile)");
+      const reopened = await (await subject.open(ctx)).load();
+      assert.deepEqual(reopened.profiles.find((profile) => profile.profile_id === a.profile.profile_id), next, "the one replacement that held is what a restart loads");
     },
   },
   {

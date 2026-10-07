@@ -42,8 +42,31 @@
 //     change committed and just its confirmation was lost, and `from_selector` otherwise. OWNER DECISION (2026-09-29):
 //     retire `from_selector` (its player asked for it to die: it must not come back), do NOT install `to_selector`, and
 //     send the profile to an operator's review.
+//   - `credentials-established` (P3-ACCT): a legacy profile's username and password. The profile's CONFIRMED one when
+//     there is one; otherwise its last one, confirmed or not (as `profile-created`: a credential whose confirmation
+//     alone was lost is its player's way back in, and a phantom's is a password its own player chose under "Confirm it's
+//     you"). A username the replay finds held by another profile -- in the restored table, or by a confirmed event --
+//     was never committed here (a username is unique, checked inside every write): such a phantom is not installed. A
+//     new account's credential travels inside its schema-2 `profile-created` and follows that rule, with the same
+//     username check.
+//   - `password-replaced` (P3-ACCT POLICY: "Change password", "Forgot password?"): the password's generations form a
+//     CHAIN by hash (`from_hash` -> `to_hash`; every hash carries a fresh salt). From the hash the restored table holds,
+//     the replay follows the chain: at each hash the CONFIRMED replacement from it when there is one (two: refused),
+//     otherwise its LAST one, confirmed or not -- as `credentials-established` (a replacement whose confirmation alone
+//     was lost is its player's way back in; a phantom's new password is one its own player chose). Never back: a hash
+//     some replacement retired is never re-installed. A wrong guess has its remedy in the account's Authorization Wallet
+//     ("Forgot password?"), so no operator review is opened. Its `family_ids` are re-applied like `signed-out-others`.
+//   - the LEGACY persisted wallet (P3-ACCT, schema 2) is NOT journaled: the restore CLEARS it (fail safe).
+//   - PHASE 3 FINAL: a schema-3 profile's AUTHORIZATION WALLET is journaled: its first designation travels inside the
+//     profile's `profile-created`; every replacement is an `authorization-wallet-replaced` (`from_wallet`/`from_since` ->
+//     `to_wallet`/`to_since`; the designation time strictly increases, so the replacements form a CHAIN with no cycle even
+//     when a wallet comes back). The replay follows it from the designation the profile holds: at each step the CONFIRMED
+//     replacement from it (two different ones: refused), otherwise its LAST one, confirmed or not -- as
+//     `password-replaced` (both wallets signed every replacement: whichever was committed, the player asked for it; no
+//     review). A designation a replacement retired is never re-installed. "Forgot password?" by the Authorization Wallet
+//     is a `password-replaced` with `via: "authorization-wallet"`.
 //
-// WHAT IS RECORDED (and what is not): the five kinds of change below, each carrying exactly what a replay needs to
+// WHAT IS RECORDED (and what is not): the eight kinds of change below, each carrying exactly what a replay needs to
 // re-apply it idempotently and in any order -- a rotation names the selector it replaced and the one it installed (a
 // chain, not a clock), a revocation names its families -- and their confirmations. Plain session rotations and
 // single-session evictions are NOT recorded: the restore procedure signs every session out (preflight §17.3 step 3). No
@@ -53,8 +76,9 @@
 // PRIVATE: the ids here (`pr_`, `pf_`, `sf_`, `rk_`) never go on the wire, in a RoomView, a log, a hold or a chain.
 
 import { StoreDefiniteError, StoreUncertainError } from "../persistence/storeResult";
+import { isLoginKey, isLoginName, isPasswordHash, loginKeyOf } from "./accountCredentials";
 import { FAMILY_ID_PATTERN, PRINCIPAL_ID_PATTERN, PROFILE_ID_PATTERN, RECOVERY_SELECTOR_PATTERN } from "./ids";
-import { isPrincipal, isProfile, REVOKE_REASONS, type Principal, type Profile, type RevokeReason } from "./store";
+import { isPrincipal, isProfile, PROFILE_V2_FIELDS, REVOKE_REASONS, type Principal, type Profile, type RevokeReason } from "./store";
 
 export const SECURITY_EVENT_FORMAT = "gs-security-event";
 export const SECURITY_EVENT_VERSION = 1;
@@ -74,9 +98,33 @@ interface SecurityEventCommon {
   readonly principal_id: string;
 }
 
-/** The kinds of security CHANGE an event records (every kind but `confirmed`). */
-export type SecurityChangeKind = "profile-created" | "recovery-key-rotated" | "family-revoked" | "signed-out-others" | "principal-disabled";
-export const SECURITY_CHANGE_KINDS: readonly SecurityChangeKind[] = Object.freeze(["profile-created", "recovery-key-rotated", "family-revoked", "signed-out-others", "principal-disabled"]);
+/** The kinds of security CHANGE an event records (every kind but `confirmed`). P3-ACCT adds `credentials-established`:
+ *  a LEGACY profile set its username and password (a new account's are inside its `profile-created`, schema 2). */
+export type SecurityChangeKind =
+  | "profile-created"
+  | "recovery-key-rotated"
+  | "family-revoked"
+  | "signed-out-others"
+  | "principal-disabled"
+  | "credentials-established"
+  | "password-replaced"
+  | "authorization-wallet-replaced";
+export const SECURITY_CHANGE_KINDS: readonly SecurityChangeKind[] = Object.freeze([
+  "profile-created",
+  "recovery-key-rotated",
+  "family-revoked",
+  "signed-out-others",
+  "principal-disabled",
+  "credentials-established",
+  "password-replaced",
+  "authorization-wallet-replaced",
+]);
+
+/** What authorized a password replacement: the current password ("Change password"), the Authorization Wallet ("Forgot
+ *  password?", PHASE 3 FINAL), or -- in journals written before it, read only -- a recovery key. */
+export const PASSWORD_REPLACED_VIA = Object.freeze(["password", "recovery-key", "authorization-wallet"] as const);
+
+const JUNO_WALLET = /^juno1[02-9ac-hj-np-z]{38}$/;
 
 export type SecurityEvent =
   /** A profile was created: the principal as bound to it and the profile, exactly as committed (no secret). */
@@ -96,6 +144,40 @@ export type SecurityEvent =
   | (SecurityEventCommon & { readonly kind: "signed-out-others"; readonly kept_family_id: string; readonly family_ids: readonly string[] })
   /** The principal was disabled (and these families closed with it). */
   | (SecurityEventCommon & { readonly kind: "principal-disabled"; readonly family_ids: readonly string[] })
+  /** P3-ACCT: a legacy profile's username and password were set (the scrypt hash only -- never the password). The
+   *  username is unique and never changes; the restore installs it (`securityReplay.ts`). */
+  | (SecurityEventCommon & {
+      readonly kind: "credentials-established";
+      readonly profile_id: string;
+      readonly login_key: string;
+      readonly login_name: string;
+      readonly password_hash: string;
+      readonly set_at: number;
+    })
+  /** P3-ACCT POLICY: the password was replaced -- "Change password" (`kept_family_id`: the changer's family, which stays
+   *  open) or "Forgot password?" (`kept_family_id` null: every family closed). `from_hash` is dead from this change on;
+   *  `family_ids` (sorted) are the families it closed. Hashes only -- never a password, never a key. */
+  | (SecurityEventCommon & {
+      readonly kind: "password-replaced";
+      readonly profile_id: string;
+      readonly from_hash: string;
+      readonly to_hash: string;
+      readonly set_at: number;
+      readonly via: (typeof PASSWORD_REPLACED_VIA)[number];
+      readonly kept_family_id: string | null;
+      readonly family_ids: readonly string[];
+    })
+  /** PHASE 3 FINAL: the Authorization Wallet was replaced (the old one approved, the new one accepted -- both signed).
+   *  `from_wallet` designated since `from_since` is retired from this change on; `to_wallet` designated since `to_since`
+   *  (> `from_since`) is the account's. */
+  | (SecurityEventCommon & {
+      readonly kind: "authorization-wallet-replaced";
+      readonly profile_id: string;
+      readonly from_wallet: string;
+      readonly from_since: number;
+      readonly to_wallet: string;
+      readonly to_since: number;
+    })
   /** Review F2: the change the event `confirms` (of kind `confirmed_kind`, same principal) WAS committed. */
   | (SecurityEventCommon & { readonly kind: "confirmed"; readonly confirms: string; readonly confirmed_kind: SecurityChangeKind });
 
@@ -109,6 +191,9 @@ const KIND_FIELDS: Readonly<Record<SecurityEventKind, readonly string[]>> = {
   "family-revoked": ["family_ids", "reason"],
   "signed-out-others": ["kept_family_id", "family_ids"],
   "principal-disabled": ["family_ids"],
+  "credentials-established": ["profile_id", "login_key", "login_name", "password_hash", "set_at"],
+  "password-replaced": ["profile_id", "from_hash", "to_hash", "set_at", "via", "kept_family_id", "family_ids"],
+  "authorization-wallet-replaced": ["profile_id", "from_wallet", "from_since", "to_wallet", "to_since"],
   confirmed: ["confirms", "confirmed_kind"],
 };
 const COMMON_FIELDS = ["format", "version", "event_id", "kind", "at", "principal_id"];
@@ -172,6 +257,43 @@ export function isSecurityEvent(value: unknown): value is SecurityEvent {
       );
     case "principal-disabled":
       return isFamilyList(value.family_ids, 0);
+    case "credentials-established":
+      return (
+        typeof value.profile_id === "string" &&
+        PROFILE_ID_PATTERN.test(value.profile_id) &&
+        isLoginName(value.login_name) &&
+        isLoginKey(value.login_key) &&
+        value.login_key === loginKeyOf(value.login_name as string) &&
+        isPasswordHash(value.password_hash) &&
+        isEventTime(value.set_at)
+      );
+    case "password-replaced":
+      return (
+        typeof value.profile_id === "string" &&
+        PROFILE_ID_PATTERN.test(value.profile_id) &&
+        isPasswordHash(value.from_hash) &&
+        isPasswordHash(value.to_hash) &&
+        value.from_hash !== value.to_hash &&
+        isEventTime(value.set_at) &&
+        typeof value.via === "string" &&
+        (PASSWORD_REPLACED_VIA as readonly string[]).includes(value.via) &&
+        (value.kept_family_id === null || (typeof value.kept_family_id === "string" && FAMILY_ID_PATTERN.test(value.kept_family_id))) &&
+        isFamilyList(value.family_ids, 0) &&
+        (value.kept_family_id === null || !(value.family_ids as string[]).includes(value.kept_family_id as string))
+      );
+    case "authorization-wallet-replaced":
+      return (
+        typeof value.profile_id === "string" &&
+        PROFILE_ID_PATTERN.test(value.profile_id) &&
+        typeof value.from_wallet === "string" &&
+        JUNO_WALLET.test(value.from_wallet) &&
+        typeof value.to_wallet === "string" &&
+        JUNO_WALLET.test(value.to_wallet) &&
+        value.from_wallet !== value.to_wallet &&
+        isEventTime(value.from_since) &&
+        isEventTime(value.to_since) &&
+        (value.to_since as number) > (value.from_since as number)
+      );
     case "confirmed":
       return (
         typeof value.confirms === "string" &&
@@ -196,7 +318,7 @@ export function canonicalSecurityEvent(event: SecurityEvent): SecurityEvent {
       out[key] = { principal_id: p.principal_id, kind: p.kind, status: p.status, created_at: p.created_at, activated_at: p.activated_at, last_seen_at: p.last_seen_at, account_link: p.account_link };
     } else if (key === "profile") {
       const p = value as Profile;
-      out[key] = {
+      const profile: Record<string, unknown> = {
         profile_id: p.profile_id,
         principal_id: p.principal_id,
         display_name: p.display_name,
@@ -207,6 +329,10 @@ export function canonicalSecurityEvent(event: SecurityEvent): SecurityEvent {
         recovery_rotated_at: p.recovery_rotated_at,
         schema: p.schema,
       };
+      /* P3-ACCT: a schema-2 (PHASE 3 FINAL: or schema-3) profile carries its six fields too, in their stored order (a
+         schema-1 one, none). */
+      if (p.schema !== 1) for (const field of PROFILE_V2_FIELDS) profile[field] = (p as unknown as Record<string, unknown>)[field];
+      out[key] = profile;
     } else if (key === "family_ids") {
       out[key] = [...(value as string[])];
     } else {

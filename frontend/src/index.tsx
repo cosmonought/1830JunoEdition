@@ -14,7 +14,8 @@ import { createRoot } from "react-dom/client";
 import App from "./App";
 // Design note #761: an uncaught render throw becomes a readable, copyable report instead of a blank page.
 import { CrashScreen } from "./components/CrashScreen";
-import { ProfileGate } from "./components/ProfileGate";
+import { AccountPromptHost } from "./components/AccountDialog";
+import { InfoPagesHost } from "./components/InfoPages";
 import { SessionEndedNotice } from "./components/SessionEndedNotice";
 import { ClientUpdateNotice } from "./components/ClientUpdateNotice";
 import { GAME_SERVER_URL } from "./config";
@@ -23,7 +24,9 @@ import { createBrowserClientUpdatePort, installClientUpdatePort } from "./utils/
 
 /* LIVE-2B (LIVE-2 §4.3): before any link opens a socket, the session is bootstrapped (`POST /gs/api/session`) -- the
    links ask this port first. A development-identity build (and a build with no game server) needs no bootstrap.
-   LIVE-2E: and the app itself waits behind `ProfileGate` until that session is a PROFILED one. */
+   P3-ACCT (owner, 2026-10-05: PUBLIC FIRST): nothing waits behind it any more. LIVE-2E's `ProfileGate` is gone: the
+   homepage renders at once, a visitor browses, reads and watches signed out, and an account is asked for only by an
+   action that needs one (`utils/accountPrompt.ts`). */
 installSessionPort(createAppSessionPort(GAME_SERVER_URL));
 /* LIVE-4 (L4-3): the page's one answer to a server that says this bundle cannot play what it asked for -- reload once
    (keeping the table), follow a checked route, or ask; never a loop (`utils/clientUpdate.ts`). */
@@ -45,12 +48,14 @@ root.render(
      anywhere below -- including one raised by StrictMode's own double-invoked render in development. */
   <CrashScreen>
     <React.StrictMode>
-      {/* LIVE-2E: profiles are mandatory -- the app renders only for a profiled session; before that, the gate. */}
-      <ProfileGate>
-        <App />
-      </ProfileGate>
-      {/* LIVE-2B: the explicit "Continue" decision when the server says the session ended (LIVE-2E: it leads back to
-          the gate, where the recovery key or a device-link code restores the profile). */}
+      {/* P3-ACCT: the app renders for everyone; the bootstrap runs in the background (the links ask the port). */}
+      <App />
+      {/* P3-ACCT: Log in / Create account, opened by an action that needs an account (and resuming it), or by the
+          homepage's own buttons; the Rules and Terms reading pages. Each is a NativeModal in the app's modal layer. */}
+      <AccountPromptHost />
+      <InfoPagesHost />
+      {/* LIVE-2B: the explicit "Continue" decision when the server says the session ended (P3-ACCT: it leads back to
+          the homepage, signed out, where Log in brings the account back). */}
       <SessionEndedNotice />
       {/* LIVE-4 (L4-3): shown only when a reload did not help, the page cannot remember that it tried, or a route
           could not be followed -- it says why and offers a Reload button. */}

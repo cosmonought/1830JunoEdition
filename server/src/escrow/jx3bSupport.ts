@@ -1,7 +1,8 @@
 // server/src/escrow/jx3bSupport.ts
 //
 // JX-3B test support (never imported by production code): a money world in the state a live JX-3 run reaches -- a
-// host table, a joiner whose laptop links W1, the joiner's recovered phone re-proving W1 (the OD-JX3-1 re-home), the
+// host table, a joiner whose laptop links W1, the joiner's phone (signed in with the password: PHASE 3 FINAL -- no recovery
+// key exists) re-proving W1 (the OD-JX3-1 re-home), the
 // laptop signed out -- with the captured wallet-challenge answers and wallet-link bodies, exactly as devtools would
 // show them. Synthetic only: test wallets, a test server; never real user data.
 
@@ -19,8 +20,8 @@ export interface Capture {
   readonly answer: ApiAnswer;
 }
 
-export async function capturedLink(world: MoneyServer, cookie: string, recoveryKey: string, gameId: string, wallet: TestWallet, consentLabel: string): Promise<Capture> {
-  assert.equal((await apiRequest(world.port, "/gs/api/profile/reauth", { cookie, body: { recoveryKey } })).status, 200);
+export async function capturedLink(world: MoneyServer, cookie: string, password: string, gameId: string, wallet: TestWallet, consentLabel: string): Promise<Capture> {
+  assert.equal((await apiRequest(world.port, "/gs/api/profile/reauth", { cookie, body: { password } })).status, 200);
   const challenge = await apiRequest(world.port, "/gs/api/money/wallet-challenge", { cookie, body: { gameId, wallet: wallet.address } });
   assert.equal(challenge.status, 200, challenge.text);
   const signed = wallet.signArbitrary(challenge.body?.text as string);
@@ -30,8 +31,8 @@ export async function capturedLink(world: MoneyServer, cookie: string, recoveryK
   return { challenge: challenge.body as Record<string, unknown>, link, answer };
 }
 
-/** A host table, a joiner whose laptop links W1, then the joiner's phone (a recovered family) re-proves W1, then the
- *  laptop signs out. */
+/** A host table, a joiner whose laptop links W1, then the joiner's phone (another family: a sign-in) re-proves W1, then
+ *  the laptop signs out. */
 export async function evidenceWorld() {
   const world = await moneyServer();
   const host = await player(world, "Hana");
@@ -44,10 +45,11 @@ export async function evidenceWorld() {
   const joined = await joiner.client.op({ type: "join", code: table.code, takeSeat: true });
   const playerId = (joined.data as { playerId: string }).playerId;
   const w1 = testWallet("jo");
-  const laptop = await capturedLink(world, joiner.browser.cookie, joiner.browser.recoveryKey, table.gameId, w1, "jo-laptop");
-  const recovered = await apiRequest(world.port, "/gs/api/profile/recover", { cookie: await freshCookie(world), body: { recoveryKey: joiner.browser.recoveryKey } });
-  const phoneCookie = recovered.headers["set-cookie"]![0].split(";")[0];
-  const phone = await capturedLink(world, phoneCookie, joiner.browser.recoveryKey, table.gameId, w1, "jo-phone");
+  const laptop = await capturedLink(world, joiner.browser.cookie, joiner.browser.password, table.gameId, w1, "jo-laptop");
+  const signedIn = await apiRequest(world.port, "/gs/api/account/login", { cookie: await freshCookie(world), body: { username: joiner.browser.username, password: joiner.browser.password } });
+  assert.equal(signedIn.status, 200, signedIn.text);
+  const phoneCookie = signedIn.headers["set-cookie"]![0].split(";")[0];
+  const phone = await capturedLink(world, phoneCookie, joiner.browser.password, table.gameId, w1, "jo-phone");
   assert.equal(phone.answer.body?.rehomed, true);
   assert.equal((await apiRequest(world.port, "/gs/api/session/revoke", { cookie: joiner.browser.cookie, body: {} })).status, 204);
   await world.money.idle();

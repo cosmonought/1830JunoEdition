@@ -20,6 +20,8 @@ import type { SessionPort } from "../../utils/sessionBootstrap";
 import { depositEntryExit, reconcilePending, resendPending, type ActionOutcome, type EscrowExit } from "../../money/moneyActions";
 import { yourDeposits } from "../../money/moneyApi";
 import { bumpLocal, moneyServices, useMoneySession, type MoneyServices } from "../../money/moneySession";
+import { browserKeplrLock, KEPLR_BUSY_SENTENCE } from "../../money/keplrLock";
+import { TermsLink } from "../InfoPages";
 import { buttonStyle, moneyStyles as styles } from "./moneyStyles";
 
 export interface YourDepositsProps {
@@ -94,9 +96,18 @@ export function YourDeposits({ onOpen, port, services }: YourDepositsProps): JSX
     busyRef.current = key;
     setBusy(key);
     setSaid(null);
-    const outcome = await run();
-    busyRef.current = null;
-    setBusy(null);
+    /* W1-K (money review L4): a withdrawal or a cancel opens Keplr -- one Keplr conversation at a time across tabs.
+       Re-review NIT: whatever happens, the latch is released (a thrown step reads as a refusal, never a stuck button). */
+    let outcome: ActionOutcome;
+    try {
+      const locked = await (svc.keplrLock ?? browserKeplrLock()).withLock(run);
+      outcome = locked.kind === "ran" ? locked.value : { ok: false, reason: KEPLR_BUSY_SENTENCE };
+    } catch {
+      outcome = { ok: false, reason: "That didn't complete. Check this list (it reads Juno) before trying again." };
+    } finally {
+      busyRef.current = null;
+      setBusy(null);
+    }
     setSaid({ key, outcome });
     bumpLocal();
     void load();
@@ -106,7 +117,9 @@ export function YourDeposits({ onOpen, port, services }: YourDepositsProps): JSX
 
   return (
     <section style={{ ...styles.band, borderTop: "none", paddingTop: 0 }} aria-label="Your deposits" data-testid="your-deposits">
-      <p style={styles.bandTitle}>Your deposits</p>
+      <p style={styles.bandTitle}>
+        Your deposits <TermsLink style={{ fontWeight: 400, marginLeft: "8px" }} testId="deposits-terms-link" />
+      </p>
       {failure !== null ? <p style={styles.blocker}>{failure}</p> : null}
       {listed.length > 0 ? (
         <ul style={styles.list}>

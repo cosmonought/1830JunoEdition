@@ -1,0 +1,2742 @@
+{
+ "base": {
+  "label": "before (caad745, measured clamp)",
+  "cases": 1212,
+  "failing": 201,
+  "settled_failures": 0,
+  "frames_sampled": 35993,
+  "frames_violating": 210,
+  "by_scenario": {
+   "signed-out": {
+    "cases": 114,
+    "failing": 14
+   },
+   "signed-in-0": {
+    "cases": 114,
+    "failing": 16
+   },
+   "signed-in-1": {
+    "cases": 114,
+    "failing": 17
+   },
+   "signed-in-many": {
+    "cases": 114,
+    "failing": 18
+   },
+   "signed-in-many:resize-cycle": {
+    "cases": 24,
+    "failing": 12
+   },
+   "loading": {
+    "cases": 114,
+    "failing": 15
+   },
+   "tables-error": {
+    "cases": 114,
+    "failing": 18
+   },
+   "long-metadata": {
+    "cases": 114,
+    "failing": 14
+   },
+   "long-metadata:resize-cycle": {
+    "cases": 24,
+    "failing": 11
+   },
+   "sign-in-after-render:before": {
+    "cases": 24,
+    "failing": 2
+   },
+   "sign-in-after-render": {
+    "cases": 114,
+    "failing": 10
+   },
+   "font-reflow": {
+    "cases": 114,
+    "failing": 19
+   },
+   "load-at-size": {
+    "cases": 114,
+    "failing": 35
+   }
+  },
+  "failing_cases": [
+   {
+    "scenario": "signed-out",
+    "dsf": 1,
+    "uiScale": 0.63,
+    "viewport": "narrow-360",
+    "loadedAt": "narrow-320",
+    "actionsBottom": 533,
+    "yourTablesTop": null,
+    "firstTableTop": 548,
+    "problems": [
+     "1 of 22 painted frame(s) had table content above the doors' foot (first: resize->narrow-360, frame 2, lobby-public-games top 525 < doors 533 at 360x740)"
+    ]
+   },
+   {
+    "scenario": "signed-out",
+    "dsf": 1,
+    "uiScale": 0.75,
+    "viewport": "tablet-768",
+    "loadedAt": "narrow-360",
+    "actionsBottom": 735,
+    "yourTablesTop": null,
+    "firstTableTop": 758,
+    "problems": [
+     "1 of 20 painted frame(s) had table content above the doors' foot (first: resize->tablet-768, frame 2, lobby-public-games top 705 < doors 735 at 768x1024)"
+    ]
+   },
+   {
+    "scenario": "signed-out",
+    "dsf": 1,
+    "uiScale": 0.9,
+    "viewport": "tablet-768",
+    "loadedAt": "narrow-375",
+    "actionsBottom": 737,
+    "yourTablesTop": null,
+    "firstTableTop": 760,
+    "problems": [
+     "1 of 21 painted frame(s) had table content above the doors' foot (first: resize->tablet-768, frame 1, lobby-public-games top 698 < doors 737 at 768x1024)"
+    ]
+   },
+   {
+    "scenario": "signed-out",
+    "dsf": 1,
+    "uiScale": 1,
+    "viewport": "laptop-1024",
+    "loadedAt": "tablet-768",
+    "actionsBottom": 548,
+    "yourTablesTop": null,
+    "firstTableTop": 573,
+    "problems": [
+     "1 of 21 painted frame(s) had table content above the doors' foot (first: resize->laptop-1024, frame 1, lobby-public-games top 505 < doors 548 at 1024x768)"
+    ]
+   },
+   {
+    "scenario": "signed-out",
+    "dsf": 1,
+    "uiScale": 1.1,
+    "viewport": "laptop-1024",
+    "loadedAt": "laptop-1024",
+    "actionsBottom": 549,
+    "yourTablesTop": null,
+    "firstTableTop": 576,
+    "problems": [
+     "1 of 52 painted frame(s) had table content above the doors' foot (first: load, frame 1, lobby-public-games top 559 < doors 563 at 1024x768)"
+    ]
+   },
+   {
+    "scenario": "signed-out",
+    "dsf": 1,
+    "uiScale": 1.1,
+    "viewport": "narrow-360",
+    "loadedAt": "laptop-1024",
+    "actionsBottom": 544,
+    "yourTablesTop": null,
+    "firstTableTop": 572,
+    "problems": [
+     "1 of 20 painted frame(s) had table content above the doors' foot (first: resize->narrow-360, frame 1, lobby-public-games top 533 < doors 544 at 360x740)"
+    ]
+   },
+   {
+    "scenario": "signed-out",
+    "dsf": 1,
+    "uiScale": 1.1,
+    "viewport": "tablet-768",
+    "loadedAt": "laptop-1024",
+    "actionsBottom": 735,
+    "yourTablesTop": null,
+    "firstTableTop": 762,
+    "problems": [
+     "1 of 21 painted frame(s) had table content above the doors' foot (first: resize->tablet-768, frame 1, lobby-public-games top 725 < doors 735 at 768x1024)"
+    ]
+   },
+   {
+    "scenario": "signed-out",
+    "dsf": 1,
+    "uiScale": 1.1,
+    "viewport": "laptop-1366",
+    "loadedAt": "laptop-1024",
+    "actionsBottom": 549,
+    "yourTablesTop": null,
+    "firstTableTop": 576,
+    "problems": [
+     "1 of 20 painted frame(s) had table content above the doors' foot (first: resize->laptop-1366, frame 1, lobby-public-games top 540 < doors 549 at 1366x768)"
+    ]
+   },
+   {
+    "scenario": "signed-out",
+    "dsf": 1,
+    "uiScale": 1.25,
+    "viewport": "tablet-768",
+    "loadedAt": "laptop-1366",
+    "actionsBottom": 733,
+    "yourTablesTop": null,
+    "firstTableTop": 764,
+    "problems": [
+     "1 of 20 painted frame(s) had table content above the doors' foot (first: resize->tablet-768, frame 1, lobby-public-games top 676 < doors 733 at 768x1024)"
+    ]
+   },
+   {
+    "scenario": "signed-in-0",
+    "dsf": 1,
+    "uiScale": 0.75,
+    "viewport": "narrow-375",
+    "loadedAt": "narrow-375",
+    "actionsBottom": 478,
+    "yourTablesTop": null,
+    "firstTableTop": 497,
+    "problems": [
+     "1 of 51 painted frame(s) had table content above the doors' foot (first: load, frame 5, lobby-public-games top 470 < doors 478 at 375x667)"
+    ]
+   },
+   {
+    "scenario": "signed-in-0",
+    "dsf": 1,
+    "uiScale": 0.75,
+    "viewport": "narrow-360",
+    "loadedAt": "narrow-375",
+    "actionsBottom": 532,
+    "yourTablesTop": null,
+    "firstTableTop": 551,
+    "problems": [
+     "1 of 21 painted frame(s) had table content above the doors' foot (first: resize->narrow-360, frame 1, lobby-public-games top 524 < doors 532 at 360x740)"
+    ]
+   },
+   {
+    "scenario": "signed-in-0",
+    "dsf": 1,
+    "uiScale": 0.75,
+    "viewport": "tablet-768",
+    "loadedAt": "narrow-375",
+    "actionsBottom": 735,
+    "yourTablesTop": null,
+    "firstTableTop": 758,
+    "problems": [
+     "1 of 22 painted frame(s) had table content above the doors' foot (first: resize->tablet-768, frame 1, lobby-public-games top 732 < doors 735 at 768x1024)"
+    ]
+   },
+   {
+    "scenario": "signed-in-0",
+    "dsf": 1,
+    "uiScale": 0.9,
+    "viewport": "laptop-1024",
+    "loadedAt": "tablet-768",
+    "actionsBottom": 550,
+    "yourTablesTop": null,
+    "firstTableTop": 572,
+    "problems": [
+     "1 of 21 painted frame(s) had table content above the doors' foot (first: resize->laptop-1024, frame 2, lobby-public-games top 510 < doors 550 at 1024x768)"
+    ]
+   },
+   {
+    "scenario": "signed-in-0",
+    "dsf": 1,
+    "uiScale": 1,
+    "viewport": "laptop-1024",
+    "loadedAt": "laptop-1024",
+    "actionsBottom": 548,
+    "yourTablesTop": null,
+    "firstTableTop": 573,
+    "problems": [
+     "1 of 52 painted frame(s) had table content above the doors' foot (first: load, frame 1, lobby-public-games top 556 < doors 561 at 1024x768)"
+    ]
+   },
+   {
+    "scenario": "signed-in-0",
+    "dsf": 1,
+    "uiScale": 1,
+    "viewport": "tablet-768",
+    "loadedAt": "laptop-1024",
+    "actionsBottom": 738,
+    "yourTablesTop": null,
+    "firstTableTop": 762,
+    "problems": [
+     "1 of 22 painted frame(s) had table content above the doors' foot (first: resize->tablet-768, frame 1, lobby-public-games top 693 < doors 738 at 768x1024)"
+    ]
+   },
+   {
+    "scenario": "signed-in-0",
+    "dsf": 1,
+    "uiScale": 1.1,
+    "viewport": "laptop-1366",
+    "loadedAt": "laptop-1366",
+    "actionsBottom": 549,
+    "yourTablesTop": null,
+    "firstTableTop": 576,
+    "problems": [
+     "1 of 51 painted frame(s) had table content above the doors' foot (first: load, frame 1, lobby-public-games top 559 < doors 563 at 1366x768)"
+    ]
+   },
+   {
+    "scenario": "signed-in-0",
+    "dsf": 1,
+    "uiScale": 1.1,
+    "viewport": "narrow-360",
+    "loadedAt": "laptop-1366",
+    "actionsBottom": 544,
+    "yourTablesTop": null,
+    "firstTableTop": 572,
+    "problems": [
+     "1 of 21 painted frame(s) had table content above the doors' foot (first: resize->narrow-360, frame 2, lobby-public-games top 533 < doors 544 at 360x740)"
+    ]
+   },
+   {
+    "scenario": "signed-in-0",
+    "dsf": 1,
+    "uiScale": 1.1,
+    "viewport": "tablet-768",
+    "loadedAt": "laptop-1366",
+    "actionsBottom": 735,
+    "yourTablesTop": null,
+    "firstTableTop": 762,
+    "problems": [
+     "1 of 21 painted frame(s) had table content above the doors' foot (first: resize->tablet-768, frame 1, lobby-public-games top 687 < doors 735 at 768x1024)"
+    ]
+   },
+   {
+    "scenario": "signed-in-0",
+    "dsf": 1,
+    "uiScale": 1.25,
+    "viewport": "desktop-1440",
+    "loadedAt": "desktop-1440",
+    "actionsBottom": 641,
+    "yourTablesTop": null,
+    "firstTableTop": 671,
+    "problems": [
+     "1 of 50 painted frame(s) had table content above the doors' foot (first: load, frame 1, lobby-public-games top 651 < doors 659 at 1440x900)"
+    ]
+   },
+   {
+    "scenario": "signed-in-0",
+    "dsf": 1,
+    "uiScale": 1.25,
+    "viewport": "tablet-768",
+    "loadedAt": "desktop-1440",
+    "actionsBottom": 733,
+    "yourTablesTop": null,
+    "firstTableTop": 764,
+    "problems": [
+     "1 of 21 painted frame(s) had table content above the doors' foot (first: resize->tablet-768, frame 1, lobby-public-games top 635 < doors 733 at 768x1024)"
+    ]
+   },
+   {
+    "scenario": "signed-in-1",
+    "dsf": 1,
+    "uiScale": 0.75,
+    "viewport": "narrow-360",
+    "loadedAt": "tablet-768",
+    "actionsBottom": 532,
+    "yourTablesTop": 551,
+    "firstTableTop": 551,
+    "problems": [
+     "1 of 20 painted frame(s) had table content above the doors' foot (first: resize->narrow-360, frame 1, my-tables top 524 < doors 532 at 360x740)"
+    ]
+   },
+   {
+    "scenario": "signed-in-1",
+    "dsf": 1,
+    "uiScale": 0.75,
+    "viewport": "laptop-1024",
+    "loadedAt": "tablet-768",
+    "actionsBottom": 553,
+    "yourTablesTop": 572,
+    "firstTableTop": 572,
+    "problems": [
+     "1 of 22 painted frame(s) had table content above the doors' foot (first: resize->laptop-1024, frame 2, my-tables top 546 < doors 553 at 1024x768)"
+    ]
+   },
+   {
+    "scenario": "signed-in-1",
+    "dsf": 1,
+    "uiScale": 0.9,
+    "viewport": "laptop-1024",
+    "loadedAt": "laptop-1024",
+    "actionsBottom": 550,
+    "yourTablesTop": 572,
+    "firstTableTop": 572,
+    "problems": [
+     "1 of 49 painted frame(s) had table content above the doors' foot (first: load, frame 1, lobby-public-games top 558 < doors 558 at 1024x768)"
+    ]
+   },
+   {
+    "scenario": "signed-in-1",
+    "dsf": 1,
+    "uiScale": 0.9,
+    "viewport": "tablet-768",
+    "loadedAt": "laptop-1024",
+    "actionsBottom": 737,
+    "yourTablesTop": 760,
+    "firstTableTop": 760,
+    "problems": [
+     "1 of 21 painted frame(s) had table content above the doors' foot (first: resize->tablet-768, frame 1, my-tables top 697 < doors 737 at 768x1024)"
+    ]
+   },
+   {
+    "scenario": "signed-in-1",
+    "dsf": 1,
+    "uiScale": 1,
+    "viewport": "laptop-1366",
+    "loadedAt": "laptop-1366",
+    "actionsBottom": 548,
+    "yourTablesTop": 573,
+    "firstTableTop": 573,
+    "problems": [
+     "1 of 55 painted frame(s) had table content above the doors' foot (first: load, frame 1, lobby-public-games top 556 < doors 561 at 1366x768)"
+    ]
+   },
+   {
+    "scenario": "signed-in-1",
+    "dsf": 1,
+    "uiScale": 1,
+    "viewport": "tablet-768",
+    "loadedAt": "laptop-1366",
+    "actionsBottom": 738,
+    "yourTablesTop": 762,
+    "firstTableTop": 762,
+    "problems": [
+     "1 of 20 painted frame(s) had table content above the doors' foot (first: resize->tablet-768, frame 1, my-tables top 693 < doors 738 at 768x1024)"
+    ]
+   },
+   {
+    "scenario": "signed-in-1",
+    "dsf": 1,
+    "uiScale": 1.1,
+    "viewport": "desktop-1440",
+    "loadedAt": "desktop-1440",
+    "actionsBottom": 643,
+    "yourTablesTop": 670,
+    "firstTableTop": 670,
+    "problems": [
+     "1 of 49 painted frame(s) had table content above the doors' foot (first: load, frame 1, lobby-public-games top 653 < doors 656 at 1440x900)"
+    ]
+   },
+   {
+    "scenario": "signed-in-1",
+    "dsf": 1,
+    "uiScale": 1.1,
+    "viewport": "narrow-360",
+    "loadedAt": "desktop-1440",
+    "actionsBottom": 544,
+    "yourTablesTop": 572,
+    "firstTableTop": 572,
+    "problems": [
+     "1 of 20 painted frame(s) had table content above the doors' foot (first: resize->narrow-360, frame 1, my-tables top 533 < doors 544 at 360x740)"
+    ]
+   },
+   {
+    "scenario": "signed-in-1",
+    "dsf": 1,
+    "uiScale": 1.1,
+    "viewport": "tablet-768",
+    "loadedAt": "desktop-1440",
+    "actionsBottom": 735,
+    "yourTablesTop": 762,
+    "firstTableTop": 762,
+    "problems": [
+     "1 of 21 painted frame(s) had table content above the doors' foot (first: resize->tablet-768, frame 1, my-tables top 687 < doors 735 at 768x1024)"
+    ]
+   },
+   {
+    "scenario": "signed-in-1",
+    "dsf": 1,
+    "uiScale": 1.25,
+    "viewport": "wide-1920",
+    "loadedAt": "wide-1920",
+    "actionsBottom": 774,
+    "yourTablesTop": 805,
+    "firstTableTop": 805,
+    "problems": [
+     "1 of 50 painted frame(s) had table content above the doors' foot (first: load, frame 1, lobby-public-games top 784 < doors 785 at 1920x1080)"
+    ]
+   },
+   {
+    "scenario": "signed-in-1",
+    "dsf": 1,
+    "uiScale": 1.25,
+    "viewport": "tablet-768",
+    "loadedAt": "wide-1920",
+    "actionsBottom": 733,
+    "yourTablesTop": 764,
+    "firstTableTop": 764,
+    "problems": [
+     "1 of 22 painted frame(s) had table content above the doors' foot (first: resize->tablet-768, frame 1, my-tables top 635 < doors 733 at 768x1024)"
+    ]
+   },
+   {
+    "scenario": "signed-in-many",
+    "dsf": 1,
+    "uiScale": 0.63,
+    "viewport": "laptop-1024",
+    "loadedAt": "tablet-768",
+    "actionsBottom": 552,
+    "yourTablesTop": 568,
+    "firstTableTop": 568,
+    "problems": [
+     "1 of 20 painted frame(s) had table content above the doors' foot (first: resize->laptop-1024, frame 1, my-tables top 547 < doors 552 at 1024x768)"
+    ]
+   },
+   {
+    "scenario": "signed-in-many:resize-cycle",
+    "dsf": 1,
+    "uiScale": 0.63,
+    "viewport": "cycle->1920x600",
+    "loadedAt": null,
+    "actionsBottom": 466,
+    "yourTablesTop": 481,
+    "firstTableTop": 481,
+    "problems": [
+     "1 of 42 painted frame(s) had table content above the doors' foot (first: resize-cycle, frame 23, my-tables top 460 < doors 466 at 1920x600)"
+    ]
+   },
+   {
+    "scenario": "signed-in-many",
+    "dsf": 1,
+    "uiScale": 0.75,
+    "viewport": "narrow-360",
+    "loadedAt": "laptop-1024",
+    "actionsBottom": 532,
+    "yourTablesTop": 551,
+    "firstTableTop": 551,
+    "problems": [
+     "1 of 22 painted frame(s) had table content above the doors' foot (first: resize->narrow-360, frame 1, my-tables top 524 < doors 532 at 360x740)"
+    ]
+   },
+   {
+    "scenario": "signed-in-many",
+    "dsf": 1,
+    "uiScale": 0.75,
+    "viewport": "tablet-768",
+    "loadedAt": "laptop-1024",
+    "actionsBottom": 735,
+    "yourTablesTop": 758,
+    "firstTableTop": 758,
+    "problems": [
+     "1 of 21 painted frame(s) had table content above the doors' foot (first: resize->tablet-768, frame 1, my-tables top 732 < doors 735 at 768x1024)"
+    ]
+   },
+   {
+    "scenario": "signed-in-many:resize-cycle",
+    "dsf": 1,
+    "uiScale": 0.75,
+    "viewport": "cycle->1920x600",
+    "loadedAt": null,
+    "actionsBottom": 474,
+    "yourTablesTop": 492,
+    "firstTableTop": 492,
+    "problems": [
+     "1 of 43 painted frame(s) had table content above the doors' foot (first: resize-cycle, frame 24, my-tables top 439 < doors 474 at 1920x600)"
+    ]
+   },
+   {
+    "scenario": "signed-in-many",
+    "dsf": 1,
+    "uiScale": 0.9,
+    "viewport": "laptop-1366",
+    "loadedAt": "laptop-1366",
+    "actionsBottom": 550,
+    "yourTablesTop": 572,
+    "firstTableTop": 572,
+    "problems": [
+     "1 of 51 painted frame(s) had table content above the doors' foot (first: load, frame 1, lobby-public-games top 558 < doors 558 at 1366x768)"
+    ]
+   },
+   {
+    "scenario": "signed-in-many",
+    "dsf": 1,
+    "uiScale": 0.9,
+    "viewport": "tablet-768",
+    "loadedAt": "laptop-1366",
+    "actionsBottom": 737,
+    "yourTablesTop": 760,
+    "firstTableTop": 760,
+    "problems": [
+     "1 of 21 painted frame(s) had table content above the doors' foot (first: resize->tablet-768, frame 1, my-tables top 697 < doors 737 at 768x1024)"
+    ]
+   },
+   {
+    "scenario": "signed-in-many:resize-cycle",
+    "dsf": 1,
+    "uiScale": 0.9,
+    "viewport": "cycle->1920x600",
+    "loadedAt": null,
+    "actionsBottom": 481,
+    "yourTablesTop": 503,
+    "firstTableTop": 503,
+    "problems": [
+     "1 of 45 painted frame(s) had table content above the doors' foot (first: resize-cycle, frame 24, my-tables top 441 < doors 481 at 1920x600)"
+    ]
+   },
+   {
+    "scenario": "signed-in-many",
+    "dsf": 1,
+    "uiScale": 1,
+    "viewport": "tablet-768",
+    "loadedAt": "desktop-1440",
+    "actionsBottom": 738,
+    "yourTablesTop": 762,
+    "firstTableTop": 762,
+    "problems": [
+     "1 of 21 painted frame(s) had table content above the doors' foot (first: resize->tablet-768, frame 1, my-tables top 693 < doors 738 at 768x1024)"
+    ]
+   },
+   {
+    "scenario": "signed-in-many:resize-cycle",
+    "dsf": 1,
+    "uiScale": 1,
+    "viewport": "cycle->1920x600",
+    "loadedAt": null,
+    "actionsBottom": 500,
+    "yourTablesTop": 524,
+    "firstTableTop": 524,
+    "problems": [
+     "1 of 45 painted frame(s) had table content above the doors' foot (first: resize-cycle, frame 24, my-tables top 456 < doors 500 at 1920x600)"
+    ]
+   },
+   {
+    "scenario": "signed-in-many",
+    "dsf": 1,
+    "uiScale": 1.1,
+    "viewport": "narrow-360",
+    "loadedAt": "wide-1920",
+    "actionsBottom": 544,
+    "yourTablesTop": 572,
+    "firstTableTop": 572,
+    "problems": [
+     "1 of 20 painted frame(s) had table content above the doors' foot (first: resize->narrow-360, frame 1, my-tables top 533 < doors 544 at 360x740)"
+    ]
+   },
+   {
+    "scenario": "signed-in-many",
+    "dsf": 1,
+    "uiScale": 1.1,
+    "viewport": "tablet-768",
+    "loadedAt": "wide-1920",
+    "actionsBottom": 735,
+    "yourTablesTop": 762,
+    "firstTableTop": 762,
+    "problems": [
+     "1 of 21 painted frame(s) had table content above the doors' foot (first: resize->tablet-768, frame 1, my-tables top 687 < doors 735 at 768x1024)"
+    ]
+   },
+   {
+    "scenario": "signed-in-many:resize-cycle",
+    "dsf": 1,
+    "uiScale": 1.1,
+    "viewport": "cycle->1920x600",
+    "loadedAt": null,
+    "actionsBottom": 549,
+    "yourTablesTop": 576,
+    "firstTableTop": 576,
+    "problems": [
+     "1 of 42 painted frame(s) had table content above the doors' foot (first: resize-cycle, frame 23, my-tables top 463 < doors 549 at 1920x600)"
+    ]
+   },
+   {
+    "scenario": "signed-in-many",
+    "dsf": 1,
+    "uiScale": 1.25,
+    "viewport": "wide-short-1920x600",
+    "loadedAt": "wide-short-1920x600",
+    "actionsBottom": 575,
+    "yourTablesTop": 605,
+    "firstTableTop": 605,
+    "problems": [
+     "1 of 51 painted frame(s) had table content above the doors' foot (first: load, frame 1, lobby-public-games top 585 < doors 604 at 1920x600)"
+    ]
+   },
+   {
+    "scenario": "signed-in-many",
+    "dsf": 1,
+    "uiScale": 1.25,
+    "viewport": "tablet-768",
+    "loadedAt": "wide-short-1920x600",
+    "actionsBottom": 733,
+    "yourTablesTop": 764,
+    "firstTableTop": 764,
+    "problems": [
+     "1 of 22 painted frame(s) had table content above the doors' foot (first: resize->tablet-768, frame 2, my-tables top 635 < doors 733 at 768x1024)"
+    ]
+   },
+   {
+    "scenario": "signed-in-many:resize-cycle",
+    "dsf": 1,
+    "uiScale": 1.25,
+    "viewport": "cycle->1920x600",
+    "loadedAt": null,
+    "actionsBottom": 575,
+    "yourTablesTop": 605,
+    "firstTableTop": 605,
+    "problems": [
+     "1 of 43 painted frame(s) had table content above the doors' foot (first: resize-cycle, frame 23, my-tables top 476 < doors 575 at 1920x600)"
+    ]
+   },
+   {
+    "scenario": "loading",
+    "dsf": 1,
+    "uiScale": 0.75,
+    "viewport": "narrow-360",
+    "loadedAt": "laptop-1366",
+    "actionsBottom": 532,
+    "yourTablesTop": null,
+    "firstTableTop": 551,
+    "problems": [
+     "1 of 21 painted frame(s) had table content above the doors' foot (first: resize->narrow-360, frame 1, lobby-public-games top 524 < doors 532 at 360x740)"
+    ]
+   },
+   {
+    "scenario": "loading",
+    "dsf": 1,
+    "uiScale": 0.75,
+    "viewport": "tablet-768",
+    "loadedAt": "laptop-1366",
+    "actionsBottom": 735,
+    "yourTablesTop": null,
+    "firstTableTop": 758,
+    "problems": [
+     "1 of 21 painted frame(s) had table content above the doors' foot (first: resize->tablet-768, frame 1, lobby-public-games top 732 < doors 735 at 768x1024)"
+    ]
+   },
+   {
+    "scenario": "loading",
+    "dsf": 1,
+    "uiScale": 0.9,
+    "viewport": "tablet-768",
+    "loadedAt": "desktop-1440",
+    "actionsBottom": 737,
+    "yourTablesTop": null,
+    "firstTableTop": 760,
+    "problems": [
+     "1 of 22 painted frame(s) had table content above the doors' foot (first: resize->tablet-768, frame 2, lobby-public-games top 697 < doors 737 at 768x1024)"
+    ]
+   },
+   {
+    "scenario": "loading",
+    "dsf": 1,
+    "uiScale": 1,
+    "viewport": "tablet-768",
+    "loadedAt": "wide-1920",
+    "actionsBottom": 738,
+    "yourTablesTop": null,
+    "firstTableTop": 762,
+    "problems": [
+     "1 of 20 painted frame(s) had table content above the doors' foot (first: resize->tablet-768, frame 1, lobby-public-games top 693 < doors 738 at 768x1024)"
+    ]
+   },
+   {
+    "scenario": "loading",
+    "dsf": 1,
+    "uiScale": 1.1,
+    "viewport": "wide-short-1920x600",
+    "loadedAt": "wide-short-1920x600",
+    "actionsBottom": 549,
+    "yourTablesTop": null,
+    "firstTableTop": 576,
+    "problems": [
+     "1 of 51 painted frame(s) had table content above the doors' foot (first: load, frame 1, lobby-public-games top 559 < doors 576 at 1920x600)"
+    ]
+   },
+   {
+    "scenario": "loading",
+    "dsf": 1,
+    "uiScale": 1.1,
+    "viewport": "narrow-360",
+    "loadedAt": "wide-short-1920x600",
+    "actionsBottom": 544,
+    "yourTablesTop": null,
+    "firstTableTop": 572,
+    "problems": [
+     "1 of 21 painted frame(s) had table content above the doors' foot (first: resize->narrow-360, frame 1, lobby-public-games top 533 < doors 544 at 360x740)"
+    ]
+   },
+   {
+    "scenario": "loading",
+    "dsf": 1,
+    "uiScale": 1.1,
+    "viewport": "tablet-768",
+    "loadedAt": "wide-short-1920x600",
+    "actionsBottom": 735,
+    "yourTablesTop": null,
+    "firstTableTop": 762,
+    "problems": [
+     "1 of 22 painted frame(s) had table content above the doors' foot (first: resize->tablet-768, frame 2, lobby-public-games top 687 < doors 735 at 768x1024)"
+    ]
+   },
+   {
+    "scenario": "loading",
+    "dsf": 1,
+    "uiScale": 1.25,
+    "viewport": "tablet-768",
+    "loadedAt": "wide-2560",
+    "actionsBottom": 733,
+    "yourTablesTop": null,
+    "firstTableTop": 764,
+    "problems": [
+     "1 of 20 painted frame(s) had table content above the doors' foot (first: resize->tablet-768, frame 1, lobby-public-games top 635 < doors 733 at 768x1024)"
+    ]
+   },
+   {
+    "scenario": "tables-error",
+    "dsf": 1,
+    "uiScale": 0.75,
+    "viewport": "narrow-360",
+    "loadedAt": "desktop-1440",
+    "actionsBottom": 532,
+    "yourTablesTop": 551,
+    "firstTableTop": 551,
+    "problems": [
+     "1 of 21 painted frame(s) had table content above the doors' foot (first: resize->narrow-360, frame 2, my-tables top 524 < doors 532 at 360x740)"
+    ]
+   },
+   {
+    "scenario": "tables-error",
+    "dsf": 1,
+    "uiScale": 0.75,
+    "viewport": "tablet-768",
+    "loadedAt": "desktop-1440",
+    "actionsBottom": 735,
+    "yourTablesTop": 758,
+    "firstTableTop": 758,
+    "problems": [
+     "1 of 22 painted frame(s) had table content above the doors' foot (first: resize->tablet-768, frame 2, my-tables top 732 < doors 735 at 768x1024)"
+    ]
+   },
+   {
+    "scenario": "tables-error",
+    "dsf": 1,
+    "uiScale": 0.9,
+    "viewport": "tablet-768",
+    "loadedAt": "wide-1920",
+    "actionsBottom": 737,
+    "yourTablesTop": 760,
+    "firstTableTop": 760,
+    "problems": [
+     "1 of 21 painted frame(s) had table content above the doors' foot (first: resize->tablet-768, frame 1, my-tables top 697 < doors 737 at 768x1024)"
+    ]
+   },
+   {
+    "scenario": "tables-error",
+    "dsf": 1,
+    "uiScale": 1,
+    "viewport": "wide-short-1920x600",
+    "loadedAt": "wide-short-1920x600",
+    "actionsBottom": 500,
+    "yourTablesTop": 524,
+    "firstTableTop": 524,
+    "problems": [
+     "1 of 50 painted frame(s) had table content above the doors' foot (first: load, frame 1, lobby-public-games top 508 < doors 523 at 1920x600)"
+    ]
+   },
+   {
+    "scenario": "tables-error",
+    "dsf": 1,
+    "uiScale": 1,
+    "viewport": "tablet-768",
+    "loadedAt": "wide-short-1920x600",
+    "actionsBottom": 738,
+    "yourTablesTop": 762,
+    "firstTableTop": 762,
+    "problems": [
+     "1 of 20 painted frame(s) had table content above the doors' foot (first: resize->tablet-768, frame 1, my-tables top 693 < doors 738 at 768x1024)"
+    ]
+   },
+   {
+    "scenario": "tables-error",
+    "dsf": 1,
+    "uiScale": 1.1,
+    "viewport": "narrow-360",
+    "loadedAt": "wide-2560",
+    "actionsBottom": 544,
+    "yourTablesTop": 572,
+    "firstTableTop": 572,
+    "problems": [
+     "1 of 21 painted frame(s) had table content above the doors' foot (first: resize->narrow-360, frame 2, my-tables top 533 < doors 544 at 360x740)"
+    ]
+   },
+   {
+    "scenario": "tables-error",
+    "dsf": 1,
+    "uiScale": 1.1,
+    "viewport": "tablet-768",
+    "loadedAt": "wide-2560",
+    "actionsBottom": 735,
+    "yourTablesTop": 762,
+    "firstTableTop": 762,
+    "problems": [
+     "1 of 20 painted frame(s) had table content above the doors' foot (first: resize->tablet-768, frame 1, my-tables top 687 < doors 735 at 768x1024)"
+    ]
+   },
+   {
+    "scenario": "tables-error",
+    "dsf": 1,
+    "uiScale": 1.25,
+    "viewport": "tablet-768",
+    "loadedAt": "narrow-320",
+    "actionsBottom": 733,
+    "yourTablesTop": 764,
+    "firstTableTop": 764,
+    "problems": [
+     "1 of 21 painted frame(s) had table content above the doors' foot (first: resize->tablet-768, frame 1, my-tables top 635 < doors 733 at 768x1024)"
+    ]
+   },
+   {
+    "scenario": "long-metadata:resize-cycle",
+    "dsf": 1,
+    "uiScale": 0.63,
+    "viewport": "cycle->1920x600",
+    "loadedAt": null,
+    "actionsBottom": 466,
+    "yourTablesTop": 481,
+    "firstTableTop": 481,
+    "problems": [
+     "1 of 43 painted frame(s) had table content above the doors' foot (first: resize-cycle, frame 24, my-tables top 460 < doors 466 at 1920x600)"
+    ]
+   },
+   {
+    "scenario": "long-metadata",
+    "dsf": 1,
+    "uiScale": 0.75,
+    "viewport": "narrow-360",
+    "loadedAt": "wide-1920",
+    "actionsBottom": 532,
+    "yourTablesTop": 551,
+    "firstTableTop": 551,
+    "problems": [
+     "1 of 21 painted frame(s) had table content above the doors' foot (first: resize->narrow-360, frame 2, my-tables top 524 < doors 532 at 360x740)"
+    ]
+   },
+   {
+    "scenario": "long-metadata",
+    "dsf": 1,
+    "uiScale": 0.75,
+    "viewport": "tablet-768",
+    "loadedAt": "wide-1920",
+    "actionsBottom": 735,
+    "yourTablesTop": 758,
+    "firstTableTop": 758,
+    "problems": [
+     "1 of 20 painted frame(s) had table content above the doors' foot (first: resize->tablet-768, frame 1, my-tables top 732 < doors 735 at 768x1024)"
+    ]
+   },
+   {
+    "scenario": "long-metadata:resize-cycle",
+    "dsf": 1,
+    "uiScale": 0.75,
+    "viewport": "cycle->1920x600",
+    "loadedAt": null,
+    "actionsBottom": 474,
+    "yourTablesTop": 492,
+    "firstTableTop": 492,
+    "problems": [
+     "1 of 43 painted frame(s) had table content above the doors' foot (first: resize-cycle, frame 23, my-tables top 439 < doors 474 at 1920x600)"
+    ]
+   },
+   {
+    "scenario": "long-metadata",
+    "dsf": 1,
+    "uiScale": 0.9,
+    "viewport": "wide-short-1920x600",
+    "loadedAt": "wide-short-1920x600",
+    "actionsBottom": 481,
+    "yourTablesTop": 503,
+    "firstTableTop": 503,
+    "problems": [
+     "1 of 49 painted frame(s) had table content above the doors' foot (first: load, frame 1, lobby-public-games top 457 < doors 471 at 1920x600)"
+    ]
+   },
+   {
+    "scenario": "long-metadata",
+    "dsf": 1,
+    "uiScale": 0.9,
+    "viewport": "tablet-768",
+    "loadedAt": "wide-short-1920x600",
+    "actionsBottom": 737,
+    "yourTablesTop": 760,
+    "firstTableTop": 760,
+    "problems": [
+     "1 of 22 painted frame(s) had table content above the doors' foot (first: resize->tablet-768, frame 1, my-tables top 697 < doors 737 at 768x1024)"
+    ]
+   },
+   {
+    "scenario": "long-metadata:resize-cycle",
+    "dsf": 1,
+    "uiScale": 0.9,
+    "viewport": "cycle->1920x600",
+    "loadedAt": null,
+    "actionsBottom": 481,
+    "yourTablesTop": 503,
+    "firstTableTop": 503,
+    "problems": [
+     "1 of 43 painted frame(s) had table content above the doors' foot (first: resize-cycle, frame 24, my-tables top 441 < doors 481 at 1920x600)"
+    ]
+   },
+   {
+    "scenario": "long-metadata",
+    "dsf": 1,
+    "uiScale": 1,
+    "viewport": "tablet-768",
+    "loadedAt": "wide-2560",
+    "actionsBottom": 738,
+    "yourTablesTop": 762,
+    "firstTableTop": 762,
+    "problems": [
+     "1 of 21 painted frame(s) had table content above the doors' foot (first: resize->tablet-768, frame 1, my-tables top 693 < doors 738 at 768x1024)"
+    ]
+   },
+   {
+    "scenario": "long-metadata:resize-cycle",
+    "dsf": 1,
+    "uiScale": 1,
+    "viewport": "cycle->1920x600",
+    "loadedAt": null,
+    "actionsBottom": 500,
+    "yourTablesTop": 524,
+    "firstTableTop": 524,
+    "problems": [
+     "1 of 36 painted frame(s) had table content above the doors' foot (first: resize-cycle, frame 18, my-tables top 456 < doors 500 at 1920x600)"
+    ]
+   },
+   {
+    "scenario": "long-metadata",
+    "dsf": 1,
+    "uiScale": 1.1,
+    "viewport": "narrow-360",
+    "loadedAt": "narrow-320",
+    "actionsBottom": 544,
+    "yourTablesTop": 572,
+    "firstTableTop": 572,
+    "problems": [
+     "1 of 21 painted frame(s) had table content above the doors' foot (first: resize->narrow-360, frame 1, my-tables top 533 < doors 544 at 360x740)"
+    ]
+   },
+   {
+    "scenario": "long-metadata",
+    "dsf": 1,
+    "uiScale": 1.1,
+    "viewport": "tablet-768",
+    "loadedAt": "narrow-320",
+    "actionsBottom": 735,
+    "yourTablesTop": 762,
+    "firstTableTop": 762,
+    "problems": [
+     "1 of 21 painted frame(s) had table content above the doors' foot (first: resize->tablet-768, frame 1, my-tables top 687 < doors 735 at 768x1024)"
+    ]
+   },
+   {
+    "scenario": "long-metadata:resize-cycle",
+    "dsf": 1,
+    "uiScale": 1.1,
+    "viewport": "cycle->1920x600",
+    "loadedAt": null,
+    "actionsBottom": 549,
+    "yourTablesTop": 576,
+    "firstTableTop": 576,
+    "problems": [
+     "1 of 43 painted frame(s) had table content above the doors' foot (first: resize-cycle, frame 23, my-tables top 463 < doors 549 at 1920x600)"
+    ]
+   },
+   {
+    "scenario": "long-metadata",
+    "dsf": 1,
+    "uiScale": 1.25,
+    "viewport": "tablet-768",
+    "loadedAt": "narrow-360",
+    "actionsBottom": 733,
+    "yourTablesTop": 764,
+    "firstTableTop": 764,
+    "problems": [
+     "1 of 22 painted frame(s) had table content above the doors' foot (first: resize->tablet-768, frame 1, my-tables top 635 < doors 733 at 768x1024)"
+    ]
+   },
+   {
+    "scenario": "long-metadata:resize-cycle",
+    "dsf": 1,
+    "uiScale": 1.25,
+    "viewport": "cycle->1920x600",
+    "loadedAt": null,
+    "actionsBottom": 575,
+    "yourTablesTop": 605,
+    "firstTableTop": 605,
+    "problems": [
+     "1 of 44 painted frame(s) had table content above the doors' foot (first: resize-cycle, frame 24, my-tables top 476 < doors 575 at 1920x600)"
+    ]
+   },
+   {
+    "scenario": "sign-in-after-render:before",
+    "dsf": 1,
+    "uiScale": 0.75,
+    "viewport": "wide-short-1920x600",
+    "loadedAt": null,
+    "actionsBottom": 474,
+    "yourTablesTop": null,
+    "firstTableTop": 492,
+    "problems": [
+     "2 of 31 painted frame(s) had table content above the doors' foot (first: load, frame 1, lobby-public-games top 436 < doors 456 at 1920x600)"
+    ]
+   },
+   {
+    "scenario": "sign-in-after-render",
+    "dsf": 1,
+    "uiScale": 0.75,
+    "viewport": "narrow-360",
+    "loadedAt": "wide-short-1920x600",
+    "actionsBottom": 532,
+    "yourTablesTop": 551,
+    "firstTableTop": 551,
+    "problems": [
+     "1 of 21 painted frame(s) had table content above the doors' foot (first: resize->narrow-360, frame 2, my-tables top 524 < doors 532 at 360x740)"
+    ]
+   },
+   {
+    "scenario": "sign-in-after-render",
+    "dsf": 1,
+    "uiScale": 0.75,
+    "viewport": "tablet-768",
+    "loadedAt": "wide-short-1920x600",
+    "actionsBottom": 735,
+    "yourTablesTop": 758,
+    "firstTableTop": 758,
+    "problems": [
+     "1 of 20 painted frame(s) had table content above the doors' foot (first: resize->tablet-768, frame 1, my-tables top 732 < doors 735 at 768x1024)"
+    ]
+   },
+   {
+    "scenario": "sign-in-after-render",
+    "dsf": 1,
+    "uiScale": 0.9,
+    "viewport": "tablet-768",
+    "loadedAt": "wide-2560",
+    "actionsBottom": 737,
+    "yourTablesTop": 760,
+    "firstTableTop": 760,
+    "problems": [
+     "1 of 21 painted frame(s) had table content above the doors' foot (first: resize->tablet-768, frame 1, my-tables top 697 < doors 737 at 768x1024)"
+    ]
+   },
+   {
+    "scenario": "sign-in-after-render",
+    "dsf": 1,
+    "uiScale": 1,
+    "viewport": "tablet-768",
+    "loadedAt": "narrow-320",
+    "actionsBottom": 738,
+    "yourTablesTop": 762,
+    "firstTableTop": 762,
+    "problems": [
+     "1 of 20 painted frame(s) had table content above the doors' foot (first: resize->tablet-768, frame 1, my-tables top 693 < doors 738 at 768x1024)"
+    ]
+   },
+   {
+    "scenario": "sign-in-after-render",
+    "dsf": 1,
+    "uiScale": 1.1,
+    "viewport": "tablet-768",
+    "loadedAt": "narrow-360",
+    "actionsBottom": 735,
+    "yourTablesTop": 762,
+    "firstTableTop": 762,
+    "problems": [
+     "1 of 21 painted frame(s) had table content above the doors' foot (first: resize->tablet-768, frame 1, my-tables top 687 < doors 735 at 768x1024)"
+    ]
+   },
+   {
+    "scenario": "sign-in-after-render",
+    "dsf": 1,
+    "uiScale": 1.25,
+    "viewport": "tablet-768",
+    "loadedAt": "narrow-375",
+    "actionsBottom": 733,
+    "yourTablesTop": 764,
+    "firstTableTop": 764,
+    "problems": [
+     "1 of 22 painted frame(s) had table content above the doors' foot (first: resize->tablet-768, frame 1, my-tables top 635 < doors 733 at 768x1024)"
+    ]
+   },
+   {
+    "scenario": "font-reflow",
+    "dsf": 1,
+    "uiScale": 0.63,
+    "viewport": "wide-short-1920x600",
+    "loadedAt": "wide-short-1920x600",
+    "actionsBottom": 493,
+    "yourTablesTop": 508,
+    "firstTableTop": 508,
+    "problems": [
+     "2 of 78 painted frame(s) had table content above the doors' foot (first: load, frame 1, lobby-public-games top 437 < doors 451 at 1920x600)"
+    ]
+   },
+   {
+    "scenario": "font-reflow",
+    "dsf": 1,
+    "uiScale": 0.63,
+    "viewport": "tablet-768",
+    "loadedAt": "wide-short-1920x600",
+    "actionsBottom": 745,
+    "yourTablesTop": 760,
+    "firstTableTop": 760,
+    "problems": [
+     "1 of 22 painted frame(s) had table content above the doors' foot (first: resize->tablet-768, frame 1, my-tables top 739 < doors 745 at 768x1024)"
+    ]
+   },
+   {
+    "scenario": "font-reflow",
+    "dsf": 1,
+    "uiScale": 0.75,
+    "viewport": "narrow-360",
+    "loadedAt": "wide-2560",
+    "actionsBottom": 532,
+    "yourTablesTop": 551,
+    "firstTableTop": 551,
+    "problems": [
+     "1 of 20 painted frame(s) had table content above the doors' foot (first: resize->narrow-360, frame 1, my-tables top 524 < doors 532 at 360x740)"
+    ]
+   },
+   {
+    "scenario": "font-reflow",
+    "dsf": 1,
+    "uiScale": 0.75,
+    "viewport": "tablet-768",
+    "loadedAt": "wide-2560",
+    "actionsBottom": 742,
+    "yourTablesTop": 761,
+    "firstTableTop": 761,
+    "problems": [
+     "1 of 22 painted frame(s) had table content above the doors' foot (first: resize->tablet-768, frame 1, my-tables top 732 < doors 742 at 768x1024)"
+    ]
+   },
+   {
+    "scenario": "font-reflow",
+    "dsf": 1,
+    "uiScale": 0.9,
+    "viewport": "narrow-320",
+    "loadedAt": "narrow-320",
+    "actionsBottom": 449,
+    "yourTablesTop": 472,
+    "firstTableTop": 472,
+    "problems": [
+     "1 of 75 painted frame(s) had table content above the doors' foot (first: late-reflow, frame 30, my-tables top 468 < doors 481 at 320x568)"
+    ]
+   },
+   {
+    "scenario": "font-reflow",
+    "dsf": 1,
+    "uiScale": 0.9,
+    "viewport": "tablet-768",
+    "loadedAt": "narrow-320",
+    "actionsBottom": 739,
+    "yourTablesTop": 761,
+    "firstTableTop": 761,
+    "problems": [
+     "1 of 21 painted frame(s) had table content above the doors' foot (first: resize->tablet-768, frame 1, my-tables top 696 < doors 739 at 768x1024)"
+    ]
+   },
+   {
+    "scenario": "font-reflow",
+    "dsf": 1,
+    "uiScale": 1,
+    "viewport": "narrow-360",
+    "loadedAt": "narrow-360",
+    "actionsBottom": 528,
+    "yourTablesTop": 552,
+    "firstTableTop": 552,
+    "problems": [
+     "1 of 78 painted frame(s) had table content above the doors' foot (first: late-reflow, frame 33, my-tables top 552 < doors 598 at 360x740)"
+    ]
+   },
+   {
+    "scenario": "font-reflow",
+    "dsf": 1,
+    "uiScale": 1,
+    "viewport": "tablet-768",
+    "loadedAt": "narrow-360",
+    "actionsBottom": 738,
+    "yourTablesTop": 762,
+    "firstTableTop": 762,
+    "problems": [
+     "1 of 21 painted frame(s) had table content above the doors' foot (first: resize->tablet-768, frame 1, my-tables top 688 < doors 738 at 768x1024)"
+    ]
+   },
+   {
+    "scenario": "font-reflow",
+    "dsf": 1,
+    "uiScale": 1.1,
+    "viewport": "narrow-360",
+    "loadedAt": "narrow-375",
+    "actionsBottom": 550,
+    "yourTablesTop": 576,
+    "firstTableTop": 576,
+    "problems": [
+     "1 of 21 painted frame(s) had table content above the doors' foot (first: resize->narrow-360, frame 1, my-tables top 567 < doors 579 at 360x740)"
+    ]
+   },
+   {
+    "scenario": "font-reflow",
+    "dsf": 1,
+    "uiScale": 1.1,
+    "viewport": "tablet-768",
+    "loadedAt": "narrow-375",
+    "actionsBottom": 736,
+    "yourTablesTop": 762,
+    "firstTableTop": 762,
+    "problems": [
+     "1 of 21 painted frame(s) had table content above the doors' foot (first: resize->tablet-768, frame 1, my-tables top 683 < doors 736 at 768x1024)"
+    ]
+   },
+   {
+    "scenario": "font-reflow",
+    "dsf": 1,
+    "uiScale": 1.25,
+    "viewport": "tablet-768",
+    "loadedAt": "tablet-768",
+    "actionsBottom": 733,
+    "yourTablesTop": 763,
+    "firstTableTop": 763,
+    "problems": [
+     "1 of 77 painted frame(s) had table content above the doors' foot (first: load, frame 4, lobby-public-games top 723 < doors 733 at 768x1024)"
+    ]
+   },
+   {
+    "scenario": "font-reflow",
+    "dsf": 1,
+    "uiScale": 1.25,
+    "viewport": "laptop-1024",
+    "loadedAt": "tablet-768",
+    "actionsBottom": 592,
+    "yourTablesTop": 650,
+    "firstTableTop": 650,
+    "problems": [
+     "1 of 22 painted frame(s) had table content above the doors' foot (first: resize->laptop-1024, frame 1, my-tables top 521 < doors 592 at 1024x768)"
+    ]
+   },
+   {
+    "scenario": "load-at-size",
+    "dsf": 1,
+    "uiScale": 0.63,
+    "viewport": "narrow-320",
+    "loadedAt": "narrow-320",
+    "actionsBottom": 407,
+    "yourTablesTop": 423,
+    "firstTableTop": 423,
+    "problems": [
+     "1 of 30 painted frame(s) had table content above the doors' foot (first: load, frame 5, my-tables top 399 < doors 407 at 320x568)"
+    ]
+   },
+   {
+    "scenario": "load-at-size",
+    "dsf": 1,
+    "uiScale": 0.75,
+    "viewport": "narrow-360",
+    "loadedAt": "narrow-360",
+    "actionsBottom": 532,
+    "yourTablesTop": 551,
+    "firstTableTop": 551,
+    "problems": [
+     "1 of 31 painted frame(s) had table content above the doors' foot (first: load, frame 5, lobby-public-games top 524 < doors 532 at 360x740)"
+    ]
+   },
+   {
+    "scenario": "load-at-size",
+    "dsf": 1,
+    "uiScale": 0.75,
+    "viewport": "narrow-375",
+    "loadedAt": "narrow-375",
+    "actionsBottom": 478,
+    "yourTablesTop": 497,
+    "firstTableTop": 497,
+    "problems": [
+     "1 of 30 painted frame(s) had table content above the doors' foot (first: load, frame 4, lobby-public-games top 470 < doors 478 at 375x667)"
+    ]
+   },
+   {
+    "scenario": "load-at-size",
+    "dsf": 1,
+    "uiScale": 1.1,
+    "viewport": "tablet-768",
+    "loadedAt": "tablet-768",
+    "actionsBottom": 735,
+    "yourTablesTop": 762,
+    "firstTableTop": 762,
+    "problems": [
+     "1 of 29 painted frame(s) had table content above the doors' foot (first: load, frame 3, my-tables top 726 < doors 735 at 768x1024)"
+    ]
+   },
+   {
+    "scenario": "load-at-size",
+    "dsf": 1,
+    "uiScale": 1.25,
+    "viewport": "tablet-768",
+    "loadedAt": "tablet-768",
+    "actionsBottom": 733,
+    "yourTablesTop": 764,
+    "firstTableTop": 764,
+    "problems": [
+     "1 of 33 painted frame(s) had table content above the doors' foot (first: load, frame 5, my-tables top 723 < doors 733 at 768x1024)"
+    ]
+   },
+   {
+    "scenario": "load-at-size",
+    "dsf": 1,
+    "uiScale": 0.9,
+    "viewport": "laptop-1024",
+    "loadedAt": "laptop-1024",
+    "actionsBottom": 550,
+    "yourTablesTop": 572,
+    "firstTableTop": 572,
+    "problems": [
+     "1 of 30 painted frame(s) had table content above the doors' foot (first: load, frame 1, lobby-public-games top 558 < doors 558 at 1024x768)"
+    ]
+   },
+   {
+    "scenario": "load-at-size",
+    "dsf": 1,
+    "uiScale": 1,
+    "viewport": "laptop-1024",
+    "loadedAt": "laptop-1024",
+    "actionsBottom": 548,
+    "yourTablesTop": 573,
+    "firstTableTop": 573,
+    "problems": [
+     "1 of 30 painted frame(s) had table content above the doors' foot (first: load, frame 1, lobby-public-games top 556 < doors 561 at 1024x768)"
+    ]
+   },
+   {
+    "scenario": "load-at-size",
+    "dsf": 1,
+    "uiScale": 1.1,
+    "viewport": "laptop-1024",
+    "loadedAt": "laptop-1024",
+    "actionsBottom": 549,
+    "yourTablesTop": 576,
+    "firstTableTop": 576,
+    "problems": [
+     "1 of 32 painted frame(s) had table content above the doors' foot (first: load, frame 1, lobby-public-games top 559 < doors 563 at 1024x768)"
+    ]
+   },
+   {
+    "scenario": "load-at-size",
+    "dsf": 1,
+    "uiScale": 0.9,
+    "viewport": "laptop-1366",
+    "loadedAt": "laptop-1366",
+    "actionsBottom": 550,
+    "yourTablesTop": 572,
+    "firstTableTop": 572,
+    "problems": [
+     "1 of 30 painted frame(s) had table content above the doors' foot (first: load, frame 1, lobby-public-games top 558 < doors 558 at 1366x768)"
+    ]
+   },
+   {
+    "scenario": "load-at-size",
+    "dsf": 1,
+    "uiScale": 1,
+    "viewport": "laptop-1366",
+    "loadedAt": "laptop-1366",
+    "actionsBottom": 548,
+    "yourTablesTop": 573,
+    "firstTableTop": 573,
+    "problems": [
+     "1 of 30 painted frame(s) had table content above the doors' foot (first: load, frame 1, lobby-public-games top 556 < doors 561 at 1366x768)"
+    ]
+   },
+   {
+    "scenario": "load-at-size",
+    "dsf": 1,
+    "uiScale": 1.1,
+    "viewport": "laptop-1366",
+    "loadedAt": "laptop-1366",
+    "actionsBottom": 549,
+    "yourTablesTop": 576,
+    "firstTableTop": 576,
+    "problems": [
+     "1 of 31 painted frame(s) had table content above the doors' foot (first: load, frame 1, lobby-public-games top 559 < doors 563 at 1366x768)"
+    ]
+   },
+   {
+    "scenario": "load-at-size",
+    "dsf": 1,
+    "uiScale": 1.1,
+    "viewport": "desktop-1440",
+    "loadedAt": "desktop-1440",
+    "actionsBottom": 643,
+    "yourTablesTop": 670,
+    "firstTableTop": 670,
+    "problems": [
+     "1 of 30 painted frame(s) had table content above the doors' foot (first: load, frame 1, lobby-public-games top 653 < doors 656 at 1440x900)"
+    ]
+   },
+   {
+    "scenario": "load-at-size",
+    "dsf": 1,
+    "uiScale": 1.25,
+    "viewport": "desktop-1440",
+    "loadedAt": "desktop-1440",
+    "actionsBottom": 641,
+    "yourTablesTop": 671,
+    "firstTableTop": 671,
+    "problems": [
+     "1 of 31 painted frame(s) had table content above the doors' foot (first: load, frame 1, lobby-public-games top 651 < doors 659 at 1440x900)"
+    ]
+   },
+   {
+    "scenario": "load-at-size",
+    "dsf": 1,
+    "uiScale": 1.25,
+    "viewport": "wide-1920",
+    "loadedAt": "wide-1920",
+    "actionsBottom": 774,
+    "yourTablesTop": 805,
+    "firstTableTop": 805,
+    "problems": [
+     "1 of 30 painted frame(s) had table content above the doors' foot (first: load, frame 1, lobby-public-games top 784 < doors 785 at 1920x1080)"
+    ]
+   },
+   {
+    "scenario": "load-at-size",
+    "dsf": 1,
+    "uiScale": 0.63,
+    "viewport": "wide-short-1920x600",
+    "loadedAt": "wide-short-1920x600",
+    "actionsBottom": 466,
+    "yourTablesTop": 481,
+    "firstTableTop": 481,
+    "problems": [
+     "2 of 31 painted frame(s) had table content above the doors' foot (first: load, frame 1, lobby-public-games top 437 < doors 451 at 1920x600)"
+    ]
+   },
+   {
+    "scenario": "load-at-size",
+    "dsf": 1,
+    "uiScale": 0.75,
+    "viewport": "wide-short-1920x600",
+    "loadedAt": "wide-short-1920x600",
+    "actionsBottom": 474,
+    "yourTablesTop": 492,
+    "firstTableTop": 492,
+    "problems": [
+     "2 of 30 painted frame(s) had table content above the doors' foot (first: load, frame 1, lobby-public-games top 436 < doors 456 at 1920x600)"
+    ]
+   },
+   {
+    "scenario": "load-at-size",
+    "dsf": 1,
+    "uiScale": 0.9,
+    "viewport": "wide-short-1920x600",
+    "loadedAt": "wide-short-1920x600",
+    "actionsBottom": 481,
+    "yourTablesTop": 503,
+    "firstTableTop": 503,
+    "problems": [
+     "1 of 30 painted frame(s) had table content above the doors' foot (first: load, frame 1, lobby-public-games top 457 < doors 471 at 1920x600)"
+    ]
+   },
+   {
+    "scenario": "load-at-size",
+    "dsf": 1,
+    "uiScale": 1,
+    "viewport": "wide-short-1920x600",
+    "loadedAt": "wide-short-1920x600",
+    "actionsBottom": 500,
+    "yourTablesTop": 524,
+    "firstTableTop": 524,
+    "problems": [
+     "1 of 29 painted frame(s) had table content above the doors' foot (first: load, frame 1, lobby-public-games top 508 < doors 523 at 1920x600)"
+    ]
+   },
+   {
+    "scenario": "load-at-size",
+    "dsf": 1,
+    "uiScale": 1.1,
+    "viewport": "wide-short-1920x600",
+    "loadedAt": "wide-short-1920x600",
+    "actionsBottom": 549,
+    "yourTablesTop": 576,
+    "firstTableTop": 576,
+    "problems": [
+     "1 of 30 painted frame(s) had table content above the doors' foot (first: load, frame 1, lobby-public-games top 559 < doors 576 at 1920x600)"
+    ]
+   },
+   {
+    "scenario": "load-at-size",
+    "dsf": 1,
+    "uiScale": 1.25,
+    "viewport": "wide-short-1920x600",
+    "loadedAt": "wide-short-1920x600",
+    "actionsBottom": 575,
+    "yourTablesTop": 605,
+    "firstTableTop": 605,
+    "problems": [
+     "1 of 33 painted frame(s) had table content above the doors' foot (first: load, frame 1, lobby-public-games top 585 < doors 604 at 1920x600)"
+    ]
+   },
+   {
+    "scenario": "signed-in-0",
+    "dsf": 2,
+    "uiScale": 0.75,
+    "viewport": "zoom200-1920x1080",
+    "loadedAt": "zoom200-1920x1080",
+    "actionsBottom": 384,
+    "yourTablesTop": null,
+    "firstTableTop": 403,
+    "problems": [
+     "1 of 50 painted frame(s) had table content above the doors' foot (first: load, frame 1, lobby-public-games top 391 < doors 396 at 960x540)"
+    ]
+   },
+   {
+    "scenario": "signed-in-many",
+    "dsf": 2,
+    "uiScale": 0.75,
+    "viewport": "zoom200-1920x1080",
+    "loadedAt": "zoom200-1920x1080",
+    "actionsBottom": 384,
+    "yourTablesTop": 403,
+    "firstTableTop": 403,
+    "problems": [
+     "1 of 52 painted frame(s) had table content above the doors' foot (first: load, frame 1, lobby-public-games top 391 < doors 396 at 960x540)"
+    ]
+   },
+   {
+    "scenario": "signed-in-many:resize-cycle",
+    "dsf": 2,
+    "uiScale": 1.25,
+    "viewport": "cycle->1920x600",
+    "loadedAt": null,
+    "actionsBottom": 575,
+    "yourTablesTop": 605,
+    "firstTableTop": 605,
+    "problems": [
+     "1 of 37 painted frame(s) had table content above the doors' foot (first: resize-cycle, frame 1, my-tables top 1026 < doors 1037 at 2560x1440)"
+    ]
+   },
+   {
+    "scenario": "tables-error",
+    "dsf": 2,
+    "uiScale": 0.75,
+    "viewport": "zoom200-1920x1080",
+    "loadedAt": "zoom200-1920x1080",
+    "actionsBottom": 384,
+    "yourTablesTop": 403,
+    "firstTableTop": 403,
+    "problems": [
+     "1 of 52 painted frame(s) had table content above the doors' foot (first: load, frame 1, lobby-public-games top 391 < doors 396 at 960x540)"
+    ]
+   },
+   {
+    "scenario": "sign-in-after-render:before",
+    "dsf": 2,
+    "uiScale": 0.75,
+    "viewport": "zoom200-1920x1080",
+    "loadedAt": null,
+    "actionsBottom": 384,
+    "yourTablesTop": null,
+    "firstTableTop": 403,
+    "problems": [
+     "1 of 30 painted frame(s) had table content above the doors' foot (first: load, frame 1, lobby-public-games top 391 < doors 396 at 960x540)"
+    ]
+   },
+   {
+    "scenario": "load-at-size",
+    "dsf": 2,
+    "uiScale": 0.75,
+    "viewport": "zoom200-1920x1080",
+    "loadedAt": "zoom200-1920x1080",
+    "actionsBottom": 384,
+    "yourTablesTop": 403,
+    "firstTableTop": 403,
+    "problems": [
+     "1 of 31 painted frame(s) had table content above the doors' foot (first: load, frame 1, lobby-public-games top 391 < doors 396 at 960x540)"
+    ]
+   },
+   {
+    "scenario": "signed-out",
+    "dsf": 3,
+    "uiScale": 0.63,
+    "viewport": "display300-3840x2160",
+    "loadedAt": "phone-390-dpr3",
+    "actionsBottom": 468,
+    "yourTablesTop": null,
+    "firstTableTop": 483,
+    "problems": [
+     "1 of 20 painted frame(s) had table content above the doors' foot (first: resize->display300-3840x2160, frame 1, lobby-public-games top 461 < doors 468 at 1280x650)"
+    ]
+   },
+   {
+    "scenario": "signed-out",
+    "dsf": 3,
+    "uiScale": 0.75,
+    "viewport": "zoom300-1920x1000-chrome",
+    "loadedAt": "zoom300-1920x1080",
+    "actionsBottom": 268,
+    "yourTablesTop": null,
+    "firstTableTop": 300,
+    "problems": [
+     "1 of 21 painted frame(s) had table content above the doors' foot (first: resize->zoom300-1920x1000-chrome, frame 2, lobby-public-games top 247 < doors 268 at 640x300)"
+    ]
+   },
+   {
+    "scenario": "signed-out",
+    "dsf": 3,
+    "uiScale": 0.75,
+    "viewport": "display300-3840x2160",
+    "loadedAt": "zoom300-1920x1080",
+    "actionsBottom": 466,
+    "yourTablesTop": null,
+    "firstTableTop": 484,
+    "problems": [
+     "1 of 20 painted frame(s) had table content above the doors' foot (first: resize->display300-3840x2160, frame 1, lobby-public-games top 458 < doors 466 at 1280x650)"
+    ]
+   },
+   {
+    "scenario": "signed-out",
+    "dsf": 3,
+    "uiScale": 0.9,
+    "viewport": "display300-3840x2160",
+    "loadedAt": "zoom300-1920x1000-chrome",
+    "actionsBottom": 463,
+    "yourTablesTop": null,
+    "firstTableTop": 485,
+    "problems": [
+     "1 of 22 painted frame(s) had table content above the doors' foot (first: resize->display300-3840x2160, frame 1, lobby-public-games top 423 < doors 463 at 1280x650)"
+    ]
+   },
+   {
+    "scenario": "signed-out",
+    "dsf": 3,
+    "uiScale": 1,
+    "viewport": "display300-3840x2160",
+    "loadedAt": "zoom300-2560x1440",
+    "actionsBottom": 500,
+    "yourTablesTop": null,
+    "firstTableTop": 524,
+    "problems": [
+     "1 of 20 painted frame(s) had table content above the doors' foot (first: resize->display300-3840x2160, frame 1, lobby-public-games top 456 < doors 500 at 1280x650)"
+    ]
+   },
+   {
+    "scenario": "signed-in-0",
+    "dsf": 3,
+    "uiScale": 0.75,
+    "viewport": "display300-3840x2160",
+    "loadedAt": "zoom300-1920x1000-chrome",
+    "actionsBottom": 466,
+    "yourTablesTop": null,
+    "firstTableTop": 484,
+    "problems": [
+     "1 of 20 painted frame(s) had table content above the doors' foot (first: resize->display300-3840x2160, frame 1, lobby-public-games top 458 < doors 466 at 1280x650)"
+    ]
+   },
+   {
+    "scenario": "signed-in-0",
+    "dsf": 3,
+    "uiScale": 0.9,
+    "viewport": "display300-3840x2160",
+    "loadedAt": "zoom300-2560x1440",
+    "actionsBottom": 463,
+    "yourTablesTop": null,
+    "firstTableTop": 485,
+    "problems": [
+     "1 of 20 painted frame(s) had table content above the doors' foot (first: resize->display300-3840x2160, frame 1, lobby-public-games top 455 < doors 463 at 1280x650)"
+    ]
+   },
+   {
+    "scenario": "signed-in-0",
+    "dsf": 3,
+    "uiScale": 1,
+    "viewport": "zoom300-1366x768",
+    "loadedAt": "zoom300-1366x768",
+    "actionsBottom": 214,
+    "yourTablesTop": null,
+    "firstTableTop": 256,
+    "problems": [
+     "1 of 51 painted frame(s) had table content above the doors' foot (first: load, frame 4, lobby-public-games top 239 < doors 249 at 455x256)"
+    ]
+   },
+   {
+    "scenario": "signed-in-0",
+    "dsf": 3,
+    "uiScale": 1.25,
+    "viewport": "zoom300-1920x1080",
+    "loadedAt": "phone-390-dpr3",
+    "actionsBottom": 281,
+    "yourTablesTop": null,
+    "firstTableTop": 360,
+    "problems": [
+     "1 of 20 painted frame(s) had table content above the doors' foot (first: resize->zoom300-1920x1080, frame 1, lobby-public-games top 317 < doors 320 at 640x360)"
+    ]
+   },
+   {
+    "scenario": "signed-in-1",
+    "dsf": 3,
+    "uiScale": 0.75,
+    "viewport": "display300-3840x2160",
+    "loadedAt": "zoom300-2560x1440",
+    "actionsBottom": 466,
+    "yourTablesTop": 484,
+    "firstTableTop": 484,
+    "problems": [
+     "1 of 21 painted frame(s) had table content above the doors' foot (first: resize->display300-3840x2160, frame 1, my-tables top 458 < doors 466 at 1280x650)"
+    ]
+   },
+   {
+    "scenario": "signed-in-1",
+    "dsf": 3,
+    "uiScale": 0.9,
+    "viewport": "zoom300-1366x768",
+    "loadedAt": "zoom300-1366x768",
+    "actionsBottom": 200,
+    "yourTablesTop": 256,
+    "firstTableTop": 256,
+    "problems": [
+     "1 of 47 painted frame(s) had table content above the doors' foot (first: load, frame 6, my-tables top 224 < doors 232 at 455x256)"
+    ]
+   },
+   {
+    "scenario": "signed-in-1",
+    "dsf": 3,
+    "uiScale": 1,
+    "viewport": "display300-3840x2160",
+    "loadedAt": "display300-3840x2160",
+    "actionsBottom": 500,
+    "yourTablesTop": 524,
+    "firstTableTop": 524,
+    "problems": [
+     "1 of 49 painted frame(s) had table content above the doors' foot (first: load, frame 1, lobby-public-games top 508 < doors 523 at 1280x650)"
+    ]
+   },
+   {
+    "scenario": "signed-in-1",
+    "dsf": 3,
+    "uiScale": 1.1,
+    "viewport": "display300-3840x2160",
+    "loadedAt": "phone-390-dpr3",
+    "actionsBottom": 526,
+    "yourTablesTop": 572,
+    "firstTableTop": 572,
+    "problems": [
+     "1 of 22 painted frame(s) had table content above the doors' foot (first: resize->display300-3840x2160, frame 1, my-tables top 496 < doors 526 at 1280x650)"
+    ]
+   },
+   {
+    "scenario": "signed-in-1",
+    "dsf": 3,
+    "uiScale": 1.25,
+    "viewport": "zoom300-1920x1080",
+    "loadedAt": "zoom300-1920x1080",
+    "actionsBottom": 281,
+    "yourTablesTop": 360,
+    "firstTableTop": 360,
+    "problems": [
+     "1 of 53 painted frame(s) had table content above the doors' foot (first: load, frame 4, lobby-public-games top 316 < doors 321 at 640x360)"
+    ]
+   },
+   {
+    "scenario": "signed-in-1",
+    "dsf": 3,
+    "uiScale": 1.25,
+    "viewport": "zoom300-1920x1000-chrome",
+    "loadedAt": "zoom300-1920x1080",
+    "actionsBottom": 276,
+    "yourTablesTop": 306,
+    "firstTableTop": 306,
+    "problems": [
+     "1 of 20 painted frame(s) had table content above the doors' foot (first: resize->zoom300-1920x1000-chrome, frame 1, my-tables top 307 < doors 320 at 640x300)"
+    ]
+   },
+   {
+    "scenario": "signed-in-many",
+    "dsf": 3,
+    "uiScale": 0.63,
+    "viewport": "zoom300-2560x1440",
+    "loadedAt": "zoom300-2560x1440",
+    "actionsBottom": 342,
+    "yourTablesTop": 358,
+    "firstTableTop": 358,
+    "problems": [
+     "1 of 50 painted frame(s) had table content above the doors' foot (first: load, frame 1, lobby-public-games top 348 < doors 351 at 853x480)"
+    ]
+   },
+   {
+    "scenario": "signed-in-many:resize-cycle",
+    "dsf": 3,
+    "uiScale": 0.75,
+    "viewport": "cycle->1920x600",
+    "loadedAt": null,
+    "actionsBottom": 474,
+    "yourTablesTop": 492,
+    "firstTableTop": 492,
+    "problems": [
+     "1 of 41 painted frame(s) had table content above the doors' foot (first: resize-cycle, frame 20, my-tables top 466 < doors 474 at 1920x600)"
+    ]
+   },
+   {
+    "scenario": "signed-in-many",
+    "dsf": 3,
+    "uiScale": 0.9,
+    "viewport": "display300-3840x2160",
+    "loadedAt": "display300-3840x2160",
+    "actionsBottom": 463,
+    "yourTablesTop": 485,
+    "firstTableTop": 485,
+    "problems": [
+     "1 of 49 painted frame(s) had table content above the doors' foot (first: load, frame 1, lobby-public-games top 470 < doors 484 at 1280x650)"
+    ]
+   },
+   {
+    "scenario": "signed-in-many:resize-cycle",
+    "dsf": 3,
+    "uiScale": 0.9,
+    "viewport": "cycle->1920x600",
+    "loadedAt": null,
+    "actionsBottom": 481,
+    "yourTablesTop": 503,
+    "firstTableTop": 503,
+    "problems": [
+     "1 of 43 painted frame(s) had table content above the doors' foot (first: resize-cycle, frame 21, my-tables top 473 < doors 481 at 1920x600)"
+    ]
+   },
+   {
+    "scenario": "signed-in-many",
+    "dsf": 3,
+    "uiScale": 1,
+    "viewport": "display300-3840x2160",
+    "loadedAt": "phone-390-dpr3",
+    "actionsBottom": 500,
+    "yourTablesTop": 524,
+    "firstTableTop": 524,
+    "problems": [
+     "1 of 22 painted frame(s) had table content above the doors' foot (first: resize->display300-3840x2160, frame 1, my-tables top 491 < doors 500 at 1280x650)"
+    ]
+   },
+   {
+    "scenario": "signed-in-many:resize-cycle",
+    "dsf": 3,
+    "uiScale": 1,
+    "viewport": "cycle->1920x600",
+    "loadedAt": null,
+    "actionsBottom": 500,
+    "yourTablesTop": 524,
+    "firstTableTop": 524,
+    "problems": [
+     "1 of 38 painted frame(s) had table content above the doors' foot (first: resize-cycle, frame 18, my-tables top 455 < doors 500 at 1920x600)"
+    ]
+   },
+   {
+    "scenario": "signed-in-many",
+    "dsf": 3,
+    "uiScale": 1.1,
+    "viewport": "zoom300-1920x1000-chrome",
+    "loadedAt": "zoom300-1920x1080",
+    "actionsBottom": 276,
+    "yourTablesTop": 302,
+    "firstTableTop": 302,
+    "problems": [
+     "1 of 20 painted frame(s) had table content above the doors' foot (first: resize->zoom300-1920x1000-chrome, frame 1, my-tables top 282 < doors 295 at 640x300)"
+    ]
+   },
+   {
+    "scenario": "signed-in-many",
+    "dsf": 3,
+    "uiScale": 1.1,
+    "viewport": "display300-3840x2160",
+    "loadedAt": "zoom300-1920x1080",
+    "actionsBottom": 526,
+    "yourTablesTop": 572,
+    "firstTableTop": 572,
+    "problems": [
+     "1 of 22 painted frame(s) had table content above the doors' foot (first: resize->display300-3840x2160, frame 1, my-tables top 496 < doors 526 at 1280x650)"
+    ]
+   },
+   {
+    "scenario": "signed-in-many:resize-cycle",
+    "dsf": 3,
+    "uiScale": 1.1,
+    "viewport": "cycle->1920x600",
+    "loadedAt": null,
+    "actionsBottom": 549,
+    "yourTablesTop": 576,
+    "firstTableTop": 576,
+    "problems": [
+     "1 of 37 painted frame(s) had table content above the doors' foot (first: resize-cycle, frame 18, my-tables top 501 < doors 549 at 1920x600)"
+    ]
+   },
+   {
+    "scenario": "signed-in-many",
+    "dsf": 3,
+    "uiScale": 1.25,
+    "viewport": "zoom300-1920x1000-chrome",
+    "loadedAt": "zoom300-1920x1000-chrome",
+    "actionsBottom": 276,
+    "yourTablesTop": 306,
+    "firstTableTop": 306,
+    "problems": [
+     "1 of 53 painted frame(s) had table content above the doors' foot (first: load, frame 4, lobby-public-games top 307 < doors 320 at 640x300)"
+    ]
+   },
+   {
+    "scenario": "signed-in-many",
+    "dsf": 3,
+    "uiScale": 1.25,
+    "viewport": "zoom300-1920x1080",
+    "loadedAt": "zoom300-1920x1000-chrome",
+    "actionsBottom": 281,
+    "yourTablesTop": 360,
+    "firstTableTop": 360,
+    "problems": [
+     "1 of 21 painted frame(s) had table content above the doors' foot (first: resize->zoom300-1920x1080, frame 1, my-tables top 317 < doors 320 at 640x360)"
+    ]
+   },
+   {
+    "scenario": "signed-in-many:resize-cycle",
+    "dsf": 3,
+    "uiScale": 1.25,
+    "viewport": "cycle->1920x600",
+    "loadedAt": null,
+    "actionsBottom": 575,
+    "yourTablesTop": 605,
+    "firstTableTop": 605,
+    "problems": [
+     "1 of 42 painted frame(s) had table content above the doors' foot (first: resize-cycle, frame 22, my-tables top 520 < doors 575 at 1920x600)"
+    ]
+   },
+   {
+    "scenario": "loading",
+    "dsf": 3,
+    "uiScale": 0.75,
+    "viewport": "display300-3840x2160",
+    "loadedAt": "display300-3840x2160",
+    "actionsBottom": 466,
+    "yourTablesTop": null,
+    "firstTableTop": 484,
+    "problems": [
+     "1 of 50 painted frame(s) had table content above the doors' foot (first: load, frame 1, lobby-public-games top 473 < doors 484 at 1280x650)"
+    ]
+   },
+   {
+    "scenario": "loading",
+    "dsf": 3,
+    "uiScale": 0.9,
+    "viewport": "phone-390-dpr3",
+    "loadedAt": "phone-390-dpr3",
+    "actionsBottom": 607,
+    "yourTablesTop": null,
+    "firstTableTop": 628,
+    "problems": [
+     "1 of 48 painted frame(s) had table content above the doors' foot (first: load, frame 3, lobby-public-games top 597 < doors 607 at 390x844)"
+    ]
+   },
+   {
+    "scenario": "loading",
+    "dsf": 3,
+    "uiScale": 0.9,
+    "viewport": "display300-3840x2160",
+    "loadedAt": "phone-390-dpr3",
+    "actionsBottom": 463,
+    "yourTablesTop": null,
+    "firstTableTop": 485,
+    "problems": [
+     "1 of 21 painted frame(s) had table content above the doors' foot (first: resize->display300-3840x2160, frame 1, lobby-public-games top 455 < doors 463 at 1280x650)"
+    ]
+   },
+   {
+    "scenario": "loading",
+    "dsf": 3,
+    "uiScale": 1,
+    "viewport": "zoom300-1920x1000-chrome",
+    "loadedAt": "zoom300-1920x1080",
+    "actionsBottom": 273,
+    "yourTablesTop": null,
+    "firstTableTop": 300,
+    "problems": [
+     "1 of 21 painted frame(s) had table content above the doors' foot (first: resize->zoom300-1920x1000-chrome, frame 2, lobby-public-games top 231 < doors 275 at 640x300)"
+    ]
+   },
+   {
+    "scenario": "loading",
+    "dsf": 3,
+    "uiScale": 1,
+    "viewport": "display300-3840x2160",
+    "loadedAt": "zoom300-1920x1080",
+    "actionsBottom": 500,
+    "yourTablesTop": null,
+    "firstTableTop": 524,
+    "problems": [
+     "1 of 21 painted frame(s) had table content above the doors' foot (first: resize->display300-3840x2160, frame 1, lobby-public-games top 491 < doors 500 at 1280x650)"
+    ]
+   },
+   {
+    "scenario": "loading",
+    "dsf": 3,
+    "uiScale": 1.1,
+    "viewport": "display300-3840x2160",
+    "loadedAt": "zoom300-1920x1000-chrome",
+    "actionsBottom": 526,
+    "yourTablesTop": null,
+    "firstTableTop": 572,
+    "problems": [
+     "1 of 20 painted frame(s) had table content above the doors' foot (first: resize->display300-3840x2160, frame 1, lobby-public-games top 496 < doors 526 at 1280x650)"
+    ]
+   },
+   {
+    "scenario": "loading",
+    "dsf": 3,
+    "uiScale": 1.25,
+    "viewport": "zoom300-1920x1080",
+    "loadedAt": "zoom300-2560x1440",
+    "actionsBottom": 281,
+    "yourTablesTop": null,
+    "firstTableTop": 360,
+    "problems": [
+     "1 of 20 painted frame(s) had table content above the doors' foot (first: resize->zoom300-1920x1080, frame 1, lobby-public-games top 317 < doors 320 at 640x360)"
+    ]
+   },
+   {
+    "scenario": "tables-error",
+    "dsf": 3,
+    "uiScale": 0.63,
+    "viewport": "display300-3840x2160",
+    "loadedAt": "display300-3840x2160",
+    "actionsBottom": 468,
+    "yourTablesTop": 483,
+    "firstTableTop": 483,
+    "problems": [
+     "1 of 52 painted frame(s) had table content above the doors' foot (first: load, frame 1, lobby-public-games top 474 < doors 483 at 1280x650)"
+    ]
+   },
+   {
+    "scenario": "tables-error",
+    "dsf": 3,
+    "uiScale": 0.75,
+    "viewport": "phone-390-dpr3",
+    "loadedAt": "phone-390-dpr3",
+    "actionsBottom": 609,
+    "yourTablesTop": 627,
+    "firstTableTop": 627,
+    "problems": [
+     "1 of 51 painted frame(s) had table content above the doors' foot (first: load, frame 4, lobby-public-games top 600 < doors 609 at 390x844)"
+    ]
+   },
+   {
+    "scenario": "tables-error",
+    "dsf": 3,
+    "uiScale": 0.75,
+    "viewport": "display300-3840x2160",
+    "loadedAt": "phone-390-dpr3",
+    "actionsBottom": 466,
+    "yourTablesTop": 484,
+    "firstTableTop": 484,
+    "problems": [
+     "1 of 20 painted frame(s) had table content above the doors' foot (first: resize->display300-3840x2160, frame 1, my-tables top 458 < doors 466 at 1280x650)"
+    ]
+   },
+   {
+    "scenario": "tables-error",
+    "dsf": 3,
+    "uiScale": 0.9,
+    "viewport": "zoom300-1920x1000-chrome",
+    "loadedAt": "zoom300-1920x1080",
+    "actionsBottom": 271,
+    "yourTablesTop": 300,
+    "firstTableTop": 300,
+    "problems": [
+     "1 of 21 painted frame(s) had table content above the doors' foot (first: resize->zoom300-1920x1000-chrome, frame 1, my-tables top 270 < doors 271 at 640x300)"
+    ]
+   },
+   {
+    "scenario": "tables-error",
+    "dsf": 3,
+    "uiScale": 0.9,
+    "viewport": "display300-3840x2160",
+    "loadedAt": "zoom300-1920x1080",
+    "actionsBottom": 463,
+    "yourTablesTop": 485,
+    "firstTableTop": 485,
+    "problems": [
+     "1 of 20 painted frame(s) had table content above the doors' foot (first: resize->display300-3840x2160, frame 1, my-tables top 455 < doors 463 at 1280x650)"
+    ]
+   },
+   {
+    "scenario": "tables-error",
+    "dsf": 3,
+    "uiScale": 1,
+    "viewport": "zoom300-1920x1000-chrome",
+    "loadedAt": "zoom300-1920x1000-chrome",
+    "actionsBottom": 273,
+    "yourTablesTop": 300,
+    "firstTableTop": 300,
+    "problems": [
+     "1 of 51 painted frame(s) had table content above the doors' foot (first: load, frame 4, lobby-public-games top 267 < doors 273 at 640x300)"
+    ]
+   },
+   {
+    "scenario": "tables-error",
+    "dsf": 3,
+    "uiScale": 1,
+    "viewport": "display300-3840x2160",
+    "loadedAt": "zoom300-1920x1000-chrome",
+    "actionsBottom": 500,
+    "yourTablesTop": 524,
+    "firstTableTop": 524,
+    "problems": [
+     "1 of 20 painted frame(s) had table content above the doors' foot (first: resize->display300-3840x2160, frame 1, my-tables top 491 < doors 500 at 1280x650)"
+    ]
+   },
+   {
+    "scenario": "tables-error",
+    "dsf": 3,
+    "uiScale": 1.1,
+    "viewport": "display300-3840x2160",
+    "loadedAt": "zoom300-2560x1440",
+    "actionsBottom": 526,
+    "yourTablesTop": 572,
+    "firstTableTop": 572,
+    "problems": [
+     "1 of 21 painted frame(s) had table content above the doors' foot (first: resize->display300-3840x2160, frame 2, my-tables top 496 < doors 526 at 1280x650)"
+    ]
+   },
+   {
+    "scenario": "tables-error",
+    "dsf": 3,
+    "uiScale": 1.25,
+    "viewport": "zoom300-1920x1080",
+    "loadedAt": "zoom300-1366x768",
+    "actionsBottom": 281,
+    "yourTablesTop": 360,
+    "firstTableTop": 360,
+    "problems": [
+     "1 of 20 painted frame(s) had table content above the doors' foot (first: resize->zoom300-1920x1080, frame 1, my-tables top 317 < doors 320 at 640x360)"
+    ]
+   },
+   {
+    "scenario": "long-metadata",
+    "dsf": 3,
+    "uiScale": 0.63,
+    "viewport": "phone-390-dpr3",
+    "loadedAt": "phone-390-dpr3",
+    "actionsBottom": 605,
+    "yourTablesTop": 625,
+    "firstTableTop": 625,
+    "problems": [
+     "1 of 52 painted frame(s) had table content above the doors' foot (first: load, frame 5, lobby-public-games top 603 < doors 605 at 390x844)"
+    ]
+   },
+   {
+    "scenario": "long-metadata",
+    "dsf": 3,
+    "uiScale": 0.75,
+    "viewport": "display300-3840x2160",
+    "loadedAt": "zoom300-1920x1080",
+    "actionsBottom": 466,
+    "yourTablesTop": 484,
+    "firstTableTop": 484,
+    "problems": [
+     "1 of 20 painted frame(s) had table content above the doors' foot (first: resize->display300-3840x2160, frame 1, my-tables top 458 < doors 466 at 1280x650)"
+    ]
+   },
+   {
+    "scenario": "long-metadata:resize-cycle",
+    "dsf": 3,
+    "uiScale": 0.75,
+    "viewport": "cycle->1920x600",
+    "loadedAt": null,
+    "actionsBottom": 474,
+    "yourTablesTop": 492,
+    "firstTableTop": 492,
+    "problems": [
+     "1 of 36 painted frame(s) had table content above the doors' foot (first: resize-cycle, frame 17, my-tables top 466 < doors 474 at 1920x600)"
+    ]
+   },
+   {
+    "scenario": "long-metadata",
+    "dsf": 3,
+    "uiScale": 0.9,
+    "viewport": "zoom300-1920x1000-chrome",
+    "loadedAt": "zoom300-1920x1000-chrome",
+    "actionsBottom": 271,
+    "yourTablesTop": 300,
+    "firstTableTop": 300,
+    "problems": [
+     "1 of 53 painted frame(s) had table content above the doors' foot (first: load, frame 4, lobby-public-games top 270 < doors 271 at 640x300)"
+    ]
+   },
+   {
+    "scenario": "long-metadata",
+    "dsf": 3,
+    "uiScale": 0.9,
+    "viewport": "display300-3840x2160",
+    "loadedAt": "zoom300-1920x1000-chrome",
+    "actionsBottom": 463,
+    "yourTablesTop": 485,
+    "firstTableTop": 485,
+    "problems": [
+     "1 of 20 painted frame(s) had table content above the doors' foot (first: resize->display300-3840x2160, frame 1, my-tables top 455 < doors 463 at 1280x650)"
+    ]
+   },
+   {
+    "scenario": "long-metadata:resize-cycle",
+    "dsf": 3,
+    "uiScale": 0.9,
+    "viewport": "cycle->1920x600",
+    "loadedAt": null,
+    "actionsBottom": 481,
+    "yourTablesTop": 503,
+    "firstTableTop": 503,
+    "problems": [
+     "1 of 41 painted frame(s) had table content above the doors' foot (first: resize-cycle, frame 21, my-tables top 473 < doors 481 at 1920x600)"
+    ]
+   },
+   {
+    "scenario": "long-metadata",
+    "dsf": 3,
+    "uiScale": 1,
+    "viewport": "display300-3840x2160",
+    "loadedAt": "zoom300-2560x1440",
+    "actionsBottom": 500,
+    "yourTablesTop": 524,
+    "firstTableTop": 524,
+    "problems": [
+     "1 of 20 painted frame(s) had table content above the doors' foot (first: resize->display300-3840x2160, frame 1, my-tables top 491 < doors 500 at 1280x650)"
+    ]
+   },
+   {
+    "scenario": "long-metadata:resize-cycle",
+    "dsf": 3,
+    "uiScale": 1,
+    "viewport": "cycle->1920x600",
+    "loadedAt": null,
+    "actionsBottom": 500,
+    "yourTablesTop": 524,
+    "firstTableTop": 524,
+    "problems": [
+     "1 of 40 painted frame(s) had table content above the doors' foot (first: resize-cycle, frame 19, my-tables top 455 < doors 500 at 1920x600)"
+    ]
+   },
+   {
+    "scenario": "long-metadata:resize-cycle",
+    "dsf": 3,
+    "uiScale": 1.1,
+    "viewport": "cycle->1920x600",
+    "loadedAt": null,
+    "actionsBottom": 549,
+    "yourTablesTop": 576,
+    "firstTableTop": 576,
+    "problems": [
+     "1 of 37 painted frame(s) had table content above the doors' foot (first: resize-cycle, frame 17, my-tables top 501 < doors 549 at 1920x600)"
+    ]
+   },
+   {
+    "scenario": "long-metadata",
+    "dsf": 3,
+    "uiScale": 1.25,
+    "viewport": "zoom300-1920x1080",
+    "loadedAt": "display300-3840x2160",
+    "actionsBottom": 281,
+    "yourTablesTop": 360,
+    "firstTableTop": 360,
+    "problems": [
+     "1 of 21 painted frame(s) had table content above the doors' foot (first: resize->zoom300-1920x1080, frame 1, my-tables top 317 < doors 320 at 640x360)"
+    ]
+   },
+   {
+    "scenario": "long-metadata:resize-cycle",
+    "dsf": 3,
+    "uiScale": 1.25,
+    "viewport": "cycle->1920x600",
+    "loadedAt": null,
+    "actionsBottom": 575,
+    "yourTablesTop": 605,
+    "firstTableTop": 605,
+    "problems": [
+     "2 of 35 painted frame(s) had table content above the doors' foot (first: resize-cycle, frame 1, my-tables top 982 < doors 1037 at 2560x1440)"
+    ]
+   },
+   {
+    "scenario": "sign-in-after-render",
+    "dsf": 3,
+    "uiScale": 0.75,
+    "viewport": "display300-3840x2160",
+    "loadedAt": "zoom300-1920x1000-chrome",
+    "actionsBottom": 466,
+    "yourTablesTop": 484,
+    "firstTableTop": 484,
+    "problems": [
+     "1 of 20 painted frame(s) had table content above the doors' foot (first: resize->display300-3840x2160, frame 1, my-tables top 458 < doors 466 at 1280x650)"
+    ]
+   },
+   {
+    "scenario": "sign-in-after-render",
+    "dsf": 3,
+    "uiScale": 0.9,
+    "viewport": "display300-3840x2160",
+    "loadedAt": "zoom300-2560x1440",
+    "actionsBottom": 463,
+    "yourTablesTop": 485,
+    "firstTableTop": 485,
+    "problems": [
+     "1 of 21 painted frame(s) had table content above the doors' foot (first: resize->display300-3840x2160, frame 1, my-tables top 455 < doors 463 at 1280x650)"
+    ]
+   },
+   {
+    "scenario": "sign-in-after-render",
+    "dsf": 3,
+    "uiScale": 1,
+    "viewport": "zoom300-1366x768",
+    "loadedAt": "zoom300-1366x768",
+    "actionsBottom": 214,
+    "yourTablesTop": 256,
+    "firstTableTop": 256,
+    "problems": [
+     "1 of 125 painted frame(s) had table content above the doors' foot (first: sign-in, frame 62, my-tables top 239 < doors 249 at 455x256)"
+    ]
+   },
+   {
+    "scenario": "sign-in-after-render",
+    "dsf": 3,
+    "uiScale": 1.25,
+    "viewport": "zoom300-1920x1080",
+    "loadedAt": "phone-390-dpr3",
+    "actionsBottom": 281,
+    "yourTablesTop": 360,
+    "firstTableTop": 360,
+    "problems": [
+     "1 of 21 painted frame(s) had table content above the doors' foot (first: resize->zoom300-1920x1080, frame 1, my-tables top 317 < doors 320 at 640x360)"
+    ]
+   },
+   {
+    "scenario": "font-reflow",
+    "dsf": 3,
+    "uiScale": 0.75,
+    "viewport": "display300-3840x2160",
+    "loadedAt": "zoom300-2560x1440",
+    "actionsBottom": 466,
+    "yourTablesTop": 484,
+    "firstTableTop": 484,
+    "problems": [
+     "1 of 21 painted frame(s) had table content above the doors' foot (first: resize->display300-3840x2160, frame 1, my-tables top 458 < doors 466 at 1280x650)"
+    ]
+   },
+   {
+    "scenario": "font-reflow",
+    "dsf": 3,
+    "uiScale": 0.9,
+    "viewport": "zoom300-1366x768",
+    "loadedAt": "zoom300-1366x768",
+    "actionsBottom": 327,
+    "yourTablesTop": 348,
+    "firstTableTop": 348,
+    "problems": [
+     "3 of 76 painted frame(s) had table content above the doors' foot (first: load, frame 5, my-tables top 224 < doors 232 at 455x256)"
+    ]
+   },
+   {
+    "scenario": "font-reflow",
+    "dsf": 3,
+    "uiScale": 1,
+    "viewport": "display300-3840x2160",
+    "loadedAt": "display300-3840x2160",
+    "actionsBottom": 500,
+    "yourTablesTop": 524,
+    "firstTableTop": 524,
+    "problems": [
+     "1 of 76 painted frame(s) had table content above the doors' foot (first: load, frame 1, lobby-public-games top 508 < doors 523 at 1280x650)"
+    ]
+   },
+   {
+    "scenario": "font-reflow",
+    "dsf": 3,
+    "uiScale": 1.1,
+    "viewport": "phone-390-dpr3",
+    "loadedAt": "phone-390-dpr3",
+    "actionsBottom": 602,
+    "yourTablesTop": 629,
+    "firstTableTop": 629,
+    "problems": [
+     "1 of 75 painted frame(s) had table content above the doors' foot (first: late-reflow, frame 30, my-tables top 629 < doors 678 at 390x844)"
+    ]
+   },
+   {
+    "scenario": "font-reflow",
+    "dsf": 3,
+    "uiScale": 1.1,
+    "viewport": "display300-3840x2160",
+    "loadedAt": "phone-390-dpr3",
+    "actionsBottom": 549,
+    "yourTablesTop": 575,
+    "firstTableTop": 575,
+    "problems": [
+     "1 of 20 painted frame(s) had table content above the doors' foot (first: resize->display300-3840x2160, frame 1, my-tables top 496 < doors 549 at 1280x650)"
+    ]
+   },
+   {
+    "scenario": "font-reflow",
+    "dsf": 3,
+    "uiScale": 1.25,
+    "viewport": "zoom300-1920x1080",
+    "loadedAt": "zoom300-1920x1080",
+    "actionsBottom": 451,
+    "yourTablesTop": 483,
+    "firstTableTop": 483,
+    "problems": [
+     "3 of 77 painted frame(s) had table content above the doors' foot (first: load, frame 4, lobby-public-games top 316 < doors 321 at 640x360)"
+    ]
+   },
+   {
+    "scenario": "font-reflow",
+    "dsf": 3,
+    "uiScale": 1.25,
+    "viewport": "zoom300-1920x1000-chrome",
+    "loadedAt": "zoom300-1920x1080",
+    "actionsBottom": 451,
+    "yourTablesTop": 481,
+    "firstTableTop": 481,
+    "problems": [
+     "1 of 21 painted frame(s) had table content above the doors' foot (first: resize->zoom300-1920x1000-chrome, frame 1, my-tables top 482 < doors 494 at 640x300)"
+    ]
+   },
+   {
+    "scenario": "load-at-size",
+    "dsf": 3,
+    "uiScale": 0.63,
+    "viewport": "phone-390-dpr3",
+    "loadedAt": "phone-390-dpr3",
+    "actionsBottom": 605,
+    "yourTablesTop": 625,
+    "firstTableTop": 625,
+    "problems": [
+     "1 of 31 painted frame(s) had table content above the doors' foot (first: load, frame 4, lobby-public-games top 603 < doors 605 at 390x844)"
+    ]
+   },
+   {
+    "scenario": "load-at-size",
+    "dsf": 3,
+    "uiScale": 0.75,
+    "viewport": "phone-390-dpr3",
+    "loadedAt": "phone-390-dpr3",
+    "actionsBottom": 609,
+    "yourTablesTop": 627,
+    "firstTableTop": 627,
+    "problems": [
+     "1 of 32 painted frame(s) had table content above the doors' foot (first: load, frame 4, my-tables top 600 < doors 609 at 390x844)"
+    ]
+   },
+   {
+    "scenario": "load-at-size",
+    "dsf": 3,
+    "uiScale": 0.9,
+    "viewport": "phone-390-dpr3",
+    "loadedAt": "phone-390-dpr3",
+    "actionsBottom": 607,
+    "yourTablesTop": 628,
+    "firstTableTop": 628,
+    "problems": [
+     "1 of 33 painted frame(s) had table content above the doors' foot (first: load, frame 4, lobby-public-games top 597 < doors 607 at 390x844)"
+    ]
+   },
+   {
+    "scenario": "load-at-size",
+    "dsf": 3,
+    "uiScale": 1.25,
+    "viewport": "zoom300-1920x1080",
+    "loadedAt": "zoom300-1920x1080",
+    "actionsBottom": 281,
+    "yourTablesTop": 360,
+    "firstTableTop": 360,
+    "problems": [
+     "1 of 31 painted frame(s) had table content above the doors' foot (first: load, frame 3, lobby-public-games top 316 < doors 321 at 640x360)"
+    ]
+   },
+   {
+    "scenario": "load-at-size",
+    "dsf": 3,
+    "uiScale": 0.9,
+    "viewport": "zoom300-1920x1000-chrome",
+    "loadedAt": "zoom300-1920x1000-chrome",
+    "actionsBottom": 271,
+    "yourTablesTop": 300,
+    "firstTableTop": 300,
+    "problems": [
+     "1 of 30 painted frame(s) had table content above the doors' foot (first: load, frame 4, lobby-public-games top 270 < doors 271 at 640x300)"
+    ]
+   },
+   {
+    "scenario": "load-at-size",
+    "dsf": 3,
+    "uiScale": 1,
+    "viewport": "zoom300-1920x1000-chrome",
+    "loadedAt": "zoom300-1920x1000-chrome",
+    "actionsBottom": 273,
+    "yourTablesTop": 300,
+    "firstTableTop": 300,
+    "problems": [
+     "1 of 31 painted frame(s) had table content above the doors' foot (first: load, frame 5, my-tables top 267 < doors 273 at 640x300)"
+    ]
+   },
+   {
+    "scenario": "load-at-size",
+    "dsf": 3,
+    "uiScale": 1.25,
+    "viewport": "zoom300-1920x1000-chrome",
+    "loadedAt": "zoom300-1920x1000-chrome",
+    "actionsBottom": 276,
+    "yourTablesTop": 306,
+    "firstTableTop": 306,
+    "problems": [
+     "1 of 32 painted frame(s) had table content above the doors' foot (first: load, frame 5, my-tables top 307 < doors 320 at 640x300)"
+    ]
+   },
+   {
+    "scenario": "load-at-size",
+    "dsf": 3,
+    "uiScale": 0.63,
+    "viewport": "zoom300-2560x1440",
+    "loadedAt": "zoom300-2560x1440",
+    "actionsBottom": 342,
+    "yourTablesTop": 358,
+    "firstTableTop": 358,
+    "problems": [
+     "1 of 33 painted frame(s) had table content above the doors' foot (first: load, frame 1, lobby-public-games top 348 < doors 351 at 853x480)"
+    ]
+   },
+   {
+    "scenario": "load-at-size",
+    "dsf": 3,
+    "uiScale": 0.9,
+    "viewport": "zoom300-1366x768",
+    "loadedAt": "zoom300-1366x768",
+    "actionsBottom": 200,
+    "yourTablesTop": 256,
+    "firstTableTop": 256,
+    "problems": [
+     "1 of 30 painted frame(s) had table content above the doors' foot (first: load, frame 3, my-tables top 224 < doors 232 at 455x256)"
+    ]
+   },
+   {
+    "scenario": "load-at-size",
+    "dsf": 3,
+    "uiScale": 1,
+    "viewport": "zoom300-1366x768",
+    "loadedAt": "zoom300-1366x768",
+    "actionsBottom": 214,
+    "yourTablesTop": 256,
+    "firstTableTop": 256,
+    "problems": [
+     "1 of 32 painted frame(s) had table content above the doors' foot (first: load, frame 5, my-tables top 239 < doors 249 at 455x256)"
+    ]
+   },
+   {
+    "scenario": "load-at-size",
+    "dsf": 3,
+    "uiScale": 0.63,
+    "viewport": "display300-3840x2160",
+    "loadedAt": "display300-3840x2160",
+    "actionsBottom": 468,
+    "yourTablesTop": 483,
+    "firstTableTop": 483,
+    "problems": [
+     "1 of 30 painted frame(s) had table content above the doors' foot (first: load, frame 1, lobby-public-games top 474 < doors 483 at 1280x650)"
+    ]
+   },
+   {
+    "scenario": "load-at-size",
+    "dsf": 3,
+    "uiScale": 0.75,
+    "viewport": "display300-3840x2160",
+    "loadedAt": "display300-3840x2160",
+    "actionsBottom": 466,
+    "yourTablesTop": 484,
+    "firstTableTop": 484,
+    "problems": [
+     "1 of 31 painted frame(s) had table content above the doors' foot (first: load, frame 1, lobby-public-games top 473 < doors 484 at 1280x650)"
+    ]
+   },
+   {
+    "scenario": "load-at-size",
+    "dsf": 3,
+    "uiScale": 0.9,
+    "viewport": "display300-3840x2160",
+    "loadedAt": "display300-3840x2160",
+    "actionsBottom": 463,
+    "yourTablesTop": 485,
+    "firstTableTop": 485,
+    "problems": [
+     "1 of 29 painted frame(s) had table content above the doors' foot (first: load, frame 1, lobby-public-games top 470 < doors 484 at 1280x650)"
+    ]
+   },
+   {
+    "scenario": "load-at-size",
+    "dsf": 3,
+    "uiScale": 1,
+    "viewport": "display300-3840x2160",
+    "loadedAt": "display300-3840x2160",
+    "actionsBottom": 500,
+    "yourTablesTop": 524,
+    "firstTableTop": 524,
+    "problems": [
+     "1 of 34 painted frame(s) had table content above the doors' foot (first: load, frame 1, lobby-public-games top 508 < doors 523 at 1280x650)"
+    ]
+   }
+  ]
+ },
+ "after": {
+  "label": "after (structural top region)",
+  "cases": 1212,
+  "failing": 0,
+  "settled_failures": 0,
+  "frames_sampled": 36354,
+  "frames_violating": 0,
+  "by_scenario": {
+   "signed-out": {
+    "cases": 114,
+    "failing": 0
+   },
+   "signed-in-0": {
+    "cases": 114,
+    "failing": 0
+   },
+   "signed-in-1": {
+    "cases": 114,
+    "failing": 0
+   },
+   "signed-in-many": {
+    "cases": 114,
+    "failing": 0
+   },
+   "signed-in-many:resize-cycle": {
+    "cases": 24,
+    "failing": 0
+   },
+   "loading": {
+    "cases": 114,
+    "failing": 0
+   },
+   "tables-error": {
+    "cases": 114,
+    "failing": 0
+   },
+   "long-metadata": {
+    "cases": 114,
+    "failing": 0
+   },
+   "long-metadata:resize-cycle": {
+    "cases": 24,
+    "failing": 0
+   },
+   "sign-in-after-render:before": {
+    "cases": 24,
+    "failing": 0
+   },
+   "sign-in-after-render": {
+    "cases": 114,
+    "failing": 0
+   },
+   "font-reflow": {
+    "cases": 114,
+    "failing": 0
+   },
+   "load-at-size": {
+    "cases": 114,
+    "failing": 0
+   }
+  },
+  "failing_cases": []
+ }
+}

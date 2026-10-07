@@ -22,6 +22,15 @@ export class IdentityLimiter {
   readonly credentialRedeems: IpBuckets;
   readonly credentialRedeemsPerSession: KeyedBuckets;
   readonly profileActions: KeyedBuckets;
+  /* P3-ACCT */
+  readonly passwordLogins: KeyedBuckets;
+  readonly passwordFailures: IpBuckets;
+  readonly passwordFailuresPerAccount: KeyedBuckets;
+  readonly passwordFailuresPerAccountAddress: KeyedBuckets;
+  readonly passwordReauthFailures: KeyedBuckets;
+  readonly passwordReauthFailuresPerAccount: KeyedBuckets;
+  /** P3-ACCT POLICY: "Change password" attempts per account. */
+  readonly passwordChanges: KeyedBuckets;
   readonly cooldowns: MalformedCooldowns;
   readonly denied: DeniedCounters = {};
 
@@ -40,6 +49,13 @@ export class IdentityLimiter {
     this.credentialRedeems = new IpBuckets(limits.credentialRedeemsPerIp, now, factor, keys);
     this.credentialRedeemsPerSession = new KeyedBuckets(limits.credentialRedeemsPerSession, now, keys);
     this.profileActions = new KeyedBuckets(limits.profileActionsPerSession, now, keys);
+    this.passwordLogins = new KeyedBuckets(limits.passwordLoginsPerSession, now, keys);
+    this.passwordFailures = new IpBuckets(limits.passwordFailuresPerIp, now, factor, keys);
+    this.passwordFailuresPerAccount = new KeyedBuckets(limits.passwordFailuresPerAccount, now, keys);
+    this.passwordFailuresPerAccountAddress = new KeyedBuckets(limits.passwordFailuresPerAccountAddress, now, keys);
+    this.passwordReauthFailures = new KeyedBuckets(limits.passwordReauthFailuresPerFamily, now, keys);
+    this.passwordReauthFailuresPerAccount = new KeyedBuckets(limits.passwordReauthFailuresPerAccount, now, keys);
+    this.passwordChanges = new KeyedBuckets(limits.passwordChangesPerAccount, now, keys);
     this.cooldowns = new MalformedCooldowns(
       limits.malformedClosesForCooldown,
       limits.malformedCloseWindowMs,
@@ -66,6 +82,13 @@ export class IdentityLimiter {
     this.credentialRedeems.prune();
     this.credentialRedeemsPerSession.prune();
     this.profileActions.prune();
+    this.passwordLogins.prune();
+    this.passwordFailures.prune();
+    this.passwordFailuresPerAccount.prune();
+    this.passwordFailuresPerAccountAddress.prune();
+    this.passwordReauthFailures.prune();
+    this.passwordReauthFailuresPerAccount.prune();
+    this.passwordChanges.prune();
     this.cooldowns.prune();
   }
 
@@ -84,6 +107,13 @@ export class IdentityLimiter {
       this.credentialRedeems.size +
       this.credentialRedeemsPerSession.size +
       this.profileActions.size +
+      this.passwordLogins.size +
+      this.passwordFailures.size +
+      this.passwordFailuresPerAccount.size +
+      this.passwordFailuresPerAccountAddress.size +
+      this.passwordReauthFailures.size +
+      this.passwordReauthFailuresPerAccount.size +
+      this.passwordChanges.size +
       this.cooldowns.size
     );
   }

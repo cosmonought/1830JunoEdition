@@ -19,7 +19,7 @@ import { IdentityService } from "../identity/sessions";
 import { createMemoryOpsRecorder } from "../persistence/opsRecorder";
 import { seatOf } from "../rooms/gameRecord";
 import { NoMoneyRosterSource } from "../rooms/roomService";
-import { apiRequest, Client, IN_SEAT_ORDER, profiledBrowser, PROD_ORIGIN, startServer, type ApiAnswer, type Frame, type ProfiledBrowser } from "../rooms/testSupport";
+import { accountBrowser, apiRequest, Client, IN_SEAT_ORDER, profiledBrowser, PROD_ORIGIN, startServer, type ApiAnswer, type Frame, type ProfiledBrowser } from "../rooms/testSupport";
 import { createMemoryChainIntentStore } from "./chainIntents";
 import { createEscrowService, type EscrowService, type JunoBackendRuntime } from "./escrowService";
 import { createMemoryFinancialGameStore } from "./financialGameStore";
@@ -133,13 +133,17 @@ export interface MoneyServerOptions {
   /** Phase 3 final clocks: whether the dedicated REMEDY signer is configured (default: on). Off: the clock's remedy port
    *  has no signer (`configured: false`) -- never the settlement signer in its place. A test may flip it. */
   readonly remedySigner?: { on: boolean };
+  /** PHASE 3 FINAL (§13): the room host's free-table switch -- `false` is every production entry point's (no-ante tables
+   *  are refused); absent: the internal default (free tables allowed, for the historical fixtures). */
+  readonly freeTables?: boolean;
 }
 
 export async function moneyServer(options: MoneyServerOptions = {}): Promise<MoneyServer> {
   const clock = { now: T0 };
   const warnings: string[] = [];
   const identityStore = createMemoryIdentityStore();
-  const identity = IdentityService.fromSnapshot(identityStore, { principals: [], sessions: [] });
+  /* P3-ACCT: a cheap password KDF for the test world (production's is `DEFAULT_PASSWORD_KDF`). */
+  const identity = IdentityService.fromSnapshot(identityStore, { principals: [], sessions: [] }, { policy: { passwordKdf: TEST_PASSWORD_KDF } });
   const chain = new FakeJunoChain({
     chainId: CHAIN_ID,
     contract: CONTRACT,
@@ -261,10 +265,12 @@ export async function moneyServer(options: MoneyServerOptions = {}): Promise<Mon
     capability: options.capability ?? service.serving.capability,
     runtime: service.serving.runtime(),
     ...(options.store !== undefined ? { store: options.store } : {}),
+    ...(options.freeTables !== undefined ? { freeTables: options.freeTables } : {}),
     moneyFacts,
     rosterSource: { plan: (record, ctx) => (record.money === null ? noMoney.plan(record, ctx) : service.rosterSource.plan(record, ctx)) },
     money: () => refs.money,
-    escrow: { onGameplayCommitted: (input) => service.onGameplayCommitted(input), isRosterFrozen: (gameId) => service.isRosterFrozen(gameId) },
+    /* As `awsRuntime.ts`: the room host asks the escrow service's L6-2 restore gate (always open here: no safe mode). */
+    escrow: { onGameplayCommitted: (input) => service.onGameplayCommitted(input), isRosterFrozen: (gameId) => service.isRosterFrozen(gameId), restoreGate: (gameId) => service.restoreGate(gameId) },
     ...(options.clock === true
       ? {
           clock: {
@@ -368,6 +374,27 @@ export interface Player {
   confirm(): Promise<void>;
 }
 
+/** P3-ACCT: the cheap scrypt parameters test worlds use (the stored hash carries them; production makes N=2^15, p=3). */
+export const TEST_PASSWORD_KDF = Object.freeze({ logN: 10, r: 1, p: 1 });
+
+/** P3-ACCT: a USERNAME/PASSWORD account player -- "Confirm it's you" is its password. */
+export async function accountPlayer(world: MoneyServer, name: string, password = "correct horse battery"): Promise<Player> {
+  const account = await accountBrowser(world.port, name, password);
+  const client = await Client.openWithCookie(world.port, account.cookie, name);
+  return {
+    browser: { cookie: account.cookie, name: account.name, username: account.username, password: account.password, wallet: account.wallet },
+    client,
+    name,
+    api: (route, body = {}) => apiRequest(world.port, `/gs/api/money/${route}`, { cookie: account.cookie, body }),
+    async confirm() {
+      const answer = await apiRequest(world.port, "/gs/api/profile/reauth", { cookie: account.cookie, body: { password } });
+      if (answer.status !== 200) throw new Error(`reauth: ${answer.status} ${answer.text}`);
+    },
+  };
+}
+
+/** A player: an account (username, password, Authorization Wallet) on its own browser. "Confirm it's you" is its
+ *  password (PHASE 3 FINAL: no recovery key exists). */
 export async function player(world: MoneyServer, name: string): Promise<Player> {
   const browser = await profiledBrowser(world.port, name);
   const client = await Client.openWithCookie(world.port, browser.cookie, name);
@@ -377,7 +404,7 @@ export async function player(world: MoneyServer, name: string): Promise<Player> 
     name,
     api: (route, body = {}) => apiRequest(world.port, `/gs/api/money/${route}`, { cookie: browser.cookie, body }),
     async confirm() {
-      const answer = await apiRequest(world.port, "/gs/api/profile/reauth", { cookie: browser.cookie, body: { recoveryKey: browser.recoveryKey } });
+      const answer = await apiRequest(world.port, "/gs/api/profile/reauth", { cookie: browser.cookie, body: { password: browser.password } });
       if (answer.status !== 200) throw new Error(`reauth: ${answer.status} ${answer.text}`);
     },
   };

@@ -345,11 +345,12 @@ export function refusalMessage(code: string, reason?: string): string {
     case "timeout":
       return serverReason && code !== "timeout" ? serverReason : "The game server did not answer. Check the connection and try again.";
     case "session-ended":
-      /* LIVE-2E: no one plays unprofiled -- "Continue" leads to the profile gate, not to somebody new. */
-      return "Your session on this browser has ended. Sign in to your profile again to play.";
+      /* LIVE-2E: no one plays unprofiled -- "Continue" signs this browser out, never into somebody new. */
+      return "Your session on this browser has ended. Log in again to play.";
     case "profile-required":
-      /* LIVE-2E: a room frame from a browser with no profile (the upgrade refuses those before any frame). */
-      return "Sign in to a profile to play.";
+      /* P3-ACCT: a frame a signed-out visitor's socket may not send (it may only read public tables: the server's
+         allow-list). */
+      return "Log in or create an account to do that.";
     case "internal":
       return "Something went wrong on the server. Try again.";
     default:

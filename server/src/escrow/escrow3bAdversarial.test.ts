@@ -845,14 +845,16 @@ describe("§16 the money deal and §15 identity's security events", () => {
     const { IdentityService } = await import("../identity/sessions");
     const { createMemoryIdentityStore } = await import("../identity/store");
     const { readSessionCookie } = await import("../identity/cookies");
-    const identity = await IdentityService.open(createMemoryIdentityStore());
+    const { createAccountWith, keplrAccount } = await import("../testSupport/authorizationWallets");
+    const identity = await IdentityService.open(createMemoryIdentityStore(), { policy: { passwordKdf: { logN: 10, r: 1, p: 1 } } });
     const T = 1_760_000_000_000;
     const readOf = (setCookie: string) => readSessionCookie(setCookie.split(";")[0]);
     const boot = await identity.bootstrap({ kind: "none" }, false, T);
-    const laptop = readOf((boot as { setCookie: string }).setCookie);
-    const created = await identity.createProfile(laptop, "Ann", T);
-    const key = (created as { recoveryKey: string }).recoveryKey;
-    await identity.reauthenticate(laptop, key, T + 1);
+    /* PHASE 3 FINAL: an account (username, password, Authorization Wallet); "Confirm it's you" is the password. */
+    const created = await createAccountWith(identity, readOf((boot as { setCookie: string }).setCookie), { username: "ann", password: "correct horse battery", displayName: "Ann", wallet: keplrAccount("escrow3b/ann") }, T);
+    assert.equal(created.kind, "ok", JSON.stringify(created));
+    const laptop = readOf((created as { setCookie: string }).setCookie);
+    assert.equal((await identity.reauthenticateWithPassword(laptop, "correct horse battery", T + 1)).kind, "ok");
     const data = fs.mkdtempSync(path.join(os.tmpdir(), "escrow3b-identity-"));
     const ledgerOver = () =>
       createWalletTicketLedger({ store: createFileWalletTicketStore(data), standing: (context) => identity.securityStanding(context), holdsSeat: () => true, now: () => T + 2 });

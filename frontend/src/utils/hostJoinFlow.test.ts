@@ -311,7 +311,8 @@ describe("the client reads them back (design note #1415)", () => {
       expect([gone, app.includes(gone)]).toEqual([gone, false]);
     }
     expect(app.match(/\{ type: "take-seat" \}/g) ?? []).toHaveLength(1);
-    expect(app).toContain('const handleTakeSeat = useCallback(() => void runRoomOp({ type: "take-seat" }), [runRoomOp]);');
+    /* P3-ACCT (public first): asked for an account first -- a signed-in seat's tab takes it at once. */
+    expect(app).toContain('const handleTakeSeat = useCallback(() => void requireAccount(() => void runRoomOp({ type: "take-seat" }), "Log in or create an account to take a seat."), [runRoomOp]);');
     // Phase 3 W3-J (OD-19): and a Watch tab -- a read-only view -- offers none either.
     expect(app).toContain("onTakeSeat={!watchOnly && !seated && !sandboxRoom.you.kicked && sandboxRoom.joinable ? handleTakeSeat : undefined}");
     /* The host is the server's answer (`you.role`), never "my id equals the document's hostId". */

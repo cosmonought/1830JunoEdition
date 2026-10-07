@@ -13,11 +13,16 @@
 //                   (`ESCROW_MONEY_TABLES=nonmainnet`) and a verified backend are required; the rules must be
 //                   settlement-certified. The financial record is written BEFORE the GameRecord (no money table ever
 //                   exists without one).
-//   link            "Confirm it's you" (the session's own /reauth grant) + an ADR-036 signature over a server-minted,
-//                   single-use challenge naming this site, network, contract, table, seat and wallet
-//                   (`walletProof.ts`) -> a ticket issued in the game's ACTOR TASK, with the verified proof recorded on
-//                   the grant (the join admission's precondition). The refusal policy is exact (below); nothing is ever
-//                   reassigned automatically.
+//   link            an AUTHORITY + an ADR-036 signature over a server-minted, single-use challenge naming this site,
+//                   network, contract, table, seat and wallet (`walletProof.ts`) -> a ticket issued in the game's ACTOR
+//                   TASK, with the verified proof recorded on the grant (the join admission's precondition). The refusal
+//                   policy is exact (below); nothing is ever reassigned automatically.
+//                   PHASE 3 FINAL: the AUTHORITY is either the session's "Confirm it's you" grant (a sign-in in the last
+//                   few minutes, or the password) -- or, when the wallet being linked IS the account's designated
+//                   AUTHORIZATION WALLET, that wallet's own fresh signature (it is a stronger authority than the password:
+//                   it can recover the account). Any other wallet needs the grant (a stolen cookie alone can never bind
+//                   a wallet to a seat). A link changes nothing about the account: no wallet is ever persisted to, or
+//                   inferred as, the profile -- a seat's wallet is that table's, and the account is the player.
 //   admission       a joiner's Join needs the server's admission (ESCROW-JOIN): `authorizeJoin` runs in the game's actor
 //                   task, so a seat op and an admission never interleave (R-J1: the seat is locked until the admission's
 //                   expiry plus the clock margin).
@@ -100,6 +105,17 @@ export const ROOM_DEADLINE_MARGIN_MS = 60 * 60 * 1000;
 const SEAT_OP_FRESH_MS = 15_000;
 /** How many pages (30 games each) one discovery pass reads of the contract's game list. */
 const SCAN_PAGES = 3;
+/** Security review (MEDIUM 1, NEW 2): how many pages (30 games each) ONE conclusive search for a host's ante may read
+ *  before it says it can't tell (a 503: nothing is decided on a partial read). It bounds how long the search holds the
+ *  game's actor (a page and the quorum reads of the host's own games among it); what it examined is never read again
+ *  for the same tickets (`TableCache.ante`), so the next search goes on from there -- normally a page or two. */
+export const HOST_ANTE_MAX_PAGES = 100;
+/** Security review (MEDIUM 2): the W-13 refusals that are about the CANDIDATE itself under the expectation it was read
+ *  for (not the host's escrow for this ticket, other terms, not a chain game id). Only these set a candidate aside;
+ *  every other refusal -- not verified yet, a restored table not yet checked (L6-2), a serving verdict that isn't
+ *  "continues", the money record missing or held, a binding write that conflicted or failed, a binding the deployment
+ *  policy refuses -- is about the table, the deployment or the moment, so the candidate is read again later. */
+const CANDIDATE_REFUSALS: ReadonlySet<string> = new Set(["not-the-hosts-escrow", "terms-mismatch", "request-invalid"]);
 /** "Your deposits": the ledgers looked at, the tables read from Juno (newest first), and how long an answer is reused. */
 const DEPOSITS_MAX_LEDGERS = 200;
 const DEPOSITS_MAX_GAMES = 25;
@@ -110,7 +126,7 @@ const MAX_PLAYERS = 6;
 const LINK_REFUSALS: Readonly<Record<string, readonly [number, string]>> = {
   "reauth-required": [403, "Confirm it's you first."],
   "not-seated": [403, "You don't have a seat at that table."],
-  "security-context-ended": [403, "This device was signed out (or your recovery key changed). Sign in again, confirm it's you, and link again."],
+  "security-context-ended": [403, "This device was signed out (or your sign-in changed). Sign in again and ante again."],
   frozen: [409, "The seats are locked with the escrow; the payout wallet can't change now."],
   conflict: [409, "The link changed meanwhile. Try again."],
   "admission-outstanding": [409, "This seat's join approval hasn't expired yet."],
@@ -128,8 +144,13 @@ export interface MoneyCaller {
   readonly familyId: string;
   readonly recoverySelector: string;
   readonly principalId: string;
-  /** This session holds a live "Confirm it's you" grant (`/gs/api/profile/reauth`, 3A) -- and nothing else counts. */
+  /** This session holds a live "Confirm it's you" grant (`/gs/api/profile/reauth`, 3A; P3-ACCT: or a sign-in in the
+   *  last few minutes, which makes one). */
   readonly sensitive: boolean;
+  /** PHASE 3 FINAL: the caller's account's designated Authorization Wallet (null: none -- never for an active account).
+   *  A fresh proof by THIS wallet authorizes its own link without the grant. It is never the seat's wallet by itself:
+   *  each table's seat binds whatever wallet the player links and funds there. */
+  readonly authorizationWallet: string | null;
   /** The request's allow-listed Origin: the challenge's `Site:`. */
   readonly origin: string;
 }
@@ -179,6 +200,15 @@ export interface MoneyTablesDeps {
   readonly noDeadlineAck?: (gameId: string, playerId: string) => Promise<"not-required" | "acknowledged" | "missing" | "unknown" | "unenforceable">;
 }
 
+/** What authorizes a wallet link for `wallet` -- the session's grant, or (PHASE 3 FINAL) the account's own
+ *  Authorization Wallet linking itself. */
+function linkAuthority(caller: MoneyCaller, wallet: string): "grant" | "authorization-wallet" | null {
+  if (caller.sensitive) return "grant";
+  if (caller.authorizationWallet !== null && caller.authorizationWallet === wallet) return "authorization-wallet";
+  return null;
+}
+const CONFIRM_FIRST = "Confirm it's you with your password to link this wallet to your seat; then the wallet signs.";
+
 type Snapshot = Awaited<ReturnType<WalletTicketLedger["snapshot"]>>;
 type Grant = Snapshot["grants"][number];
 
@@ -210,8 +240,15 @@ interface TableCache {
   digest: string;
   /** Discovery of the host's CreateGame: the ticket being looked for, and how far the game list was read. */
   scan: { ticket: string; cursor: string | null } | null;
-  /** Chain games the host's wallet opened that W-13 refused (another ticket: a duplicate escrow, A-4). */
+  /** Chain games the host's wallet opened that W-13 refused FOR THEMSELVES (another ticket: a duplicate escrow, A-4;
+   *  other terms), keyed `${ticket}|${chainGameId}` -- a refusal under one ticket never hides the game from another
+   *  ticket's scan. A refusal about the table or the moment is never recorded here (security review, MEDIUM 2). */
   duplicates: Set<string>;
+  /** The conclusive search for the host's ante (`hostAnteOnChain`), in memory only (a restart searches once more):
+   *  `through` -- per proven (wallet, ticket) of the host's seat, the chain game id through which the contract's game
+   *  list has been examined FOR THAT PAIR, every game up to it found not to be its ante or remembered in `found`;
+   *  `found` -- the chain game ids found to be the host's ante (each read again by quorum at every search). */
+  ante: { readonly through: Map<string, bigint>; readonly found: Set<string> };
 }
 
 interface ChainConfig {
@@ -360,7 +397,7 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
   function entryOf(gameId: string): TableCache {
     let entry = cache.get(gameId);
     if (entry === undefined) {
-      entry = { gameId, financial: null, financialError: false, ledger: null, chain: null, chainError: null, intents: [], observedAt: 0, refreshing: null, again: false, digest: "", scan: null, duplicates: new Set() };
+      entry = { gameId, financial: null, financialError: false, ledger: null, chain: null, chainError: null, intents: [], observedAt: 0, refreshing: null, again: false, digest: "", scan: null, duplicates: new Set(), ante: { through: new Map(), found: new Set() } };
       cache.set(gameId, entry);
     }
     return entry;
@@ -478,18 +515,25 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
     return { creator: grant.wallet, ticket: grant.ticket, anteGross: terms.ante_gross, maxPlayers: record.exact_players ?? 0, mode: (terms.mode === "live" ? 0 : 1) as 0 | 1 };
   }
 
-  /** Look for the host's CreateGame: first a hinted chain game id, then the contract's game list from the ticket's own
-   *  floor. Every candidate is BOUND only through W-13 (a quorum read proving it is exactly the table's). */
+  /** The key under which a candidate W-13 refused for itself is set aside: per TICKET, so the refusal of an older
+   *  ticket's escrow by a newer ticket's scan never hides it from the older ticket's own (security review, MEDIUM 2). */
+  const duplicateKey = (ticket: string, chainGameId: string): string => `${ticket}|${chainGameId}`;
+
+  /** The observer's discovery of the host's CreateGame under the host's STANDING link: first a hinted chain game id,
+   *  then the contract's game list from the ticket's own floor, a few pages per pass. Every candidate is BOUND only
+   *  through W-13 (a quorum read proving it is exactly the table's). It decides nothing about a link: a wallet link and
+   *  cancel-room ask `hostAnteOnChain`, which reads the list to its end (going on where it stopped) and can say "I can't tell". */
   async function discover(entry: TableCache, record: GameRecord): Promise<boolean> {
     if (!deps.service.isReady()) return false;
     const grants = entry.ledger?.grants ?? [];
     const hostGrant = standingLinkOf(grants, record.host_player_id);
-    if (hostGrant === null) return false;
+    if (hostGrant === null || hostGrant.player_id !== record.host_player_id || hostGrant.proof === null) return false;
     const expect = hostExpectation(record, hostGrant);
-    /* A candidate refused because the backend isn't verified yet may pass later: the scan stops before it and reads it
-       again next time (review S-L1). Every other refusal is about the candidate itself (not the host's escrow, other
-       terms, an invalid binding) and is final -- it is set aside and the scan moves on (verification pass). A read that
-       fails throws, and the cursor stays where it was. */
+    /* Security review (MEDIUM 2): only a refusal about the CANDIDATE under this expectation (`CANDIDATE_REFUSALS`) is
+       final -- set aside for THIS ticket, and the scan moves on. Every other refusal (not verified yet, review S-L1; a
+       restored table not yet checked; a serving verdict; a binding write that conflicted) is about the table or the
+       moment: the scan stops before the candidate and reads it again next time. A read that fails throws, and the cursor
+       stays where it was. */
     let retryFrom: string | null | undefined;
     const tryBind = async (chainGameId: string, before: string | null): Promise<boolean> => {
       const bound = await deps.service.bindHostChainGame(record.game_id, chainGameId, record.variants, expect);
@@ -499,13 +543,12 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
         entry.scan = null;
         return true;
       }
-      if (bound.code === "not-verified") {
-        if (retryFrom === undefined) retryFrom = before;
-      } else entry.duplicates.add(chainGameId);
+      if (CANDIDATE_REFUSALS.has(bound.code)) entry.duplicates.add(duplicateKey(expect.ticket, chainGameId));
+      else if (retryFrom === undefined) retryFrom = before;
       return false;
     };
     const hint = hints.get(record.game_id)?.get(record.host_player_id);
-    if (hint !== undefined && hint.kind === "create" && hint.chainGameId !== null && !entry.duplicates.has(hint.chainGameId)) {
+    if (hint !== undefined && hint.kind === "create" && hint.chainGameId !== null && !entry.duplicates.has(duplicateKey(expect.ticket, hint.chainGameId))) {
       if (await tryBind(hint.chainGameId, null)) return true;
       retryFrom = undefined; // the hinted id is re-read from the hint next time; it moves no cursor
     }
@@ -520,7 +563,7 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
       let previous = scan.cursor;
       for (const summary of games) {
         const candidate = summary.creator === expect.creator && summary.state === "FUNDING" && summary.seats_filled === 1 && summary.ante_gross === expect.anteGross && summary.max_players === expect.maxPlayers && summary.mode === expect.mode;
-        if (candidate && !entry.duplicates.has(summary.chain_game_id) && (await tryBind(summary.chain_game_id, previous))) return true;
+        if (candidate && !entry.duplicates.has(duplicateKey(expect.ticket, summary.chain_game_id)) && (await tryBind(summary.chain_game_id, previous))) return true;
         if (retryFrom !== undefined) {
           scan.cursor = retryFrom;
           return false;
@@ -532,6 +575,160 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
     }
     return false;
   }
+
+  /** One escrow on chain whose creator's seat carries a proven (wallet, ticket) of the host's seat: the host's ante. */
+  interface HostAnte {
+    readonly chainGameId: string;
+    readonly wallet: string;
+    readonly ticket: string;
+    /** The NEWEST proven grant of the seat carrying this (wallet, ticket): a relink re-adopts its ticket. */
+    readonly grant: Grant;
+  }
+  type HostAnteCheck = { readonly kind: "found"; readonly antes: readonly HostAnte[] } | { readonly kind: "absent" } | { readonly kind: "unknown"; readonly why: string };
+
+  /** PHASE 3 FINAL / security review (MEDIUM 1, NEW 2): is the host's ANTE on chain -- an escrow, still holding
+   *  deposits, that the host's seat opened under ANY ticket it was ever issued with a proof (standing or not)? A
+   *  CONCLUSIVE answer, or "I can't tell" ("unknown": a read that failed, a backend not verified, a list not read to its
+   *  end within `HOST_ANTE_MAX_PAGES` this time). It never reads or writes the observer's scan cursor or its set-aside
+   *  duplicates, so nothing the observer met can hide an ante from it.
+   *
+   *  WHAT IT READS. Every proven (wallet, ticket) PAIR of the seat is searched from where it was left (`entry.ante`):
+   *  the chain game id through which the game list was already examined for it, else its ticket's floor (no CreateGame
+   *  can carry a ticket below the chain's next id when it was minted; a legacy ticket with no floor: from game 1 -- the
+   *  table's records carry no chain id of its creation, only wall-clock times -- once per process). The list is read
+   *  from the lowest of those to its end, and every game in it a proven wallet created that is FUNDING or FUNDED is read
+   *  by quorum (as W-13 reads it) and its creator's seat (0) matched against every pair. The antes found before are
+   *  read again by quorum first (a cancelled one is dropped: it never holds a deposit again).
+   *
+   *  WHY WHAT WAS EXAMINED STAYS EXAMINED (the marks). For a pair, "no game up to N is its ante, except those in
+   *  `found`" stays true: a game's id, creator and creator's seat never change, games are never removed, ids only grow,
+   *  and a game's state only moves on from FUNDING/FUNDED (it never holds a deposit again once it stopped). A NEW pair
+   *  (a new ticket, linked later) has no mark: it is searched from its own floor (`walletLink` never mints a ticket
+   *  without one, read fresh from the chain), and a relink re-adopts an existing pair with its mark. So after one search
+   *  over a long list the next reads only what is new -- a CreateGame landing later always has a higher id than any
+   *  mark, so it is read. A search cut short (the cap, a failure) still keeps what it examined: the next goes on.
+   *
+   *  THE LIST, AND THE HEAD (review NEW 2 (3)). List pages come from ONE endpoint (with its failover), not a quorum: a
+   *  page of 30 games changes whenever any of them is joined or withdrawn, so endpoints a block apart would disagree
+   *  over and over. What one endpoint could get wrong is checked: ids are dense from 1 (never removed), so a page that
+   *  skips an id is read again by quorum; and a lagging endpoint can only END the list early -- so where its list ends,
+   *  the rest is read by QUORUM until every endpoint agrees the list ends there (normally one empty page). A game's
+   *  state as a lagging endpoint shows it is one it had before -- a game holding a deposit now held one then -- so a
+   *  candidate is never missed for being stale; every candidate itself is read by quorum. (An endpoint that LIES about a
+   *  game's creator is outside what one read can catch -- the trust the observer's discovery places in the list too.) */
+  async function hostAnteOnChain(entry: TableCache, record: GameRecord, grants: readonly Grant[]): Promise<HostAnteCheck> {
+    const proven = grants.filter((grant) => grant.player_id === record.host_player_id && grant.proof !== null);
+    /* No ticket was ever issued with a proof: no CreateGame can carry one of this seat's tickets. */
+    if (proven.length === 0) return { kind: "absent" };
+    const unknown = (why: string): HostAnteCheck => {
+      deps.warn(`  money: whether the host's ante of ${record.game_id} is on Juno could not be told -- ${why}`);
+      return { kind: "unknown", why };
+    };
+    if (!deps.service.isReady()) return unknown("the escrow backend is not verified");
+    const ZERO = BigInt(0);
+    const ONE = BigInt(1);
+    const DECIMAL = /^(0|[1-9][0-9]{0,19})$/;
+    const pairOf = (wallet: string, ticket: string): string => `${wallet}\u0000${ticket}`;
+    /* Each pair: the NEWEST proven grant carrying it (a relink re-adopts its ticket), and where its search resumes. */
+    const grantOf = new Map<string, Grant>();
+    const startOf = new Map<string, bigint>();
+    for (const grant of proven) {
+      const pair = pairOf(grant.wallet, grant.ticket);
+      const best = grantOf.get(pair);
+      if (best === undefined || grant.epoch > best.epoch) grantOf.set(pair, grant);
+      /* The lowest floor among the grants carrying the pair (a relink carries its adopted grant's). */
+      const floor = grant.create_floor !== null && DECIMAL.test(grant.create_floor) && grant.create_floor !== "0" ? BigInt(grant.create_floor) - ONE : ZERO;
+      const known = startOf.get(pair);
+      if (known === undefined || floor < known) startOf.set(pair, floor);
+    }
+    for (const pair of startOf.keys()) {
+      const marked = entry.ante.through.get(pair);
+      if (marked !== undefined) startOf.set(pair, marked); // examined through here already (a mark is never below the floor)
+    }
+    const wallets = new Set(proven.map((grant) => grant.wallet));
+    const antes = new Map<string, HostAnte>();
+    /* Read one game by quorum: the host's ante (remembered), or not. A read that fails throws. */
+    const confirm = async (chainGameId: string): Promise<boolean> => {
+      const g = (await readChainGame(chainGameId)).game;
+      if (g.chain_game_id !== chainGameId) throw new Error("the chain answered for another game");
+      /* Money still in this escrow before any Start: a refundable deposit (a CANCELLED escrow has paid it back). */
+      if (g.state !== "FUNDING" && g.state !== "FUNDED") return false;
+      const seat = g.seats[0];
+      const grant = seat === undefined ? undefined : grantOf.get(pairOf(seat.wallet, seat.join_ticket));
+      if (seat === undefined || grant === undefined) return false;
+      antes.set(chainGameId, { chainGameId, wallet: seat.wallet, ticket: seat.join_ticket, grant });
+      entry.ante.found.add(chainGameId);
+      return true;
+    };
+    try {
+      for (const chainGameId of [...entry.ante.found]) if (!(await confirm(chainGameId))) entry.ante.found.delete(chainGameId);
+    } catch (error) {
+      return unknown(error instanceof Error ? error.message : String(error));
+    }
+    const from = [...startOf.values()].reduce((a, b) => (b < a ? b : a));
+    let examined = from; // every game up to here is examined (for every pair whose search starts at or below `from`)
+    let quorum = false; // the list pages are read by quorum (where one endpoint's list ended, or skipped an id)
+    let concluded = false;
+    let why = `the game list did not end within ${HOST_ANTE_MAX_PAGES} pages`;
+    try {
+      pages: for (let page = 0; page < HOST_ANTE_MAX_PAGES; page += 1) {
+        const query = QUERY.games(examined === ZERO ? null : examined.toString(), 30);
+        const games = parseGamesResponse(quorum ? await quorumSmart(query) : await deps.rest.smart(contract, query));
+        for (const summary of games) {
+          if (BigInt(summary.chain_game_id) !== examined + ONE) {
+            if (quorum) {
+              why = `the game list skipped from ${examined.toString()} to ${summary.chain_game_id}`;
+              break pages;
+            }
+            quorum = true; // one endpoint's page skipped an id: read it again by quorum
+            continue pages;
+          }
+          /* Every game a proven wallet created is a candidate WHATEVER state this endpoint's summary shows: the state is
+             judged only by the quorum read (`confirm`), so one endpoint misreporting it can't hide an ante (re-review
+             LOW). The creator is still this endpoint's word -- a residual the observer's discovery shares. */
+          const candidate = wallets.has(summary.creator);
+          if (candidate && !antes.has(summary.chain_game_id)) await confirm(summary.chain_game_id);
+          examined = BigInt(summary.chain_game_id);
+        }
+        if (games.length === 30) continue;
+        if (quorum) {
+          concluded = true; // every endpoint agrees the list ends here
+          break;
+        }
+        quorum = true; // one endpoint's list ended here: every endpoint must agree that nothing follows
+      }
+    } catch (error) {
+      why = error instanceof Error ? error.message : String(error);
+    }
+    /* What was examined is never read again for these pairs: each pair's search started at or above `from`. */
+    for (const [pair, start] of startOf) if (examined > start) entry.ante.through.set(pair, examined);
+    if (!concluded) return unknown(why);
+    const found = [...antes.values()].sort((a, b) => (BigInt(a.chainGameId) < BigInt(b.chainGameId) ? -1 : 1));
+    return found.length > 0 ? { kind: "found", antes: found } : { kind: "absent" };
+  }
+
+  /** Bind the first of `antes` W-13 accepts (each under the expectation of the grant its creator's seat carries), so the
+   *  table shows the escrow its host's ante is in. Best effort: whatever it answers, the caller's decision is the same
+   *  (the ante is on chain either way). Returns the ante bound, or null. */
+  async function bindHostAnte(entry: TableCache, record: GameRecord, antes: readonly HostAnte[]): Promise<HostAnte | null> {
+    for (const ante of antes) {
+      try {
+        const bound = await deps.service.bindHostChainGame(record.game_id, ante.chainGameId, record.variants, hostExpectation(record, ante.grant));
+        if (!bound.ok) continue;
+        audit("money.host-escrow-bound", { game_id: record.game_id, chain_game_id: ante.chainGameId });
+        entry.financial = await deps.financial.load(record.game_id).catch(() => entry.financial);
+        entry.scan = null;
+        return ante;
+      } catch {
+        /* a read that failed: the next ante, or none (nothing about the decision changes) */
+      }
+    }
+    return null;
+  }
+
+  /** The host's sentence when its seat's ante is on chain from `wallet` (the seat's wallet can't change). */
+  const hostAnteSentence = (wallet: string): string =>
+    `Your table's ante is already on Juno from ${wallet}, so its payout wallet can't change. Relink that wallet (free), or cancel the escrow on Juno first.`;
 
   /* ---------------- refresh: what the table's money is now ---------------- */
 
@@ -689,8 +886,7 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
     /* A table that ended before any escrow was bound closes its financial record -- unless the host's CreateGame may
        still be in flight (then the chain answers first). */
     if ((record.status === "cancelled" || record.status === "expired") && fin.phase === "funding" && fin.binding?.escrow == null) {
-      const hostGrant = standingLinkOf(entry.ledger?.grants ?? [], record.host_player_id);
-      if (hostGrant === null || !hostCreateInFlight(record, hostGrant)) await deps.service.closeUnboundTable(record.game_id);
+      if (entry.ledger !== null && !hostCreateInFlight(record, entry.ledger.grants)) await deps.service.closeUnboundTable(record.game_id);
     }
   }
 
@@ -1028,9 +1224,13 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
 
   /* ---------------- seat locks (R-J1, W-2, W-3), inside the actor task ---------------- */
 
-  function hostCreateInFlight(record: GameRecord, hostGrant: Grant): boolean {
+  /** W-2: the host's CreateGame may still be in flight -- its hint, or a link (ANY proven ticket of the host's seat,
+   *  standing or not: a security event or a newer link ends a link, never a CreateGame already signed with its ticket;
+   *  security review, INFO 4) issued less than `HOST_CREATE_WINDOW_MS` ago. */
+  function hostCreateInFlight(record: GameRecord, grants: readonly Grant[]): boolean {
     const hint = hints.get(record.game_id)?.get(record.host_player_id);
-    return (hint !== undefined && hint.kind === "create") || deps.now() - hostGrant.issued_at < HOST_CREATE_WINDOW_MS;
+    if (hint !== undefined && hint.kind === "create") return true;
+    return grants.some((grant) => grant.player_id === record.host_player_id && grant.proof !== null && deps.now() - grant.issued_at < HOST_CREATE_WINDOW_MS);
   }
 
   /** A chain read of the bound game fresh enough to rely on for a seat op (the cache's, or one read now). */
@@ -1062,9 +1262,8 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
     const bound = fin?.binding?.escrow ?? null;
     const hint = hints.get(record.game_id)?.get(playerId);
     if (playerId === record.host_player_id && hint !== undefined && hint.kind === "create") return { code: "deposit-pending", reason: "Your table may be opening on Juno right now. Wait until Juno answers, then try again." };
-    if (playerId === record.host_player_id && bound === null) {
-      const hostGrant = standingLinkOf(snapshot.grants, playerId);
-      if (hostGrant !== null && hostCreateInFlight(record, hostGrant)) return { code: "deposit-in-flight", reason: "The table may be opening on Juno right now. Wait for Juno to answer (a few minutes), then try again." };
+    if (playerId === record.host_player_id && bound === null && hostCreateInFlight(record, snapshot.grants)) {
+      return { code: "deposit-in-flight", reason: "The table may be opening on Juno right now. Wait for Juno to answer (a few minutes), then try again." };
     }
     if (bound !== null && grants.length > 0) {
       const game = await freshChain(record.game_id, bound.chain_game_id);
@@ -1100,17 +1299,18 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
         if (game.game.state === "CANCELLED") return null;
         return { code: "cancel-on-juno", reason: "This table is open on Juno. Cancel it there (Cancel table on Juno): every deposit comes back minus the fee." };
       }
-      const hostGrant = standingLinkOf(snapshot.grants, record.host_player_id);
-      if (hostGrant !== null && hostCreateInFlight(record, hostGrant)) return { code: "deposit-in-flight", reason: "Your table may be opening on Juno right now. Wait for Juno to answer (a few minutes), then try again." };
-      if (snapshot.grants.some((grant) => grant.player_id === record.host_player_id && grant.proof !== null)) {
-        /* The host linked a wallet: look once more for its CreateGame before the table is dropped. */
-        const entry = entryOf(record.game_id);
-        entry.ledger = snapshot;
-        try {
-          if (await discover(entry, record)) return { code: "cancel-on-juno", reason: "This table is open on Juno. Cancel it there (Cancel table on Juno): every deposit comes back minus the fee." };
-        } catch {
-          return { code: "chain-unknown", reason: "Juno couldn't be checked just now, so the table wasn't cancelled. Try again in a moment." };
-        }
+      if (hostCreateInFlight(record, snapshot.grants)) return { code: "deposit-in-flight", reason: "Your table may be opening on Juno right now. Wait for Juno to answer (a few minutes), then try again." };
+      /* The host linked a wallet: before the table is dropped, the chain is asked CONCLUSIVELY whether the host's ante is
+         on it under ANY proven ticket of the seat, standing or not (security review, INFO 4) -- a room is never cancelled
+         over an unbound escrow, nor on a read that couldn't tell. A found escrow is bound on the way (best effort), so
+         the table offers "Cancel table on Juno"; it is also listed in "Your deposits". */
+      const entry = entryOf(record.game_id);
+      entry.ledger = snapshot;
+      const onChain = await hostAnteOnChain(entry, record, snapshot.grants);
+      if (onChain.kind === "unknown") return { code: "chain-unknown", reason: "Juno couldn't be checked just now, so the table wasn't cancelled. Try again in a moment." };
+      if (onChain.kind === "found") {
+        const ante = (await bindHostAnte(entry, record, onChain.antes)) ?? onChain.antes[0];
+        return { code: "cancel-on-juno", reason: `Your table's ante is on Juno (from ${ante.wallet}). Cancel that escrow on Juno first (Cancel table on Juno, here or in Your deposits): every deposit comes back minus the fee.` };
       }
       return null;
     }
@@ -1212,6 +1412,16 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
 
   const serviceReady = (): MoneyAnswer | null => (deps.service.isReady() ? null : refusal(503, "money-unavailable", "The Juno escrow isn't reachable right now. Try again in a minute."));
 
+  /** LIVE-6 L6-2 (security review, LOW 1): a RESTORED money table is read-only until its history is verified against the
+   *  ledger and the chain (post-restore safe mode) -- its seat ops already wait (`roomHost.ts`); so do its money WRITES:
+   *  a wallet challenge and link (a ticket, a renewed proof, a re-home), a join admission, a signing key. Asked only of
+   *  a table the caller sits at (`tableFor` first: a stranger's id starts no check). Read-only views are served as ever.
+   *  A 503: the check runs in the background, and a signed link refused here is not spent (it may be sent again). */
+  const restoreHeld = (record: GameRecord): MoneyAnswer | null => {
+    const restoring = deps.service.restoreGate(record.game_id);
+    return restoring === null ? null : refusal(503, "held", restoring);
+  };
+
   async function config_(): Promise<MoneyAnswer> {
     const status = creationStatus();
     const current = status.ok ? await chainConfig() : config;
@@ -1228,11 +1438,14 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
   async function walletChallenge(caller: MoneyCaller, body: Record<string, unknown>): Promise<MoneyAnswer> {
     const down = serviceReady();
     if (down !== null) return down;
-    if (!caller.sensitive) return refusal(403, "reauth-required", "Confirm it's you first (your recovery key), then link the wallet.");
     const table = tableFor(caller, body.gameId);
     if (!isTable(table)) return table;
+    const restoring = restoreHeld(table.record);
+    if (restoring !== null) return restoring;
     const wallet = canonicalJunoWallet(body.wallet);
     if (wallet === null) return refusal(400, "bad-wallet", "That isn't a Juno wallet address.");
+    /* The grant, or the account's own Authorization Wallet (its fresh signature, next, is the proof). */
+    if (linkAuthority(caller, wallet) === null) return refusal(403, "reauth-required", CONFIRM_FIRST);
     if (table.record.status !== "waiting" || dealtRecord(table.record)) return refusal(409, "wrong-state", "A wallet is linked before the game starts.");
     /* W2-M (AUD-20.14): before the wallet signs, say which wallet this seat's standing link would replace (the
        standing-link half of the link's `replace-required` test; the link's earlier refusals and its relink of an own
@@ -1285,6 +1498,40 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
       return no(409, "wallet-in-use", "That wallet is already linked to another seat at this table.");
     }
     const bound = fin.binding?.escrow ?? null;
+    /* PHASE 3 FINAL (owner ruling 2026-10-06: ONCE A PLAYER HAS ANTED INTO A TABLE, THAT TABLE'S FINANCIAL WALLET
+       BINDING CANNOT BE CHANGED): a host's ante is its CreateGame, which needs no admission -- so it can be on chain while
+       the table is still unbound (no hint, a restart, a bind refused for a moment, a security event that ended the link).
+       Before this link could issue anything for an unbound table, the chain is asked CONCLUSIVELY (security review,
+       MEDIUM 1: `hostAnteOnChain`, never the observer's few pages or its set-aside candidates) whether an escrow carries
+       ANY proven (wallet, ticket) of this seat -- standing or not:
+         found    the seat's wallet is the ante's. The standing link's own ante: the same wallet is already funded, any
+                  other is refused. Otherwise the anted wallet relinks (free: its ticket re-adopted) and any other wallet
+                  is refused until that escrow is cancelled on Juno. The escrow is bound through W-13 on the way (best
+                  effort -- a bind that fails changes none of this).
+         unknown  503: nothing is issued on a partial or failed read.
+         absent   decided below exactly as before. */
+    if (bound === null && isHost) {
+      const entry = entryOf(record.game_id);
+      entry.ledger = snapshot;
+      const onChain = await hostAnteOnChain(entry, record, snapshot.grants);
+      if (onChain.kind === "unknown") return no(503, "chain-unavailable", "Juno couldn't be checked just now, so the wallet wasn't linked. Try again in a moment.");
+      if (onChain.kind === "found") {
+        const standing = newest !== undefined && newest.standing && newest.proof !== null ? newest : null;
+        const standingAnte = standing === null ? undefined : onChain.antes.find((ante) => ante.wallet === standing.wallet && ante.ticket === standing.ticket);
+        if (standingAnte !== undefined) {
+          await bindHostAnte(entry, record, [standingAnte]);
+          if (wallet === standingAnte.wallet) return no(409, "already-funded", "Your table is already open on Juno with the linked wallet.");
+          return no(409, "withdraw-or-relink-first", hostAnteSentence(standingAnte.wallet));
+        }
+        const requested = onChain.antes.filter((ante) => ante.wallet === wallet);
+        if (requested.length > 0) {
+          const relinked = (await bindHostAnte(entry, record, requested)) ?? requested[0];
+          return { kind: "issue", relinkFrom: relinked.grant.epoch };
+        }
+        const named = (await bindHostAnte(entry, record, onChain.antes)) ?? onChain.antes[0];
+        return no(409, "withdraw-or-relink-first", hostAnteSentence(named.wallet));
+      }
+    }
     if (bound !== null) {
       let game: JunoGameResponse;
       try {
@@ -1305,15 +1552,15 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
       if (admitted !== null) return no(409, "admission-outstanding", "This seat's join approval hasn't expired yet. Deposit with the linked wallet, or wait for the approval to lapse.");
       const mine = new Set(grants.map((grant) => grant.wallet));
       const earlierDeposit = seats.find((seat) => mine.has(seat.wallet) && seat.wallet !== wallet);
-      if (earlierDeposit !== undefined) return no(409, "withdraw-or-relink-first", `This seat still has a deposit from ${earlierDeposit.wallet} on Juno. Relink that wallet (free), or withdraw its deposit first.`);
-    } else if (isHost && newest !== undefined && newest.standing && newest.proof !== null) {
-      /* A host's CreateGame needs no admission: before a new ticket orphans it, look for it once more. */
-      const entry = entryOf(record.game_id);
-      entry.ledger = snapshot;
-      try {
-        if (await discover(entry, record)) return no(409, "already-funded", "Your table is already open on Juno with the linked wallet.");
-      } catch {
-        return no(503, "chain-unavailable", "Juno couldn't be checked just now, so the wallet wasn't linked. Try again in a moment.");
+      /* PHASE 3 FINAL: the ante is the binding -- a seat whose deposit is on chain keeps that deposit's wallet. */
+      if (earlierDeposit !== undefined) {
+        return no(
+          409,
+          "withdraw-or-relink-first",
+          isHost
+            ? hostAnteSentence(earlierDeposit.wallet)
+            : `This seat's ante is already on Juno from ${earlierDeposit.wallet}, so its payout wallet can't change. Relink that wallet (free), or withdraw that deposit first.`,
+        );
       }
     }
     if (admitted !== null) return no(409, "admission-outstanding", "This seat's join approval hasn't expired yet.");
@@ -1335,9 +1582,11 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
   async function walletLink(caller: MoneyCaller, body: Record<string, unknown>): Promise<MoneyAnswer> {
     const down = serviceReady();
     if (down !== null) return down;
-    if (!caller.sensitive) return refusal(403, "reauth-required", "Confirm it's you first (your recovery key), then link the wallet.");
+    if (!caller.sensitive && caller.authorizationWallet === null) return refusal(403, "reauth-required", CONFIRM_FIRST);
     const table = tableFor(caller, body.gameId);
     if (!isTable(table)) return table;
+    const restoring = restoreHeld(table.record);
+    if (restoring !== null) return restoring;
     const elsewhere = await notServedHere(table.record);
     if (elsewhere !== null) return elsewhere;
     const context = { sessionId: caller.sessionId, familyId: caller.familyId, recoverySelector: caller.recoverySelector, principalId: caller.principalId };
@@ -1347,6 +1596,10 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
     if (taken.kind === "spent") return taken.signature === signature ? (taken.result as MoneyAnswer) : refusal(409, "challenge-used", "That link request was already used. Start the link again.");
     const entry = taken.entry;
     const nonce = entry.nonce;
+    /* Decided again at LINK time, for the wallet the challenge names (a grant that lapsed meanwhile, or an Authorization
+       Wallet replaced meanwhile, refuses). Not spent: the same signature may be sent again once authorized. */
+    const authority = linkAuthority(caller, entry.wallet);
+    if (authority === null) return refusal(403, "reauth-required", CONFIRM_FIRST);
     /* The nonce is spent with its answer -- unless the answer is "try again" (the chain or the table busy for a moment):
        then the same signed challenge may be sent again, and a lost answer is not replayed as that failure (S-L4). */
     const finish = (result: MoneyAnswer): MoneyAnswer => {
@@ -1363,7 +1616,10 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
     if (!CONSENT_KEY.test(consentKey)) return finish(refusal(400, "bad-consent-key", "The signing key this browser made isn't a valid key."));
     const proof: WalletLinkProof = verdict.proof;
     const replace = body.replace === true;
-    const current = await chainConfig();
+    /* Review NEW 2 (b): a FRESH ticket's floor -- where the conclusive search for the host's ante starts it -- is the
+       chain's next game id read NOW (before the actor task: a read never holds the table). A read that fails keeps the
+       last one read (lower: only more to read); if none was ever read, no fresh ticket is minted (below). */
+    const current = await chainConfig(0);
     const ran = await room.runTask(table.record.game_id, async (record): Promise<MoneyAnswer> => {
       const seat = seatOf(record, caller.principalId);
       if (record.money === null || seat === null || seat.player_id !== table.playerId) return refusal(409, "seat-changed", "Your seat at this table changed. Start the link again.");
@@ -1394,7 +1650,7 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
           playerId: seat.player_id,
           wallet: entry.wallet,
           context: { principalId: caller.principalId, familyId: caller.familyId, recoverySelector: caller.recoverySelector },
-          reauthorized: caller.sensitive,
+          reauthorized: authority !== null,
           proof,
           consentKey,
           relinkFrom: grant.epoch,
@@ -1407,26 +1663,35 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
         audit("money.wallet-linked", { game_id: record.game_id, epoch: rehomed.epoch, relink: false, rehome: true, from_epoch: grant.epoch });
         return answer({ mode: "unchanged", wallet: entry.wallet, epoch: rehomed.epoch, ticket: rehomed.ticket, rehomed: true });
       }
+      /* Review NEW 2 (b): NEVER a ticket with an unknown floor (it would make every later search start at game 1). A
+         relink re-adopts its grant's ticket and floor; a fresh ticket waits until the chain's next game id can be read
+         (a 503: the signed link is not spent). */
+      const createFloor = current?.nextChainGameId ?? null;
+      if (decision.relinkFrom === null && createFloor === null) return refusal(503, "chain-unavailable", "Juno couldn't be checked just now, so the wallet wasn't linked. Try again in a moment.");
       const issued = await deps.tickets.issue({
         binding: { backend: deps.pin.backend, chain_id: deps.pin.chain_id, deployment_id: contract },
         gameId: record.game_id,
         playerId: seat.player_id,
         wallet: entry.wallet,
         context: { principalId: caller.principalId, familyId: caller.familyId, recoverySelector: caller.recoverySelector },
-        reauthorized: caller.sensitive,
+        /* Always true here -- a link reaches this point only with an authority (a sensitive grant, or the account's own
+           Authorization Wallet), checked at the challenge and again above. The ledger keeps its own check as a backstop
+           against a caller that skipped it. */
+        reauthorized: authority !== null,
         proof,
         consentKey,
         relinkFrom: decision.relinkFrom,
-        createFloor: current?.nextChainGameId ?? null,
+        createFloor,
       });
       if (!issued.ok) {
         const [status, reason] = LINK_REFUSALS[issued.refusal] ?? [409, "The wallet wasn't linked."];
         return refusal(status, issued.refusal, reason);
       }
-      audit("money.wallet-linked", { game_id: record.game_id, epoch: issued.epoch, relink: decision.relinkFrom !== null });
+      audit("money.wallet-linked", { game_id: record.game_id, epoch: issued.epoch, relink: decision.relinkFrom !== null, authority });
       return answer({ mode: decision.relinkFrom === null ? "issued" : "relinked", wallet: entry.wallet, epoch: issued.epoch, ticket: issued.ticket });
     });
     soon(table.record.game_id);
+    /* PHASE 3 FINAL: a link writes nothing about the account (no wallet is persisted to or inferred as the profile). */
     return finish(ran.ok ? ran.value : refusal(ran.code === "not-found" ? 404 : 503, ran.code, ran.reason));
   }
 
@@ -1435,6 +1700,8 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
     if (down !== null) return down;
     const table = tableFor(caller, body.gameId);
     if (!isTable(table)) return table;
+    const restoring = restoreHeld(table.record);
+    if (restoring !== null) return restoring;
     if (table.isHost) return refusal(409, "host-creates", "As the host you open the table on Juno with your own deposit; no join approval is needed.");
     const ran = await room.runTask(table.record.game_id, async (record): Promise<MoneyAnswer> => {
       const seat = seatOf(record, caller.principalId);
@@ -1518,11 +1785,16 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
   }
 
   async function consentKey(caller: MoneyCaller, body: Record<string, unknown>): Promise<MoneyAnswer> {
-    if (!caller.sensitive) return refusal(403, "reauth-required", "Confirm it's you first (your recovery key) to set up signing on this device.");
+    /* Unchanged by P3-ACCT: registering or moving a signing key outside a wallet link stays SENSITIVE. (The Ante registers
+       this browser's key through a wallet link -- a fresh proof by the wallet itself -- whenever this browser holds none,
+       so it never needs this route: `frontend/src/money/moneyActions.ts` anteNow.) */
+    if (!caller.sensitive) return refusal(403, "reauth-required", "Confirm it's you with your password to set up signing on this device.");
     const table = tableFor(caller, body.gameId);
     if (!isTable(table)) return table;
     const pubkey = typeof body.pubkey === "string" ? body.pubkey : "";
     if (!CONSENT_KEY.test(pubkey)) return refusal(400, "bad-consent-key", "That isn't a valid signing key.");
+    const restoring = restoreHeld(table.record);
+    if (restoring !== null) return restoring;
     const elsewhere = await notServedHere(table.record);
     if (elsewhere !== null) return elsewhere;
     const registered = await deps.tickets.registerConsentKey({ gameId: table.record.game_id, playerId: table.playerId, principalId: caller.principalId, pubkey });
@@ -1737,6 +2009,8 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
 
   return {
     creationStatus,
+    /** P3-ACCT (trust indicators): a table's financial record, read-only (its phase and the chain's outcome route). */
+    financialRecord: (gameId: string): Promise<FinancialGameRecord | null> => deps.financial.load(gameId),
     /** A create's money terms, checked against this deployment (never a caller's claim about the deployment). */
     async prepareCreate(input: { readonly stake: unknown; readonly exactPlayers: unknown; readonly variants: GameVariants }): Promise<{ readonly ok: true; readonly terms: GameMoneyTerms } | { readonly ok: false; readonly code: string; readonly reason: string }> {
       const status = creationStatus();

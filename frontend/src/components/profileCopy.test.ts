@@ -74,7 +74,7 @@ describe("no player-visible guest or seat-PIN vocabulary (LIVE-2E)", () => {
 
   it("scans the whole production UI", () => {
     expect(files.length).toBeGreaterThan(150);
-    for (const name of [...shellSourcePaths(), "index.tsx", "components/ProfileGate.tsx", "components/ProfileMenu.tsx", "components/SessionEndedNotice.tsx", "utils/roomProtocol.ts"]) {
+    for (const name of [...shellSourcePaths(), "index.tsx", "components/AccountDialog.tsx", "components/ProfileMenu.tsx", "components/SessionEndedNotice.tsx", "utils/roomProtocol.ts"]) {
       expect(files).toContain(path.join(SRC, name));
     }
   });
@@ -116,7 +116,8 @@ describe("no player-visible guest or seat-PIN vocabulary (LIVE-2E)", () => {
   });
 
   it("the profile screens name no id: no principal, profile, session or key selector, and no game id", () => {
-    for (const name of ["components/ProfileGate.tsx", "components/ProfileMenu.tsx", "components/RecoveryKeyReveal.tsx", "components/SessionEndedNotice.tsx"]) {
+    /* PHASE 3 FINAL: `RecoveryKeyReveal.tsx` is deleted (no recovery key); the account's new screens are scanned instead. */
+    for (const name of ["components/AccountDialog.tsx", "components/ProfileMenu.tsx", "components/TableAccountNotice.tsx", "components/SessionEndedNotice.tsx", "components/TrustFacts.tsx", "components/ConfirmItsYou.tsx", "utils/authorizationWalletFlow.ts", "utils/profileAuthorizationV1.ts"]) {
       for (const { text } of readableText(path.join(SRC, name))) {
         expect([name, text, /\b(?:pr|pf|se|rk)_[0-9a-z]/i.test(text) || /\bg_[0-9a-z]{6,}/i.test(text)]).toEqual([name, text, false]);
       }
@@ -125,9 +126,18 @@ describe("no player-visible guest or seat-PIN vocabulary (LIVE-2E)", () => {
 
   it("the profile screens never read the cookie or keep a credential in storage or a URL", () => {
     for (const name of [
-      "components/ProfileGate.tsx",
+      "components/AccountDialog.tsx",
+      "components/ConfirmItsYou.tsx",
+      "components/TrustFacts.tsx",
+      "utils/accountPrompt.ts",
+      "utils/trustApi.ts",
       "components/ProfileMenu.tsx",
-      "components/RecoveryKeyReveal.tsx",
+      /* PHASE 3 FINAL: the Authorization Wallet's screens and helpers, and the open table's account guard, in place of
+         the deleted `RecoveryKeyReveal.tsx`. */
+      "components/TableAccountNotice.tsx",
+      "utils/authorizationWalletFlow.ts",
+      "utils/profileAuthorizationV1.ts",
+      "utils/tableAccountGuard.ts",
       "components/SessionEndedNotice.tsx",
       "utils/profileApi.ts",
       "utils/sessionBootstrap.ts",
@@ -139,7 +149,16 @@ describe("no player-visible guest or seat-PIN vocabulary (LIVE-2E)", () => {
         .replace(/\/\*[\s\S]*?\*\//g, "")
         .replace(/(^|[^:])\/\/.*$/gm, "$1");
       for (const banned of ["document.cookie", "localStorage", "sessionStorage", "console.", "history.pushState", "history.replaceState", "location.hash", "location.search"]) {
+        /* PHASE 3 FINAL: the ONE exception -- the open table's account guard keeps, per table in this tab's sessionStorage,
+           a FINGERPRINT of the account it was opened as and the display name shown there (no username, no credential),
+           so a reload still asks; pinned below. */
+        if (name === "utils/tableAccountGuard.ts" && banned === "sessionStorage") continue;
         expect([name, banned, code.includes(banned)]).toEqual([name, banned, false]);
+      }
+      if (name === "utils/tableAccountGuard.ts") {
+        expect(code).toContain("[gameId, { key: baseline.key, name: baseline.name }]");
+        expect(code).toContain("{ key: tag, name, local: changes }");
+        expect(code).toContain("const tag = key === null ? null : fingerprintOf(key);");
       }
     }
   });

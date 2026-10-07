@@ -5,9 +5,10 @@
 // -- `POST /gs/api/session {"fresh": true}` -- and then the page reloads. There is no automatic path and no
 // console-only one.
 //
-// LIVE-2E: PROFILES ARE MANDATORY, so "Continue" no longer starts anybody new: it gives this browser a fresh,
-// unprofiled session and the reload lands on `ProfileGate`, where the recovery key (or a link code from another
-// signed-in device) brings the SAME profile back -- with its seats, which the server kept all along.
+// LIVE-2E / P3-ACCT: "Continue" never starts anybody new: it gives this browser a fresh, signed-out session and the
+// reload lands on the public homepage, where "Log in" (username and password; "Forgot password?" with the account's
+// Authorization Wallet) brings the SAME account back, with its seats, which the server kept all along. (PHASE 3 FINAL: a
+// `retired` session belonged to an account made before Authorization Wallets -- its owner makes a new account.)
 
 import { forgetActiveTable } from "../utils/activeGame";
 import React, { useState } from "react";
@@ -40,10 +41,7 @@ export function SessionEndedNotice({ port = sessionPort() }: { port?: SessionPor
           You're signed out on this browser
         </h2>
         <p style={styles.text}>{sessionEndedSentence(endedReason)}</p>
-        <p style={styles.text}>
-          Your profile and its seats are kept. To sign this browser back in, continue and use your recovery key, or a
-          link code from another device that is still signed in.
-        </p>
+        <p style={styles.text}>Your account and its seats are kept. Continue, then log in again to play on this browser.</p>
         <button
           type="button"
           onClick={() => void continueFresh()}

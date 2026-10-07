@@ -187,6 +187,11 @@ export interface RoomHostDeps {
   /** ESCROW-4: the real-money table layer (`escrow/moneyTables.ts`), bound late (it needs this host's port). Absent or
    *  null: no money table can be created, and an existing one is shown by its terms only, its seats locked. */
   money?: () => MoneyTables | null;
+  /** PHASE 3 FINAL (owner ruling 2026-10-06: PLAYER GAMES ARE ANTED GAMES): whether a table WITHOUT an ante may be
+   *  created, joined with a seat or started. `false` in every production entry point (`start.ts` in production mode,
+   *  `awsRuntime.ts`): the player product has no free game. Absent / true: the internal machinery -- development mode,
+   *  the deterministic suites and historical fixtures -- keeps its free tables. Watching is never affected. */
+  freeTables?: boolean;
   /** LIVE-3C: whether a session's board has ended or closed (the reducer's `GameEnd` / `room_closed`; a test seam
    *  may say so of a game that has not -- a stored game that reaches GameEnd needs a whole game played). */
   boardFacts?: (gameId: string, session: RoomSession) => { ended: boolean; closed: boolean };
@@ -746,6 +751,25 @@ export function createRoomHost(deps: RoomHostDeps) {
     return unavailable;
   }
 
+  /** P3-ACCT (trust indicators): the seats of a table `principalId` may READ (its view, as any watcher would: a private
+   *  table is `null` to an outsider, exactly as a table that does not exist). Server-side only: the principals here
+   *  never leave the server -- the caller turns them into public facts keyed by the seat's public `player_id`. */
+  function readableSeats(gameId: string, principalId: string | null, options: { moneyOnly?: boolean } = {}): ReadonlyArray<{ readonly playerId: string; readonly principalId: string }> | null {
+    const record = peekLoaded(gameId)?.view.record ?? recordIndex.get(gameId) ?? null;
+    if (record === null) return null;
+    /* P3-ACCT (review L4): the trust facts are for deciding whether to sit at a REAL-MONEY table; a free table answers
+       exactly as a missing one (nothing about it, or its players, is said). */
+    if (options.moneyOnly === true && record.money === null) return null;
+    const verdict = authorize("read-view", { record, facts: factsFromRecord(record), principalId: principalId ?? "", now: now(), held: false });
+    if (!verdict.ok) return null;
+    return record.seats.map((seat) => ({ playerId: seat.player_id, principalId: seat.principal_id }));
+  }
+
+  /** P3-ACCT (trust indicators): every table the index knows that `principalId` holds a seat at (server-side only). */
+  function tablesOf(principalId: string): GameRecord[] {
+    return [...recordIndex.values()].filter((record) => seatOf(record, principalId) !== null);
+  }
+
   /** A hold discovery found this run but could not write down (the load honours it as if its file existed). */
   function pendingHoldOf(gameId: string): { code: HoldCode; detail: string } | null {
     return discoveryHolds.get(gameId) ?? null;
@@ -1200,6 +1224,10 @@ export function createRoomHost(deps: RoomHostDeps) {
     }
   }
 
+  /** PHASE 3 FINAL: a table without an ante, where this server serves no free game (watching it stays open). */
+  const ANTE_REQUIRED = { ok: false as const, code: "ante-required", reason: "Every game here is a real-money game with an ante. This table has no ante, so it can be watched but not joined or started." };
+  const freeTableRefused = (record: GameRecord | null): boolean => deps.freeTables === false && record !== null && record.money === null;
+
   async function handleCreate(socket: WebSocket, ctx: ConnectionContext, requestId: string, op: Record<string, unknown>): Promise<void> {
     await indexReady;
     const ip = deps.ipOf(socket);
@@ -1237,6 +1265,10 @@ export function createRoomHost(deps: RoomHostDeps) {
       const prepared = await money.prepareCreate({ stake: stakeRaw, exactPlayers: op.exactPlayers, variants: resolveVariants(op.variants as never) });
       if (!prepared.ok) return ack(socket, requestId, { ok: false, code: prepared.code, reason: prepared.reason });
       moneyTerms = prepared.terms;
+    }
+    /* PHASE 3 FINAL: no free game in the player product -- a table is created with an ante, or not at all. */
+    if (moneyTerms === null && deps.freeTables === false) {
+      return ack(socket, requestId, { ok: false, code: "ante-required", reason: "Every game here is a real-money game: set an ante to host a table." });
     }
     const waits = [createsPrincipal.peek(ctx.principalId), ip ? createsIp.peek(ip) : 0, createsGlobal.peek("global")];
     if (waits.some((wait) => wait > 0)) {
@@ -1364,6 +1396,8 @@ export function createRoomHost(deps: RoomHostDeps) {
     /* The code must still be THIS record's (an orphan, rotated or released entry is never authoritative), and a
        private room past its deal admits nobody new -- all answered alike. */
     if (record.join_code !== code || !authorizeNow(game, ctx.principalId, "join").ok) return failed();
+    /* PHASE 3 FINAL: no seat at a table without an ante (a valid code is not a failed one: nothing is charged). */
+    if (op.takeSeat === true && seatOf(record, ctx.principalId) === null && freeTableRefused(record)) return ack(socket, requestId, ANTE_REQUIRED);
     if (op.takeSeat === true && seatOf(record, ctx.principalId) === null && capsOf(ctx.principalId).seated >= rooms.maxSeatedGames) {
       return ack(socket, requestId, { ok: false, code: "limit-reached", reason: `You already sit at ${rooms.maxSeatedGames} open tables.` });
     }
@@ -1430,6 +1464,9 @@ export function createRoomHost(deps: RoomHostDeps) {
       const verdict = authorizeNow(game, ctx.principalId, "take-seat");
       if (!verdict.ok) return ack(socket, requestId, verdict);
       const record = game.view.record as GameRecord;
+      /* PHASE 3 FINAL: no new seat at a table without an ante -- decided AFTER the authorization (security review,
+         INFO 5): an outsider of a private table is answered exactly as before (as if it did not exist). */
+      if (freeTableRefused(record) && seatOf(record, ctx.principalId) === null) return ack(socket, requestId, ANTE_REQUIRED);
       if (seatOf(record, ctx.principalId) === null) {
         if (capsOf(ctx.principalId).seated >= rooms.maxSeatedGames) {
           return ack(socket, requestId, { ok: false, code: "limit-reached", reason: `You already sit at ${rooms.maxSeatedGames} open tables.` });
@@ -1677,6 +1714,8 @@ export function createRoomHost(deps: RoomHostDeps) {
       if (!verdict.ok && verdict.code === "not-found") return { ok: false, code: verdict.code, reason: verdict.reason };
       /* LIVE-3C: a held table is not dealt, whatever the host presses. */
       if (maintenance) return { ok: false, code: "held", reason: HELD_PLAYER_SENTENCE };
+      /* PHASE 3 FINAL: a table without an ante is never dealt where this server serves no free game. */
+      if (!facts.dealt && freeTableRefused(record)) return ANTE_REQUIRED;
       /* ESCROW-4: at a real-money table a funded non-host may start after the host's grace (OD-4-7): the money layer
          decides who, from the chain. Every other refusal of the table's own rules stands. */
       const moneyNonHost = record.money !== null && !verdict.ok && verdict.code === "forbidden" && seat !== null;
@@ -1727,6 +1766,13 @@ export function createRoomHost(deps: RoomHostDeps) {
       if (record === null) return { ok: false, code: "not-found", reason: "There is no such game." };
       if (isMaintenanceHold(tx.view.hold)) return { ok: false, code: "held", reason: HELD_PLAYER_SENTENCE };
       if (tx.view.hold !== null || awaitingReconciliation(actor)) return { ok: false, code: "unavailable", reason: UNAVAILABLE };
+      /* LIVE-6 L6-2 (security review, LOW 1): no money write of a RESTORED table runs before its history is verified --
+         the same gate as its seat ops (`runOp`). The money routes ask it first (`moneyTables.ts` restoreHeld); this is
+         the actor's own backstop for every money task. */
+      if (record.record_schema === 2) {
+        const restoring = deps.escrow?.restoreGate?.(record.game_id) ?? null;
+        if (restoring !== null) return { ok: false, code: "held", reason: restoring };
+      }
       return { ok: true, value: await task(record) };
     });
     if (outcome.kind === "ran") return outcome.value;
@@ -2513,6 +2559,9 @@ export function createRoomHost(deps: RoomHostDeps) {
     moneyPort,
     /* Phase 3 final clocks: the table clock (null when this host keeps none). */
     clock,
+    /* P3-ACCT: the trust indicators' reads (server-side only). */
+    readableSeats,
+    tablesOf,
     /* ESCROW-3A (brief §6): the money games the index knows (never a replay; the coordinator loads them). */
     financialGameIds: (): string[] => [...recordIndex.values()].filter((record) => settlement.retentionOf(record).kind === "financial").map((record) => record.game_id),
     financialRecords: (): GameRecord[] => [...recordIndex.values()].filter((record) => settlement.retentionOf(record).kind === "financial"),

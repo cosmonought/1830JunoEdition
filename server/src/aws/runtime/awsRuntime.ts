@@ -828,6 +828,7 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
   let identity: IdentityService;
   try {
     identity = await IdentityService.open(identityStore, {
+      /* PHASE 3 FINAL: accounts are username + password + an Authorization Wallet; no recovery key exists anywhere. */
       security: {
         journal: substrate.securityJournal({ onFenced: (detail) => w.markLost(`the security-event journal was refused: the adopted generation moved (${detail})`) }),
         grants: identityStore.grants,
@@ -1123,6 +1124,8 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
       port: input.port,
       bindHost: input.bindHost,
       build: input.build,
+      /* PHASE 3 FINAL (owner ruling: PLAYER GAMES ARE ANTED GAMES): the player product has no free game. */
+      freeTables: false,
       settlement,
       rosterSource: {
         plan: (record, ctx) =>

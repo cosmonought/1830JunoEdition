@@ -18,12 +18,11 @@
 //
 // Design notes #3/#24/#524/#525/#527/#586: see `docs/ai_architecture/firebase_middleware.md`.
 
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 
-import { useWallet } from "../context/WalletContext";
-import { ConnectWalletButton } from "./ConnectWalletButton";
 import { UiScalePicker } from "./UiScalePicker";
-import { NATIVE_DENOM_DISPLAY, chainConfigError, formatNativeAmount } from "../config";
+import { chainConfigError } from "../config";
+import { FREE_TABLES_OFFERED } from "../utils/tablePolicy"; // PHASE 3 FINAL (§13)
 import { isBackendConfigured, backendConfigError } from "../config/backend";
 import { preloadWaitingRoomScene } from "./SandboxWaitingRoom";
 import {
@@ -46,9 +45,14 @@ import { zoomAwareMediaCss } from "../utils/uiScale";
 // Design note #524: the sandbox lobby lives on this screen now.
 import SandboxRoomBar from "./SandboxRoomBar";
 import { createHostedGame, gameIdOf, joinHostedGame, type RoomSetup } from "../utils/sandboxRoom";
-/* LIVE-2E: the profile chip (link a device, rotate the key, sign out), and the profile's name as the host's seat name. */
+/* LIVE-2E: the profile chip (link a device, rotate the key, sign out), and the profile's name as the host's seat name.
+   P3-ACCT (public first): signed out, the same corner offers Log in and Create account. */
 import { ProfileMenu } from "./ProfileMenu";
 import { profileNickname } from "../utils/profileApi";
+/* P3-ACCT: Host, Join and a listed table's Join ask for an account first, then carry on by themselves. */
+import { requireAccount } from "../utils/accountPrompt";
+import { useSession } from "../utils/useSession";
+import { openInfoPage } from "../utils/infoPages";
 // #1415: the host's setup card -- type, pace, visibility, then the house rules -- before the room exists; and
 // the join card, the code box for an unlisted table.
 import { HostSetupCard } from "./HostSetupCard";
@@ -57,7 +61,7 @@ import { LobbyRoomList } from "./LobbyRoomList";
 import { roomLinkAvailable } from "../utils/roomLink";
 import { JOIN_CODE_EXAMPLE, parseJoinCode, refusalMessage, supportRefOf } from "../utils/roomProtocol";
 import { CONTROL_PADDING, FONT_FAMILY, FONT_FAMILY_MONO, FONT_SIZE, LINE_HEIGHT, RADIUS } from "../styles/typography";
-import { truncateAddress, useMyTables, usePublicRooms } from "../utils/lobby";
+import { useMyTables, usePublicRooms } from "../utils/lobby";
 import { MyTablesList } from "./MyTablesList";
 import type { GameVariants } from "../gameEngine/gameVariants";
 
@@ -75,17 +79,6 @@ import type { GameVariants } from "../gameEngine/gameVariants";
 // guessing which of four preconditions they missed, while an enabled button that says "Connect a wallet first
 // -- the room is stored under your address as host" answers the question they actually have. The precondition
 // is still enforced in the handler; the only change is that refusing now explains itself.
-
-/** Visibly greys out a disabled control -- design note #3, rule 1. `pointerEvents` is deliberately NOT `none`:
- *  the click must still reach React so a genuinely disabled (busy) control can be distinguished from a dead one
- *  during debugging, and so the `title` still appears on hover. `cursor: not-allowed` is what communicates it. */
-function disabledButtonStyle(
-  base: React.CSSProperties,
-  disabled: boolean,
-): React.CSSProperties {
-  if (!disabled) return base;
-  return { ...base, opacity: 0.4, cursor: "not-allowed" };
-}
 
 export interface LobbyProps {
   /** LIVE-2D: enter a server-owned table by its `gameId` -- after Host (the server seated the host), Join (the server
@@ -147,68 +140,91 @@ function sceneSizeFor(scale: number): React.CSSProperties {
    THE PICTURE IS NOT RESIZED, ONLY CROPPED. Shrinking the scene would move every anchor inside it (#1131);
    cropping the bottom of a top-anchored scene moves nothing -- the title and the buttons keep their exact
    positions, and what is lost is the foreground edge of the table below them.
-   A CUSTOM PROPERTY RATHER THAN A SPREAD, so `styles.sceneClip` stays the one static object three other
-   harnesses read it as (`blendIsolation`, `seatPin`) while the one number in it follows the zoom. */
+   [P3-N028, below: the window is now the top region's MINIMUM height -- a floor, not a clip the doors hang in.] */
 const HERO_MIN_PX = 520;
 const HERO_SHARE = 74;
-function heroVars(scale: number, utilityRowPx: number): React.CSSProperties {
-  const hero = `min(${100 / scale}vh, max(${HERO_MIN_PX}px, ${HERO_SHARE / scale}vh))`;
+/* ==================================================================
+    PHASE 3 (P3-N028, REOPENED 2026-10-06): THE TOP REGION OWNS ITS HEIGHT, AND THE TABLES START BELOW IT
+   ==================================================================
+   REPORTED AGAIN BY THE OWNER (playtesting, ~300% viewing scale): "Your Tables" covering Host / Join. P3-N028 is not
+   closed while that is reproducible.
+   WHY THE FIRST FIX COULD NOT HOLD. It kept the doors ABSOLUTELY positioned inside the photograph (`top: 70%` of a
+   `cover` scene, clamped into the window) and the list in the flow, and it bridged the two with a NUMBER: the doors'
+   foot, measured (`getBoundingClientRect`, divided by the zoom, `ResizeObserver` + `resize`) and written back as the
+   height of an empty spacer. The boundary was therefore a copy -- of a measurement taken in one coordinate system
+   (the zoomed scene) and replayed in another (the flow) one render later -- correct only after every observer had
+   fired, in the right order, in an engine whose client rects agreed with this file's division by the zoom. Until the
+   copy landed (the first frames after a load, a resize, a sign-in or a reflow), and wherever it never landed, the list
+   was laid out over the doors: measured-height luck, which is exactly what the owner ruled out.
+   THE BOUNDARY IS STRUCTURAL NOW, AND NOTHING IS MEASURED:
+     1. the TOP REGION (`styles.top`, `lobby-top`) is a normal-flow block holding the account corner, the title and the
+        doors, all in flow -- so its height IS its content's, never less than the hero window (`minHeight`);
+     2. the photograph is that region's DECORATIVE BACKGROUND and nothing more (`sceneClip`: absolute, `inset: 0`,
+        clipped to the region, `pointer-events: none`, painted under the region's flow content) -- it positions nothing;
+     3. an explicit BOUNDARY (`lobby-boundary`) follows the region, and then the TABLES REGION (`lobby-tables`: "Your
+        tables", the public list, their loading / empty / error states, the banners) as a normal-flow sibling with no
+        absolute position, no negative margin, no transform and no offset.
+   So a taller corner (wrapped, signed in, a wallet), a larger text size, a wrapped door row or an error under it makes
+   the TOP REGION taller and moves the tables DOWN -- at every window, zoom and font, in the very frame it happens.
+   THE COMPOSITION (#1131) SURVIVES AS MARGINS, NOT COORDINATES. The scene keeps its exact cover arithmetic
+   (`sceneSizeFor`, top-anchored), and the flow aims the title's foot at 40% of it and the doors' centre at 70%,
+   clamped into the hero window as #1441 / P3-ACCT did -- computed in CSS from the scene's own size (`topRegionVars`),
+   so on the window it was tuned on the picture and the controls line up as before. The aim assumes a one-line corner
+   and a one-line row; when either is taller, everything below it moves down rather than under anything. */
+/** #1131's composition, as fractions of the scene's height: the title's foot ("at the lowest" 0.4) and the doors'
+ *  centre (the table, 0.7). */
+const TITLE_FOOT_OF_SCENE = 0.4;
+const DOORS_CENTRE_OF_SCENE = 0.7;
+/** #1131: the wordmark is 20% of the scene wide (at least 230px); the artwork is 900 x 617. P3-N028: the 230px floor
+ *  gives way on a very short window (at most half the window's height wide), so the corner, the title and the doors
+ *  stack inside it instead of the title being laid over the corner (what the absolute layout did at ~300%). */
+const WORDMARK_SHARE_OF_SCENE = 0.2;
+const WORDMARK_MIN_PX = 230;
+const WORDMARK_MAX_SHARE_OF_WINDOW = 0.5;
+/** The aim's assumptions only (never a measurement): the account corner's one-line height (its 14px top padding
+ *  plus a row of small pills) and half the doors' one-line height (#1136's 45px control). */
+const UTILITY_ROW_NOMINAL_PX = 44;
+const DOORS_HALF_NOMINAL_PX = 23;
+/** P3-ACCT, kept: the doors' least distance from the hero window's foot, and from the title above them. */
+const ACTIONS_WINDOW_MARGIN_PX = 20;
+const ACTIONS_TITLE_GAP_PX = 12;
+/** P3-ACCT, kept: the least space under the doors, inside the top region. */
+const ACTIONS_GAP_PX = 24;
+
+/** P3-N028: the top region's lengths, in the zoomed root's layout space (every viewport term divided by the scale,
+ *  #1144/#1294). Pure CSS arithmetic of the window -- nothing here reads the DOM. */
+export function topRegionVars(scale: number): React.CSSProperties {
   return {
-    "--lobby-hero": hero,
-    /* Design note #1441: the action row's narrow extent, in the scene's percentages. */
-    "--lobby-actions-left": `calc(50% - ${50 / scale}vw + 16px)`,
-    "--lobby-actions-width": `calc(${100 / scale}vw - 32px)`,
-    /* The hero's share of the FLOW: the utility row is laid over the picture (#1354), and the root column
-       puts a 16px gap either side of the spacer, so both come off the height it reserves. */
-    "--lobby-hero-flow": `max(0px, calc(${hero} - ${utilityRowPx + 32}px))`,
+    /* The hero window (#1440): the top region's floor. */
+    "--lobby-hero-window": `min(${100 / scale}vh, max(${HERO_MIN_PX}px, ${HERO_SHARE / scale}vh))`,
+    /* The window's own height, for the wordmark's floor. */
+    "--lobby-window-h": `${100 / scale}vh`,
+    /* The scene's own box -- `cover` of the window (#1131/#1144), the same arithmetic as `sceneSizeFor`. */
+    "--lobby-scene-w": `max(${100 / scale}vw, calc(${100 / scale}vh * 1920 / 1072))`,
+    "--lobby-scene-h": `max(${100 / scale}vh, calc(${100 / scale}vw * 1072 / 1920))`,
   } as React.CSSProperties;
 }
 
-/* ==================================================================
-    DESIGN NOTE 1354: THE TITLE STAYS UNDER THE UTILITY ROW AND INSIDE THE WINDOW
-   ==================================================================
-   REPORTED (feedback 4): on one device at 100% the title was clipped at the top.
-   THE SCENE IS `cover`, SO IT OVERHANGS THE WINDOW on any aspect that is not the photograph's -- above and
-   below on a wide window -- and the title is anchored to the SCENE (#1131, bottom at 60%), so on a wide or
-   short window its top rises past the viewport's; and the utility row is flow content laid over the scene's
-   top band, taller when it wraps, which at 100% on a narrow device it does. Both are the same fault: nothing
-   held the title below a line it could not see.
-   THE LINE IS COMPUTED. The wordmark is 900x617 and 20% of the scene wide, so its height is 24.6% of the
-   scene's (the scene is always aspect-exact, both `max()`s preserving 1920:1072). The scene's top sits
-   `(sceneH - viewport)/2` above the window, so the highest safe `bottom` is
-   `100% - 24.6% - (50% - viewport/2) - row`, and the title takes the lower of that and #1131's 60%. The row's
-   height is measured (`ResizeObserver`) because it wraps. On the 16:9 window this was tuned on the answer
-   is 60%, unchanged; only a window that would have clipped it moves the title down. */
-const WORDMARK_HEIGHT_OF_SCENE = "24.6%";
-/* ==================================================================
-    DESIGN NOTE 1440: THE SAFE LINE GOT SIMPLER WHEN THE SCENE STOPPED FLOATING
-   ==================================================================
-   #1354's THIRD TERM WAS THE OVERHANG -- `- 50% + 50vh`, the half of the scene sitting above the window
-   because the scene was CENTRED in a viewport-tall clip. Top-anchoring (#1440) makes that term zero by
-   construction: the scene's top edge and the page's are the same edge, so the title can no longer rise past
-   the window at any aspect, and the only line left to clear is the utility row's.
-   THE CLAIM IS #1354's, UNCHANGED, and so is the arithmetic that survives it: the wordmark is 24.6% of the
-   scene, so its top sits at `100% - bottom - 24.6%`, and that must stay below the row. On the 16:9 window
-   this was tuned on the answer is still 60%. */
-function titleBottomFor(scale: number, utilityRowPx: number): React.CSSProperties {
-  return {
-    bottom: `min(60%, calc(100% - ${WORDMARK_HEIGHT_OF_SCENE} - ${utilityRowPx + 16}px))`,
-  };
-}
+/** The wordmark's width: 20% of the scene, at least 230px (#1131) unless the window is too short for that. The column
+ *  caps it too (`maxWidth` on `titleAnchor`). */
+const WORDMARK_WIDTH = `max(min(${WORDMARK_MIN_PX}px, calc(var(--lobby-window-h) * ${WORDMARK_MAX_SHARE_OF_WINDOW})), calc(var(--lobby-scene-w) * ${WORDMARK_SHARE_OF_SCENE}))`;
+const WORDMARK_HEIGHT = `${WORDMARK_WIDTH} * 617 / 900`;
+/** The title's flow offset under the corner: its foot at 40% of the scene (#1131), never closer than 16px to the
+ *  corner (#1354's safe line, now simply flow). */
+export const TITLE_MARGIN_TOP = `max(16px, calc(var(--lobby-scene-h) * ${TITLE_FOOT_OF_SCENE} - ${WORDMARK_HEIGHT} - ${UTILITY_ROW_NOMINAL_PX}px))`;
+/** Where the title's foot lands under a one-line corner: 40% of the scene, or lower when the corner and the title
+ *  need more (the margin above, resolved). */
+const TITLE_FOOT = `max(calc(var(--lobby-scene-h) * ${TITLE_FOOT_OF_SCENE}), calc(${UTILITY_ROW_NOMINAL_PX + 16}px + ${WORDMARK_HEIGHT}))`;
+/** The doors' flow offset under the title: their centre at 70% of the scene, clamped into the hero window (P3-ACCT's
+ *  clamp: half the row and 20px inside it), and never closer than 12px to the title. */
+export const ACTIONS_MARGIN_TOP = `max(${ACTIONS_TITLE_GAP_PX}px, min(calc(var(--lobby-scene-h) * ${DOORS_CENTRE_OF_SCENE} - ${DOORS_HALF_NOMINAL_PX}px - ${TITLE_FOOT}), calc(var(--lobby-hero-window) - ${2 * DOORS_HALF_NOMINAL_PX + ACTIONS_WINDOW_MARGIN_PX}px - ${TITLE_FOOT})))`;
 
 export function Lobby({ onEnterSandbox, onWatchSandbox }: LobbyProps) {
   /* Design note #1294: the chrome scale, live. */
   const uiScale = useUiScale();
-  /* Design note #1354: the utility row's measured height, for the title's safe line. */
-  const utilityRowRef = useRef<HTMLDivElement | null>(null);
-  const [utilityRowPx, setUtilityRowPx] = useState(56);
-  useEffect(() => {
-    const node = utilityRowRef.current;
-    if (!node || typeof ResizeObserver === "undefined") return undefined;
-    const observer = new ResizeObserver(() => setUtilityRowPx(node.getBoundingClientRect().height / uiScale));
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, [uiScale]);
+  /* P3-N028 (reopened): NOTHING ON THIS SCREEN IS MEASURED. #1354's utility-row observer and P3-ACCT's door
+     observer are gone with the absolute layout they corrected: the corner, the title and the doors are flow content
+     of the top region, so the region's height is theirs and the tables follow it (see `topRegionVars`). */
   /* Design note #524: the sandbox room handlers. Local to this screen -- the game id is handed straight to
      `onEnterSandbox` and this component unmounts, so there is nothing to keep. */
   const [sandboxRoomError, setSandboxRoomError] = useState<string | null>(null);
@@ -224,8 +240,12 @@ export function Lobby({ onEnterSandbox, onWatchSandbox }: LobbyProps) {
   const [hostSetup, setHostSetup] = useState(false);
   const [joinOpen, setJoinOpen] = useState(false);
   const publicRooms = usePublicRooms();
-  /* LIVE-2F/3D (C9-01): the tables this profile sits at -- the way back to a seat from any tab or browser. */
-  const myTables = useMyTables();
+  /* P3-ACCT (public first): who is looking -- a visitor browses; Host and Join ask for an account first. */
+  const session = useSession();
+  const signedIn = session.state === "ready" && session.account !== null;
+  /* LIVE-2F/3D (C9-01): the tables this profile sits at -- the way back to a seat from any tab or browser (signed in
+     only: a visitor sits nowhere, and the server answers it nothing). */
+  const myTables = useMyTables(signedIn);
 
   /** A refusal, said as a sentence a player can act on; an internal failure's reference goes to the console only. */
   const sayRefusal = useCallback((code: string, reason: string): string => {
@@ -303,8 +323,24 @@ export function Lobby({ onEnterSandbox, onWatchSandbox }: LobbyProps) {
     [handleJoinSandboxRoom],
   );
 
-  const wallet = useWallet();
-  const address = wallet.address;
+  /* P3-ACCT: the three doors that seat somebody ask for an account first and carry on by themselves once signed in
+     (`requireAccount`). Watch and the rules never ask (OD-19: Watch is read-only for everyone). */
+  const openHost = useCallback(() => {
+    setSandboxRoomError(null);
+    requireAccount(() => setHostSetup(true), "Log in or create an account to host a game.");
+  }, []);
+  const openJoin = useCallback(() => {
+    setSandboxRoomError(null);
+    requireAccount(() => setJoinOpen(true), "Log in or create an account to join a game.");
+  }, []);
+  const joinListed = useCallback(
+    (code: string) => {
+      setRoomRefusal(null);
+      requireAccount(() => void handleJoinListedRoom(code), "Log in or create an account to join this table.");
+    },
+    [handleJoinListedRoom],
+  );
+
   const chainError = chainConfigError();
   const backendError = backendConfigError();
 
@@ -313,7 +349,7 @@ export function Lobby({ onEnterSandbox, onWatchSandbox }: LobbyProps) {
   /* ---------------- Render ---------------- */
 
   return (
-    <div style={{ ...styles.root, ...chromeZoomFor(uiScale), ...heroVars(uiScale, utilityRowPx) }}>
+    <div style={{ ...styles.root, ...chromeZoomFor(uiScale) }}>
       {/* Design note #46 is the standing exception and this is the case it exists for: neither a keyframe nor
           a media query can be expressed as an inline style object.
           Design note #1130: #1123's 860px breakpoint is GONE WITH ITS GRID -- one centred column needs no
@@ -322,6 +358,13 @@ export function Lobby({ onEnterSandbox, onWatchSandbox }: LobbyProps) {
           exactly what that query exists to switch off. */}
       {/* W1-O (AUD-16.05): the narrow amendment switches at the same effective width at every text size. */}
       <style>{zoomAwareMediaCss(LOBBY_CSS, uiScale)}</style>
+      {/* ==================================================================
+           P3-N028 (REOPENED): THE TOP REGION -- THE CORNER, THE TITLE AND THE DOORS, IN FLOW
+          ==================================================================
+          One normal-flow block that owns its height (at least the hero window): the account corner, then the
+          stage (title, Host / Join), with the photograph as its background only. It ends at `lobby-boundary`;
+          the tables region is the next thing in the column. See `topRegionVars`. */}
+      <div style={{ ...styles.top, ...topRegionVars(uiScale) }} data-testid="lobby-top">
       {/* ==================================================================
            DESIGN NOTE 1130: THE UTILITY ROW LEAVES THE TITLE ALONE
           ==================================================================
@@ -334,7 +377,7 @@ export function Lobby({ onEnterSandbox, onWatchSandbox }: LobbyProps) {
           controls pinned right "reads as two designs sharing a row". That was true of a plate holding both.
           With the account furniture moved to its own corner there is no row left to share -- the title gets
           the middle of the screen to itself, which is what a title is for. */}
-      <div style={styles.utilityRow} ref={utilityRowRef}>
+      <div style={styles.utilityRow}>
         {/* ==================================================================
              DESIGN NOTE 1131: THE PILL GOES LEFT, AND THE ROW BECOMES TWO GROUPS
             ==================================================================
@@ -357,147 +400,106 @@ export function Lobby({ onEnterSandbox, onWatchSandbox }: LobbyProps) {
           </div>
         )}
         <div style={styles.utilityAccount}>
-        {/* LIVE-2E: who this browser plays as -- the profile chip, first in the account corner. Its menu links another
-            device, rotates the recovery key and signs devices out. */}
+        {/* P3-ACCT: the rules are public -- a visitor reads them here, no account needed. */}
+        <button type="button" style={styles.rulesButton} onClick={() => openInfoPage("rules")} data-testid="lobby-rules">
+          Rules
+        </button>
+        {/* LIVE-2E: who this browser plays as -- the account chip, first in the account corner. Its menu changes the
+            password or the Authorization Wallet and signs devices out. Signed out: Log in and Create account. */}
         <ProfileMenu />
         {/* Design note #1336: the text-size control, on the first screen a player sees. The same component
             as the bars'; the scale it writes is the one every later screen reads. */}
         <UiScalePicker />
         {/* Design note #1133: the lobby's Display Name field served only the parked Web3 staging lobby, and went with
-            it (LIVE-2D). A seat's name is set in the waiting room. */}
-        <div style={styles.headerControls}>
-          {address ? (
-            <>
-              <span style={styles.addressBadge} title={address}>
-                {truncateAddress(address)}
-              </span>
-              {wallet.nativeBalance && (
-                <span style={styles.balanceBadge}>
-                  {formatNativeAmount(wallet.nativeBalance.amount)} {NATIVE_DENOM_DISPLAY}
-                </span>
-              )}
-              <button type="button" style={styles.secondaryButton} onClick={wallet.disconnect}>
-                Disconnect
-              </button>
-            </>
-          ) : (
-            // The burner-wallet security recommendation ships with the button (`ConnectWalletButton.tsx #0`), so the
-            // lobby's connect path shows it just like the in-game top bar's does. Calling `wallet.connect()` directly here
-            // is exactly the omission that component exists to make impossible.
-            /* Design note #1133: "most websites just have the Keplr logo with Connect in a button." The mark
-               is the logo -- Keplr's own is a licensed asset this project does not ship, so the word does the
-               naming and the button does the shrinking. `primaryButton`'s paper slab is the lobby's loudest
-               control and was sized for a call to action; this is account furniture in a corner. */
-            <ConnectWalletButton
-              label="Connect"
-              buttonStyle={disabledButtonStyle(
-                styles.connectButton,
-                wallet.status === "connecting",
-              )}
-            />
-          )}
-        </div>
+            it (LIVE-2D). A seat's name is set in the waiting room.
+            PHASE 3 FINAL (§12): the parked on-chain mode's Connect / address / balance / Disconnect chip is gone from this
+            corner too. A connected Keplr address beside the account chip answered "who am I" -- the question the owner
+            ruled only the PROFILE answers. Keplr is reached where it signs: a seat's money panel, the account's
+            Authorization Wallet steps. */}
         </div>
       </div>
 
       {/* ==================================================================
-           DESIGN NOTE 1131: A SCENE WITH COORDINATES, SO THINGS CAN BE ANCHORED TO IT
+           DESIGN NOTE 1131: A SCENE WITH COORDINATES -- NOW THE TOP REGION'S BACKGROUND ONLY (P3-N028)
           ==================================================================
           RULED, with the positions given directly: "y0.4 x0.5 is where I'd have the Project 18XX at the
           lowest, x0.4y0.7 and x0.6y0.7 is where I'd put the Host Game and Join Game buttons."
-          I ARGUED AGAINST ANCHORING LAST TURN AND THE OBJECTION WAS SOUND ABOUT THE WRONG THING. With the
-          room as a `background-size: cover` image there ARE no stable coordinates -- the browser crops it
-          differently at every viewport aspect, so a control pinned at 70% would sit on the table on one
-          window and on somebody's lapel on the next. That is a fact about `cover`, not about anchoring.
-          SO THE PICTURE STOPS BEING A BACKGROUND AND BECOMES A BOX WITH A KNOWN ASPECT. `.scene` is sized
-          `max(100vw, 100vh * 1920/1072)` by `max(100vh, 100vw * 1072/1920)` and centred -- which is precisely
-          what `cover` computes, done in CSS where the result is an element children can be positioned inside.
-          The image fills it `100% 100%`, so it is never distorted and percentage coordinates map to the same
-          feature of the photograph on every screen. 0.7 is the table everywhere.
-          `pointerEvents: none` ON THE SCENE, `auto` ON THE CONTROLS, because the scene is a full-bleed layer
-          sitting over the page and would otherwise swallow every click on the footer beneath it. */}
-      <div style={styles.sceneClip} aria-hidden={false}>
-        <div style={{ ...styles.scene, ...sceneSizeFor(uiScale) }}>
-          {/* Design note #1131: BOTTOM-ANCHORED at 40%, which is the constraint as it was given -- "at the
-              lowest" is a bottom edge, and pinning the bottom keeps it true whatever the artwork's aspect
-              becomes. The width is what sets the size: 20% of the scene puts the top edge up among the
-              chandelier's arms and the bottom clear of the barons' heads, which begin at 0.44. */}
-          <div style={{ ...styles.titleAnchor, ...titleBottomFor(uiScale, utilityRowPx) }}>
-            {/* ==================================================================
-                 DESIGN NOTE 1130: THE CSS GILT SURVIVES AS THE FALLBACK
-                ==================================================================
-                AN `<img>` THAT 404s LEAVES NOTHING BEHIND IT, and the heading beside it is clipped for screen
-                readers -- so a missing asset would leave this lobby with no visible title at all, a worse
-                version of the failure #1129's `color`-before-clip guard was written to prevent. The gilt
-                gradient it replaced is still here, still measured, and stands in when the artwork does not
-                arrive. `onError` covers a 404, a decode failure and an offline cache miss alike.
-                ONE HEADING IN BOTH BRANCHES, so a screen reader hears "Project 18XX" exactly once whichever
-                renders: clipped while the artwork carries the name, visible when it cannot. */}
-            <h1 style={titleArtFailed ? styles.brandTitle : styles.srOnlyTitle}>Project 18XX</h1>
-            {!titleArtFailed && (
-              <img
-                className="lobby-wordmark"
-                src={`${process.env.PUBLIC_URL ?? ""}/images/title-project18xx.jpg`}
-                alt=""
-                onError={() => setTitleArtFailed(true)}
-                style={styles.brandWordmark}
-              />
-            )}
-          </div>
-
-          {/* Design note #1131: the controls, on the table at 0.7. `space-between` across a 24%-wide box
-              centred at 0.5 lands the two buttons either side of 0.40 and 0.60 -- the positions as given,
-              expressed as a width rather than as two absolute anchors so the join form can expand in place
-              without a second set of coordinates to keep in step. */}
-          {/* ==================================================================
-               DESIGN NOTE 1441: THE THREE DOORS COME BACK INSIDE THE WINDOW
-              ==================================================================
-              REPORTED: at 430 "'Host game' begins outside the viewport and 'Rejoin game' is cut off."
-              THE ANCHOR IS MEASURED IN THE SCENE, AND THE SCENE IS NOT THE WINDOW. #1131 hung these on the
-              photograph on purpose -- 60% of a box centred at 0.5 is the table on every aspect -- but the
-              scene is `cover`, so on a tall narrow window it is 1669px wide against a 430px viewport, and
-              "60% of the picture" is a box that starts 285px to the left of the screen.
-              SO AT NARROW WIDTHS THE ROW IS RE-HUNG ON THE VIEWPORT, in the scene's own coordinates: the
-              scene's left edge sits `(sceneW - viewportW) / 2` outside the window, which in this box's
-              percentages is `50% - 50vw`. Adding the gutter to that is an exact conversion, not an estimate
-              -- the same "put both sides in one space" move #1144 made for the cover arithmetic.
-              THE DESKTOP POSITION IS UNTOUCHED, and so is the vertical composition: `top: 70%` still puts
-              the row on the table, and only its horizontal extent changes. */}
-          <div className="lobby-table-anchor" style={styles.tableAnchor}>
-            {/* Design note #1083: `appliedCount={0}` and `onLeave={() => undefined}` are GONE with the props
-                they fed. Both were placeholders this surface had no use for -- the lobby is never in a room --
-                and a required prop satisfied by a stub is a prop the component did not need. */}
-            <SandboxRoomBar
-              bare
-              roomCode={null}
-              available={isBackendConfigured()}
-              error={sandboxRoomError}
-              busy={sandboxRoomBusy}
-              onHost={() => {
-                setSandboxRoomError(null);
-                setHostSetup(true);
-              }}
-              onJoin={handleJoinSandboxRoom}
-              onOpenJoin={
-                roomLinkAvailable()
-                  ? () => {
-                      setSandboxRoomError(null);
-                      setJoinOpen(true);
-                    }
-                  : undefined
-              }
-            />
-          </div>
-        </div>
+          `.scene` is sized `max(100vw, 100vh * 1920/1072)` by `max(100vh, 100vw * 1072/1920)` and top-anchored --
+          precisely what `cover` computes, done in CSS so the photograph's framing is the same feature on every
+          screen. P3-N028 (reopened) KEEPS THAT BOX AND STOPS HANGING CONTROLS IN IT: the title and the doors are
+          flow content of the top region (below), aimed at 0.4 and 0.7 of this same box by CSS arithmetic, so the
+          picture is decoration that can position nothing and cover nothing. `sceneClip` is the region's own size
+          (`inset: 0`), clipped to it, `pointerEvents: none`, and painted beneath the region's flow content. */}
+      <div style={styles.sceneClip} aria-hidden="true">
+        <div style={{ ...styles.scene, ...sceneSizeFor(uiScale) }} />
         {/* Design note #1440: the room falls into shadow rather than being cut off. A hard edge across the
             barons' chests is what a bounded hero looks like without this; the fade is on the CLIP, not the
-            scene, because the crop line is the hero's and the scene runs past it. */}
+            scene, because the crop line is the region's and the scene runs past it. Painted under the doors now. */}
         <div style={styles.heroFade} aria-hidden="true" />
       </div>
 
-      {/* Design note #1440: the hero's place in the column. `sceneClip` is absolute and reserves no height,
-          so without this the list would start under the utility row and read through the photograph. */}
-      <div style={styles.heroFlow} aria-hidden="true" />
+      {/* P3-N028 (reopened): THE STAGE -- the title and the doors, in flow, under the corner. Positioned (so it paints
+          above `sceneClip`) but with no z-index, transform or opacity: the wordmark's `screen` blend keys against the
+          photograph inside the top region's group (`blendIsolation.test.ts`). */}
+      <div style={styles.heroStage}>
+        {/* Design note #1131: "at the lowest" is the title's FOOT at 0.4 of the scene -- now a flow margin that aims
+            it there (`TITLE_MARGIN_TOP`) and never lets it nearer the corner than 16px (#1354's safe line). The
+            width sets the size: 20% of the scene, at least 230px. */}
+        <div style={styles.titleAnchor}>
+          {/* ==================================================================
+               DESIGN NOTE 1130: THE CSS GILT SURVIVES AS THE FALLBACK
+              ==================================================================
+              AN `<img>` THAT 404s LEAVES NOTHING BEHIND IT, and the heading beside it is clipped for screen
+              readers -- so a missing asset would leave this lobby with no visible title at all, a worse
+              version of the failure #1129's `color`-before-clip guard was written to prevent. The gilt
+              gradient it replaced is still here, still measured, and stands in when the artwork does not
+              arrive. `onError` covers a 404, a decode failure and an offline cache miss alike.
+              ONE HEADING IN BOTH BRANCHES, so a screen reader hears "Project 18XX" exactly once whichever
+              renders: clipped while the artwork carries the name, visible when it cannot. */}
+          <h1 style={titleArtFailed ? styles.brandTitle : styles.srOnlyTitle}>Project 18XX</h1>
+          {!titleArtFailed && (
+            <img
+              className="lobby-wordmark"
+              src={`${process.env.PUBLIC_URL ?? ""}/images/title-project18xx.jpg`}
+              alt=""
+              onError={() => setTitleArtFailed(true)}
+              style={styles.brandWordmark}
+            />
+          )}
+        </div>
+
+        {/* ==================================================================
+             THE DOORS (#1131 / #1423 / #1441), IN FLOW (P3-N028)
+            ==================================================================
+            #1131 put them on the table at 0.7; #1423 centred the group with a gap; #1441 kept them inside a narrow
+            window. All three hold by flow now: the row is the stage's full width less a 16px gutter (so it can
+            never start off-screen, #1441), the bar centres its buttons (#1423), and `ACTIONS_MARGIN_TOP` aims the
+            row's centre at 0.7 of the scene, clamped into the hero window (P3-ACCT). A row that wraps, an error
+            under it or a larger text size makes the top region taller; nothing below can rise into it. */}
+        <div className="lobby-table-anchor" style={styles.tableAnchor} data-testid="lobby-actions">
+          {/* Design note #1083: `appliedCount={0}` and `onLeave={() => undefined}` are GONE with the props
+              they fed. Both were placeholders this surface had no use for -- the lobby is never in a room --
+              and a required prop satisfied by a stub is a prop the component did not need. */}
+          <SandboxRoomBar
+            bare
+            roomCode={null}
+            available={isBackendConfigured()}
+            error={sandboxRoomError}
+            busy={sandboxRoomBusy}
+            onHost={openHost}
+            onJoin={(raw) => void requireAccount(() => void handleJoinSandboxRoom(raw), "Log in or create an account to join a game.")}
+            onOpenJoin={roomLinkAvailable() ? openJoin : undefined}
+          />
+        </div>
+      </div>
+      {/* The top region ends here (`lobby-top`). */}
+      </div>
+
+      {/* P3-N028 (reopened): THE HARD BOUNDARY. The top region above ends here, in flow; every table-related box --
+          "Your tables", its rows and error, the public list and its loading / empty states, the banners -- is in the
+          region after it. Nothing on either side is positioned against the other, so the boundary is the document's
+          own order: it cannot be crossed by a measurement arriving late, because there is none. */}
+      <div style={styles.boundary} role="presentation" aria-hidden="true" data-testid="lobby-boundary" />
 
       {/* Design note #1114: the width cap.      {/* Design note #1114: the width cap. The HEADER stays full-bleed above it -- its own background is a
           band across the window and capping it would leave two stripes of root either side -- so the cap
@@ -548,7 +550,9 @@ export function Lobby({ onEnterSandbox, onWatchSandbox }: LobbyProps) {
           onClearError={() => setSandboxRoomError(null)}
         />
       )}
-      <div style={styles.content}>
+      {/* P3-N028 (reopened): THE TABLES REGION -- a normal-flow sibling after the boundary. No position, offset,
+          transform or negative margin here or on anything in it that could lift it into the top region. */}
+      <div style={styles.content} data-testid="lobby-tables">
 
       {/* ==================================================================
            DESIGN NOTE 1440: THE PUBLIC ROOMS, BELOW THE TWO DOORS
@@ -565,7 +569,7 @@ export function Lobby({ onEnterSandbox, onWatchSandbox }: LobbyProps) {
           the player is looking. */}
       {/* LIVE-2F/3D (C9-01): "Your tables" above the public list -- a private table is in no list but this one, and
           after the deal its code no longer opens it. Hidden when there is nothing to show. */}
-      <MyTablesList tables={myTables.tables} error={myTables.error} onOpen={(gameId) => onEnterSandbox(gameId)} />
+      {signedIn ? <MyTablesList tables={myTables.tables} error={myTables.error} onOpen={(gameId) => onEnterSandbox(gameId)} /> : null}
       <LobbyRoomList
         rooms={publicRooms.rooms}
         loading={publicRooms.loading}
@@ -573,12 +577,14 @@ export function Lobby({ onEnterSandbox, onWatchSandbox }: LobbyProps) {
         available={publicRooms.available}
         busy={sandboxRoomBusy}
         refusal={roomRefusal}
-        onJoin={(code) => void handleJoinListedRoom(code)}
+        onJoin={joinListed}
         /* LIVE-2D: Watch needs no op -- a public table is readable by any signed-in profile; the shell opens its
            RoomView and log by game id, and the viewer holds no seat and is never given one.
            PHASE 3 W3-J (OD-19): its OWN door, so "never given one" holds for a principal who IS seated there too --
            the shell opens a read-only spectator view. "Your tables" above stays the way back to a seat. */
         onWatch={(gameId) => (onWatchSandbox ?? onEnterSandbox)(gameId)}
+        /* PHASE 3 FINAL (§13): every player game is anted -- a no-ante table is Watch only (`utils/tablePolicy.ts`). */
+        noAnteSeats={FREE_TABLES_OFFERED}
       />
 
       {/* Honest, specific banners -- never a silently empty screen. Each
@@ -596,7 +602,7 @@ export function Lobby({ onEnterSandbox, onWatchSandbox }: LobbyProps) {
           AND IT IS NOT AMBER. #1094 freed amber to mean "heads up, nothing is broken", and this is one step
           quieter than that: nothing here is wrong, the app is doing exactly what an unconfigured build
           should. The neutral chip is the same one `CHIP_INERT` uses for a genuinely inert fact. */}
-      {wallet.error && <Banner tone="error" text={wallet.error} />}
+      {/* PHASE 3 FINAL (§12): the parked on-chain mode's wallet-error banner went with its Connect chip. */}
 
 
       {/* The escape hatch (`App.tsx #24`), placed OUTSIDE the room-browser branch so it is reachable in every state
@@ -712,21 +718,9 @@ function Banner({ tone, text }: { tone: "error" | "warn"; text: string }) {
 /* Design note #1123: the one rule inline styles cannot carry. Kept next to the grid it collapses rather
    than in a shared sheet -- this file has no other CSS and a second consumer would be a reason to move it. */
 const LOBBY_CSS = `
-/* ==================================================================
-    DESIGN NOTE 1441: "!important" IS WHAT IT TAKES TO MOVE AN INLINE LENGTH
-   ==================================================================
-   #46's standing exception is that a stylesheet carries what an inline style CANNOT express -- a media query
-   is on that list. What the exception did not have to say before is that the two are not peers: an inline
-   declaration outranks every stylesheet rule that is not "!important", so the narrow layout does not merely
-   need a rule, it needs the one form of rule that can win against "styles.tableAnchor".
-   THE DESKTOP VALUES STAY WHERE THEY ARE. #1131's 20%/60% remains the authored position and is what a reader
-   of the style object sees; this is the narrow window's amendment to it, in one place, said once. */
-@media (max-width: 899px) {
-  .lobby-table-anchor {
-    left: var(--lobby-actions-left) !important;
-    width: var(--lobby-actions-width) !important;
-  }
-}
+/* P3-N028 (reopened): #1441's narrow amendment ("left/width: var(--lobby-actions-*) !important") is GONE with the
+   absolute anchor it re-hung. The doors' row is flow content the width of the top region less a 16px gutter, so a
+   narrow window cannot start it off-screen; "SandboxRoomBar" still wraps it and trims its padding there (#1441). */
 @media (prefers-reduced-motion: no-preference) {
   .lobby-wordmark { animation: lobby-wordmark-in 620ms ease-out both; }
 }
@@ -819,22 +813,48 @@ const styles: Record<string, React.CSSProperties> = {
     top: 0,
     left: 0,
     right: 0,
-    /* Design note #1440 SUPERSEDES #1133's `bottom: 0`. That value made the layer the ROOT's height so no
-       band of bare ink was left under a one-screen page; the page has a public list under it now, and a clip
-       that grew with the list would have stretched the window the photograph is seen through down the whole
-       scroll. The height is the hero's, written on the root as `--lobby-hero` so this object stays static. */
-    height: "var(--lobby-hero)",
+    /* Design note #1440 superseded #1133's `bottom: 0` with the hero's height (`--lobby-hero`) so the window would
+       not stretch down the list. P3-N028 (reopened) brings `bottom: 0` back for the better reason: this layer now
+       lives INSIDE the top region, so `bottom: 0` is the region's foot -- the hero, by construction, whatever the
+       corner, the title and the doors come to -- and it can never reach the list, which is outside the region. */
+    bottom: 0,
     overflow: "hidden",
     zIndex: 0,
     pointerEvents: "none",
   },
-  /* Design note #1440: the hero's share of the flow. `sceneClip` is absolute and reserves nothing, so this
-     is what holds `content` below the picture -- an empty box rather than a margin, because the number is
-     the hero's own and belongs in one place. */
-  heroFlow: {
-    height: "var(--lobby-hero-flow)",
+  /* ==================================================================
+      P3-N028 (REOPENED): THE TOP REGION, THE STAGE AND THE BOUNDARY
+     ==================================================================
+     `heroFlow` -- #1440's empty spacer, sized from P3-ACCT's measured doors -- is GONE: the region is no longer an
+     absolute layer that reserves nothing, so there is nothing to reserve.
+     `top` is a flow block (the root column's first item) whose height is its content's, at least the hero window.
+     `position: relative` makes it `sceneClip`'s containing block; `zIndex: 1` makes it one group (the wordmark's
+     blend happens inside it) that paints above the column's later flow -- so the account menu's dropdown overhangs
+     the tables rather than sliding under them. Its box never overlaps the tables region: that one starts after it. */
+  top: {
+    position: "relative",
+    zIndex: 1,
+    display: "flex",
+    flexDirection: "column",
+    minHeight: "var(--lobby-hero-window)",
     flexShrink: 0,
-    pointerEvents: "none",
+  },
+  /* The title and the doors, a centred flow column under the corner. Positioned only to paint above `sceneClip`
+     (tree order, same layer); no z-index, transform, opacity or filter -- see `blendIsolation.test.ts`. */
+  heroStage: {
+    position: "relative",
+    flex: "1 0 auto",
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    paddingBottom: `${ACTIONS_GAP_PX}px`,
+  },
+  /* The hard boundary between the top region and the tables region: an empty flow box, never positioned. */
+  boundary: {
+    flex: "none",
+    height: 0,
+    margin: 0,
+    padding: 0,
   },
   heroFade: {
     position: "absolute",
@@ -884,12 +904,14 @@ const styles: Record<string, React.CSSProperties> = {
      which is the same position by a means that does not break the blend. The lesson generalises: NOTHING
      between a blended element and its backdrop may create a stacking context -- not `transform`, not
      `opacity` below 1, not `filter`, not a `z-index` on a positioned ancestor. */
+  /* P3-N028 (reopened): CENTRED BY FLOW NOW -- the stage centres it (`alignItems: center`), so neither #1132's
+     `left: 40%` arithmetic nor a transform is needed, and the rule above holds trivially: this box carries a width
+     and a margin, nothing that can isolate the blend. Its foot is aimed at 0.4 of the scene (`TITLE_MARGIN_TOP`). */
   titleAnchor: {
-    position: "absolute",
-    left: "40%",
-    bottom: "60%",
-    width: "20%",
-    minWidth: "230px",
+    flex: "none",
+    width: WORDMARK_WIDTH,
+    maxWidth: "calc(100% - 32px)",
+    marginTop: TITLE_MARGIN_TOP,
   },
   /* Design note #1131: centred on the table at 0.7. A 24%-wide box with `space-between` puts the two buttons
      either side of 0.40 and 0.60 as ruled; `pointerEvents: auto` re-enables clicks that `sceneClip` turned
@@ -907,17 +929,22 @@ const styles: Record<string, React.CSSProperties> = {
      it to the right, since the box's left edge is what is anchored. The box is now 60% wide at 20% (the same
      centre, still no horizontal transform -- #1132's blend-mode reason stands) and the row centres its
      contents with a gap, so the group stays centred at any zoom and any count. */
+  /* P3-N028 (reopened): THE DOORS ARE FLOW CONTENT -- no `position`, no `top: 70%`, no `translateY(-50%)`. The row is
+     the stage's width less a 16px gutter (the bar centres its buttons, #1423; it can never begin off-screen, #1441)
+     and its centre is aimed at 0.7 of the scene, clamped into the hero window (`ACTIONS_MARGIN_TOP`). */
   tableAnchor: {
-    position: "absolute",
-    left: "20%",
-    top: "70%",
-    width: "60%",
-    transform: "translateY(-50%)",
+    flex: "none",
+    width: "100%",
+    boxSizing: "border-box",
+    padding: "0 16px",
+    marginTop: ACTIONS_MARGIN_TOP,
     pointerEvents: "auto",
   },
   /* Design note #1131: `brandHeader`, `brandSubtitle`, `stage` and `stageNote` are GONE. The header was a
      flow container for a title and a strapline; the title is anchored to the scene now and the strapline was
-     one of the three lines removed with it. `stage` held the controls, which are anchored too. */
+     one of the three lines removed with it. `stage` held the controls, which are anchored too.
+     [P3-N028 (reopened): the title and the controls are flow content again -- of the top region's `heroStage`, not
+     of a card -- so the list after them can never be laid out over them.] */
   /* ==================================================================
       DESIGN NOTE 1130: SCREEN, NOT ALPHA
      ==================================================================
@@ -992,8 +1019,21 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     alignItems: "center",
     flexWrap: "wrap",
+    /* P3-ACCT: a wrapped corner stays right-aligned, so the account buttons never drift under the title. */
+    justifyContent: "flex-end",
     gap: "10px",
     marginLeft: "auto",
+  },
+  /* P3-ACCT: the public rules, as quiet as the corner's other furniture. */
+  rulesButton: {
+    fontSize: FONT_SIZE.small,
+    fontWeight: 700,
+    padding: CONTROL_PADDING.buttonSmall,
+    borderRadius: RADIUS.pill,
+    border: "1px solid #3a3a3a",
+    backgroundColor: "rgba(8, 8, 8, 0.6)",
+    color: "#f2f0eb",
+    cursor: "pointer",
   },
   /* Design note #1130: the stage -- a centred column holding a sentence and the two controls, with no panel
      around them. See the note at its call site for why the box came off. */
@@ -1143,9 +1183,9 @@ const styles: Record<string, React.CSSProperties> = {
      status pill, a seat count and two buttons, and at 960 the buttons start wrapping under the name on a
      staged room with a long title. `margin: 0 auto` centres it; the root's own column keeps the gaps. */
   content: {
-    // Design note #1131: above the scene, for the reason set out on `utilityRow`.
-    position: "relative",
-    zIndex: 1,
+    /* P3-N028 (reopened): no `position` / `zIndex` any more. #1131 lifted this above an absolute scene that spread
+       over the column; the scene is the top region's background now and ends where the region does, so nothing is
+       painted here to rise above -- and the tables region carries nothing that could move it out of the flow. */
     width: "100%",
     maxWidth: "1040px",
     margin: "0 auto",

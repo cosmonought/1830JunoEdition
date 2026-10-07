@@ -9,8 +9,9 @@ import { scriptedPort, TEST_CONTRACT, TEST_PIN } from "./moneyTestSupport";
 describe("ESCROW-4: moneyApi", () => {
   it("answers with the server's own refusal words, and never rejects", async () => {
     const port = scriptedPort();
-    port.answer("money/wallet-challenge", 403, { error: "reauth-required", reason: "Confirm it's you first (your recovery key), then link the wallet." });
-    expect(await walletChallenge("g_1", "juno1w", port)).toEqual({ ok: false, code: "reauth-required", reason: "Confirm it's you first (your recovery key), then link the wallet.", status: 403 });
+    /* The server's own words (`server/src/escrow/moneyTables.ts`: "reauth-required" -> "Confirm it's you first."). */
+    port.answer("money/wallet-challenge", 403, { error: "reauth-required", reason: "Confirm it's you first." });
+    expect(await walletChallenge("g_1", "juno1w", port)).toEqual({ ok: false, code: "reauth-required", reason: "Confirm it's you first.", status: 403 });
     expect(await walletChallenge("g_1", "juno1w", port)).toEqual({ ok: false, code: "network", reason: expect.stringMatching(/didn't answer/), status: null });
     port.answer("money/wallet-link", 429, { error: "rate-limited", retryAfterMs: 4000 });
     expect(await walletLink({ gameId: "g", nonce: "n", pubKey: "k", signature: "s", consentKey: "c" }, port)).toMatchObject({ ok: false, code: "rate-limited", retryAfterMs: 4000 });
@@ -20,6 +21,14 @@ describe("ESCROW-4: moneyApi", () => {
     expect(await relayConsent("g", "sig", port)).toMatchObject({ ok: false, code: "internal" });
     port.answer("money/annul", 200, { ok: true, trustedSeq: 5 });
     expect(await submitAnnul("g", "sig", port)).toMatchObject({ ok: false, code: "bad-answer" });
+  });
+
+  it("PHASE 3 FINAL: a refusal without the server's words reads in account words -- an account, and the password (never a recovery key)", async () => {
+    const port = scriptedPort();
+    port.answer("money/wallet-challenge", 403, { error: "profile-required" });
+    expect(await walletChallenge("g_1", "juno1w", port)).toEqual({ ok: false, code: "profile-required", reason: "Log in or create an account first.", status: 403 });
+    port.answer("money/wallet-challenge", 403, { error: "reauth-required" });
+    expect(await walletChallenge("g_1", "juno1w", port)).toEqual({ ok: false, code: "reauth-required", reason: "Confirm it's you with your password first.", status: 403 });
   });
 
   it("sends the route's exact fields, with `replace` only when asked for", async () => {

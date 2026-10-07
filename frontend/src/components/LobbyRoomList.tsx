@@ -41,6 +41,7 @@ import { formatAmount } from "../utils/moneyProtocol";
 /* W1-O (AUD-16.05): the narrow layout switches at the same effective width at every text size. */
 import { zoomAwareMediaCss } from "../utils/uiScale";
 import { useUiScale } from "../utils/useUiScale";
+import { NO_ANTE_WATCH_ONLY } from "../utils/tablePolicy"; // PHASE 3 FINAL (§13)
 
 /** The rule variants a row names, in the house-rules order, by their short titles (#1415). */
 const RULE_TITLES: ReadonlyArray<{
@@ -162,9 +163,12 @@ export interface LobbyRoomListProps {
   onJoin: (code: string) => void;
   /** LIVE-2D: watching opens the table by its game id. */
   onWatch: (gameId: string) => void;
+  /** PHASE 3 FINAL (§13): whether a NO-ANTE table offers a seat. Every player game is anted, so the Lobby passes false
+   *  (`utils/tablePolicy.ts`): a no-ante table is Watch only. Default true (the list on its own takes no position). */
+  noAnteSeats?: boolean;
 }
 
-export function LobbyRoomList({ rooms, loading, error, available, busy, refusal, onJoin, onWatch }: LobbyRoomListProps) {
+export function LobbyRoomList({ rooms, loading, error, available, busy, refusal, onJoin, onWatch, noAnteSeats = true }: LobbyRoomListProps) {
   const [pace, setPace] = useState<PaceFilter>("all");
   const uiScale = useUiScale();
 
@@ -243,6 +247,7 @@ export function LobbyRoomList({ rooms, loading, error, available, busy, refusal,
             refusal={refusal}
             onJoin={onJoin}
             onWatch={onWatch}
+            noAnteSeats={noAnteSeats}
           />
           <RoomGroup
             id="ongoing"
@@ -253,6 +258,7 @@ export function LobbyRoomList({ rooms, loading, error, available, busy, refusal,
             refusal={refusal}
             onJoin={onJoin}
             onWatch={onWatch}
+            noAnteSeats={noAnteSeats}
           />
         </>
       )}
@@ -271,6 +277,7 @@ function RoomGroup({
   refusal,
   onJoin,
   onWatch,
+  noAnteSeats,
 }: {
   id: string;
   title: string;
@@ -281,6 +288,7 @@ function RoomGroup({
   onJoin: (code: string) => void;
   /** LIVE-2D: watching opens the table by its game id. */
   onWatch: (gameId: string) => void;
+  noAnteSeats: boolean;
 }) {
   if (rows.length === 0) return null;
   return (
@@ -306,7 +314,7 @@ function RoomGroup({
       <ul style={styles.list}>
         {rows.map((row) => (
           <React.Fragment key={row.code}>
-            <RoomRow row={row} busy={busy} onJoin={onJoin} onWatch={onWatch} />
+            <RoomRow row={row} busy={busy} onJoin={onJoin} onWatch={onWatch} noAnteSeats={noAnteSeats} />
             {refusal !== null && refusal.code === row.code && (
               <li style={styles.refusal} role="status" data-testid={`lobby-refusal-${row.code}`}>
                 {refusal.reason}
@@ -324,12 +332,14 @@ function RoomRow({
   busy,
   onJoin,
   onWatch,
+  noAnteSeats,
 }: {
   row: PublicRoomRow;
   busy: boolean;
   onJoin: (code: string) => void;
   /** LIVE-2D: watching opens the table by its game id. */
   onWatch: (gameId: string) => void;
+  noAnteSeats: boolean;
 }) {
   const seats = `${row.seated}/${row.seatCap}${row.exactCount ? " exactly" : ""}`;
   const table = `${row.hostNickname}’s table, ${row.code}`;
@@ -364,6 +374,12 @@ function RoomRow({
                disabled button it replaces could only ever say no. */
             <span style={styles.fullTag} data-testid={`lobby-full-${row.code}`}>
               Full
+            </span>
+          ) : row.stake === null && !noAnteSeats ? (
+            /* PHASE 3 FINAL (§13): every player game is anted -- a no-ante table (which a production server never
+               makes) is watched, never sat at. A fact, like Full. */
+            <span style={styles.fullTag} data-testid={`lobby-no-ante-${row.code}`}>
+              {NO_ANTE_WATCH_ONLY}
             </span>
           ) : (
             <button

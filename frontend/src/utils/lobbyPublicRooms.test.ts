@@ -405,29 +405,25 @@ describe("the three doors fit the window (design note #1441)", () => {
      THE CONVERSION IS EXACT, NOT AN ESTIMATE. The scene's left edge sits `(sceneW − viewportW) / 2` outside
      the window, which in this box's own percentages is `50% − 50vw` -- the same "put both sides in one
      space" move #1144 made for the cover arithmetic itself. */
-  it("re-hangs the action row on the viewport at narrow widths, and only there", () => {
-    expect(LOBBY).toContain('"--lobby-actions-left": `calc(50% - ${50 / scale}vw + 16px)`');
-    expect(LOBBY).toContain('"--lobby-actions-width": `calc(${100 / scale}vw - 32px)`');
-    expect(LOBBY).toContain('<div className="lobby-table-anchor" style={styles.tableAnchor}>');
-    expect(LOBBY).toContain("left: var(--lobby-actions-left) !important;");
-    expect(LOBBY).toContain("width: var(--lobby-actions-width) !important;");
-    // The authored desktop position is untouched -- #1131's coordinates still read as written.
-    expect(LOBBY).toContain('left: "20%"');
-    expect(LOBBY).toContain('width: "60%"');
-    expect(LOBBY).toContain('top: "70%"');
+  it("keeps the action row inside the window by flow (P3-N028 retires the re-hanging)", () => {
+    /* #1441 re-hung an ABSOLUTE row on the viewport at narrow widths (`--lobby-actions-left/width` and two
+       `!important` rules). P3-N028 (reopened) made the row flow content of the top region: it is the region's
+       full width less a 16px gutter at every width, so it cannot start to the left of the screen -- the same
+       result, with nothing left to re-hang and no inline length to out-rank. */
+    expect(LOBBY).toContain('<div className="lobby-table-anchor" style={styles.tableAnchor} data-testid="lobby-actions">');
+    const anchor = LOBBY.slice(LOBBY.indexOf("\n  tableAnchor: {"));
+    const body = anchor.slice(0, anchor.indexOf("\n  },"));
+    expect(body).toContain('width: "100%"');
+    expect(body).toContain('boxSizing: "border-box"');
+    expect(body).toContain('padding: "0 16px"');
+    expect(body).not.toMatch(/position:|left:|top:|transform:/);
+    expect(LOBBY).not.toContain("--lobby-actions-left");
+    expect(LOBBY).not.toContain("--lobby-actions-width");
   });
 
-  it("needs `!important`, because an inline length outranks an ordinary rule", () => {
-    /* #46's exception says a stylesheet carries what an inline style cannot express, and a media query is on
-       that list. What it did not have to say before is that the two are not peers: `styles.tableAnchor` is an
-       inline declaration, so the narrow layout needs the one form of rule that can win against it. This case
-       exists because a later tidy-up that "removes the shouty !important" would silently restore the bug. */
-    for (const rule of [
-      "left: var(--lobby-actions-left) !important;",
-      "width: var(--lobby-actions-width) !important;",
-    ]) {
-      expect(LOBBY).toContain(rule);
-    }
+  it("still wraps the bar and trims its padding at narrow widths (#1441's `!important` lives on in the bar)", () => {
+    /* The bar's own narrow rules are what fit three doors into a 398px window; they out-rank the bar's inline
+       styles, which is why they keep their `!important`. */
     const bar = readStripped("components/SandboxRoomBar.tsx");
     expect(bar).toContain(".sandbox-bare-bar { flex-wrap: wrap !important; gap: 10px !important; }");
     expect(bar).toContain(".sandbox-bare-btn { padding-left: 16px !important; padding-right: 16px !important; }");

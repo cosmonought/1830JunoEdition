@@ -19,13 +19,15 @@
 //      exits 3 on its own self-check.
 //   §D the identity restore: the dry run writes nothing; an interrupted replay leaves the table unserved (a serving load
 //      and a serving takeover are refused) and resumes to the same end; the restored identity signs every session out,
-//      keeps every security action, installs the confirmed chain, reviews the unconfirmed rotation; a re-run of a
-//      completed restore writes nothing; a journal changed during the replay, or a malformed one, leaves it unserved.
+//      keeps every security action, follows the password chain (PHASE 3 FINAL: accounts with an Authorization Wallet),
+//      reviews a LEGACY profile's unconfirmed key rotation; a re-run of a completed restore writes nothing; a journal
+//      changed during the replay, or a malformed one, leaves it unserved.
 //   §E the operator commands: plan by default, no secret in any answer.
 
 import { after, describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { DeleteItemCommand, GetItemCommand, PutItemCommand, ScanCommand, TransactWriteItemsCommand, type AttributeValue, type DynamoDBClient } from "@aws-sdk/client-dynamodb";
+import { createHash } from "crypto";
+import { GetItemCommand, PutItemCommand, ScanCommand, TransactWriteItemsCommand, type AttributeValue, type DynamoDBClient } from "@aws-sdk/client-dynamodb";
 
 import { createDynamoDbClient, deadline, dynamoLocalTargetFromEnv, DYNAMODB_LOCAL_ENV } from "../../aws/awsClients";
 import { poolKey } from "../../aws/game/gameTable";
@@ -47,9 +49,11 @@ import { AWS_RUNTIME_CONFIG_FORMAT, parseAwsRuntimeConfig } from "../../aws/runt
 import { SignerError } from "../../escrow/juno/signer";
 import { SigningJournalError } from "../../escrow/signingJournal";
 import { readSessionCookie, type SessionCookieRead } from "../../identity/cookies";
-import { parseSecurityEventBody, type SecurityEvent } from "../../identity/securityEvents";
-import { IdentityService } from "../../identity/sessions";
-import type { Session } from "../../identity/store";
+import { familyIdOf, mintPrincipalId, mintProfileId, mintRecoveryKey, mintSecret, mintSessionId, secretHash } from "../../identity/ids";
+import { SECURITY_EVENT_FORMAT, SECURITY_EVENT_VERSION, type SecurityEvent } from "../../identity/securityEvents";
+import { IdentityService, type SecurityEventDraft } from "../../identity/sessions";
+import type { Principal, Profile, Session, SessionFamily } from "../../identity/store";
+import { createAccountWith, keplrAccount } from "../../testSupport/authorizationWallets";
 import { createMemoryOpsRecorder } from "../opsRecorder";
 import { StoreDefiniteError } from "../storeResult";
 import { quietConsole } from "../../rooms/testSupport";
@@ -489,6 +493,19 @@ describe("§F g<N> and g<N+1> coexist; the adoption order; the old generation pr
    ================================================================== */
 const readOf = (setCookie: string | null | undefined): SessionCookieRead => readSessionCookie((setCookie as string).split(";")[0]);
 const sessionIdOf = (read: SessionCookieRead): string => (read.kind === "session" ? read.sessionId : "");
+/** Cheap scrypt parameters for the test writer (a stored hash carries its own). */
+const POLICY = { passwordKdf: { logN: 10, r: 1, p: 1 } };
+/** A legacy recovery key's digest (hex SHA-256), as an earlier build stored it. */
+const keyDigest = (key: string): string => createHash("sha256").update(key).digest("hex");
+
+/** PHASE 3 FINAL: an account of this build (username, password, Authorization Wallet). */
+interface Account {
+  read: SessionCookieRead;
+  username: string;
+  /** Every password it had, oldest first: the last is the account's. */
+  passwords: string[];
+  principalId: string;
+}
 
 async function identityWorld(label: string) {
   const ledger = await tables.create(`${label}-ledger`);
@@ -499,58 +516,108 @@ async function identityWorld(label: string) {
   let clock = 1_780_000_000_000;
   const now = () => clock;
   const store = createDynamoIdentityStore(admin, source, { epoch, sleep: noSleep });
-  const identity = await IdentityService.open(store, { security: { journal: createDynamoSecurityJournal(admin, ledger, { generation: 1, sleep: noSleep }), grants: store.grants, clock: now } });
-  const create = async (name: string) => {
+  const journal = createDynamoSecurityJournal(admin, ledger, { generation: 1, sleep: noSleep });
+  const identity = await IdentityService.open(store, { policy: POLICY, security: { journal, grants: store.grants, clock: now } });
+  const create = async (name: string): Promise<Account> => {
     clock += 60_000;
     const boot = await identity.bootstrap({ kind: "none" }, false, now());
-    const read = readOf((boot as { setCookie: string | null }).setCookie);
-    const created = await identity.createProfile(read, name, now());
+    const username = name.toLowerCase();
+    const password = `${username} password 0`;
+    const created = await createAccountWith(identity, readOf((boot as { setCookie: string | null }).setCookie), { username, password, displayName: name, wallet: keplrAccount(`l6-4-dynamo/${label}/${username}`) }, now());
     assert.equal(created.kind, "ok");
     await identity.settled();
-    const key = (created as { recoveryKey: string }).recoveryKey;
-    return { read, key, keys: [key], principalId: (identity.peekSession(sessionIdOf(read)) as Session).principal_id };
+    const read = readOf((created as { setCookie: string }).setCookie);
+    return { read, username, passwords: [password], principalId: (identity.peekSession(sessionIdOf(read)) as Session).principal_id };
   };
-  const rotate = async (who: { read: SessionCookieRead; key: string; keys: string[] }) => {
+  /** "Change password" on the account's browser (which goes on with a fresh cookie; every other device is signed out). */
+  const change = async (who: Account) => {
     clock += 60_000;
-    assert.equal((await identity.reauthenticate(who.read, who.key, now())).kind, "ok");
-    const rotated = await identity.rotateRecoveryKey(who.read, now());
-    assert.equal(rotated.kind, "ok");
+    const next = `${who.username} password ${who.passwords.length}`;
+    const changed = await identity.changePassword(who.read, { currentPassword: who.passwords[who.passwords.length - 1], newPassword: next }, now());
+    assert.equal(changed.kind, "ok");
     await identity.settled();
-    who.key = (rotated as { recoveryKey: string }).recoveryKey;
-    who.keys.push(who.key);
+    who.passwords.push(next);
+    who.read = readOf((changed as { setCookie: string }).setCookie);
+  };
+  /* A LEGACY profile (schema 1: a recovery-key profile an EARLIER build made), its records written through the same
+     store and its events into the same journal exactly as that build wrote them. This build makes none and serves none
+     (retired), but the restore still replays what that build journaled -- an unconfirmed key rotation is the one change
+     that sends a profile to operator review. */
+  let legacyEvents = 0;
+  type ConfirmationDraft = Omit<Extract<SecurityEvent, { kind: "confirmed" }>, "format" | "version" | "event_id">;
+  const legacyEvent = (draft: SecurityEventDraft | ConfirmationDraft): SecurityEvent =>
+    ({ format: SECURITY_EVENT_FORMAT, version: SECURITY_EVENT_VERSION, event_id: `ee${(legacyEvents += 1).toString(16).padStart(6, "0")}${"0".repeat(24)}`, ...draft }) as SecurityEvent;
+  const legacy = async (name: string) => {
+    clock += 60_000;
+    const at = now();
+    const [principalId, profileId, sessionId, secret, key] = [mintPrincipalId(), mintProfileId(), mintSessionId(), mintSecret(), mintRecoveryKey()];
+    const familyId = familyIdOf(sessionId);
+    const principal: Principal = { principal_id: principalId, kind: "profile", status: "active", created_at: at, activated_at: at, last_seen_at: at, account_link: profileId };
+    const profile: Profile = { profile_id: profileId, principal_id: principalId, display_name: name, created_at: at, status: "active", recovery_selector: key.selector, recovery_hash: keyDigest(key.key), recovery_rotated_at: at, schema: 1 };
+    const session: Session = { session_id: sessionId, principal_id: principalId, secret_hash: secretHash(secret), created_at: at, last_seen_at: at, expires_at: at + 30 * 24 * 3_600_000, revoked_at: null, revoke_reason: null, rotated_to: null, family_id: familyId };
+    const family: SessionFamily = { family_id: familyId, principal_id: principalId, created_at: at, origin: "bootstrap", revoked_at: null, revoke_reason: null };
+    const creation = legacyEvent({ kind: "profile-created", at, principal_id: principalId, principal, profile });
+    await journal.append(creation);
+    await store.commit({
+      expect: [
+        { kind: "principal-absent", principal_id: principalId },
+        { kind: "profile-absent", profile_id: profileId },
+        { kind: "selector-unused", recovery_selector: key.selector },
+        { kind: "session-absent", session_id: sessionId },
+        { kind: "family-absent", family_id: familyId },
+      ],
+      principals: [principal],
+      profiles: [profile],
+      sessions: [session],
+      families: [family],
+    });
+    await journal.append(legacyEvent({ kind: "confirmed", at, principal_id: principalId, confirms: creation.event_id, confirmed_kind: "profile-created" }));
+    return { read: { kind: "session", sessionId, secret } as SessionCookieRead, principalId, profile, keys: [key.selector] };
+  };
+  /** The legacy key rotation: its event, then its change -- and its confirmation LOST (never written). */
+  const rotateUnconfirmed = async (who: Awaited<ReturnType<typeof legacy>>) => {
+    clock += 60_000;
+    const at = now();
+    const next = mintRecoveryKey();
+    const event = legacyEvent({ kind: "recovery-key-rotated", at, principal_id: who.principalId, profile_id: who.profile.profile_id, from_selector: who.keys[0], to_selector: next.selector, recovery_hash: keyDigest(next.key), rotated_at: at });
+    await journal.append(event);
+    await store.commit({
+      expect: [{ kind: "profile-selector", profile_id: who.profile.profile_id, recovery_selector: who.keys[0] }, { kind: "selector-unused", recovery_selector: next.selector }],
+      profiles: [{ ...who.profile, recovery_selector: next.selector, recovery_hash: keyDigest(next.key), recovery_rotated_at: at }],
+    });
+    who.keys.push(next.selector);
+    return event;
   };
   const ann = await create("Ann");
   clock += 60_000;
+  /* Ann's phone: a sign-in with her username and password (its own family). */
   const phoneBoot = await identity.bootstrap({ kind: "none" }, false, now());
-  const phone = await identity.recover(readOf((phoneBoot as { setCookie: string | null }).setCookie), ann.key, now());
+  const phone = await identity.login(readOf((phoneBoot as { setCookie: string | null }).setCookie), { username: ann.username, password: ann.passwords[0] }, now());
   assert.equal(phone.kind, "ok");
-  const dave = await create("Dave");
+  const dave = await legacy("Dave");
   const carol = await create("Carol");
   /* THE RESTORE POINT: the table as it stands now. */
   const restorePoint = clock;
   const restored = await restoreCopy(source, `${label}-restored`);
   clock += 20 * 60_000; // the serving table goes on: its later records are past the restore point's allowance
 
-  assert.equal((await identity.reauthenticate(ann.read, ann.key, now())).kind, "ok");
+  assert.equal((await identity.reauthenticateWithPassword(ann.read, ann.passwords[0], now())).kind, "ok");
   assert.equal((await identity.signOutOthers(ann.read, now())).kind, "ok");
-  await rotate(ann);
+  await change(ann);
   const bob = await create("Bob");
-  await rotate(dave);
+  /* Dave's (legacy) rotation committed; its confirmation is lost. */
+  const daveRotation = await rotateUnconfirmed(dave);
   clock += 60_000;
   assert.equal(await identity.disablePrincipal(carol.principalId, now()), true);
   await identity.settled();
-  /* Dave's rotation committed; its confirmation is lost. */
-  const events = (await scanAll(ledger)).filter((item) => item.pk?.S?.startsWith("SEC#")).map((item) => ({ item, event: parseSecurityEventBody(item.body?.S ?? "") as SecurityEvent }));
-  const daveRotation = events.find(({ event }) => event.kind === "recovery-key-rotated" && event.principal_id === dave.principalId)?.event as SecurityEvent;
-  const confirmation = events.find(({ event }) => event.kind === "confirmed" && event.confirms === daveRotation.event_id);
-  await admin.send(new DeleteItemCommand({ TableName: ledger, Key: { pk: confirmation?.item.pk as AttributeValue, sk: confirmation?.item.sk as AttributeValue } }), { abortSignal: deadline() });
   const request: IdentityRestoreRequest = { table: restored, restoreId: `r-${label}`, restorePoint, source: { kind: "fence", table: source }, by: "op-drill" };
   return { ledger, source, restored, request, ann, dave, carol, bob, phone: readOf((phone as { setCookie: string }).setCookie), daveRotation, now: () => clock + 3_600_000 };
 }
 
-async function recoverWith(identity: IdentityService, key: string, now: number): Promise<string> {
+/** A sign-in on a new browser: what a password opens. */
+async function loginWith(identity: IdentityService, username: string, password: string, now: number): Promise<string> {
   const boot = await identity.bootstrap({ kind: "none" }, false, now);
-  return (await identity.recover(readOf((boot as { setCookie: string | null }).setCookie), key, now)).kind;
+  return (await identity.login(readOf((boot as { setCookie: string | null }).setCookie), { username, password }, now)).kind;
 }
 
 describe("§D the identity restore on DynamoDB", () => {
@@ -620,14 +687,17 @@ describe("§D the identity restore on DynamoDB", () => {
 
     /* The restored identity, served: every old session out; every security action kept; the chain; the review. */
     const { epoch } = await takeOverIdentityWriter(admin, w.restored, { task: "t-new", pool: "p1", now: () => 2, checks: identityServingChecks(w.restored) });
-    const identity = await IdentityService.open(createDynamoIdentityStore(admin, w.restored, { epoch, sleep: noSleep }));
+    const identity = await IdentityService.open(createDynamoIdentityStore(admin, w.restored, { epoch, sleep: noSleep }), { policy: POLICY });
     const later = w.now();
     for (const read of [w.ann.read, w.phone, w.dave.read, w.carol.read]) assert.notEqual(identity.authenticate(read, later).kind, "ok", "signed out");
-    assert.equal(await recoverWith(identity, w.ann.keys[1], later), "ok", "Ann's confirmed new key");
-    assert.equal(await recoverWith(identity, w.ann.keys[0], later), "invalid", "Ann's retired key never comes back");
-    assert.equal(await recoverWith(identity, w.bob.key, later), "ok", "Bob, created after the restore point");
-    assert.equal(await recoverWith(identity, w.carol.key, later), "invalid", "Carol stays disabled");
-    for (const key of w.dave.keys) assert.equal(await recoverWith(identity, key, later), "invalid", "Dave is under review: neither key");
+    assert.equal(await loginWith(identity, w.ann.username, w.ann.passwords[1], later), "ok", "Ann's changed password (the journal's chain)");
+    assert.equal(await loginWith(identity, w.ann.username, w.ann.passwords[0], later), "invalid", "Ann's retired password never comes back");
+    assert.equal(await loginWith(identity, w.bob.username, w.bob.passwords[0], later), "ok", "Bob, created after the restore point");
+    assert.equal(await loginWith(identity, w.carol.username, w.carol.passwords[0], later), "invalid", "Carol stays disabled");
+    /* Dave (legacy) is under review: disabled, neither key his -- the quarantine key nobody holds. */
+    const dave = identity.peekProfileOf(w.dave.principalId);
+    assert.equal(dave?.status, "disabled");
+    assert.ok(dave !== undefined && !w.dave.keys.includes(dave.recovery_selector), "Dave is under review: neither key");
   });
 
   test("the dry run refuses what apply refuses (a fenced source that does not exist); a resumed replay keeps its source", async () => {
@@ -736,11 +806,11 @@ describe("§E the operator commands: plan by default, no secret in any answer", 
     const id = await identityWorld("e2");
     const idClients = () => ({ app: admin, ledger: { client: admin, table: id.ledger } });
     const replayArgs = ["identity-replay", "--identity-table", id.restored, "--ledger", id.ledger, "--restore-id", id.request.restoreId, "--restore-point", String(id.request.restorePoint), "--by", "op-drill", "--source-table", id.source];
-    const secrets = [...id.ann.keys, ...id.dave.keys, id.bob.key, id.carol.key].flatMap((key) => key.split(".")).concat([id.ann.read, id.phone].flatMap((read) => (read.kind === "session" ? [read.sessionId, read.secret] : [])));
+    const secrets = [...id.ann.passwords, ...id.bob.passwords, ...id.carol.passwords, ...id.dave.keys].concat([id.ann.read, id.phone, id.dave.read].flatMap((read) => (read.kind === "session" ? [read.sessionId, read.secret] : [])));
     for (const argv of [replayArgs, [...replayArgs, "--apply"], ["identity-status", "--identity-table", id.restored]]) {
       const result = await runRecoveryCommand(argv, idClients, id.now);
       const text = assertPrintable(JSON.stringify(result.answer));
-      for (const secret of secrets) assert.ok(!text.includes(secret), "no key, selector, session id or secret");
+      for (const secret of secrets) assert.ok(!text.includes(secret), "no password, key selector, session id or secret");
       assert.equal(result.exitCode, 0, text.slice(0, 400));
     }
     await assert.rejects(runRecoveryCommand(["identity-replay", "--identity-table", id.restored], idClients), /--source-table|required/);

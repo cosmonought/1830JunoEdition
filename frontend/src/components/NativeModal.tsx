@@ -326,6 +326,14 @@ export function NativeModal({
 
   const handleClose = () => {
     if (releasedRef.current) return;
+    /* CONSOLIDATED FINAL INTEGRATION (the Rules Reference flicker, reproduced in a real browser): a `close` event that
+       arrives while the dialog is OPEN is not a close. `close()` only QUEUES its event; when React tears the dialog
+       down and shows it again before that task runs -- React 18 StrictMode's development-only effect re-run does exactly
+       this on every mount (showModal, close, showModal) -- the stale event lands on a dialog that is open again, after
+       the re-show has cleared `releasedRef`. Read as the player's dismissal, it closed every dismissible surface the
+       moment it opened (the public Rules page: open for ~10 ms). A real close request always leaves the dialog closed
+       when its event fires. */
+    if (ref.current?.open === true) return;
     if (dismissible) {
       onDismiss?.();
       return;

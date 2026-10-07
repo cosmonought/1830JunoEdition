@@ -17,6 +17,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 
 import { styles } from "../styles/appStyles";
+import { RADIUS } from "../styles/typography";
 import { CLOCK_OPS, type RoomClockView } from "../utils/clockProtocol";
 import { presentClock, type ClockTone } from "../utils/gameClockView";
 import { roomOp, roomViewReceivedAt, watchRoomLink } from "../utils/roomLink";
@@ -76,7 +77,7 @@ const buttonStyle: React.CSSProperties = {
   fontSize: "inherit",
   fontWeight: 700,
   padding: "2px 8px",
-  borderRadius: "999px",
+  borderRadius: RADIUS.pill,
   border: "1px solid #3a3a3a",
   backgroundColor: "#1c1c1c",
   color: "#d8d5ce",
@@ -91,7 +92,7 @@ const panelStyle: React.CSSProperties = {
   minWidth: "260px",
   maxWidth: "360px",
   padding: "10px 12px",
-  borderRadius: "8px",
+  borderRadius: RADIUS.layer,
   border: "1px solid #3a3a3a",
   backgroundColor: "#151515",
   color: "#d8d5ce",
@@ -103,7 +104,7 @@ const panelStyle: React.CSSProperties = {
   gap: "6px",
 };
 
-const warningStyle: React.CSSProperties = { color: "#f3b1a6", fontWeight: 700, border: "1px solid #8a3a30", borderRadius: "6px", padding: "4px 6px" };
+const warningStyle: React.CSSProperties = { color: "#f3b1a6", fontWeight: 700, border: "1px solid #8a3a30", borderRadius: RADIUS.control, padding: "4px 6px" };
 const rowStyle: React.CSSProperties = { display: "flex", flexWrap: "wrap", gap: "6px" };
 
 const defaultMonotonic = () => (typeof performance !== "undefined" && typeof performance.now === "function" ? performance.now() : Date.now());

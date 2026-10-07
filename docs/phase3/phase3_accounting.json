@@ -6461,7 +6461,7 @@
   },
   "account": "The profile / account is the player; a Keplr wallet is signer state (session -> profile -> seat). One Authorization Wallet per profile; username + password (>= 12 characters); no recovery key, no email; recovery = username + fresh ADR-036 from the Authorization Wallet + a new password, revoking every session; Authorization Wallet replacement = password + old-wallet APPROVE + new-wallet ACCEPT; creating an account requires the Authorization-Wallet proof; ordinary gameplay needs no Keplr; the seat's financial wallet is immutable while money is bound and frozen after Start; a full pre-Start withdrawal permits re-ante from another wallet; production player tables are ante-only; Watch available; factual trust indicators; the multi-game invariant (Authorization Wallet C; Game 1 wallet A; Game 2 wallet B) holds. Owner ruling 2026-10-07: the Authorization Wallet MAY also be a game's financial wallet when the player deliberately chooses it -- explicit, warned once before that first binding (separation recommended for operational-security isolation), never blocked, never auto-selected or auto-bound; the account-authority and game-money roles stay distinct even when they share an address (see same_wallet_ruling).",
   "clocks": "Live 20:00 per required action; at most 10:00 TOTAL optional-offer freeze per required-action episode; 10:00 offer response timer; two directional declines per round instance (OR 2.1 / OR 2.2 distinct; each SR instance); offers never refresh the allowance; first / second overdue -> 10:00 cure / resolution window inside the 30:00 horizon (N-1 vote decides only the minute-30 outcome; a cure defeats it until finality); third overdue -> automatic gameplay foreclosure, money challengeable on chain; voluntary pause unanimous in and out; system pause protective, left by unanimous resume; outage time never charged; Timed Async 12 h / 24 h / 2 d / 3 d / 7 d, no grace, no decline limit; No-deadline (disclosure acknowledged before every ante); universal unanimous annulment; a timed money table fails closed when no REMEDY signer can enforce its deadline: creation answers money-games-disabled; admission, deposit approval, the host's own ante and Start answer money-unavailable.",
-  "escrow": "Escrow 2.1 / FP4 SOURCE-COMPLETE: REMEDY-APPROVE judged at the sealed final_at; a sealed remedy is immutable; no old IN_PROGRESS standings liveness exit for 2.1; 2.0 terms unchanged. 2.1 is NOT deployed, NOT certified, NOT canonical (escrow 2.0.0 `5ecc3022...09e8` stays canonical); the earlier provisional 2.1 Wasm hash is obsolete. Consequently this baseline runs no real money table: FP4 financial mode accepts only contract version 2.1.0 while its checksum pin is still 2.0.0's (junoConfig.ts) -- unsatisfiable on any real chain -- so no deployment verifies until the owner's 2.1.0 artifact gate records the canonical 2.1.0 checksum (fail closed).",
+  "escrow": "Escrow 2.1 / FP4 SOURCE-COMPLETE: REMEDY-APPROVE judged at the sealed final_at; a sealed remedy is immutable; no old IN_PROGRESS standings liveness exit for 2.1; 2.0 terms unchanged. 2.1 is NOT deployed; its artifact is CERTIFIED, NOT DEPLOYED (2026-10-07, see escrow21_artifact_certification: canonical SHA-256 c3bd0618615e0d8688f71860a90f235a796b0152be84e2489ce6639e3a218219, 641,842 B); escrow 2.0.0 `5ecc3022...09e8` stays the canonical DEPLOYED money artifact; the earlier provisional 2.1 Wasm hash is obsolete. Consequently this baseline runs no real money table: FP4 financial mode accepts only contract version 2.1.0 while its checksum pin is still 2.0.0's (junoConfig.ts) -- unsatisfiable on any real chain -- so no deployment verifies (fail closed) until the owner-authorized 2.1.0 release steps are done (Junox StoreCode simulation, StoreCode / instantiate, REMEDY KMS signer, production / Terraform pin update, deployment verification).",
   "reporting": "P3-N035: no automatic effect (no game / money / escrow / profile / trust / seat change; no score; nothing public); reviewer conflict judged from the DURABLE table roster (record store: seats, removed seats, creator) so it survives restart, pool handoff and another host; an unreadable roster withholds the case (503); clock evidence hook (responsibility, offer, reject, expiry, freeze exhaustion, overdue, cure, strike, foreclosure proposal, votes, pause, system pause, remedy finality) without signatures, wallet proofs, keys or secrets; GS_CONDUCT_REVIEWERS wired in the single-host and ECS Terraform, SOURCE ONLY, absent by default (byte-identical default rendering).",
   "keplr_asset": "ASSET PENDING: no original official Keplr icon / wordmark file exists in the repository or was supplied; KeplrMark's KEPLR_OFFICIAL_ICON / KEPLR_OFFICIAL_WORDMARK stay null; nothing redrawn. Dependency: the owner supplies the original files; import them in frontend/src/components/money/KeplrMark.tsx with intrinsic sizes and flip keplrMark.test.tsx's pins.",
   "aud_19_04": "The brief's option A -- deferred, with citation (tracking disposition E): OD-18 deferred host succession and the clock's automatic consequences; the owner's final clocks brief (2026-10-06) built the clock's escrow-2.1 REMEDY outcomes but kept 'no host succession'. Host succession and any Forfeit / Clemency settlement payload stay deferred. No policy invented.",
@@ -6472,7 +6472,7 @@
    "LOW: retired / disabled seats versus a unanimous system resume (a deployment precondition).",
    "LOW: legacy money tables with no clock record are refused at Start ('unknown').",
    "LOW (pre-existing): roomProtocol refusal flattening; HostStakeSection loading flash; pendingTx HINT_KINDS lacks request-review; a reviewer-name typo is a startup crash loop; pre-deal released seats are not report parties; a report reads the clock store each frame; roomOp is not gated by the account-change send gate; reviewer decisions accept a sign-in grant.",
-   "contracts/escrow/README.md's approximate provisional 2.1 hash is obsolete (no canonical 2.1 checksum exists)."
+   "contracts/escrow/README.md's approximate provisional 2.1 hash is obsolete; the canonical 2.1.0 checksum was certified afterwards (2026-10-07, c3bd0618615e0d8688f71860a90f235a796b0152be84e2489ce6639e3a218219; certified, NOT deployed)."
   ],
   "record": "Project claude/PHASE3_CONSOLIDATED_FINAL_INTEGRATION_<head>_2026-10-07.md",
   "post_review_commits": {
@@ -6490,7 +6490,7 @@
    "terraform": "terraform 1.16.5, mocked providers: modules/single-host 23/23, modules/app 71/71; validate stacks/single-host and stacks/app (b281a59; no IaC change since)",
    "frontend": "npm ci; typecheck clean; production build compiled (pre-existing warnings only), scanDevIdentity clean; full suite 651 suites: 639 pass, 12 fail; 12,689 tests: 12,663 pass, 13 fail, 13 skipped -- the 12 failing suites (13 tests + 3 suites that cannot run) are IDENTICAL at 5fc690e (run there): the absent sandbox-log-JUNO-3XD / CV4 corpus, the corpus-count closures, sourceGuards / boardInEffect / liveHygiene binding debt",
    "real_browser": "homepage boundary matrix on the integrated production build: 1212 cases, 0 overlaps; Rules Reference on the development server open from 50 ms to 5 s after the fix",
-   "contract": "cargo fmt --check clean; cargo clippy --all-targets -D warnings clean (rustc 1.97 stable; MSRV 1.81); cargo test -p eighteen-cosmos-escrow --locked 415 passed / 0 failed (26 binaries: escrow21, remedy, remedy_vectors, matrix, invariants ...); schema regenerated with no diff; the remedy, payload and join-admission vector generators reproduce their frozen JSON byte for byte; NO canonical Wasm build (no Docker daemon / official optimizer; Rust 1.81 not installed) -- 2.1.0 stays uncertified",
+   "contract": "cargo fmt --check clean; cargo clippy --all-targets -D warnings clean (rustc 1.97 stable; MSRV 1.81); cargo test -p eighteen-cosmos-escrow --locked 415 passed / 0 failed (26 binaries: escrow21, remedy, remedy_vectors, matrix, invariants ...); schema regenerated with no diff; the remedy, payload and join-admission vector generators reproduce their frozen JSON byte for byte; NO canonical Wasm build (no Docker daemon / official optimizer; Rust 1.81 not installed) -- 2.1.0 stays uncertified [SUPERSEDED 2026-10-07: the owner-machine canonical build certified 2.1.0 from e2a67c3 -- see escrow21_artifact_certification]",
    "accounting": "check_phase3_accounting.py PASS; git diff --check clean"
   },
   "reviews": "Three independent reviews (identity / authorization; money / clock / reporting; frontend / UX / reconciliation) at bc2be5c: no HIGH; every integration-introduced MEDIUM / LOW fixed in bc2be5c and re-reviewed (no HIGH / MEDIUM left). A fourth independent review of the post-validation commits: no HIGH, one MEDIUM (the drift guards had become additions-only) fixed in 9f4dcec / 668d70a.",
@@ -6502,5 +6502,41 @@
    "tests": "server p3SameWalletWarning 4/4 (in npm test); frontend money/sameWalletWarning 13/13",
    "review": "one focused independent review: no HIGH / MEDIUM; LOW L1, L3-L6 fixed, L2 (per-browser scope) by design; re-review: none"
   }
+ },
+ "escrow21_artifact_certification": {
+  "date": "2026-10-07",
+  "status": "CERTIFIED, NOT DEPLOYED",
+  "artifact": "eighteen_cosmos_escrow.wasm (escrow 2.1.0)",
+  "sha256": "c3bd0618615e0d8688f71860a90f235a796b0152be84e2489ce6639e3a218219",
+  "bytes": 641842,
+  "certified_source": "phase3/consolidated-final-preplaytest-integration @ e2a67c3ec567328b9cd5d533b80cbdb4f38997e2",
+  "wasm_inputs": {
+   "Cargo.toml": "f07686d2b506fd61fef2304a3f0cd7a6bc6cec02",
+   "Cargo.lock": "e34610fad15554f093e99054bbc00f0b3f6687a2",
+   "contracts/escrow/Cargo.toml": "e780c7ce540e95383ae22634a005fa516b15378a",
+   "contracts/escrow/src": "131d0a9c6fb9ee6663e8f9b2b87fd5a4250ab42e"
+  },
+  "covered_heads": {
+   "e2a67c3ec567328b9cd5d533b80cbdb4f38997e2": "certified source",
+   "857694f76333515c32b2e7ea5457159e68e4c3f7": "verify-escrow21-inputs.sh: IDENTICAL (Authorization Wallet warning correction; no Wasm input changed)"
+  },
+  "adoption_check": "verify-escrow21-inputs.sh (owner kit target/escrow21-cert-kit/, SHA-256 e162bb6c91848fd42976c182445cd3ee24d2dd6388e6a4b77283f3fd1af6098e); a later head reuses the checksum only on IDENTICAL, otherwise rebuild and recertify",
+  "certified": [
+   "exact canonical checksum established",
+   "reproducible official-optimizer build: cosmwasm/optimizer:0.16.1@sha256:b9c92b2900b7ebaab3499203615c1b8589592bc557355ed3432e48851ffde69e (Rust 1.81.0, wasm-opt 116), two fresh-clone fresh-volume builds byte-identical on the owner machine",
+   "checker matrix: cosmwasm-check 1.5.11 / 2.2.9 / 3.0.5 / 3.0.9 pass (101-locals negative control rejected by 2.2.9 and 3.0.9)",
+   "artifact gate: contracts/escrow/scripts/wasm-gate.sh PASS (max 80 locals of 90; exports / imports / sections / opcodes clean)",
+   "gasbench on the same bytes: 134 rows; worst execute Resolve Replace at 64 checkpoints, 547,134 est. SDK gas; semantic trace identical to a source build of the same tree"
+  ],
+  "not_yet_done": [
+   "Junox StoreCode simulation (about 3.98M SDK gas estimated, unmeasured)",
+   "2.1 StoreCode / instantiate",
+   "REMEDY KMS signer deployment",
+   "production / Terraform checksum pin update (junoConfig.ts still pins 2.0.0)",
+   "pointing servers at 2.1",
+   "real deployment verification"
+  ],
+  "not_claimed": "Escrow 2.1 is not deployed and is not the canonical deployed contract; escrow 2.0.0 (JX-1, 5ecc3022...09e8) stays the deployed money artifact.",
+  "record": "Project claude/PHASE3_ESCROW21_CANONICAL_ARTIFACT_CERTIFICATION_c3bd0618_2026-10-07.md; gas table claude/ESCROW21_canonical_gas_table_c3bd0618.md"
  }
 }

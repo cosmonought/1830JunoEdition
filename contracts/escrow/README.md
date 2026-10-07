@@ -11,11 +11,14 @@
 > `phase3/consolidated-final-preplaytest-integration`, not merged to main;
 > `docs/phase3/PHASE3_FINAL_CLOCKS_REMEDIES.md`): the sealed decision, the
 > dedicated REMEDY signer port (fail closed when absent), the durable intent
-> and the clock lane's remedy gate. No KMS remedy signer is deployed, 2.1.0 is
-> not deployed and its canonical checksum is not certified; nothing here is
-> mainnet ready. The canonical money artifact remains escrow **2.0.0**
-> (`5ecc3022…09e8`, the JX-1 deployment, untouched); a 2.1.0 artifact needs the
-> official optimizer gate on the owner's machine before it can hold money.
+> and the clock lane's remedy gate. No KMS remedy signer is deployed and 2.1.0 is
+> not deployed; nothing here is mainnet ready. The 2.1.0 artifact is CERTIFIED
+> (2026-10-07, owner-machine official optimizer gate): canonical SHA-256
+> `c3bd0618615e0d8688f71860a90f235a796b0152be84e2489ce6639e3a218219`, 641,842 B,
+> from `e2a67c3` -- certified, NOT deployed. The deployed money artifact remains
+> escrow **2.0.0** (`5ecc3022…09e8`, the JX-1 deployment, untouched) until the
+> separate release steps (Junox StoreCode simulation, StoreCode / instantiate,
+> the REMEDY KMS signer, the production pin, deployment verification) are done.
 
 A CosmWasm 1.5 settlement escrow for Juno money rooms. It is a vault, a deposit
 holder, a roster record, a secp256k1 signature verifier, a settlement/challenge
@@ -435,22 +438,32 @@ Rust and Cargo 1.81.
   and `zeroize 1.8.2` (via `cosmwasm-crypto`, host-only). A `cargo update` that
   raises either breaks the optimizer build.
 
-**Escrow 2.1.0 (source branch, NOT a canonical artifact).** Without Docker,
+**Escrow 2.1.0 canonical artifact (CERTIFIED 2026-10-07, NOT deployed).** The
+owner-machine gate built `e2a67c3` twice with `cosmwasm/optimizer:0.16.1`
+(digest `b9c92b29…e69e`), byte-identical: SHA-256
+`c3bd0618615e0d8688f71860a90f235a796b0152be84e2489ce6639e3a218219`, 641,842 B,
+max 80 locals (limit 90); `cosmwasm-check` 1.5.11, 2.2.9, 3.0.5 and 3.0.9 pass;
+`scripts/wasm-gate.sh` PASS; gasbench on those bytes: the largest 2.1.0 execute
+is Resolve Replace at 64 checkpoints, ≈547k estimated SDK gas. A later source
+tree reuses this checksum only if its Wasm build inputs are byte-identical
+(the kit's `verify-escrow21-inputs.sh`). The history below is superseded.
+
+**Escrow 2.1.0 (earlier source-branch approximation, superseded).** Without Docker,
 an approximation of the optimizer route (`cargo +1.81.0 build --release --lib
 --target wasm32-unknown-unknown --locked` with `-C link-arg=-s`, then binaryen
 `wasm-opt -Os --signext-lowering`, version 116) gives, for the timed-remedy
 source, max **80** locals (limit 90) and 634,892 B (SHA-256 of that
 approximation `5990f2a1…6b0`, not a canonical checksum -- and OBSOLETE: it predates the
-last owner correction of 2026-10-07, which changed the contract source; no 2.1.0 hash recorded anywhere is
-canonical); the same route gives
+last owner correction of 2026-10-07, which changed the contract source; at that time no 2.1.0 hash
+recorded anywhere was canonical); the same route gives
 68 locals for the 2.0.0 source, matching the canonical record, and
 `cosmwasm-check` 2.2.9 passes. `gasbench` now benchmarks `SubmitRemedy` (all
 five kinds, with 6 approvals where needed, and scaling to 64 checkpoints),
 `RequestReview`, `ReviewAnnul` and the DISPUTED `AnnulByConsent`; the largest
-remedy is ≈0.53M modelled SDK gas at 64 checkpoints. **Owner-machine
-certification still required:** the official `cosmwasm/optimizer:0.16.1` build
-(two byte-identical builds; the canonical 2.1.0 checksum), all four
-`cosmwasm-check` versions, and `gasbench` against that artifact.
+remedy is ≈0.53M modelled SDK gas at 64 checkpoints. *(The owner-machine
+certification this paragraph called for -- the official `cosmwasm/optimizer:0.16.1` build,
+two byte-identical builds, all four `cosmwasm-check` versions and `gasbench` against that
+artifact -- is DONE: see the CERTIFIED paragraph above.)*
 
 **Acceptance.** Run `scripts/wasm-gate.sh`. It fails when any function
 declares more than 90 locals, and it runs every `cosmwasm-check` listed in

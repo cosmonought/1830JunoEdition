@@ -21,7 +21,8 @@ consolidated FINAL pre-playtest integration (2026-10-07, `phase3/consolidated-fi
   direction below): the profile / account is the player; username + password + one Authorization Wallet; the homepage overlap fixed
   structurally (P3-N028); trust facts; W1-K (AUD-19.02) and AUD-20.08's Terms shell folded in; every production player game anted;
 - Live / Async clocks (AUD-11.04) -- **INTEGRATED** (the final clocks / remedies lane, with escrow 2.1.0 / FP4 SOURCE; no host succession,
-  no Forfeit / Clemency payload);
+  no Forfeit / Clemency payload); the escrow 2.1.0 artifact is CERTIFIED, NOT DEPLOYED (2026-10-07, `c3bd0618…8219`;
+  `PROJECT_CANONICAL_CONTEXT.md` §D.3a);
 - the D-35 OO reservation marker -- **INTEGRATED** (both-city steady state tentatively accepted for Phase-4 visual review);
 - P3-N027, the emergency third-seat duplicate prompt -- **INTEGRATED**;
 - the W3-B latch residue (AUD-14.06, P3-N021) -- **INTEGRATED** (W3-B COMPLETE);

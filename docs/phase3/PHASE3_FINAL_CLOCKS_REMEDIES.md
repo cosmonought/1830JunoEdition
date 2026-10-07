@@ -6,11 +6,13 @@ JUNOX mutation, no production KMS key. **The escrow 2.1.0 contract SOURCE change
 (2026-10-07)**: seat approvals are judged at the sealed decision's `final_at` (§3), with an uncapped retired-key
 history and a `ConsentKeyAt` query. No signed byte, gameplay rules version or settlement codec changed. Any earlier
 noncanonical 2.1 Wasm hash is SUPERSEDED: the owner-machine canonical Wasm certification must build the final contract
-HEAD of this branch.
+HEAD of this branch. **Done 2026-10-07:** certified from the integration head `e2a67c3` (whose Wasm inputs equal `5fc690e`'s):
+canonical SHA-256 `c3bd0618615e0d8688f71860a90f235a796b0152be84e2489ce6639e3a218219`, 641,842 B -- CERTIFIED, NOT DEPLOYED
+(`PROJECT_CANONICAL_CONTEXT.md` §D.3a).
 
 **INTEGRATED (2026-10-07):** this branch's head `5fc690e` is the base of the consolidated final pre-playtest integration,
-`phase3/consolidated-final-preplaytest-integration` (not merged to main; nothing deployed; escrow 2.1.0 still NOT deployed, NOT
-certified, NOT canonical). There the reporting hook (`ClockConductHook`, below) is CONSUMED by player reporting (P3-N035):
+`phase3/consolidated-final-preplaytest-integration` (not merged to main; nothing deployed; escrow 2.1.0 still NOT deployed; its artifact was
+certified later the same day, `c3bd0618…8219`, and is still not deployed). There the reporting hook (`ClockConductHook`, below) is CONSUMED by player reporting (P3-N035):
 `server/src/conduct/conductClockFacts.ts` keeps a bounded per-game feed of the hook's events, and a report attaches the
 server's clock facts (responsibility, offers, rejects, expiries, freeze exhaustion, overdue, cure, strike, foreclosure
 proposal, votes, pauses, system pause, remedy finality; the sealed remedy's own evidence after a seal) with no signature,
@@ -346,7 +348,8 @@ defaulting player and the outcome.
   paused).
 - **Not done here (by the brief):** 2.1 is not deployed; the canonical 2.1 checksum is not certified (and any earlier
   noncanonical Wasm hash is superseded by this branch's final contract HEAD); no KMS remedy signer is deployed; nothing
-  is mainnet ready.
+  is mainnet ready. *(Later, 2026-10-07: the canonical 2.1.0 checksum IS certified, `c3bd0618…8219`; 2.1 is still not
+  deployed and no KMS remedy signer is deployed.)*
 
 ## 9. Tests
 

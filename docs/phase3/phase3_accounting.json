@@ -6476,6 +6476,25 @@
    "LOW (pre-existing): roomProtocol refusal flattening; HostStakeSection loading flash; pendingTx HINT_KINDS lacks request-review; a reviewer-name typo is a startup crash loop; pre-deal released seats are not report parties; a report reads the clock store each frame; roomOp is not gated by the account-change send gate; reviewer decisions accept a sign-in grant.",
    "contracts/escrow/README.md's approximate provisional 2.1 hash is obsolete (no canonical 2.1 checksum exists)."
   ],
-  "record": "Project claude/PHASE3_CONSOLIDATED_FINAL_INTEGRATION_<head>_2026-10-07.md"
+  "record": "Project claude/PHASE3_CONSOLIDATED_FINAL_INTEGRATION_<head>_2026-10-07.md",
+  "post_review_commits": {
+   "acab466": "full server suite: IaC drift guards reconciled with the reviewer wiring; p3AccountWallet stops importing the conformance harness",
+   "92b8346": "docs / tracking reconciliation",
+   "11ffadd": "smoke: the restarted Live table is system-paused until every seat resumes (account lane x clock lane)",
+   "7141fca": "full frontend suite: radius scale on the account / reporting surfaces; conduct/me is a menu read",
+   "9f4dcec": "fourth independent review follow-ups: the drift guards pin the reviewer wiring line by line; smoke unanimity; doc corrections",
+   "668d70a": "the wiring pin spawns nothing (COST-2C)"
+  },
+  "validation": {
+   "server": "npm ci; npm run build (tsc) clean; full npm test at 668d70a: 2,837 tests, 2,534 pass, 0 fail, 303 skipped (capability-declared conformance cases; PowerShell absent)",
+   "smoke": "SMOKE PASSED (production + development halves, 261 checks)",
+   "dynamodb_local": "DynamoDB Local 3.3.1 (software.amazon.dynamodb:DynamoDBLocal:3.3.1, in memory), npm run test:dynamodb-local: 547 tests, 532 pass, 0 fail, 15 skipped (capability declarations); clock CLK, conduct-case CND and identity ID-23 conformance included",
+   "terraform": "terraform 1.16.5, mocked providers: modules/single-host 23/23, modules/app 71/71; validate stacks/single-host and stacks/app (b281a59; no IaC change since)",
+   "frontend": "npm ci; typecheck clean; production build compiled (pre-existing warnings only), scanDevIdentity clean; full suite 651 suites: 639 pass, 12 fail; 12,689 tests: 12,663 pass, 13 fail, 13 skipped -- the 12 failing suites (13 tests + 3 suites that cannot run) are IDENTICAL at 5fc690e (run there): the absent sandbox-log-JUNO-3XD / CV4 corpus, the corpus-count closures, sourceGuards / boardInEffect / liveHygiene binding debt",
+   "real_browser": "homepage boundary matrix on the integrated production build: 1212 cases, 0 overlaps; Rules Reference on the development server open from 50 ms to 5 s after the fix",
+   "contract": "cargo fmt --check clean; cargo clippy --all-targets -D warnings clean (rustc 1.97 stable; MSRV 1.81); cargo test -p eighteen-cosmos-escrow --locked 415 passed / 0 failed (26 binaries: escrow21, remedy, remedy_vectors, matrix, invariants ...); schema regenerated with no diff; the remedy, payload and join-admission vector generators reproduce their frozen JSON byte for byte; NO canonical Wasm build (no Docker daemon / official optimizer; Rust 1.81 not installed) -- 2.1.0 stays uncertified",
+   "accounting": "check_phase3_accounting.py PASS; git diff --check clean"
+  },
+  "reviews": "Three independent reviews (identity / authorization; money / clock / reporting; frontend / UX / reconciliation) at bc2be5c: no HIGH; every integration-introduced MEDIUM / LOW fixed in bc2be5c and re-reviewed (no HIGH / MEDIUM left). A fourth independent review of the post-validation commits: no HIGH, one MEDIUM (the drift guards had become additions-only) fixed in 9f4dcec / 668d70a."
  }
 }

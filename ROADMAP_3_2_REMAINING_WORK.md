@@ -40,7 +40,9 @@ factual trust indicators rather than a numeric composite score. ~~A verified wal
 PROFILE / ACCOUNT IS THE PLAYER and no wallet is an identity; the profile stores no game wallet; each account has exactly ONE Authorization
 Wallet (account creation, password recovery with a fresh ADR-036 signature, replacement by password + old-wallet APPROVE + new-wallet
 ACCEPT); a seat's financial wallet is fixed while money is bound and frozen for the game's lifetime after Start; production player games
-are ante-only. "Established" = one completed real-money game.
+are ante-only. Owner ruling (2026-10-07): the Authorization Wallet MAY also be a game's financial wallet when the player deliberately
+chooses it -- warned once before that first binding (separation recommended for operational-security isolation), never blocked, never
+auto-selected or auto-bound; the two roles stay distinct. "Established" = one completed real-money game.
 
 **Mapping from the ROADMAP 3.2 numbering below** (for reading older records): its 4 (LIVE-4/5/6) and the COST / single-host work → Phase 1;
 its 5 (Junox E2E, "ESCROW-5") → Phase 2; its 9–10 (UI/UX consolidation and polish) → Phase 3; its 11 (near-production playtest) → Phase 4;

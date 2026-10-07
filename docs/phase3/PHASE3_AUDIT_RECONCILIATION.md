@@ -1430,8 +1430,12 @@ P3-N032 … P3-N034); W2-M COMPLETE (every row integrated once W3-L is); W3-H CO
 confirmation owed). Still PARTIAL: W3-D (AUD-13.04 → the final tutorial pass) and W2-K (the Keplr asset, ASSET PENDING). NOT
 STARTED: W3-F. **Not started (lane F, LAST): the final gameplay tutorial pass.**
 
-**Owner question (reported, NOT decided):** a seat's payout (ante) wallet may today be the account's Authorization Wallet,
-with no warning; the brief says the Authorization Wallet "must not become the routine financial wallet".
+**Owner ruling (2026-10-07; resolves the question this integration reported) -- IMPLEMENTED on the same branch:** the
+Authorization Wallet MAY also be a game's financial wallet. Allowed, not blocked; separation recommended for stronger
+operational-security isolation; explicit and warned once before that same address is first bound to a seat (the money
+panel; the server's wallet challenge says `authorizationWallet: true`); never automatically selected or bound; the
+account-authority and game-money roles stay distinct even when they share an address. Acknowledgement per account x
+Authorization Wallet on that browser. Tests: server `p3SameWalletWarning`, frontend `money/sameWalletWarning`.
 
 **AUD-19.04 (host succession):** deferred (disposition E): OD-18 deferred it with the clock's automatic consequences; the
 owner's final clocks brief built the clock's escrow-2.1 REMEDY outcomes but kept "no host succession". **Forfeit / Clemency:** no required feature depends on it.

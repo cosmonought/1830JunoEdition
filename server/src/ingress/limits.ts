@@ -70,8 +70,11 @@ export interface RoomLimits {
   submitsPerGame: BucketSpec;
   /** Phase 3 final clocks (owner-policy correction): the FREQUENCY of offers (proposals) per seat per game -- a
    *  transport-sanity bound on pathological offer churn, never a count of offers a round allows. A refusal is the
-   *  ordinary `rate-limited` answer with its wait; the same offer is legal the moment the bucket refills. */
+   *  ordinary `rate-limited` answer with its wait; the same offer is legal the moment the bucket refills. Two buckets:
+   *  the short burst (`offersPerSeat`) and the sustained rate (`offersPerSeatSustained`). Only an offer that LANDED
+   *  spends them (as the revert budget): a refused or rolled-back proposal grows no log. */
   offersPerSeat: BucketSpec;
+  offersPerSeatSustained: BucketSpec;
   /** Chat per principal per game. */
   chatPerSeat: BucketSpec;
   /** Join-code rotations (rotate-code, going private) per game: each rewrites the join index. */
@@ -221,9 +224,12 @@ export const DEFAULT_INGRESS_LIMITS: IngressLimits = Object.freeze({
     membershipOpsPerPrincipal: { capacity: 10, refillPerSecond: perMinute(20) },
     submitsPerSeat: { capacity: 20, refillPerSecond: 3 },
     submitsPerGame: { capacity: 30, refillPerSecond: 10 },
-    /* Offers: burst 10, then one every 10 seconds (six a minute) -- far above any table's negotiation, far below a
-       script's churn (which would otherwise fill the game's log). */
+    /* Offers: burst 10, then one every 10 seconds; and, sustained, 30 then 30 an hour -- far above any table's
+       negotiation (a Live action lasts 20:00), and it slows a script's offer churn toward the log cap below to about
+       60 entries an hour (from ~2,000 entries, ~5 days of one seat's own churn; a residual for the longest Async
+       paces, recorded in the design record §8). */
     offersPerSeat: { capacity: 10, refillPerSecond: 1 / 10 },
+    offersPerSeatSustained: { capacity: 30, refillPerSecond: 30 / 3600 },
     chatPerSeat: { capacity: 5, refillPerSecond: 1 / 3 },
     codeRotationsPerGame: { capacity: 5, refillPerSecond: 5 / 3600 },
     listCoalesceMs: 1_000,

@@ -29,6 +29,7 @@ import {
   recoverGap,
   remainingAt,
   remedyBlocked,
+  remedyProgress,
   systemResumeVote,
   vote,
   type ClockBoardFacts,
@@ -351,6 +352,40 @@ describe("Live train offer: the proposer's clock freezes; the recipient has a di
     assert.deepEqual(t.record.parked, [], "nothing of C's was running: nothing parks");
     t.move(B, facts(turn(A, 0)), "reject");
     assert.deepEqual(t.record.declines.counts, {}, "no decline for an offer that never suspended its proposer");
+  });
+
+  test("REVIEW: an offer whose board key repeats (a funding offer has no instance) still counts each declined PROPOSAL -- a third is refused; an answer undone and given again is still one decline", () => {
+    const t = new Table("live");
+    const funding = offerOf("funding", A, B, 5); // the same key every time
+    t.move(A, offering(funding), "propose");
+    t.move(B, facts(turn(A, 0)), "reject");
+    t.move(A, offering(funding), "propose");
+    t.advance(LIVE_TRADE_MS);
+    t.commit(A, facts(turn(A, 0)), "server-expiry");
+    assert.equal(t.record.declines.counts[`${A}>${B}`], 2, "two proposals, two declines (never folded into one by their key)");
+    /* Undo of a rejection, then the same rejection again: the proposal is the same, the decline counted once. */
+    const u = new Table("live");
+    u.move(A, offering(offerOf("private", A, B, 7)), "propose");
+    const proposalIndex = u.index;
+    u.move(B, facts(turn(A, 0)), "reject");
+    assert.equal(u.record.declines.counts[`${A}>${B}`], 1);
+    u.move(B, offering(offerOf("private", A, B, 7)), "revert", { revertTarget: u.index });
+    assert.equal(u.record.obligation?.began_index, proposalIndex, "the answerer's response restored");
+    u.move(B, facts(turn(A, 0)), "reject");
+    assert.equal(u.record.declines.counts[`${A}>${B}`], 1, "the same proposal is declined once");
+  });
+
+  test("REVIEW: a recovered gap with a standing QUALIFYING non-train Live offer keeps the answerer on the 10:00 response timer (never an action clock or a strike)", () => {
+    const t = new Table("live");
+    t.advance(5 * MIN);
+    const priv = offerOf("private", A, B, 3);
+    /* The offer was committed by an authority whose clock write never landed: the record still shows A responsible. */
+    t.take(recoverGap(t.record, { now: t.t + MIN, lastIndex: 3, lastAt: t.t, actors: [A], facts: offering(priv) }));
+    assert.deepEqual([t.record.obligation?.seat, t.record.obligation?.trade?.proposer, t.remaining()], [B, A, LIVE_TRADE_MS]);
+    assert.deepEqual(t.record.parked.map((p) => [p.seat, p.remaining_ms]), [[A, 15 * MIN]]);
+    const expiry = t.advance(LIVE_TRADE_MS);
+    assert.notEqual(expiry, null, "it expires as an offer, never as an overdue");
+    assert.deepEqual([t.record.phase, t.record.strikes], ["active", {}]);
   });
 
   test("NO 16-OFFER CAP: well over 16 otherwise-legal offers in one round are each taken (Live and Async); no game-rule refusal exists", () => {
@@ -1148,6 +1183,48 @@ describe("Canonical clock evidence", () => {
     assert.equal(t.record.remedy!.evidence.events[0].f.seat, B);
   });
 
+  test("REVIEW: a parked negotiation never restarts the window -- the sealed document still holds the defaulting obligation's ORIGINAL grant and every park / resume since", () => {
+    const t = new Table("live", { money: true });
+    t.move(A, facts(turn(B, 1)));
+    t.advance(3 * MIN);
+    for (let n = 1; n <= 3; n += 1) {
+      t.move(B, offering(offerOf("private", B, C, n)), "propose");
+      t.advance(MIN);
+      t.move(C, facts(turn(B, 1)), "reject");
+    }
+    t.advance(LIVE_ACTION_MS - 3 * MIN + LIVE_CURE_MS);
+    const doc = t.record.remedy!.evidence;
+    const kinds = doc.events.map((event) => event.kind);
+    assert.equal(doc.events[0].kind, "responsibility");
+    assert.deepEqual([doc.events[0].f.seat, doc.events[0].f.timer_ms, doc.events[0].f.reason], [B, LIVE_ACTION_MS, "handoff"], "the original 20:00 grant");
+    assert.equal(kinds.filter((k) => k === "trade-begin").length, 3, "every park, with its exact parked remainder");
+    assert.equal(kinds.filter((k) => k === "trade-end").length, 3);
+    assert.deepEqual(kinds.slice(-3), ["overdue", "final", "remedy-sealed"]);
+    assert.equal(sealedRemedyProblem(GAME, t.record.remedy!), null);
+  });
+
+  test("REVIEW: after the seal the record's own window restarts (the remedy document holds the sealed one): the record stays well inside a store's item limit even with a full window", () => {
+    const t = new Table("live", { money: true, seats: [A, B, C] });
+    t.ok(pauseOp(t.record, A, { action: "request", kind: "pause", id: null }, t.t));
+    for (const seat of [B, C]) t.ok(pauseOp(t.record, seat, { action: "yes", kind: "pause", id: t.record.pause.request?.id ?? null }, t.t));
+    for (let i = 0; i < 300; i += 1) {
+      t.t += MIN;
+      t.ok(pauseOp(t.record, A, { action: "request", kind: "resume", id: null }, t.t));
+      t.ok(pauseOp(t.record, C, { action: "no", kind: "resume", id: t.record.pause.request?.id ?? null }, t.t));
+    }
+    t.t += MIN;
+    t.ok(pauseOp(t.record, A, { action: "request", kind: "resume", id: null }, t.t));
+    for (const seat of [B, C]) t.ok(pauseOp(t.record, seat, { action: "yes", kind: "resume", id: t.record.pause.request?.id ?? null }, t.t));
+    t.advance(LIVE_ACTION_MS + LIVE_CURE_MS);
+    const record = t.record as GameClockRecord;
+    assert.equal(record.remedy?.evidence.events.length, CLOCK_EVIDENCE_WINDOW, "the sealed window is full");
+    assert.ok(record.evidence.window.length <= 2, "the record's own window restarted at the seal");
+    assert.equal(record.evidence.window_from, record.remedy?.evidence_hash, "from the sealed head");
+    assert.equal(foldEvidence(record.evidence.window_from, record.evidence.window), record.evidence.head);
+    const bytes = Buffer.byteLength(JSON.stringify(record), "utf8");
+    assert.ok(bytes < 300_000, `the record is ${bytes} bytes (DynamoDB's item limit is 400 KB)`);
+  });
+
   test("canonical JSON refuses floats; no signature is ever in an event (only its digest)", () => {
     assert.throws(() => canonicalJson({ x: 0.5 }));
     assert.equal(canonicalJson({ b: 1, a: [2, "x"] }), '{"a":[2,"x"],"b":1}');
@@ -1291,6 +1368,20 @@ describe("Review fixes: requests, breaks, gaps, offers, approvals", () => {
     t.ok(vote(t.record, C, t.record.overdue?.proposal?.id as number, true, sig(nowSecs + 7 * 86_400, "55"), t.t));
     assert.equal(t.record.phase, "overdue");
     assert.deepEqual(t.record.overdue?.proposal?.votes.map((v) => v.seat), [C], "B's lapsing YES is set aside; B is asked again");
+  });
+
+  test("REVIEW: seats named unlandable are cleared once the SAME decision is carried on again; a pre-correction record (with its offer budget) still reads", () => {
+    const t = new Table("async-pace", { pace: 86_400, money: true });
+    t.advance(86_400 * SEC);
+    const nowSecs = Math.floor(t.t / 1000);
+    t.ok(propose(t.record, B, "foreclose", sig(nowSecs + 7 * 86_400), t.t));
+    t.ok(vote(t.record, C, t.record.overdue?.proposal?.id as number, true, sig(nowSecs + 7 * 86_400, "55"), t.t));
+    t.take(remedyBlocked(t.record, [C], "owner decision required", t.t));
+    assert.deepEqual(clockViewOf(t.record, t.t).remedy?.stale, [C]);
+    t.take(remedyProgress(t.record, "submitted", null, t.t, true));
+    assert.deepEqual([t.record.remedy?.status, t.record.remedy?.stale], ["submitted", []]);
+    const legacy = JSON.stringify({ ...t.record, offers: { key: "OperatingRound/1/1", counts: { [A]: 3 } } });
+    assert.deepEqual(parseClockDocument(legacy, GAME), t.record, "the legacy offer budget is dropped on read; nothing else changes");
   });
 
   test("a sealed N-1 decision whose approvals can no longer land is HELD unchanged (owner decision required): never converted, never re-voted", () => {

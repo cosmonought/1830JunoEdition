@@ -38,7 +38,7 @@ const proposeTrain = (seller: number, model: string, price: string) => ({
 });
 const answerTrain = (seller: number, accept: boolean) => ({ AnswerTrainPurchase: { game_id: 1, seller_protocol_id: seller, accept } });
 
-function harness(options: { money?: boolean; remedy?: RemedyPort; loadFails?: { n: number }; held?: { on: boolean }; frozen?: { on: boolean }; closeFails?: { n: number } } = {}) {
+function harness(options: { money?: boolean; remedy?: RemedyPort; loadFails?: { n: number }; held?: { on: boolean }; frozen?: { on: boolean }; closeFails?: { n: number }; pins?: boolean[] } = {}) {
   const time = fakeTime(T0);
   let stamp: number | null = null;
   const stampAt = <T>(at: number, fn: () => T): T => {
@@ -98,6 +98,7 @@ function harness(options: { money?: boolean; remedy?: RemedyPort; loadFails?: { 
     runOn: (_gameId, _label, task) => serial(() => task(game, tx)).then(() => true),
     onChange: () => undefined,
     serving: () => true,
+    ...(options.pins !== undefined ? { pin: (_gameId: string, on: boolean) => void (options.pins as boolean[]).push(on) } : {}),
     ...(options.remedy !== undefined ? { remedy: () => options.remedy as RemedyPort } : {}),
     closeOffer: async (_game, _tx, input) => {
       if (options.closeFails !== undefined && options.closeFails.n > 0) {
@@ -289,6 +290,22 @@ describe("Live train offers through the controller (real engine offers)", () => 
     const other = { ...intent, op: { ...intent.op, overdue_epoch: "99" } } as unknown as ChainIntentRecord;
     assert.equal((await h.clock.remedyGate(GAME, other)).kind, "wait", "an intent that is not the sealed decision never passes");
     assert.equal((await h.clock.remedyGate(GAME, carrying("cd".repeat(32)))).kind, "wait", "nor one carrying another evidence hash for the same instance");
+  });
+
+  test("REVIEW: a sealed remedy not yet final keeps its table RESIDENT (the sweep carries it on with nobody there, no vote); once final on chain the table is released", async () => {
+    let status: "submitted" | "confirmed" = "submitted";
+    const port = { configured: true, annulOpen: async () => false, attest: async () => ({ status, detail: null, attested: status === "submitted" }), progress: async () => (status === "confirmed" ? "confirmed" : "open"), fence: () => undefined } as unknown as RemedyPort;
+    const pins: boolean[] = [];
+    const h = harness({ money: true, remedy: port, pins });
+    await h.deal();
+    await h.time.advance(LIVE_ACTION_MS + LIVE_CURE_MS);
+    await h.clock.idle();
+    assert.deepEqual([h.record().phase, h.record().remedy?.status, h.record().system], ["ended", "submitted", null]);
+    assert.equal(pins[pins.length - 1], true, "kept resident while the remedy is not final");
+    status = "confirmed";
+    await h.clock.driveRemedy(GAME);
+    assert.equal(h.record().remedy?.status, "confirmed");
+    assert.equal(pins[pins.length - 1], false, "released once final on chain");
   });
 
   test("the recipient's response timer is never an overdue: no strike, no interruption, no remedy", async () => {

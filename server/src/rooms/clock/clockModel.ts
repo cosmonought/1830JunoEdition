@@ -219,7 +219,11 @@ class Draft {
     let from = ev.window_from;
     let window: ClockEvidenceEvent[];
     let truncated = ev.truncated;
-    if (kind === "responsibility" && this.d.phase !== "overdue" && this.d.phase !== "ended") {
+    /* The window restarts with each NEW obligation -- never with a resumption (a proposer resumed after its offer, an
+       undo's restoration, a recovered gap) nor while a proposer stands parked behind an offer: the defaulting
+       obligation's window then still holds its original grant and every park / resume since (bounded below). */
+    const resumption = kind === "responsibility" && (RESUMPTION_REASONS.has(String(f.reason)) || this.d.parked.length > 0);
+    if (kind === "responsibility" && !resumption && this.d.phase !== "overdue" && this.d.phase !== "ended") {
       from = ev.head;
       window = [event];
       truncated = false;
@@ -380,6 +384,9 @@ function emitResponsibility(x: Draft, ob: ClockObligation | null, at: number, ca
     THE BATCH FOLD (after a commit, inside the committing task)
    ================================================================== */
 
+/** Responsibility events that CONTINUE an obligation rather than begin one (the evidence window is not restarted). */
+const RESUMPTION_REASONS: ReadonlySet<string> = new Set(["offer-expired", "offer-rejected", "offer-withdrawn", "undo-restored", "undo-restored-charged", "undo-unrecorded", "recovered-gap"]);
+
 /** Brings the record in line with one committed batch. */
 export function foldBatch(record: GameClockRecord, batch: ClockBatch, now: number): ClockStep {
   const x = new Draft(record, now);
@@ -489,7 +496,10 @@ export function foldBatch(record: GameClockRecord, batch: ClockBatch, now: numbe
        current Operating Round (one counter per direction, whatever the offer's kind; once per offer). Async keeps no
        decline count. A negotiation the answerer CONTINUES (a new offer of its own) resolves no offer here: no decline. */
     if (liveQualifying && (batch.msg === "reject" || batch.msg === "server-expiry") && before.proposer !== null && before.answerer !== null) {
-      bumpDeclines(x, batch.before.orKey, declineKey(before.proposer, before.answerer), before.key);
+      /* Once per PROPOSAL (its position in the log -- the response obligation began at it): a board key can repeat (a
+         funding offer has no instance; an undo rewinds a serial), an answer undone and given again cannot. */
+      const proposedAt = current !== null && current.trade !== null && current.trade.offer_key === before.key ? current.began_index : batch.first;
+      bumpDeclines(x, batch.before.orKey, declineKey(before.proposer, before.answerer), `${before.key}@${proposedAt}`.slice(-200));
     }
     if (liveQualifying) {
       x.emit("trade-end", at, {
@@ -844,6 +854,9 @@ function seal(x: Draft, kind: RemedyKind, od: ClockOverdue, finalMs: number, vot
     replaces,
     stale: [],
   };
+  /* The sealed window now lives in the remedy document: the record's own restarts at the seal's head (the chain is
+     unchanged; the record is not carried twice toward a store's item limit). */
+  d.evidence = { ...d.evidence, window_from: d.evidence.head, window: [], truncated: false };
   x.effects.push({ kind: "remedy" });
 }
 
@@ -854,7 +867,9 @@ export function remedyProgress(record: GameClockRecord, status: RemedyStatus, de
   if (r === null) return { record, events: [], effects: [] };
   if (r.status === status && r.detail === detail && !attested) return { record, events: [], effects: [] };
   const x = new Draft(record, now);
-  x.d.remedy = { ...r, status, detail: detail === null ? null : detail.slice(0, 500), attestations: r.attestations + (attested ? 1 : 0) };
+  /* Seats named unlandable are cleared once the decision is carried on again (submitted, confirmed, superseded). */
+  const stale = status === "refused" || status === "sealed" ? r.stale : [];
+  x.d.remedy = { ...r, status, detail: detail === null ? null : detail.slice(0, 500), attestations: r.attestations + (attested ? 1 : 0), stale };
   /* The evidence says WHAT happened (a status), never the free text of why (signer, chain or host errors stay in the
      record and the ops lines). */
   if (r.status !== status) x.emit("remedy-status", now, { remedy: r.kind, status });
@@ -1192,7 +1207,14 @@ export function recoverGap(record: GameClockRecord, input: { readonly now: numbe
       const parkedMs = kept !== null ? kept.remaining_ms : prior !== null && prior.seat === standing.proposer && prior.timer !== null ? remainingAt(prior.timer, at) : (allowance ?? 0);
       if (allowance !== null) d.parked = [{ seat: standing.proposer, offer_key: standing.key, remaining_ms: parkedMs }];
     }
-    const trade = d.policy.class === "live" && standing !== null && standing.slot === "train" && standing.proposer !== null ? { proposer: standing.proposer, offer_key: standing.key } : null;
+    /* LIVE: the response timer for a train offer and for any offer that suspended its proposer (the proposer held the
+       running obligation, or this record already parked it behind this offer) -- as `foldBatch` decides it. */
+    const suspended =
+      standing !== null &&
+      ((prior !== null && prior.seat === standing.proposer && prior.timer !== null && prior.trade === null) ||
+        keptParked.some((p) => p.offer_key === standing.key && p.seat === standing.proposer) ||
+        (prior !== null && prior.trade !== null && prior.trade.offer_key === standing.key));
+    const trade = d.policy.class === "live" && standing !== null && standing.proposer !== null && (standing.slot === "train" || suspended) ? { proposer: standing.proposer, offer_key: standing.key } : null;
     const continues = prior !== null && prior.seat === D.seat && !input.actors.includes(D.seat) && cured !== D.seat && (prior.trade?.offer_key ?? null) === (trade?.offer_key ?? null);
     if (continues && prior !== null) {
       d.obligation = { ...prior, kind: D.kind, key: D.key, timer: prior.timer === null ? null : { remaining_ms: remainingAt(prior.timer, at), since: at } };

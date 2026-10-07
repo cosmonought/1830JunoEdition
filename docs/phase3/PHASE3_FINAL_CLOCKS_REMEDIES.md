@@ -40,7 +40,10 @@ clock nor cures an overdue.
   `RescindPrivateTrade`), stamped at the exact moment, in the game's own task; an expiry is an undo fence.
 - **Two directional declines per Operating Round (Live only).** A rejection or an unanswered expiry of a qualifying Live
   offer is one DECLINE for its direction A -> B in the current Operating Round -- ONE counter per direction (`from>to`),
-  whatever the offer's kind, once per offer (an answer undone and given again is the same decline). After two, A cannot
+  whatever the offer's kind, once per PROPOSAL (identified by its position in the log, never by a board key that can
+  repeat -- a funding offer carries no instance; an answer undone and given again is the same decline). Private trades
+  between players happen only in a Stock Round: there the scope is that Stock Round (the stretch between Operating
+  Rounds), so the generalised rule has effect on them (interpretation, for the owner's confirmation). After two, A cannot
   make another qualifying offer to B that OR (the train's pre-speculation check uses the owner's sentence "B has
   declined two train offers from you this operating round."; every kind is checked after speculation against the
   answerer the board names, before commit, "B has declined two offers from you this operating round."). The next OR
@@ -49,9 +52,10 @@ clock nor cures an overdue.
   and the answerer can only answer it, so no counter-offer arises in practice.
 - **No offer count, no history bound.** No number of offers per round and no game-history length ever makes an offer
   illegal (owner ruling: the earlier 16-proposal budget and the "no new offer past 5,000 entries" refusal are
-  removed). Offer CHURN is bounded only as transport: a per-seat, per-game offer-FREQUENCY bucket
-  (`RoomLimits.offersPerSeat`, burst 10, then one every 10 s) answers the ordinary `rate-limited` with its
-  `retryAfterMs`, after which the same offer is taken. The general limits are unchanged (submits per seat: burst 20, then
+  removed). Offer CHURN is bounded only as transport: per-seat, per-game offer-FREQUENCY buckets
+  (`RoomLimits.offersPerSeat`: burst 10, then one every 10 s; `offersPerSeatSustained`: 30, then 30 an hour) answer
+  the ordinary `rate-limited` with its `retryAfterMs`, after which the same offer is taken; only an offer that LANDS
+  spends them (a refused or rolled-back proposal grows no log). The general limits are unchanged (submits per seat: burst 20, then
   3 a second; per game: burst 30, then 10 a second; the revert budget; the LIVE-2 log cap of 10,000 entries with its
   alarm at 5,000 -- the alarm only logs).
 - **Overdue (strikes 1 and 2).** At 20:00 the seat is OVERDUE at that exact moment: its durable strike count rises and a
@@ -99,7 +103,11 @@ clock nor cures an overdue.
   contract and game state, and expiry / freshness. An attestation that expired during the outage is ATTESTED AGAIN for
   the same decision (the protocol's own recovery: a fresh `attested_at`, the same decision digest) and submitted. The
   remedy is never changed, recalculated or converted; gameplay never reopens; the defaulting player gets no cure; no new
-  foreclosure vote is collected. Strike 3 stays gameplay-terminal and the on-chain challenge window remains the
+  foreclosure vote is collected. Nobody needs to open the table: money games are loaded at startup (the settlement
+  coordinator's walk), a table with an unfinished sealed remedy is kept RESIDENT (the sweep keeps carrying it on, every
+  30 s with backoff), and an FP4 remedy intent's end (an expired attestation mooted by the relayer) notifies the clock,
+  which loads a table not open here. Ownership is revalidated against the STORE at every attempt (and by the relayer's
+  gate): a process another authority took over signs and writes nothing. Strike 3 stays gameplay-terminal and the on-chain challenge window remains the
   defaulter's protection; a sealed first / second-overdue TimeoutAnnul or N-1 foreclosure continues only that outcome.
   **Owner decision required (stop condition):** escrow 2.1.0 checks every seat approval's `approve_until` against the
   BLOCK time and under the seat's CURRENT consent key. A sealed N-1 remedy (Live foreclosure 2; Async 4 / 5) whose
@@ -149,12 +157,16 @@ every strike it relies on. Every durable event is offered to the reporting hook 
 it -- the player-reporting lane's interface (that branch is not merged here).
 
 **Storage is independent of the game history's length.** The evidence chain hashes every clock fact; the record keeps
-only a bounded, CHECKPOINTED window: the events since the current obligation's responsibility event (reset by each new
-obligation while nothing is overdue), at most `CLOCK_EVIDENCE_WINDOW` = 512 -- past that the oldest are folded into the
+only a bounded, CHECKPOINTED window: the events since the current obligation's ORIGINAL grant (reset only by a new
+obligation while nothing is overdue -- never by a resumption after an offer, an undo's restoration or a recovered gap,
+nor while a proposer stands parked, so a sealed document carries the defaulting obligation's grant and every park /
+resume since), at most `CLOCK_EVIDENCE_WINDOW` = 512 -- past that the oldest are folded into the
 window's starting head (`window_from`, `truncated: true`), so the window still folds to the chain head and a sealed
 document still folds to its attested hash -- and the strike ledger's newest 64 events (a Live game has at most five per
-seat). Every event also goes, as it happens, to the reporting hook and the ops audit (the archive). A long negotiation
-does not grow the window (each qualifying offer and each resumption starts a responsibility event). Nothing here
+seat). Every event also goes, as it happens, to the reporting hook and the ops audit (the archive; best effort). At
+the seal the window moves into the remedy document and the record's own window restarts from the sealed head (the
+record is never carried twice; a full-window sealed record measures well under 300 KB against DynamoDB's 400 KB item
+limit). Nothing here
 depends on the 5,000-entry figure: the stalled position (`log_len`, `log_hash`) is the full history's, and a remedy
 sealed after more than 5,000 entries verifies the same way (`clockModel.test.ts`: 5,200 entries of negotiation, then a
 sealed N-1 remedy; and a window past 512 events, checkpointed). Authoritative gameplay history is never compacted or
@@ -208,10 +220,23 @@ key (never the selected Keplr wallet) only after a confirmation naming the defau
   aside votes found stale).
 - **Still applied beyond the brief's letter (owner may revise):** the proposer's own rescission is charged the
   answerer's run time (so propose-and-rescind cannot stop the proposer's clock).
-- **Transport residual:** with no offer count, offer churn can still grow a game's log toward the LIVE-2 cap (10,000)
-  at the frequency limit -- in Live the proposer's own clock is charged for propose-and-rescind and the two-decline
-  rule bounds rejections; in Async a churning seat can add about 720 entries an hour. A table at the cap is frozen
-  (timers stop), as before this lane. Raising or redesigning the general log cap is outside this correction.
+- **OWNER DECISION -- a timed table at the LIVE-2 log cap.** With no offer count, offer churn (propose-and-rescind on a
+  seat's own clock) can still grow a game's log toward the general 10,000-entry cap, at the transport rate only: about
+  60 entries an hour sustained. In Live the churner's own 20:00 is charged for it (unreachable in practice); in Timed
+  Async it takes about 130 hours of the churner's own obligations from a typical 2,000 entries -- several turns at
+  12 h - 48 h paces, fewer at 3 d / 7 d -- and No-deadline has no time bound. A table at the cap is FROZEN (every move
+  refused, timers stopped; votes, annulment and a sealed remedy carry on), as before this lane, so a timed money table
+  could then end only by unanimous or exceptional-review annulment. What a frozen timed money table's outcome should be
+  (or a larger, segmented log) is the owner's to decide; this correction does not alter the cap.
+- **OWNER DECISION -- accepted offers refresh the proposer.** Under the per-required-action rule an ACCEPTED offer is
+  progress (a fresh 20:00 / pace for the next decision). Two colluding players can therefore extend one seat's turn
+  indefinitely by trading a private back and forth (each acceptance refreshes the proposer), now that no offer count
+  bounds it -- at the transport rate only. Resuming the parked remainder after an accepted offer that leaves the
+  proposer owing the same decision would close it, but changes the settled refresh rule: owner's call.
+- A truncated evidence document (more than 512 facts in one obligation, e.g. hours of rebuffed resume requests during a
+  pause) folds to its attested hash but its earliest facts are only in the best-effort archive; a lost clock record of
+  a dealt money table starts a new clock (the game is then system-paused; its escrow's own remedy intents and chain
+  state still stand); an Async confederate answerer can sit up to its pace per offer (no decline limit by the ruling).
 - Live outages and stalls under about 60 s are charged (the continuity limit); host undo on FREE tables can hand the
   host a fresh clock (money tables have `host_undo: "none"`); a confederate Async answerer can sit up to its pace per
   offer; a recovered gap may misread an offer and its answer that both fall inside it (conservative: no fresh time); a

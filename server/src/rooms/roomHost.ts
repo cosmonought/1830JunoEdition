@@ -347,6 +347,7 @@ export function createRoomHost(deps: RoomHostDeps) {
   const submitsSeat = new KeyedBuckets(rooms.submitsPerSeat, now, keys);
   const submitsGame = new KeyedBuckets(rooms.submitsPerGame, now, keys);
   const offersSeat = new KeyedBuckets(rooms.offersPerSeat, now, keys);
+  const offersSeatSustained = new KeyedBuckets(rooms.offersPerSeatSustained, now, keys);
   const chatSeat = new KeyedBuckets(rooms.chatPerSeat, now, keys);
   const rotations = new KeyedBuckets(rooms.codeRotationsPerGame, now, keys);
   const denied: Record<string, number> = {};
@@ -2103,12 +2104,20 @@ export function createRoomHost(deps: RoomHostDeps) {
     return 0;
   }
 
-  /** Phase 3 final clocks (owner-policy correction): the per-seat offer FREQUENCY budget -- `0` granted, else the
-   *  wait. Transport only: it never says an offer is illegal, and no count of offers per round exists. */
+  /** Phase 3 final clocks (owner-policy correction): the per-seat offer FREQUENCY budget -- `0` when an offer may be
+   *  tried now, else the wait. Transport only: it never says an offer is illegal, and no count of offers per round
+   *  exists. Asking spends nothing; an offer that LANDED spends one token of each bucket (`offerSpent`). */
   function offerBudget(gameId: string, playerId: string): number {
-    const wait = offersSeat.take(`${gameId}\u0000${playerId}`);
+    const key = `${gameId}\u0000${playerId}`;
+    const wait = Math.max(offersSeat.peek(key), offersSeatSustained.peek(key));
     if (wait > 0) deny("offers-seat");
     return wait;
+  }
+
+  function offerSpent(gameId: string, playerId: string): void {
+    const key = `${gameId}\u0000${playerId}`;
+    offersSeat.take(key);
+    offersSeatSustained.take(key);
   }
 
   function hasSubscription(socket: WebSocket): boolean {
@@ -2302,7 +2311,7 @@ export function createRoomHost(deps: RoomHostDeps) {
     publishStatus();
     for (const gameId of [...chats.keys()]) if (!viewSubs.has(gameId)) chats.delete(gameId);
     for (const gameId of [...presence.keys()]) if (!viewSubs.has(gameId)) presence.delete(gameId);
-    for (const buckets of [createsPrincipal, createsGlobal, joinFailPrincipal, joinFailGlobal, membership, clockOps, submitsSeat, submitsGame, offersSeat, chatSeat, rotations]) buckets.prune();
+    for (const buckets of [createsPrincipal, createsGlobal, joinFailPrincipal, joinFailGlobal, membership, clockOps, submitsSeat, submitsGame, offersSeat, offersSeatSustained, chatSeat, rotations]) buckets.prune();
     createsIp.prune();
     joinFailIp.prune();
     const cutoff = now();
@@ -2413,6 +2422,7 @@ export function createRoomHost(deps: RoomHostDeps) {
     seatActor,
     submitBudget,
     offerBudget,
+    offerSpent,
     afterGameplay,
     syncRecord,
     onRecordPublished,

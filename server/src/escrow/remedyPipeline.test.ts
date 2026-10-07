@@ -409,6 +409,8 @@ function moneyTable(world: World, chainGameId: string, signer = deterministicTes
     moneyStartedAtSecs: async () => gameOf(world, chainGameId).started_at,
   });
   let clock = make("auth-1");
+  /* As `clockWiring.ts` wires it: the escrow's changes reach the CURRENT clock (a remedy intent's end included). */
+  world.service.onChange((gameId) => clock.moneyChanged(gameId));
   const settle = async () => {
     for (let i = 0; i < 6; i += 1) await new Promise((resolve) => setImmediate(resolve));
   };
@@ -539,13 +541,10 @@ describe("FP4 end to end: the table clock's decision reaches the chain, and only
     const [first] = await remedyIntents(world);
     /* The outage: nothing runs for two hours (the attestation's one-hour bearer life passes, unrelayed). */
     advanceTo(world, world.chain.time + 2 * 3_600);
-    /* The restart: a new authority, the same store, log and chain. */
+    /* The restart: a new authority, the same store, log and chain. NOBODY opens the table: the relayer finds the
+       expired attestation, the escrow tells the clock, and the clock loads the table and carries the remedy on. */
     table.restart("auth-2");
     table.clock.startSweep();
-    await table.serial(() => table.clock.op(table.game, table.tx, { type: "clock-ack", seat: ALICE }).then(() => undefined));
-    const adopted = table.record()!;
-    assert.deepEqual([adopted.authority, adopted.system, adopted.phase], ["auth-2", null, "ended"], "no system pause, nothing to resume");
-    assert.equal(adopted.remedy?.evidence_hash, remedy.evidence_hash);
     for (let round = 0; round < 24 && (await table.port.progress(GAME_A, remedy)) !== "confirmed"; round += 1) {
       await world.relayer.pass();
       world.chain.produceBlock();
@@ -553,6 +552,8 @@ describe("FP4 end to end: the table clock's decision reaches the chain, and only
       await table.advance(CLOCK_REMEDY_SWEEP_MS);
     }
     assert.equal(await table.port.progress(GAME_A, remedy), "confirmed");
+    const adopted = table.record()!;
+    assert.deepEqual([adopted.authority, adopted.system, adopted.phase], ["auth-2", null, "ended"], "no system pause, nothing to resume, no player asked");
     const all = await remedyIntents(world);
     assert.equal(all.length, 2, "the expired attestation, and ONE re-attestation");
     const second = all.find((intent) => intent.intent_id !== first.intent_id)!;

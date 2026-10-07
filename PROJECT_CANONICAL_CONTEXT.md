@@ -413,7 +413,9 @@ nor funded without it -> one durable intent -> the chain, on the clock lane's wo
 2.1 deployed; the canonical 2.1 checksum certified; a KMS remedy signer deployed; mainnet ready. The owner's policy
 correction of 2026-10-06 is applied (design record §2, §3, §8). **Owner decision required:** a sealed N-1 remedy whose seat
 approvals can no longer land on escrow 2.1.0 (a horizon passed, or a key rotated) is held unchanged -- the protocol has no
-recovery for it without a new vote or another outcome (design record §3, §8).
+recovery for it without a new vote or another outcome (design record §3, §8). Also for the owner (design record §8): what a
+timed money table frozen at the general 10,000-entry log cap should become, and whether an accepted offer should still
+refresh its proposer (colluding trades can otherwise extend a turn, at the transport rate).
 
 **LIVE-4 status (2026-09-29): CLOSED.** Integrated at `6da8a1f` (corpus-gate certified), tooled / documented by L4-6
 (`89a4b5b`) and certified by L4-7 (`f1736bf` on it, plus a documentation-only evidence commit). **LIVE-5 is in progress: L5-1 … L5-6 are done and integrated (`e1f1280`); L5-7 (the AWS runtime convergence: the substrate wired into `GS_STORAGE=aws`) is done on its feature branch `live5/l5-7-aws-runtime`, and L5-8 (the AWS infrastructure and deployment: `infra/aws/`, the bootstrap and verifier; nothing deployed) on `live5/l5-8-aws-infrastructure` on top of it, owner gates pending. LIVE-6 L6-1 (non-primary serving and routing) is done on its feature branch `live6/l6-1-nonprimary-routing` (from the L5-7 head), its owner gate pending; LIVE-6 L6-3 (the AWS operator tooling) is done on its own feature branch `live6/l6-3-dynamodb-operator-tooling` from L5-7, its owner gate pending; L6-2 next.**

@@ -220,7 +220,7 @@ export function presentClock(input: ClockPresentationInput): ClockPresentation {
   if (clock.state === "ended") {
     const kind = clock.ended?.kind;
     const lines = [endedSentence(kind, clock.money)];
-    const unlandable = clock.money && clock.remedy !== null && Array.isArray(clock.remedy.stale) && clock.remedy.stale.length > 0;
+    const unlandable = clock.money && clock.remedy !== null && clock.remedy.status === "refused" && Array.isArray(clock.remedy.stale) && clock.remedy.stale.length > 0;
     /* An ended game has nothing to resume: no system pause and no vote is shown for it (the owner's ruling) -- its sealed
        money outcome is carried on by the server as it stands. */
     if (clock.remedy !== null && clock.money) lines.push(unlandable ? REMEDY_UNLANDABLE_DETAIL : remedyStatusSentence(clock.remedy.status));

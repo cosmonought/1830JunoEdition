@@ -951,8 +951,9 @@ export function createGameServer(options: GameServerOptions): {
     /* Phase 3 final clocks (owner-policy correction): the history's length never changes which offers are legal and no
        round counts offers. Offer CHURN -- the one optional message a seat can repeat at will, and the one that could
        grow a timed table's log toward the cap above -- is bounded by FREQUENCY only, as transport: the ordinary
-       `rate-limited` answer with its wait, after which the same offer is taken. */
-    if (host.clock !== null && classifyMessage(frame.msg).cls === "propose") {
+       `rate-limited` answer with its wait, after which the same offer is taken. Only an offer that lands spends it. */
+    const offering = host.clock !== null && classifyMessage(frame.msg).cls === "propose";
+    if (offering) {
       const offerWait = host.offerBudget(attached.room, actor);
       if (offerWait > 0) {
         ingress.rateLimited += 1;
@@ -1099,6 +1100,8 @@ export function createGameServer(options: GameServerOptions): {
     if (settled.kind !== "committed" || result.kind !== "applied") return;
     /* LIVE-2A: a revert that landed spends its budget. */
     revertBudget?.record();
+    /* An offer that landed spends its frequency budget. */
+    if (offering) host.offerSpent(attached.room, actor);
   };
 
   /** What a settled batch owes its submitter and the room. */

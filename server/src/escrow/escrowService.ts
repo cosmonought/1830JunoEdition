@@ -2142,8 +2142,8 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
           const passes: readonly FinancialHoldCode[] = ["chain-inconsistent", "binding-mismatch", "continuation-incompatible"];
           const code: FinancialHoldCode = passes.includes(intent.hold?.code as FinancialHoldCode) ? (intent.hold?.code as FinancialHoldCode) : "chain-intent-held";
           /* A held checkpoint is not a held game (a newer one may land); FP4: nor is a held remedy refused for good (an
-             approver rotated its key, the attempts failed) -- a later remedy (the neutral TimeoutAnnul) may still land.
-             A contradiction always is. */
+             approver rotated its key, the attempts failed) -- the clock holds the SAME sealed decision (attested again
+             while it can land, else kept for an owner decision; never converted). A contradiction always is a held game. */
           if ((intent.op.kind !== "checkpoint" && intent.op.kind !== "remedy") || code !== "chain-intent-held") await hold(intent.game_id, code, `${intent.op.kind}: ${intent.hold?.detail ?? ""}`);
           return;
         }
@@ -2152,8 +2152,11 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
           await apply(intent.game_id, () => ({ kind: "checkpoint-confirmed", at: deps.now(), seq: op.seq, log_len: op.log_len }));
           return;
         }
-        /* Settle / finalize (confirmed or superseded): read what the chain did. */
+        /* Settle / finalize / remedy (confirmed or superseded): read what the chain did. */
         await observeChain(intent.game_id);
+        /* FP4: the table clock hears of its remedy's attempt ending (an expired attestation mooted, say), so the SAME
+           sealed decision is carried on at once -- even for a table nobody has open. */
+        if (intent.op.kind === "remedy") notify(intent.game_id);
       });
     },
 

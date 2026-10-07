@@ -31,7 +31,7 @@ import type { RoomClockView } from "../../../../frontend/src/utils/clockProtocol
 import { CLOCK_REFUSAL } from "../../../../frontend/src/utils/clockProtocol";
 import { createFileHoldStore } from "../holdStore";
 import { createFileRecordStore } from "../recordStore";
-import { ALICE, BOB, BUY, CAROL, Client, quietConsole, sleep, startServer, stopServer, until, type Frame } from "../testSupport";
+import { ALICE, BOB, BUY, CAROL, Client, PASS, quietConsole, sleep, startServer, stopServer, until, type Frame } from "../testSupport";
 import { fakeTime, type FakeTime } from "./clockTestSupport";
 import { createFileClockStore } from "./clockStore";
 import { LIVE_ACTION_MS, LIVE_CURE_MS } from "./clockRecord";
@@ -506,28 +506,122 @@ describe("Timed Async, No-deadline and annulment through the server", () => {
    ================================================================== */
 
 describe("Offers through the server: no game-rule cap, no history bound; frequency is transport", () => {
-  test("past the 5,000-entry alarm (here: 1) an offer still reaches the game; a pathological burst answers rate-limited WITH its wait (never a game rule), and the same offer is taken once it passes", () =>
-    withDir("offer-rate", async (dir) => {
-      const time = fakeTime(T0);
-      const { server, port } = await boot(dir, time, "auth-1", { limits: { logEntryAlarm: 1, rooms: { offersPerSeat: { capacity: 2, refillPerSecond: 20 } } } });
-      try {
-        const { gameId } = await openTable(port, THREE);
-        const offer = { ProposeTrainPurchase: { game_id: 0, seller_protocol_id: 2, seller_ticker: "x", seller_president: null, buyer_protocol_id: 1, buyer_ticker: "x", model_type: "2", price: "50" } };
-        const answers: Frame[] = [];
-        for (let n = 1; n <= 3; n += 1) answers.push(await submit(port, ALICE, gameId, offer, `offer-${n}`));
-        for (const [n, answer] of answers.slice(0, 2).entries()) {
-          assert.notEqual(answer.code, "rate-limited", `offer ${n + 1} reaches the game: ${JSON.stringify(answer)}`);
-          assert.notEqual(answer.code, "log-nearly-full", "the history's length is never a rule");
+  const TWO = [ALICE, BOB];
+
+  /** Plays a dealt two-seat table to its SECOND Stock Round (private trades are allowed from there): the waterfall
+   *  auction bought out, the B&O par set, the first Stock Round passed (its empty Operating Rounds pass at once).
+   *  Returns the seat on turn there and a private it owns. */
+  async function toSecondStockRound(port: number, gameId: string, ids: Record<string, string>, _watcher: Client): Promise<{ seller: string; buyer: string; privateId: number }> {
+    let n = 0;
+    /* Whoever may make this move makes it (the other seat's attempt is refused and changes nothing). */
+    const either = async (msg: (claim: string) => object, label: string): Promise<string | null> => {
+      for (const claim of TWO) {
+        const answer = await submit(port, claim, gameId, msg(claim), `${label}-${(n += 1)}`);
+        if (answer.kind === "applied") return claim;
+      }
+      return null;
+    };
+    for (let bought = 0; bought < 6; ) {
+      if ((await either(() => BUY, "buy")) !== null) {
+        bought += 1;
+        continue;
+      }
+      assert.notEqual(await either((claim) => ({ SetBoPar: { player: ids[claim], par_value: "100" } }), "bo-par"), null, "the auction waits on the B&O par");
+    }
+    await either((claim) => ({ SetBoPar: { player: ids[claim], par_value: "100" } }), "bo-par-late");
+    await play(port, ALICE, gameId, { OpenStockRound: {} }, "open-sr");
+    for (let pass = 0; pass < 2; pass += 1) assert.notEqual(await either(() => PASS, "sr1-pass"), null, "the first Stock Round passes");
+    /* A private the seller (the seat on turn) owns: the engine refuses every other offer (and a refused offer spends
+       nothing). */
+    for (const seller of TWO) {
+      const buyer = seller === ALICE ? BOB : ALICE;
+      for (let privateId = 1; privateId <= 6; privateId += 1) {
+        const tried = await submit(port, seller, gameId, { ProposePrivateTrade: { game_id: 0, private_id: privateId, seller: ids[seller], buyer: ids[buyer], price: 10 } }, `probe-${(n += 1)}`);
+        if (tried.kind === "applied") {
+          await play(port, seller, gameId, { RescindPrivateTrade: { game_id: 0, private_id: privateId } }, `probe-rescind-${n}`);
+          return { seller, buyer, privateId };
         }
-        assert.equal(answers[2].code, "rate-limited", JSON.stringify(answers[2]));
-        assert.ok(typeof answers[2].retryAfterMs === "number" && (answers[2].retryAfterMs as number) > 0, "a transport answer: it says when to try again");
-        assert.match(String(answers[2].reason), /too quickly/);
-        await sleep((answers[2].retryAfterMs as number) + 60);
-        const later = await submit(port, ALICE, gameId, offer, "offer-4");
-        assert.notEqual(later.code, "rate-limited", `the same offer is taken once the burst passed: ${JSON.stringify(later)}`);
-        /* Another seat has its own budget; an ordinary move is never an offer. */
-        assert.notEqual((await submit(port, BOB, gameId, offer, "offer-bob")).code, "rate-limited");
-        await play(port, ALICE, gameId, BUY, "a-buys");
+      }
+    }
+    throw new Error("no seat could offer a private");
+  }
+
+  const offer = (privateId: number, sellerId: string, buyerId: string) => ({ ProposePrivateTrade: { game_id: 0, private_id: privateId, seller: sellerId, buyer: buyerId, price: 10 } });
+
+  test("NO 16 CAP: well over 16 legal offers in one Stock Round are each taken through the real server (Live table); none is refused by any game rule", () =>
+    withDir("offers-nocap", async (dir) => {
+      const time = fakeTime(T0);
+      const { server, port } = await boot(dir, time, "auth-1", { limits: { rooms: { offersPerSeat: { capacity: 1e6, refillPerSecond: 1e6 }, offersPerSeatSustained: { capacity: 1e6, refillPerSecond: 1e6 } } } });
+      try {
+        const { gameId, ids } = await openTable(port, TWO);
+        const watcher = await tab(port, ALICE, gameId);
+        const { seller, buyer, privateId } = await toSecondStockRound(port, gameId, ids, watcher);
+        for (let n = 1; n <= 20; n += 1) {
+          await play(port, seller, gameId, offer(privateId, ids[seller], ids[buyer]), `offer-${n}`);
+          const view = await clockWhere(watcher, (c) => c.state === "trade", `offer ${n} standing`);
+          assert.equal(view.trade?.recipient, ids[buyer], "the Live 10:00 response timer runs for the answerer");
+          await play(port, seller, gameId, { RescindPrivateTrade: { game_id: 0, private_id: privateId } }, `rescind-${n}`);
+        }
+        await watcher.close();
+      } finally {
+        await stopServer(server);
+      }
+    }));
+
+  test("frequency is transport: past a burst of landed offers the next answers rate-limited WITH its wait (never a game rule) and is taken once it passes; a refused proposal spends nothing; the history's length is never a rule", () =>
+    withDir("offers-rate", async (dir) => {
+      const time = fakeTime(T0);
+      const { server, port } = await boot(dir, time, "auth-1", { limits: { logEntryAlarm: 1, rooms: { offersPerSeat: { capacity: 3, refillPerSecond: 20 }, offersPerSeatSustained: { capacity: 1e6, refillPerSecond: 1e6 } } } });
+      try {
+        const { gameId, ids } = await openTable(port, TWO);
+        const watcher = await tab(port, ALICE, gameId);
+        const { seller, buyer, privateId } = await toSecondStockRound(port, gameId, ids, watcher);
+        /* The probe's refused offers spent nothing; its one landed offer spent one token: two remain. */
+        for (let n = 1; n <= 2; n += 1) {
+          await play(port, seller, gameId, offer(privateId, ids[seller], ids[buyer]), `landed-${n}`);
+          await play(port, seller, gameId, { RescindPrivateTrade: { game_id: 0, private_id: privateId } }, `landed-rescind-${n}`);
+        }
+        const limited = await submit(port, seller, gameId, offer(privateId, ids[seller], ids[buyer]), "limited");
+        assert.equal(limited.code, "rate-limited", JSON.stringify(limited));
+        assert.ok(typeof limited.retryAfterMs === "number" && (limited.retryAfterMs as number) > 0, "a transport answer: it says when to try again");
+        assert.match(String(limited.reason), /too quickly/);
+        assert.notEqual(limited.code, "log-nearly-full", "the history (past the alarm here) is never a rule");
+        await sleep((limited.retryAfterMs as number) + 60);
+        await play(port, seller, gameId, offer(privateId, ids[seller], ids[buyer]), "after-wait");
+        await watcher.close();
+      } finally {
+        await stopServer(server);
+      }
+    }));
+
+  test("ASYNC: repeated rejected offers stay available (no decline limit, no 10:00 response timer); LIVE: the third offer after two declines that round is refused, the reverse direction is open", () =>
+    withDir("offers-declines", async (dir) => {
+      const time = fakeTime(T0);
+      const { server, port } = await boot(dir, time, "auth-1");
+      try {
+        const paced = await openTable(port, TWO, { variants: { mode: "async" }, before: async (id) => opOk(port, ALICE, id, { type: "clock-policy", deadline: "async-pace", paceSecs: 86_400 }) });
+        const watcher = await tab(port, ALICE, paced.gameId);
+        const a = await toSecondStockRound(port, paced.gameId, paced.ids, watcher);
+        for (let n = 1; n <= 4; n += 1) {
+          await play(port, a.seller, paced.gameId, offer(a.privateId, paced.ids[a.seller], paced.ids[a.buyer]), `async-offer-${n}`);
+          const view = await clockWhere(watcher, (c) => c.responsible?.seat === paced.ids[a.buyer], `async offer ${n} owed`);
+          assert.deepEqual([view.trade, view.action?.remainingMs], [null, 86_400_000], "an ordinary pace obligation, no response timer");
+          await play(port, a.buyer, paced.gameId, { AnswerPrivateTrade: { game_id: 0, private_id: a.privateId, accept: false } }, `async-reject-${n}`);
+        }
+        assert.deepEqual((await clockWhere(watcher, () => true, "the Async clock")).declines, [], "no decline count in Async");
+        await watcher.close();
+
+        const live = await openTable(port, TWO);
+        const liveWatcher = await tab(port, ALICE, live.gameId);
+        const b = await toSecondStockRound(port, live.gameId, live.ids, liveWatcher);
+        for (let n = 1; n <= 2; n += 1) {
+          await play(port, b.seller, live.gameId, offer(b.privateId, live.ids[b.seller], live.ids[b.buyer]), `live-offer-${n}`);
+          await play(port, b.buyer, live.gameId, { AnswerPrivateTrade: { game_id: 0, private_id: b.privateId, accept: false } }, `live-reject-${n}`);
+        }
+        const third = await submit(port, b.seller, live.gameId, offer(b.privateId, live.ids[b.seller], live.ids[b.buyer]), "live-offer-3");
+        assert.equal(third.code, CLOCK_REFUSAL.declines, JSON.stringify(third));
+        assert.match(String(third.reason), /has declined two offers from you/);
+        await liveWatcher.close();
       } finally {
         await stopServer(server);
       }

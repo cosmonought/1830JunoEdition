@@ -675,8 +675,10 @@ export function createClockController(deps: ClockControllerDeps) {
       return;
     }
     /* A running clock keeps its table resident (Live and Timed Async): its heartbeat keeps the continuity proof fresh,
-       so a later restart credits only the real outage, and its due transitions fire on time. */
-    pinFor(entry, timed);
+       so a later restart credits only the real outage, and its due transitions fire on time. So does a SEALED remedy
+       not yet final (or superseded) on chain: the sweep keeps carrying it on -- re-attested if its attestation expires,
+       retried after a refusal -- without anyone opening the table (the owner's ruling: no player is needed). */
+    pinFor(entry, timed || remedyUnfinished(record, entry));
     if (record === null || !timed) return;
     const due = nextDue(record);
     if (due !== null) {
@@ -763,6 +765,10 @@ export function createClockController(deps: ClockControllerDeps) {
       () => inFlight.delete(task),
     );
     return task;
+  }
+
+  function remedyUnfinished(record: GameClockRecord | null, entry: Entry): boolean {
+    return record !== null && !entry.lost && record.remedy !== null && record.remedy.status !== "confirmed" && record.remedy.status !== "superseded";
   }
 
   function pinFor(entry: Entry, on: boolean): void {
@@ -1067,16 +1073,31 @@ export function createClockController(deps: ClockControllerDeps) {
     if (entry === undefined) return Promise.resolve();
     if (entry.pipeline !== null) return entry.pipeline;
     const run = (async () => {
-      const record = entry.record;
-      const remedy = record?.remedy ?? null;
-      if (closed || record === null || remedy === null || entry.lost) return;
-      if (remedy.status === "confirmed" || remedy.status === "superseded") return;
-      if (record.authority !== deps.authority || isHeld(gameId)) return;
+      const first = entry.record;
+      if (closed || first === null || first.remedy === null || entry.lost) return;
+      if (first.remedy.status === "confirmed" || first.remedy.status === "superseded") return;
+      if (isHeld(gameId)) return;
       /* A refused (or fenced) remedy is asked again only after its backoff, whoever asks. */
       if (now() < entry.remedyRetryAt) return;
-      if (entry.sealedRev !== null && (entry.stored === null || entry.stored < entry.sealedRev)) {
+      /* FENCE AND OWNERSHIP, revalidated against the STORE at every attempt (a restart, a takeover, a retry): the record
+         this process decided is durable under ITS authority, and no other authority wrote since -- a process another one
+         took over stops here, signing and writing nothing. */
+      if (entry.stale && !(await reread(entry))) return;
+      if (entry.lost) return;
+      /* Only a table whose continuity this process judged (its load, in the table's task) is carried on here; one only
+         read for a view is loaded first. */
+      if (!entry.checked) {
+        kickLoad(gameId);
+        return;
+      }
+      if (entry.record !== null && (entry.stored === null || entry.stored < entry.record.revision || entry.record.authority !== deps.authority)) {
         if (!(await flush(entry))) return;
       }
+      if (!(await reread(entry)) || entry.lost) return;
+      const record = entry.record as GameClockRecord | null;
+      const remedy = record?.remedy ?? null;
+      if (record === null || remedy === null || record.authority !== deps.authority || entry.stored !== record.revision) return;
+      if (remedy.status === "confirmed" || remedy.status === "superseded") return;
       const port = deps.remedy?.() ?? null;
       counters.remedyAttempts += 1;
       let attempt: Awaited<ReturnType<RemedyPort["attest"]>>;
@@ -1107,6 +1128,8 @@ export function createClockController(deps: ClockControllerDeps) {
           : remedyProgress(latest, attempt.status, attempt.detail, now(), attempt.attested);
       applyStep(entry, step, gameId);
       await flush(entry);
+      /* A remedy now final (or superseded) on chain no longer keeps its table resident. */
+      arm(entry);
       deps.onChange(gameId);
     })()
       .catch((error) => deps.warn(`  clock: ${gameId}: the remedy pipeline failed -- ${describe(error)}`))
@@ -1130,13 +1153,13 @@ export function createClockController(deps: ClockControllerDeps) {
   async function remedyGate(gameId: string, intent: ChainIntentRecord): Promise<{ readonly kind: "ok" } | { readonly kind: "wait"; readonly why: string }> {
     if (intent.op.kind !== "remedy") return { kind: "wait", why: "not a remedy intent" };
     const entry = entries.get(gameId);
-    let record = entry?.record ?? null;
-    if (record === null || entry?.stale === true) {
-      try {
-        record = await deps.store.load(gameId);
-      } catch (error) {
-        return { kind: "wait", why: `the table's clock cannot be read (${describe(error)})` };
-      }
+    /* Judged on the DURABLE record, read now (never a cached one): what is relayed is only what is stored, under this
+       process's authority. */
+    let record: GameClockRecord | null;
+    try {
+      record = await deps.store.load(gameId);
+    } catch (error) {
+      return { kind: "wait", why: `the table's clock cannot be read (${describe(error)})` };
     }
     if (record === null || record.remedy === null) return { kind: "wait", why: "the table's clock has sealed no remedy" };
     const r = record.remedy;
@@ -1148,9 +1171,9 @@ export function createClockController(deps: ClockControllerDeps) {
     /* A sealed remedy belongs to an ENDED game: a system pause (of a game still playable) never gates it. */
     if (record.phase !== "ended") return { kind: "wait", why: "the table's game has not ended: no remedy is relayed" };
     if (record.authority !== deps.authority) {
-      /* After a restart the table may not be open here yet: open it, so its continuity is judged (and the remedy carried
-         on, or system-paused) without waiting for a player. */
-      if (entry === undefined || entry.record === null) kickLoad(gameId);
+      /* After a restart the table may not be open here yet (or its adoption not yet stored): open it, so the sealed
+         remedy is carried on without waiting for a player. */
+      if (entry === undefined || entry.record === null || !entry.lost) kickLoad(gameId);
       return { kind: "wait", why: "this server is not the table clock's current authority" };
     }
     if (entry?.lost === true) return { kind: "wait", why: "this server no longer decides the table's clock" };
@@ -1190,6 +1213,7 @@ export function createClockController(deps: ClockControllerDeps) {
                   const latest = entry.record;
                   if (latest !== null) applyStep(entry, remedyProgress(latest, "confirmed", null, now()), gameId);
                   await flush(entry);
+                  arm(entry);
                   deps.onChange(gameId);
                   return;
                 }
@@ -1320,7 +1344,12 @@ export function createClockController(deps: ClockControllerDeps) {
     },
     /** A money table's financial record changed: re-check its escrow's end in the table's task. */
     moneyChanged(gameId: string): void {
-      if (!entries.has(gameId)) return;
+      /* A money change (a remedy intent resolved -- an expired attestation mooted, say) for a table not open here: open
+         it, so a sealed remedy is carried on (rate-limited per table). */
+      if (!entries.has(gameId)) {
+        kickLoad(gameId);
+        return;
+      }
       void track(deps.runOn(gameId, "clock-money", async (game, tx) => {
         const entry = entryOf(gameId);
         const record = await ensure(game, tx, true);

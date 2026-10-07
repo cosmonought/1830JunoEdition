@@ -467,6 +467,13 @@ export function parseClockDocument(raw: string, gameId: string): GameClockRecord
     if (parsed.version > CLOCK_VERSION) throw new ClockUnreadableError(`the clock of ${gameId} was written by a newer build (version ${parsed.version})`, gameId, "newer");
     if (parsed.version < CLOCK_VERSION) throw new ClockUnreadableError(`the clock of ${gameId} is the provisional version ${parsed.version} (never read by this build)`, gameId, "older");
   }
+  /* A record written before the owner-policy correction (2026-10-06) carried the offer budget (`offers`): it never
+     entered the evidence or any decision that remains, so it is dropped on read (the record is otherwise the same v2). */
+  if (isObject(parsed) && Object.prototype.hasOwnProperty.call(parsed, "offers")) {
+    const { offers: _legacy, ...rest } = parsed as Record<string, unknown>;
+    void _legacy;
+    parsed = rest;
+  }
   if (!isGameClockRecord(parsed) || parsed.game_id !== gameId) throw new ClockUnreadableError(`the clock of ${gameId} is not a clock of that game`, gameId);
   return parsed;
 }

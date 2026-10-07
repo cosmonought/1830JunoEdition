@@ -69,6 +69,7 @@ import { isMaintenanceHold, type CommittedView } from "./rooms/committedView";
 import { createMemoryHoldStore, HoldUnreadableError, makeHold, type HoldStore } from "./rooms/holdStore";
 import type { RoomHostClockConfig } from "./rooms/roomHost";
 import type { ClockController } from "./rooms/clock/clockController";
+import { classifyMessage } from "./rooms/clock/clockModel";
 import { handleReadiness, type ReadinessAnswer } from "./ingress/readiness";
 import { handleEdgeDiagnostic } from "./ingress/edgeDiagnostic";
 import { admissibleAfterSeal, GAME_OVER_SENTENCE, NO_MONEY_SETTLEMENT, RECONCILING_SENTENCE, UNAVAILABLE_PLAYER_SENTENCE, type SettlementLifecycle } from "./rooms/lifecycle";
@@ -943,6 +944,12 @@ export function createGameServer(options: GameServerOptions): {
     if (length >= limits.logEntryCap) {
       ingress.logFull += 1;
       answer({ kind: "refused", code: "log-full", reason: LOG_FULL_REASON, build: options.build });
+      return;
+    }
+    /* Phase 3 final clocks: past the alarm, no new OFFER is taken (offers are optional; the room left is kept for the
+       moves the game needs, so offer churn can never fill a log and freeze a timed table). */
+    if (length >= limits.logEntryAlarm && host.clock !== null && classifyMessage(frame.msg).cls === "propose") {
+      answer({ kind: "refused", code: "log-nearly-full", reason: "This game's history is very long, so no new offers are taken. Make your move instead.", build: options.build });
       return;
     }
     let revertBudget: HourlyBudget | null = null;

@@ -49,8 +49,11 @@ export const LIVE_CURABLE_OVERDUES = 2;
 export const CLOCK_SNAPSHOT_LIMIT = 48;
 /** The strike ledger keeps the newest this many overdue / cure events (a Live game has at most 5 per seat). */
 export const CLOCK_LEDGER_LIMIT = 64;
-/** Proposals one seat may make under one obligation (an offer budget). */
-export const CLOCK_OFFERS_PER_OBLIGATION = 12;
+/** Proposals one seat may make in one round (an Operating Round, or the stretch outside ORs): an offer budget that
+ *  bounds offer spam and the log it fills (an undo never refunds it). */
+export const CLOCK_OFFERS_PER_ROUND = 16;
+/** The offer budget's key outside an Operating Round. */
+export const CLOCK_OFFERS_OUTSIDE_OR = "outside-or";
 /** Resume requests in one pause before they are limited to one a minute. */
 export const CLOCK_RESUME_BURST = 16;
 export const CLOCK_RESUME_SPACING_MS = 60_000;
@@ -246,7 +249,7 @@ export interface GameClockRecord {
     readonly ledger_head: string;
     readonly ledger: readonly ClockEvidenceEvent[];
   };
-  /** The proposals each seat made under the current obligation key (an offer budget: offers never stall a table). */
+  /** The proposals each seat made in the current round (`key`: the Operating Round, or `outside-or`): the offer budget. */
   readonly offers: { readonly key: string | null; readonly counts: Readonly<Record<string, number>> };
   readonly created_at: number;
   readonly updated_at: number;

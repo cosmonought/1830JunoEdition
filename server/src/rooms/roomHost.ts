@@ -420,9 +420,13 @@ export function createRoomHost(deps: RoomHostDeps) {
           /* LIVE-3C: a held, incompatible or unreconciled table takes no move -- its clock does not run either. */
           held: (gameId) => {
             const game = peekLoaded(gameId);
-            /* A full log (the ingress cap) takes no move either: the clock does not run against a table nobody can play. */
-            const full = game !== undefined && deps.clock?.logCap !== undefined && game.view.entries.length >= deps.clock.logCap;
-            return game !== undefined && (game.view.hold !== null || game.view.incompatible !== null || unreconciled.has(gameId) || full);
+            return game !== undefined && (game.view.hold !== null || game.view.incompatible !== null || unreconciled.has(gameId));
+          },
+          /* A full log (the ingress cap) takes no move again: the clock's timers stop (nobody can make the owed move);
+             votes, the annulment and a sealed remedy carry on. */
+          frozen: (gameId) => {
+            const game = peekLoaded(gameId);
+            return game !== undefined && deps.clock?.logCap !== undefined && game.view.entries.length >= deps.clock.logCap;
           },
           ...(deps.clock.remedy !== undefined ? { remedy: deps.clock.remedy } : {}),
           ...(deps.clock.moneyTerminal !== undefined ? { moneyTerminal: deps.clock.moneyTerminal } : {}),
@@ -1528,6 +1532,7 @@ export function createRoomHost(deps: RoomHostDeps) {
         let approval: { approve_until: number; signature: string } | null = null;
         let verifiedFor: ClockVerifiedFor | null = null;
         let stale: readonly string[] = [];
+        let renew = false;
         if (yes && record.money !== null) {
           if (typeof op.approveUntil !== "number" || typeof op.signature !== "string") return { ok: false, code: "bad-frame", reason: "On a money table, a YES needs your signed approval." };
           const standing = clock.recordOf(game.gameId);
@@ -1556,17 +1561,19 @@ export function createRoomHost(deps: RoomHostDeps) {
           }
           /* The other standing YES approvals, re-checked under their seats' CURRENT keys: one that no longer verifies is
              set aside (that seat is asked again) rather than completing a consensus that could not land. */
-          const others = (proposal?.votes ?? []).filter((v) => v.yes && v.seat !== seat && v.approval !== null).map((v) => ({ seat: v.seat, approveUntil: (v.approval as { approve_until: number }).approve_until, signature: (v.approval as { signature: string }).signature }));
-          const found = await port.staleApprovals(game.gameId, facts, others);
+          /* (Including this seat's own standing YES: one that no longer verifies is RENEWED by this vote.) */
+          const standingYes = (proposal?.votes ?? []).filter((v) => v.yes && v.approval !== null).map((v) => ({ seat: v.seat, approveUntil: (v.approval as { approve_until: number }).approve_until, signature: (v.approval as { signature: string }).signature }));
+          const found = await port.staleApprovals(game.gameId, facts, standingYes);
           if (found === null) return { ok: false, code: CLOCK_REFUSAL.unavailable, reason: "The escrow could not be read to check the other approvals. Try again." };
-          stale = found;
+          renew = found.includes(seat);
+          stale = found.filter((s) => s !== seat);
           approval = { approve_until: op.approveUntil, signature: op.signature };
           verifiedFor = { epoch: od.epoch, logLen: od.log_len, proposalId: proposal?.id ?? null, kind };
         }
         input =
           type === "clock-propose"
             ? { type: "clock-propose", seat, kind: op.kind as "foreclose" | "annul", approval, verifiedFor, stale }
-            : { type: "clock-vote", seat, proposalId: typeof op.proposalId === "number" ? op.proposalId : 0, yes, approval, verifiedFor, stale };
+            : { type: "clock-vote", seat, proposalId: typeof op.proposalId === "number" ? op.proposalId : 0, yes, approval, verifiedFor, stale, renew };
         break;
       }
       default:

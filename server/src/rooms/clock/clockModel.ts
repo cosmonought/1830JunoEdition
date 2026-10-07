@@ -56,7 +56,8 @@ import {
   CLOCK_EVIDENCE_WINDOW,
   CLOCK_FORMAT,
   CLOCK_LEDGER_LIMIT,
-  CLOCK_OFFERS_PER_OBLIGATION,
+  CLOCK_OFFERS_OUTSIDE_OR,
+  CLOCK_OFFERS_PER_ROUND,
   CLOCK_RESUME_BURST,
   CLOCK_RESUME_SPACING_MS,
   CLOCK_PAUSE_REQUESTS_PER_OBLIGATION,
@@ -442,9 +443,9 @@ export function foldBatch(record: GameClockRecord, batch: ClockBatch, now: numbe
     /* A NEW STANDING OFFER. */
     const proposer = after.proposer;
     const answerer = after.answerer;
-    /* The offer budget: proposals per seat under the obligation in force when it was made. */
+    /* The offer budget: proposals per seat in the round (the Operating Round, or the stretch outside ORs). */
     if (proposer !== null) {
-      const key = batch.before.decision?.key ?? null;
+      const key = batch.before.orKey ?? CLOCK_OFFERS_OUTSIDE_OR;
       const counts = d.offers.key === key ? { ...d.offers.counts } : {};
       counts[proposer] = (counts[proposer] ?? 0) + 1;
       d.offers = { key, counts: Object.fromEntries(Object.entries(counts).slice(-8)) };
@@ -503,7 +504,12 @@ export function foldBatch(record: GameClockRecord, batch: ClockBatch, now: numbe
          by the proposer is charged the time the answerer's clock actually RAN while the offer stood (never a pause or
          an outage): an offer can never be used to stop the proposer's own clock. */
       const ran = current !== null && current.key === `offer:${before.key}` && current.initial_ms !== null && current.timer !== null ? clamp(current.initial_ms - remainingAt(current.timer, at)) : 0;
-      const stood = batch.msg === "rescind" && batch.actor === parked.seat ? ran : 0;
+      /* Only a LIVE TRAIN offer freezes its proposer outright (the owner's special rule: its rejection or expiry resumes
+         the exact remainder). Every other offer -- a Live private / funding / trade offer, any Async offer -- is the
+         proposer's own negotiation: its rejection charges the proposer the time the answerer's clock actually ran, so a
+         confederate sitting on offers can never stall the table on the proposer's behalf. */
+      const charged = (batch.msg === "rescind" && batch.actor === parked.seat) || (batch.msg === "reject" && !trainLive);
+      const stood = charged ? ran : 0;
       const resumed = clamp(parked.remaining_ms - stood);
       d.obligation = obligationFor(d, D, at, batch.first, resumed, null);
       d.obligation = { ...d.obligation, initial_ms: resumed };
@@ -935,7 +941,7 @@ export function vote(
   yes: boolean,
   approval: ClockVote["approval"],
   now: number,
-  options: { readonly kind?: ClockProposalKind | null; readonly stale?: readonly string[] } = {},
+  options: { readonly kind?: ClockProposalKind | null; readonly stale?: readonly string[]; readonly renew?: boolean } = {},
 ): ClockStep | ClockRefusal {
   const od = record.overdue;
   if (record.phase !== "overdue" || od === null) return { code: "wrong-state", reason: "Nobody is overdue." };
@@ -949,7 +955,7 @@ export function vote(
   const prior = proposal.votes.find((v) => v.seat === by) ?? null;
   if (prior !== null && prior.yes === yes && (!yes || (prior.approval?.approve_until === approval?.approve_until && prior.approval?.signature === approval?.signature))) return { record, events: [], effects: [] };
   /* A standing YES is renewed only to reach meaningfully further (a minute or more): a re-vote never floods the record. */
-  if (prior !== null && prior.yes && yes && prior.approval !== null && approval !== null && approval.approve_until < prior.approval.approve_until + 60) return { record, events: [], effects: [] };
+  if (prior !== null && prior.yes && yes && prior.approval !== null && approval !== null && approval.approve_until < prior.approval.approve_until + 60 && options.renew !== true) return { record, events: [], effects: [] };
   const x = new Draft(record, now);
   if (!yes) {
     x.emit("vote", now, voteFields(od.epoch, proposal.id, by, false, null));
@@ -1087,7 +1093,7 @@ function applyIfUnanimous(x: Draft, now: number): void {
  *  the defaulting seat can withhold its resume; the contract's exceptional review is the backstop.) Decisions are
  *  never made ACROSS a break: the timers of a running game are frozen as of the last proven instant, and a stall inside
  *  one process is a break too (`clockController.ts`, `CLOCK_CONTINUITY_GAP_*`). */
-export function continuityBreak(record: GameClockRecord, input: { readonly now: number; readonly preservedAt: number; readonly reason: string; readonly authority: string }): ClockStep {
+export function continuityBreak(record: GameClockRecord, input: { readonly now: number; readonly preservedAt: number; readonly reason: string; readonly authority: string; readonly resumeFrom?: number }): ClockStep {
   const x = new Draft(record, input.now);
   const d = x.d;
   const preserved = Math.min(Math.max(input.preservedAt, 0), input.now);
@@ -1119,12 +1125,14 @@ export function continuityBreak(record: GameClockRecord, input: { readonly now: 
     return x.done();
   }
   if (d.policy.class === "async-pace" && d.phase !== "ended") {
-    /* The outage is never charged: every timer as of `preserved`, running on from now. */
+    /* The outage is never charged: every timer as of `preserved`, running on from when this authority began serving
+       (`resumeFrom`: a table nobody opened after the restart was still served -- that time is real), or from now. */
     const ob = d.obligation;
-    if (ob !== null && ob.timer !== null && ob.timer.since !== null) d.obligation = { ...ob, timer: { remaining_ms: remainingAt(ob.timer, preserved), since: input.now } };
+    const from = Math.min(input.now, Math.max(preserved, input.resumeFrom ?? input.now));
+    if (ob !== null && ob.timer !== null && ob.timer.since !== null) d.obligation = { ...ob, timer: { remaining_ms: remainingAt(ob.timer, preserved), since: from } };
     /* A credited outage is a fence: no undo reaches back across it (it would charge the outage). */
     d.undo_floor = Math.max(d.undo_floor, d.watermark);
-    x.emit("outage-credited", input.now, { preserved_at: preserved, credited_ms: input.now - preserved });
+    x.emit("outage-credited", input.now, { preserved_at: preserved, credited_ms: from - preserved });
     return x.done();
   }
   x.touch();
@@ -1285,6 +1293,8 @@ export interface GateInput {
   readonly trainRecipient: string | null;
   /** Names, for the owner's copy. */
   readonly nameOf: (seat: string) => string;
+  /** The board's Operating Round key (`null`: outside an OR) -- the offer budget's round. Absent: the record's own. */
+  readonly orKey?: string | null;
 }
 
 export function gate(record: GameClockRecord, input: GateInput): ClockRefusal | null {
@@ -1306,8 +1316,9 @@ export function gate(record: GameClockRecord, input: GateInput): ClockRefusal | 
     return { code: CLOCK_REFUSAL.interrupted, reason: "You're overdue: make your owed move first. An offer can't cure an overdue." };
   }
   if (input.msg === "propose") {
-    const used = record.offers.key === (record.obligation?.key ?? null) ? (record.offers.counts[input.actor] ?? 0) : 0;
-    if (used >= CLOCK_OFFERS_PER_OBLIGATION) return { code: "rate-limited", reason: `You have made ${CLOCK_OFFERS_PER_OBLIGATION} offers during this action. Make your move, or wait for the next action.` };
+    const key = input.orKey === undefined ? record.offers.key : (input.orKey ?? CLOCK_OFFERS_OUTSIDE_OR);
+    const used = record.offers.key === key ? (record.offers.counts[input.actor] ?? 0) : 0;
+    if (used >= CLOCK_OFFERS_PER_ROUND) return { code: "rate-limited", reason: `You have made ${CLOCK_OFFERS_PER_ROUND} offers this round. Offers open again next round.` };
   }
   if (record.policy.class === "live" && input.msg === "propose" && input.trainRecipient !== null && input.trainRecipient !== input.actor) {
     const count = record.declines.counts[`${input.actor}>${input.trainRecipient}`] ?? 0;

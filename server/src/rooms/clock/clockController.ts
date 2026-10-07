@@ -169,6 +169,9 @@ export interface ClockControllerDeps {
   /** Whether the table is HELD (LIVE-3C: held, incompatible or awaiting reconciliation): nobody can move, so its clock
    *  neither advances nor proves continuity, and nothing of it is relayed. */
   held?(gameId: string): boolean;
+  /** Whether the table is FROZEN: it takes no more moves for good (its log reached the ingress cap). Its timers stop
+   *  (nobody can make the owed move), but its votes, annulment and any sealed remedy carry on. */
+  frozen?(gameId: string): boolean;
 }
 
 export type ClockAnswer = { readonly ok: true; readonly data?: Record<string, unknown> } | { readonly ok: false; readonly code: string; readonly reason: string };
@@ -290,6 +293,8 @@ export function createClockController(deps: ClockControllerDeps) {
   const entries = new Map<string, Entry>();
   const counters = { loads: 0, breaks: 0, systemPauses: 0, overdues: 0, finalities: 0, tradeExpiries: 0, writes: 0, writeFailures: 0, remedyAttempts: 0, remedyRefused: 0, refusals: 0 };
   const now = () => deps.now();
+  /** When this authority began serving: a restart's outage ends here for a table nobody opened since (Async). */
+  const startedAt = deps.now();
   const name = (gameId: string, seat: string) => deps.nameOf?.(gameId, seat) ?? seat;
   let sweepHandle: unknown | null = null;
   /** Closed (the server is stopping): nothing more is written, armed or relayed by this controller. */
@@ -535,7 +540,7 @@ export function createClockController(deps: ClockControllerDeps) {
     }
     const preservedAt = Math.max(record.trusted_at, lastAt ?? 0);
     const reason = `server continuity was not proven: this table was last served by another server process (last proven at ${new Date(record.trusted_at).toISOString()})`;
-    const step = continuityBreak(record, { now: at, preservedAt, reason, authority: deps.authority });
+    const step = continuityBreak(record, { now: at, preservedAt, reason, authority: deps.authority, resumeFrom: startedAt });
     if (step.record.system !== null && record.system === null) counters.systemPauses += 1;
     deps.ops.audit("clock.continuity-break", { game_id: game.gameId, prior_authority: String(entry.record?.authority ?? "").slice(0, 80), preserved_at: preservedAt, system_pause: step.record.system !== null, deadline: record.policy.class });
     applyStep(entry, { ...step, record: step.record }, game.gameId, true);
@@ -547,7 +552,10 @@ export function createClockController(deps: ClockControllerDeps) {
   async function checkStall(entry: Entry, gameId: string): Promise<void> {
     const record = entry.record;
     if (record === null || record.authority !== deps.authority) return;
-    const running = (record.phase === "active" || record.phase === "overdue") && record.system === null && record.pause.paused_at === null && record.policy.class !== "no-deadline";
+    /* A frozen table runs no timer for good: there is no continuity to prove. */
+    if (isFrozen(gameId)) return;
+    /* (An Async overdue runs nothing: no timer, so no continuity to prove.) */
+    const running = (record.phase === "active" || (record.phase === "overdue" && record.policy.class === "live")) && record.system === null && record.pause.paused_at === null && record.policy.class !== "no-deadline";
     if (!running) return;
     const limit = record.policy.class === "live" ? CLOCK_CONTINUITY_GAP_LIVE_MS : CLOCK_CONTINUITY_GAP_ASYNC_MS;
     const at = now();
@@ -628,8 +636,16 @@ export function createClockController(deps: ClockControllerDeps) {
     if (entry.beat !== null) timers.clear(entry.beat);
     entry.beat = null;
     if (closed) return;
-    const timed = record !== null && !entry.lost && (record.phase === "active" || record.phase === "overdue") && record.system === null && record.pause.paused_at === null && record.policy.class !== "no-deadline";
-    if (timed && isHeld(entry.gameId)) {
+    /* What runs: an active obligation, or a Live overdue's cure window (an Async overdue runs nothing and is never kept
+       resident for it). */
+    const timed =
+      record !== null &&
+      !entry.lost &&
+      (record.phase === "active" || (record.phase === "overdue" && record.policy.class === "live")) &&
+      record.system === null &&
+      record.pause.paused_at === null &&
+      record.policy.class !== "no-deadline";
+    if (timed && (isHeld(entry.gameId) || isFrozen(entry.gameId))) {
       /* HELD: nobody can move, so nothing advances and no continuity is proven; looked at again later. A Live table
          stays resident meanwhile (its held time is judged by the stall rule when the hold lifts). */
       pinFor(entry, true);
@@ -669,7 +685,7 @@ export function createClockController(deps: ClockControllerDeps) {
          beside a transition), and only after the stall check: a heartbeat never papers over a gap. */
       void track(
         deps.runOn(entry.gameId, "clock-heartbeat", async (game, tx) => {
-          if (entry.lost || entry.record === null || isHeld(game.gameId)) return;
+          if (entry.lost || entry.record === null || isHeld(game.gameId) || isFrozen(game.gameId)) return;
           const before = entry.record;
           const record = await ensure(game, tx);
           if (record === null) return;
@@ -706,6 +722,14 @@ export function createClockController(deps: ClockControllerDeps) {
   function isHeld(gameId: string): boolean {
     try {
       return deps.held?.(gameId) === true;
+    } catch {
+      return true;
+    }
+  }
+
+  function isFrozen(gameId: string): boolean {
+    try {
+      return deps.frozen?.(gameId) === true;
     } catch {
       return true;
     }
@@ -789,7 +813,7 @@ export function createClockController(deps: ClockControllerDeps) {
   /** A timer fired: process what is due, write, re-arm, re-broadcast. */
   async function tick(game: GameActor, tx: Tx): Promise<void> {
     const entry = entryOf(game.gameId);
-    if (isHeld(game.gameId)) {
+    if (isHeld(game.gameId) || isFrozen(game.gameId)) {
       arm(entry);
       return;
     }
@@ -852,7 +876,7 @@ export function createClockController(deps: ClockControllerDeps) {
     if (typeof body === "object" && body !== null && typeof (body as { seller_protocol_id?: unknown }).seller_protocol_id === "number") {
       trainRecipient = sellerPresident(state, (body as { seller_protocol_id: number }).seller_protocol_id);
     }
-    const refusal = gate(current, { actor: input.actor, msg: cls.cls, closeRoom: cls.closeRoom, revertTarget: cls.revertTarget, trainRecipient, nameOf: (seat) => name(game.gameId, seat) });
+    const refusal = gate(current, { actor: input.actor, msg: cls.cls, closeRoom: cls.closeRoom, revertTarget: cls.revertTarget, trainRecipient, nameOf: (seat) => name(game.gameId, seat), orKey: factsOfGame(game.gameId, state).orKey });
     /* A move is judged only against a STORED clock: an overdue (a strike) decided but not yet durable must not be cured
        -- or played past -- by a move a crash could then separate from it. */
     const durable = entry.stored === current.revision ? true : await settle(entry, game.gameId);
@@ -946,7 +970,8 @@ export function createClockController(deps: ClockControllerDeps) {
     const record = await ensure(game, tx);
     if (record === null) return { ok: false, code: CLOCK_REFUSAL.unavailable, reason: "This table's clock is not available right now." };
     const at = Math.max(now(), record.updated_at);
-    if (input.type !== "clock-ack") {
+    /* A frozen table's timers do not run (nobody can make the owed move): its ops act on the clock as it stands. */
+    if (input.type !== "clock-ack" && !isFrozen(game.gameId)) {
       const expired = await catchUp(entry, game, tx, at);
       if (expired) await settle(entry, game.gameId);
     }
@@ -979,7 +1004,7 @@ export function createClockController(deps: ClockControllerDeps) {
         const step =
           input.type === "clock-propose"
             ? propose(current, seat, input.kind, input.approval, at, input.stale)
-            : vote(current, seat, input.proposalId, input.yes, input.approval, at, { kind: v?.kind ?? null, stale: input.stale });
+            : vote(current, seat, input.proposalId, input.yes, input.approval, at, { kind: v?.kind ?? null, stale: input.stale, renew: input.renew === true });
         return finish(entry, game.gameId, step);
       }
       default:
@@ -1188,7 +1213,7 @@ export function createClockController(deps: ClockControllerDeps) {
         entry.pinned = false;
         const record = await ensure(game, tx, true);
         if (record === null) return;
-        if (!isHeld(gameId)) await catchUp(entry, game, tx, now());
+        if (!isHeld(gameId) && !isFrozen(gameId)) await catchUp(entry, game, tx, now());
         await settle(entry, gameId);
       })).catch((error) => deps.warn(`  clock: ${gameId}: the clock load failed -- ${describe(error)}`));
   }
@@ -1330,6 +1355,8 @@ export type ClockOpInput =
       readonly approval: ClockVote["approval"];
       readonly verifiedFor: ClockVerifiedFor | null;
       readonly stale: readonly string[];
+      /** Money: this seat's own standing YES no longer verifies (its consent key moved): the new approval replaces it. */
+      readonly renew?: boolean;
     }
   | { readonly type: "clock-reapprove"; readonly seat: string; readonly approval: NonNullable<ClockVote["approval"]>; readonly verifiedFor: { readonly epoch: number; readonly logLen: number; readonly remedy: number } };
 

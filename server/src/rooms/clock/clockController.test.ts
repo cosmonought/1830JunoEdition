@@ -38,7 +38,7 @@ const proposeTrain = (seller: number, model: string, price: string) => ({
 });
 const answerTrain = (seller: number, accept: boolean) => ({ AnswerTrainPurchase: { game_id: 1, seller_protocol_id: seller, accept } });
 
-function harness(options: { money?: boolean; remedy?: RemedyPort; loadFails?: { n: number }; held?: { on: boolean }; closeFails?: { n: number } } = {}) {
+function harness(options: { money?: boolean; remedy?: RemedyPort; loadFails?: { n: number }; held?: { on: boolean }; frozen?: { on: boolean }; closeFails?: { n: number } } = {}) {
   const time = fakeTime(T0);
   let stamp: number | null = null;
   const stampAt = <T>(at: number, fn: () => T): T => {
@@ -90,6 +90,7 @@ function harness(options: { money?: boolean; remedy?: RemedyPort; loadFails?: { 
     authority: "auth-1",
     conduct: (input) => conduct.push(input.event.kind),
     ...(options.held !== undefined ? { held: () => (options.held as { on: boolean }).on } : {}),
+    ...(options.frozen !== undefined ? { frozen: () => (options.frozen as { on: boolean }).on } : {}),
     now: time.now,
     timers: time.timers,
     ops,
@@ -417,5 +418,35 @@ describe("Controller review fixes (third pass)", () => {
     assert.ok(timer !== null && timer !== undefined);
     const left = timer.since === null ? timer.remaining_ms : timer.remaining_ms - (h.time.now() - timer.since);
     assert.ok(left <= 43_200_000 - 6 * 60 * MIN, `the 6 hours unloaded were charged (${left} ms left)`);
+  });
+});
+
+describe("Controller review fixes (fourth pass)", () => {
+  test("a FROZEN table (its log at the cap) runs no timer, but its votes still work", async () => {
+    const frozen = { on: false };
+    const h = harness({ frozen });
+    await h.deal();
+    await h.time.advance(LIVE_ACTION_MS);
+    await h.clock.idle();
+    assert.equal(h.record().phase, "overdue");
+    frozen.on = true;
+    await h.time.advance(LIVE_CURE_MS + MIN);
+    await h.clock.idle();
+    assert.equal(h.record().phase, "overdue", "no finality while nobody can make the owed move");
+    const voted = await h.serial(() => h.clock.op(h.game, h.tx, { type: "clock-propose", seat: P2, kind: "foreclose", approval: null, verifiedFor: null, stale: [] }));
+    assert.equal(voted.ok, true, JSON.stringify(voted));
+  });
+
+  test("an Async overdue keeps nothing running: no residency, no heartbeat writes", async () => {
+    const h = harness();
+    assert.equal((await h.clock.createPolicy(GAME, { deadline: "async-pace", paceSecs: 43_200, money: false })).ok, true);
+    await h.deal();
+    await h.time.advance(43_200_000);
+    await h.clock.idle();
+    assert.equal(h.record().phase, "overdue");
+    const writes = h.store.saves.length;
+    await h.time.advance(60 * MIN);
+    await h.clock.idle();
+    assert.equal(h.store.saves.length, writes, "no heartbeat writes while overdue");
   });
 });

@@ -281,7 +281,7 @@ describe("Live train offer: the proposer's clock freezes; the recipient has a di
     assert.equal(t.remaining(), LIVE_ACTION_MS);
   });
 
-  test("non-train offers (Live) and every Async offer: a rejection resumes the proposer exactly; the offer budget bounds proposals per action", () => {
+  test("non-train offers (Live) and every Async offer: a rejection charges the proposer the time the answerer's clock ran (never fresh); the offer budget bounds proposals per round", () => {
     const t = new Table("live");
     t.advance(19 * MIN + 50 * SEC);
     const priv = offerOf("private", A, B, 9);
@@ -289,21 +289,30 @@ describe("Live train offer: the proposer's clock freezes; the recipient has a di
     assert.equal(t.record.obligation?.seat, B, "B owes the answer (an ordinary action clock)");
     t.move(B, facts(turn(A, 0)), "reject");
     assert.equal(t.remaining(), 10 * SEC, "no fresh 20:00 for A: the lowball-offer stall is gone");
+    /* A confederate sitting on a non-train offer stalls nothing: the time it sat is A's. */
+    const sat = new Table("live");
+    sat.advance(5 * MIN);
+    sat.move(A, offering(offerOf("private", A, B, 10)), "propose");
+    sat.advance(14 * MIN);
+    sat.move(B, facts(turn(A, 0)), "reject");
+    assert.equal(sat.remaining(), MIN, "15:00 parked, less the 14:00 B sat on it");
     const paced = new Table("async-pace", { pace: 86_400 });
-    paced.advance(23 * HOUR);
-    paced.move(A, offering(offerOf("train", A, B, 3)), "propose");
     paced.advance(20 * HOUR);
+    paced.move(A, offering(offerOf("train", A, B, 3)), "propose");
+    paced.advance(3 * HOUR);
     paced.move(B, facts(turn(A, 0)), "reject");
-    assert.equal(paced.remaining(), HOUR, "Async: A resumes its last hour");
-    /* The budget: 12 proposals under one obligation, then a move first. */
+    assert.equal(paced.remaining(), HOUR, "Async: A's 4 hours less the 3 B took");
+    /* The budget: 16 proposals in one round, then none until the next. */
     const budget = new Table("live");
-    for (let n = 1; n <= 12; n += 1) {
+    for (let n = 1; n <= 16; n += 1) {
       budget.move(A, offering(offerOf("private", A, B, 100 + n)), "propose");
       budget.move(A, facts(turn(A, 0)), "rescind");
     }
     assert.equal(budget.refusal(A, "propose")?.code, "rate-limited");
     budget.move(A, facts(turn(B, 1)));
-    assert.equal(budget.refusal(B, "propose"), null, "a new obligation, a new budget");
+    assert.equal(budget.refusal(A, "propose")?.code, "rate-limited", "a new action in the same round does not refund it");
+    budget.move(B, facts(turn(A, 2), { orKey: "OperatingRound/1/2" }));
+    assert.equal(gate(budget.record, { actor: A, msg: "propose", closeRoom: false, revertTarget: null, trainRecipient: null, nameOf: (x) => x, orKey: "OperatingRound/1/2" }), null, "the next round opens a new budget");
   });
 
   test("the proposer's own rescission is no decline, and is charged the time its offer stood (a propose-and-rescind never gives time)", () => {
@@ -1194,5 +1203,29 @@ describe("Review fixes (third pass): the strike ledger proves the strike a remed
     assert.equal(seal.kind, "remedy-sealed");
     assert.equal(seal.f.ledger_head, ledgerHeadOf(doc), "the signed chain commits to the ledger through the seal event");
     assert.equal(evidenceHashOf(doc), remedy.evidence_hash, "and the attested hash is still the main chain's head");
+  });
+});
+
+describe("Review fixes (fourth pass): restart credit, approval renewal", () => {
+  test("an Async restart credits only the outage: a table nobody opened after the new server began is charged that time", () => {
+    const t = new Table("async-pace", { pace: 86_400 });
+    t.advance(2 * HOUR); // the last proof: 22 h left
+    const proven = t.t;
+    const serverStarted = proven + 30 * MIN; // the old server died, the new one started half an hour later
+    t.t = proven + 18 * HOUR; // first opened 18 h after the last proof
+    t.ok(continuityBreak(t.record, { now: t.t, preservedAt: proven, reason: "restart", authority: "auth-2", resumeFrom: serverStarted }));
+    assert.equal(t.remaining(), 22 * HOUR - (18 * HOUR - 30 * MIN), "only the 30-minute outage is credited");
+  });
+
+  test("a money YES whose consent key moved is RENEWED by a new approval even at the same horizon; otherwise a re-vote that does not reach a minute further is ignored", () => {
+    const t = new Table("live", { money: true });
+    t.advance(LIVE_ACTION_MS);
+    const until = 9_999_999_999;
+    t.ok(propose(t.record, B, "foreclose", { approve_until: until, signature: "44".repeat(64) }, t.t));
+    const id = t.record.overdue?.proposal?.id as number;
+    const ignored = vote(t.record, B, id, true, { approve_until: until, signature: "55".repeat(64) }, t.t);
+    assert.equal("code" in ignored ? null : ignored.events.length, 0);
+    t.ok(vote(t.record, B, id, true, { approve_until: until, signature: "55".repeat(64) }, t.t, { renew: true }));
+    assert.equal(t.record.overdue?.proposal?.votes.find((v) => v.seat === B)?.approval?.signature, "55".repeat(64));
   });
 });

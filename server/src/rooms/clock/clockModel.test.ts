@@ -324,14 +324,19 @@ describe("Live train offer: the proposer's clock freezes; the recipient has a di
     assert.equal(t.remaining(), 10 * MIN, "no refresh by withdrawing it either");
   });
 
-  test("invalid offers never freeze: a refused proposal is never a batch -- the clock is exactly as it was", () => {
+  test("invalid offers never freeze: a proposal the gate refuses is never a batch -- the clock is exactly as it was (the engine's own refusals: clockController.test.ts)", () => {
     const t = new Table("live");
+    /* Two declines A -> B this Operating Round: a third A -> B proposal is refused by the gate. */
+    for (let n = 1; n <= 2; n += 1) {
+      t.move(A, offering(offerOf("train", A, B, n)), "propose", { trainRecipient: B });
+      t.move(B, facts(turn(A, 0)), "reject");
+    }
     t.advance(9 * MIN);
     const before = t.record;
-    t.advance(0);
-    assert.equal(t.record, before);
+    assert.throws(() => t.move(A, offering(offerOf("train", A, B, 3)), "propose", { trainRecipient: B }), /refused: trade-declines/);
+    assert.equal(t.record, before, "nothing folded");
     assert.equal(t.record.obligation?.trade, null);
-    assert.equal(t.remaining(), 11 * MIN);
+    assert.equal(t.remaining(), 11 * MIN, "A's clock runs on, unfrozen");
   });
 
   test("the recipient's 10:00 never strikes it, and the expiry never increments any overdue count", () => {

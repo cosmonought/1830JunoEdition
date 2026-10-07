@@ -176,7 +176,7 @@ export interface MoneyTablesDeps {
   /** Phase 3 final clocks: whether a seat acknowledged a No-deadline table's indefinite-lock disclosure (the table
    *  clock's record). No join admission is signed for a No-deadline table's seat that has not (nor for an Async table
    *  whose clock cannot be read). Absent: no table has a recorded deadline (3fecd54's behaviour: Live only). */
-  readonly noDeadlineAck?: (gameId: string, playerId: string) => Promise<"not-required" | "acknowledged" | "missing" | "unknown">;
+  readonly noDeadlineAck?: (gameId: string, playerId: string) => Promise<"not-required" | "acknowledged" | "missing" | "unknown" | "unenforceable">;
 }
 
 type Snapshot = Awaited<ReturnType<WalletTicketLedger["snapshot"]>>;
@@ -1449,6 +1449,7 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
         const asyncTable = (record.variants as { mode?: string }).mode === "async";
         if (acked === "missing") return refusal(409, "acknowledge-no-deadline", `${NO_DEADLINE_DISCLOSURE} Acknowledge this before your deposit.`);
         if (acked === "unknown" && asyncTable) return refusal(503, "money-unavailable", "This table's deadline can't be read right now, so no deposit is approved. Try again later.");
+        if (acked === "unenforceable") return refusal(503, "money-unavailable", "This server can't enforce this table's deadline right now, so no deposit is approved. Try again later.");
       }
       const snapshot = await deps.tickets.snapshot(record.game_id);
       const link = standingLinkOf(snapshot.grants, seat.player_id);

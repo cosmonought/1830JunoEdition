@@ -1207,7 +1207,7 @@ export function createClockController(deps: ClockControllerDeps) {
     },
     /** Whether a seat may ante at this table as far as the No-deadline disclosure goes: `not-required` (the table has a
      *  deadline), `acknowledged`, `missing`, or `unknown` (its clock cannot be read: refuse). */
-    async ackStatus(gameId: string, seat: string): Promise<"not-required" | "acknowledged" | "missing" | "unknown"> {
+    async ackStatus(gameId: string, seat: string): Promise<"not-required" | "acknowledged" | "missing" | "unknown" | "unenforceable"> {
       const entry = entries.get(gameId);
       let record = entry !== undefined && !entry.stale ? entry.record : null;
       if (record === null) {
@@ -1218,6 +1218,11 @@ export function createClockController(deps: ClockControllerDeps) {
         }
       }
       if (record === null) return "unknown";
+      /* A TIMED money table whose deadline this server cannot enforce now (no REMEDY signer): no deposit is approved. */
+      if (record.money && record.policy.class !== "no-deadline") {
+        const port = deps.remedy?.() ?? null;
+        if (port === null || !port.configured) return "unenforceable";
+      }
       if (record.policy.class !== "no-deadline") return "not-required";
       return record.acks[seat] !== undefined ? "acknowledged" : "missing";
     },

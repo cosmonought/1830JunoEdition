@@ -258,22 +258,33 @@ describe("the Tokens step is skipped when there is nowhere to place, #1237", () 
       { private_id: DH_PRIVATE_ID, owner_protocol_id: owner, closed },
     ];
     it("is available only to the corporation that owns the D&H, after its lay and before its token", () => {
-      expect(dhFreeStationAvailableFor({ companyId: 1, privates: privates(1), usedAbilities: ["dh-tile"], dhHexBuilt: true })).toBe(true);
+      expect(dhFreeStationAvailableFor({ companyId: 1, privates: privates(1), usedAbilities: ["dh-tile"], dhHexBuilt: true, stationPending: 1 })).toBe(true);
     });
     it("is not available to a rival, whatever the ability's state", () => {
       // #781: a rival mid-turn must not have its Tokens step held open by somebody else's private.
-      expect(dhFreeStationAvailableFor({ companyId: 2, privates: privates(1), usedAbilities: ["dh-tile"], dhHexBuilt: true })).toBe(false);
+      expect(dhFreeStationAvailableFor({ companyId: 2, privates: privates(1), usedAbilities: ["dh-tile"], dhHexBuilt: true, stationPending: 1 })).toBe(false);
     });
     it("is not available while the D&H is still a player's, unassigned to any corporation", () => {
       // `owner_protocol_id` is null until a corporation buys the private; a player cannot lend the power.
-      expect(dhFreeStationAvailableFor({ companyId: 1, privates: privates(null), usedAbilities: ["dh-tile"], dhHexBuilt: true })).toBe(false);
+      expect(dhFreeStationAvailableFor({ companyId: 1, privates: privates(null), usedAbilities: ["dh-tile"], dhHexBuilt: true, stationPending: 1 })).toBe(false);
     });
     it("is spent once the token has been placed, and gone if the private has closed", () => {
-      expect(dhFreeStationAvailableFor({ companyId: 1, privates: privates(1), usedAbilities: ["dh-tile", "dh-token"], dhHexBuilt: true })).toBe(false);
-      expect(dhFreeStationAvailableFor({ companyId: 1, privates: privates(1, true), usedAbilities: ["dh-tile"], dhHexBuilt: true })).toBe(false);
+      expect(dhFreeStationAvailableFor({ companyId: 1, privates: privates(1), usedAbilities: ["dh-tile", "dh-token"], dhHexBuilt: true, stationPending: 1 })).toBe(false);
+      expect(dhFreeStationAvailableFor({ companyId: 1, privates: privates(1, true), usedAbilities: ["dh-tile"], dhHexBuilt: true, stationPending: 1 })).toBe(false);
+    });
+    it("AUD-04.04 (DH-1): is available only inside the lay's own turn -- the window the station authority reads", () => {
+      /* `dh_station_pending` names the corporation whose same-turn D&H lay opened the window; the turn boundary and
+         the placement clear it (#1660). Lay used, token unplaced, but no window standing = a later turn: gone. */
+      expect(dhFreeStationAvailableFor({ companyId: 1, privates: privates(1), usedAbilities: ["dh-tile"], dhHexBuilt: true, stationPending: undefined })).toBe(false);
+      expect(dhFreeStationAvailableFor({ companyId: 1, privates: privates(1), usedAbilities: ["dh-tile"], dhHexBuilt: true, stationPending: null })).toBe(false);
+      // A window naming another corporation is not this one's.
+      expect(dhFreeStationAvailableFor({ companyId: 1, privates: privates(1), usedAbilities: ["dh-tile"], dhHexBuilt: true, stationPending: 2 })).toBe(false);
+      // The window alone grants nothing the power itself does not (rival-owned, spent).
+      expect(dhFreeStationAvailableFor({ companyId: 2, privates: privates(1), usedAbilities: ["dh-tile"], dhHexBuilt: true, stationPending: 2 })).toBe(false);
+      expect(dhFreeStationAvailableFor({ companyId: 1, privates: privates(1), usedAbilities: ["dh-tile", "dh-token"], dhHexBuilt: true, stationPending: 1 })).toBe(false);
     });
     it("is not available before the D&H's own lay, which is the order the power comes in", () => {
-      expect(dhFreeStationAvailableFor({ companyId: 1, privates: privates(1), usedAbilities: [], dhHexBuilt: false })).toBe(false);
+      expect(dhFreeStationAvailableFor({ companyId: 1, privates: privates(1), usedAbilities: [], dhHexBuilt: false, stationPending: 1 })).toBe(false);
     });
   });
 });

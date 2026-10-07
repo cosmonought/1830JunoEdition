@@ -158,6 +158,8 @@ export function nextDerivedAction(input: DerivedActionInput): DerivedAction | nu
         privates: state.private_companies,
         usedAbilities: state.used_private_abilities ?? [],
         dhHexBuilt: dhHex ? mapGrid.tiles.some((tile) => tile.q === dhHex.q && tile.r === dhHex.r) : false,
+        // AUD-04.04 (DH-1): the one-turn window the station authority itself reads (#1660).
+        stationPending: state.dh_station_pending,
       });
     })();
 

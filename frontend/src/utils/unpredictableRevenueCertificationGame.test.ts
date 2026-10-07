@@ -56,6 +56,7 @@ const { trainObligationFor } = require("../gameEngine/trainAvailability") as typ
 const { projectBloodPriceMove } = require("../gameEngine/marketGeometry") as typeof import("../gameEngine/marketGeometry");
 const { gameHistoryFrom } = require("./gameHistory") as typeof import("./gameHistory");
 const DX = require("../gameEngine/dieselExchange") as typeof import("../gameEngine/dieselExchange");
+const { dividendAmountRefusal } = require("../gameEngine/routeAuthority") as typeof import("../gameEngine/routeAuthority");
 
 const { CO, BO, PRR, NYC, CPR, ERIE, P1, P2, P3, BANK_SIZE, NETWORK } = G;
 type Run = ReturnType<typeof G.playCertificationGame>;
@@ -453,14 +454,28 @@ describe("2 + 3. OR 3.2 -- the Mark on C&O's Gentle Rust grace turn (OD-UR-1, OD
     expect(A.room.entries.some((entry) => "YellowSignEvent" in JSON.parse(entry.payload))).toBe(false);
   });
 
-  it("S10-27, reproduced live and not fixed here: the room derives a $0 withhold for the trainless C&O, the reducer declines it, and the president declares the $40", () => {
+  it("S10-27 / AUD-08.01: the room's $0 withhold for the trainless C&O is declined by the reducer and NOT appended; the president declares the $40", () => {
+    /* Before AUD-08.01 this burst was ["RunMultipleRoutes", "DeclareDividends*"]: the room derived a $0 forced withhold
+       from C&O's empty fleet, the reducer declined it ("$0 does not match the run"), and the declined entry was still
+       appended as a derived no-op. The derivation still asks for it (its fleet-based answer is unchanged here); the
+       room's derived-action seam now drops what the authority declines, so the run is followed directly by the
+       president's own declaration. */
     const run = A.find("3.2 C&O runs");
-    expect(run.entries).toEqual(["RunMultipleRoutes", "DeclareDividends*"]);
-    const derived = payloadOf(A, run.indices[1]).DeclareDividends;
-    expect(derived.revenue_amount).toBe("0");
-    expect(stateDigest(boardsOf(A)[run.indices[1]])).toBe(stateDigest(boardsOf(A)[run.indices[0]]));
+    expect(run.entries).toEqual(["RunMultipleRoutes"]);
+    const ran = boardsOf(A)[run.indices[0]];
+    expect(fleetOf(ran, CO)).toEqual([]);
+    expect(co(ran, CO).last_route_revenue).toBe("40");
+    expect(dividendAmountRefusal(ran, { protocol_id: CO, revenue_amount: "0" })).toMatch(/does not match/);
     const declared = A.find("3.2 C&O withholds $40");
+    expect(declared.indices[0]).toBe(run.indices[0] + 1);
     expect(treasury(declared.after, CO) - treasury(declared.before, CO)).toBe(40);
+    // No declined derived entry anywhere in either game.
+    for (const run of [A, B]) {
+      run.room.entries.forEach((entry, at) => {
+        if (!entry.derived || at === 0) return;
+        expect(stateDigest(boardsOf(run)[at])).not.toBe(stateDigest(boardsOf(run)[at - 1]));
+      });
+    }
   });
 
   it("trainless with a route: the ordinary obligation holds -- the turn may not end until C&O buys a train (UR-N34, X8)", () => {

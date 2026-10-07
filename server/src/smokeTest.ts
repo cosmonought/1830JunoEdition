@@ -676,6 +676,30 @@ async function refusedMove(mover: Seat, msg: object, tag: string, reason: string
   return answer;
 }
 
+/** PHASE 3 FINAL CLOCKS: a restart is a continuity break nobody proved, so a dealt Live table comes back SYSTEM-PAUSED
+ *  (timers kept as of the last proof; a fence no undo crosses) and takes no move until EVERY seat votes to resume
+ *  (`clock-sysresume`, naming the break by its `since`). `mover` proves the refusal; `seats` vote; `viewer` reads the
+ *  RoomView's clock. */
+async function resumeSystemPause(mover: Seat, seats: readonly Seat[], viewer: WireClient, gameId: string, tag: string): Promise<void> {
+  type SystemPause = { system?: { since?: unknown } | null } | null | undefined;
+  const systemOf = (view: RoomView) => (view as { clock?: SystemPause }).clock?.system ?? null;
+  const pausedMove = await mover.client.act(BUY, tag);
+  check(
+    `${mover.who}'s move at the paused table is refused clock-system-paused, appending nothing`,
+    pausedMove.kind === "refused" && pausedMove.code === "clock-system-paused" && entriesOf(pausedMove).length === 0,
+    pausedMove,
+  );
+  const pausedView = await viewer.view((view) => view.gameId === gameId && systemOf(view) !== null, "the system-paused view");
+  const since = systemOf(pausedView)?.since;
+  check("the RoomView names the system pause", typeof since === "number", (pausedView as { clock?: unknown }).clock);
+  for (const seat of seats) {
+    const resumed = await seat.client.op({ type: "clock-sysresume", since }, gameId);
+    check(`${seat.who}'s resume vote is accepted`, resumed.ok === true, resumed);
+  }
+  await viewer.view((view) => view.gameId === gameId && systemOf(view) === null, "the resumed view");
+  check("with every seat's vote the table resumes", true);
+}
+
 /** What a seat's RoomView says about the table and about the reader -- everything but who is online right now. */
 const seatingOf = (view: RoomView) => ({
   gameId: view.gameId,
@@ -1035,6 +1059,13 @@ async function productionHalf(): Promise<void> {
     "bad-frame",
   );
 
+  /* ---- 8+: PHASE 3 FINAL CLOCKS -- G was written while the server was stopped (A3+), so nothing proves the table's
+     continuity across that gap: the Live table is SYSTEM-PAUSED (timers kept as of the last proof) and takes no move
+     until EVERY seat agrees to resume. (CONSOLIDATED FINAL INTEGRATION: the account lane's ante-only smoke writes G with
+     the server stopped; the clock lane pauses exactly such a table.) ---- */
+  step("A8+", "the restart left G system-paused (continuity unproven): a move is refused, then both seats vote to resume");
+  await resumeSystemPause(first, [first, second], alice, gameId, "paused-buy");
+
   /* ---- 9: moves, and one out of turn ---- */
   step("A9", `gameplay: ${first.who} is on turn (the deal's first seat); ${second.who} tries first`);
   await refusedMove(second, BUY, "early-buy", NOT_YOUR_TURN, `${second.who}'s WaterfallBuyLowest, out of turn`);
@@ -1049,7 +1080,11 @@ async function productionHalf(): Promise<void> {
   );
   const revertTo = (index: number, by: Seat) => ({ RevertTo: { index, player: by.playerId, summary: "smoke undo" } });
   const hostsLatest = [firstBuy, secondBuy].filter((entry) => entry.actor === alicePid).slice(-1)[0];
-  await refusedMove(host, revertTo(deal.index, host), "undo-deal", REVERT_DEAL_FLOOR, "the HOST's RevertTo aimed at the deal (#0)");
+  /* PHASE 3 FINAL CLOCKS: the system resume at A8+ fenced undo at the position it resumed from (the clock's undo floor),
+     so the deal revert meets that fence before the engine's deal floor (REVERT_DEAL_FLOOR, which the frontend's
+     logRevert suites pin): refused either way, nothing appended. */
+  void REVERT_DEAL_FLOOR;
+  await refusedMove(host, revertTo(deal.index, host), "undo-deal", /cannot be undone/, "the HOST's RevertTo aimed at the deal (#0), behind the resume's undo fence", "undo-fenced");
   await refusedMove(guest, revertTo(hostsLatest.index, guest), "undo-not-mine", REVERT_NOT_YOURS, `${guest.who} (not the host) undoing ${host.who}'s move #${hostsLatest.index}`);
   const undone = await legalMove(
     host,
@@ -1231,6 +1266,10 @@ async function productionHalf(): Promise<void> {
   const afterB = seatingOf(await bob.view());
   check("device C's RoomView after the restart: the same seats, the same host, the same you", same(afterA, storedA), { before: storedA, after: afterA });
   check("B's too", same(afterB, storedB), { before: storedB, after: afterB });
+  /* The crash is a continuity break: G is system-paused again, and its fence means no undo reaches back across it. */
+  step("A13+", "the crash left G system-paused: a move is refused, then both seats vote to resume");
+  const onTurnSeat: Seat = { who: nameOf(onTurn), connect: onTurn === alicePid ? connectC2 : connectB, client: onTurn === alicePid ? aliceC : bob, playerId: onTurn };
+  await resumeSystemPause(onTurnSeat, [{ ...host, client: aliceC }, { ...guest, client: bob }], aliceC, gameId, "crash-paused-buy");
 
   /* ---- 14: the Authorization Wallet replaced; then "Forgot password?" on a new browser, with the new wallet ---- */
   step("A14", `replace A's Authorization Wallet from device C (${ACCOUNT_WALLET_CHALLENGE_PATH}, ${ACCOUNT_WALLET_REPLACE_PATH}); a NEW browser D runs "Forgot password?" with it (${ACCOUNT_RECOVER_PATH})`);
@@ -1321,14 +1360,21 @@ async function productionHalf(): Promise<void> {
   check(`browser D is handed the stored log: ${logSummary(entriesOf(caughtD))}`, sameLog(entriesOf(caughtD), storedLog), entriesOf(caughtD).length);
   const seatingD = seatingOf(await aliceD.view());
   check(`and the same seat: role ${seatingD.you.role}, playerId ${String(seatingD.you.playerId)} (${alicePid})`, same(seatingD, storedA) && seatingD.you.playerId === alicePid, { before: storedA, after: seatingD });
+  const bobSeat: Seat = { who: "Bob", connect: connectB, client: bob, playerId: bobPid };
+  const aliceSeatD: Seat = { who: "Alice (browser D)", connect: connectD2, client: aliceD, playerId: alicePid };
+  if (onTurn === bobPid) {
+    /* The host's take-back of the pre-crash action would cross the crash's fence: refused. So B moves first. */
+    const lastStored = [...effectiveActions(storedLog)].reverse().find((entry) => entry.derived !== true) as Entry;
+    await refusedMove(aliceSeatD, revertTo(lastStored.index, aliceSeatD), "undo-across-crash", /cannot be undone/, `Alice's RevertTo of the pre-crash action (#${lastStored.index}) from browser D -- behind the crash's fence`, "undo-fenced");
+    await legalMove(bobSeat, aliceSeatD, BUY, "bob-first-after-restart", "B, on turn, moves first on the restarted server");
+    onTurn = alicePid;
+  }
   const further = await aliceActs(aliceD, "the recovered browser D", "after-restart", []);
   check(
     `  it extends the stored log (#${further.index}), with an id the stored log does not hold`,
     further.index > storedLog[storedLog.length - 1].index && !storedLog.some((entry) => entry.id === further.id),
     further,
   );
-  const bobSeat: Seat = { who: "Bob", connect: connectB, client: bob, playerId: bobPid };
-  const aliceSeatD: Seat = { who: "Alice (browser D)", connect: connectD2, client: aliceD, playerId: alicePid };
   if (onTurn === bobPid) {
     await legalMove(bobSeat, aliceSeatD, BUY, "bob-after-restart", "B, on turn, moves on the restarted server");
     onTurn = alicePid;

@@ -17,7 +17,7 @@ import type { GameVariants } from "../gameEngine/gameVariants";
 import type { HashableLogEntry } from "../gameEngine/logHash";
 import type { RoomMoneyView } from "../utils/moneyProtocol";
 import type { RoomClockView } from "../utils/clockProtocol";
-import type { SessionPort } from "../utils/sessionBootstrap";
+import { sessionPort, type SessionPort } from "../utils/sessionBootstrap";
 import {
   agreeToAnnul,
   anteNow,
@@ -42,6 +42,7 @@ import { proofAgedOut, seatFlow, WALLET_PROOF_MAX_AGE_MS, settlementFlow, type A
 import { bumpLocal, isConfirmed, moneyServices, moneySession, proofKey, updateMoneySession, useMoneySession, type MoneyServices } from "./moneySession";
 import { browserKeplrLock, KEPLR_BUSY_SENTENCE } from "./keplrLock";
 import type { PendingWalletTx } from "./pendingTx";
+import { browserSameWalletAcks, sameWalletAccountKey } from "./sameWalletAck";
 
 /** `replace-confirmed`: the player answered "Replace wallet" to the question "Change wallet" asked first (W2-M). */
 export type MoneyActionKind = ActionKind | SettlementActionKind | "replace-confirmed";
@@ -107,7 +108,13 @@ export interface MoneyTable {
   readonly error: string | null;
   /** A step the player must take before the action can run: "Confirm it's you", or the wallet replacement question
    *  (W2-M: asked BEFORE Keplr signs, naming the linked wallet and the one Keplr is on, when they are known). */
-  readonly needs: { readonly kind: "confirm"; readonly then: MoneyActionKind | null } | { readonly kind: "replace"; readonly from: string | null; readonly to: string | null; readonly again: boolean; readonly said: string | null } | null;
+  readonly needs:
+    | { readonly kind: "confirm"; readonly then: MoneyActionKind | null }
+    | { readonly kind: "replace"; readonly from: string | null; readonly to: string | null; readonly again: boolean; readonly said: string | null }
+    /** Owner ruling 2026-10-07: the wallet about to be bound is the account's Authorization Wallet -- warned once,
+     *  allowed; `then` is the action the player pressed, run again once they continue. */
+    | { readonly kind: "same-wallet"; readonly wallet: string; readonly then: MoneyActionKind }
+    | null;
   /** W2-M (AUD-20.07, JX-6E): Juno's dispute facts for the dispute confirm (read when it opens), or null. */
   readonly disputeTerms: DisputeRead | null;
   /** W2-M (AUD-20.07, JX-6E): Juno's dispute record for the band (read while disputed or once a resolver route
@@ -122,6 +129,9 @@ export interface MoneyTable {
   closeReview(): void;
   /** "Confirm it's you" was granted: continue with what was asked. */
   confirmed(expiresAt: number): Promise<void>;
+  /** Owner ruling 2026-10-07: "Continue with this wallet" -- keep the account's acknowledgement, then run the pressed
+   *  action again (never a wallet chosen for the player). */
+  acknowledgeSameWallet(): Promise<void>;
   cancelNeeds(): void;
   dismiss(): void;
 }
@@ -474,6 +484,9 @@ export function useMoneyTable(input: MoneyTableInput): MoneyTable {
           replaceTo.current = outcome.replace.to;
           replaceFrom.current = outcome.replace.from;
           setNeeds({ kind: "replace", from: outcome.replace.from, to: outcome.replace.to, again: false, said: null });
+        } else if (outcome.needs === "same-wallet" && outcome.sameWallet !== undefined) {
+          /* Owner ruling 2026-10-07: nothing was signed or linked; the panel shows the warning (not an error). */
+          setNeeds({ kind: "same-wallet", wallet: outcome.sameWallet.wallet, then: kind });
         } else if (outcome.needs === "replace") {
           /* The server asked only after Keplr signed (a server that doesn't name the standing wallet beforehand, or a
              link made between the challenge and the signature): its answer spent that request, so Keplr signs once
@@ -517,6 +530,19 @@ export function useMoneyTable(input: MoneyTableInput): MoneyTable {
     [needs, run, services],
   );
 
+  /* Owner ruling 2026-10-07: "Continue with this wallet" -- the account's acknowledgement is kept (`sameWalletAck.ts`:
+     this account x this Authorization Wallet, on this browser), then the action the player pressed runs again. It
+     selects no wallet: the run re-reads Keplr's account, and another account there is simply linked instead. */
+  const acknowledgeSameWallet = useCallback(async () => {
+    if (needs === null || needs.kind !== "same-wallet") return;
+    const acks = services.sameWalletAcks ?? browserSameWalletAcks();
+    acks.acknowledge(sameWalletAccountKey((latest.current.port ?? sessionPort()).account?.username), needs.wallet);
+    const then = needs.then;
+    setNeeds(null);
+    setError(null);
+    await run(then);
+  }, [needs, run, services]);
+
   return {
     view,
     flow,
@@ -536,6 +562,7 @@ export function useMoneyTable(input: MoneyTableInput): MoneyTable {
     openReview: () => setReviewing(true),
     closeReview: () => setReviewing(false),
     confirmed: continueAfterConfirm,
+    acknowledgeSameWallet,
     disputeTerms,
     disputeRecord,
     readDisputeTerms: () => {

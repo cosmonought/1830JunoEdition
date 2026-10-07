@@ -1489,7 +1489,12 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
       chainId: deps.pin.chain_id,
       contract,
     });
-    return answer({ text: minted.text, nonce: minted.nonce, expiresAt: minted.expiresAt, ...(replaces !== undefined ? { replaces } : {}) });
+    /* OWNER RULING (2026-10-07): the account's Authorization Wallet MAY also be this seat's financial wallet -- allowed,
+       never refused, never chosen for the player. Said here (to the account's own session, which already knows its
+       Authorization Wallet) so the browser warns once before that same address is first bound; the challenge, its
+       single use and the link's decision are unchanged, and the two roles stay apart (the link binds this seat only). */
+    const sameAsAuthorization = caller.authorizationWallet !== null && caller.authorizationWallet === wallet;
+    return answer({ text: minted.text, nonce: minted.nonce, expiresAt: minted.expiresAt, ...(replaces !== undefined ? { replaces } : {}), ...(sameAsAuthorization ? { authorizationWallet: true } : {}) });
   }
 
   type LinkDecision = { readonly kind: "issue"; readonly relinkFrom: number | null } | { readonly kind: "unchanged"; readonly grant: Grant } | { readonly kind: "refused"; readonly status: number; readonly code: string; readonly reason: string };

@@ -30,6 +30,7 @@ import { moneyServices } from "../../money/moneySession";
 import { formatMoneyTime } from "../../money/moneyTime";
 import { useMoneyTable, type MoneyActionKind } from "../../money/useMoneyTable";
 import { KeplrMark } from "./KeplrMark";
+import { SAME_WALLET_SENTENCE, SAME_WALLET_SWITCH_HINT, SAME_WALLET_TITLE } from "../../money/sameWalletAck";
 import { buttonStyle, moneyStyles as styles } from "./moneyStyles";
 import { CLOCK_OPS, NO_DEADLINE_DISCLOSURE, type RoomClockView } from "../../utils/clockProtocol";
 import { deadlineLabel } from "../../utils/gameClockView";
@@ -308,6 +309,28 @@ export function MoneyPanel({ room, onStart, busy = false, port, services }: Mone
             ) : null}
             <button type="button" className="wr-touch" style={buttonStyle("secondary", inFlight)} disabled={inFlight} onClick={table.cancelNeeds}>
               Keep the linked wallet
+            </button>
+          </div>
+        </div>
+      ) : null}
+      {table.needs !== null && table.needs.kind === "same-wallet" ? (
+        <div style={styles.confirm} role="group" aria-label="Authorization Wallet as this game's financial wallet" data-testid="money-same-wallet">
+          {/* Owner ruling 2026-10-07: allowed, warned once per account and Authorization Wallet -- before that same
+              address is first bound to a seat. Nothing was signed or linked; continuing runs the pressed action again
+              with whatever wallet Keplr is on. */}
+          <p style={styles.detail} data-testid="money-same-wallet-text">
+            <strong>{SAME_WALLET_TITLE}.</strong> {SAME_WALLET_SENTENCE}
+          </p>
+          <p style={styles.faint} data-testid="money-same-wallet-wallets">
+            Authorization Wallet: <span title={table.needs.wallet}>{shortWallet(table.needs.wallet)}</span> · This game&apos;s funds:{" "}
+            <span title={table.needs.wallet}>{shortWallet(table.needs.wallet)}</span> — the same address. {SAME_WALLET_SWITCH_HINT}
+          </p>
+          <div style={styles.row}>
+            <button type="button" className="wr-touch" style={buttonStyle("primary", inFlight)} disabled={inFlight} onClick={() => void table.acknowledgeSameWallet()} data-testid="money-same-wallet-continue">
+              Continue with this wallet
+            </button>
+            <button type="button" className="wr-touch" style={buttonStyle("secondary", inFlight)} disabled={inFlight} onClick={table.cancelNeeds} data-testid="money-same-wallet-cancel">
+              Not now
             </button>
           </div>
         </div>

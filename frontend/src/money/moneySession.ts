@@ -17,6 +17,7 @@ import { browserConsentKeys, type ConsentKeys } from "./consentKeys";
 import { browserPendingTxStore, type PendingTxStore } from "./pendingTx";
 import { pinnedDeployment, type PinnedDeploymentResult } from "./escrowDeployment";
 import type { KeplrLock } from "./keplrLock";
+import { browserSameWalletAcks, type SameWalletAcks } from "./sameWalletAck";
 
 export interface MoneySessionState {
   readonly wallet: "unknown" | "unavailable" | "disconnected" | "connecting" | "connected";
@@ -42,13 +43,16 @@ export interface MoneyServices {
   readonly now: () => number;
   /** W1-K (AUD-19.02): the cross-tab Keplr lock (`keplrLock.ts`); absent: the page's own (`browserKeplrLock`). */
   readonly keplrLock?: KeplrLock;
+  /** Owner ruling 2026-10-07: the account's acknowledgement that its Authorization Wallet may also fund a table
+   *  (`sameWalletAck.ts`); absent: this browser's (`browserSameWalletAcks`). */
+  readonly sameWalletAcks?: SameWalletAcks;
 }
 
 let services: MoneyServices | null = null;
 
 /** The page's money services (Keplr, IndexedDB keys, localStorage pending records, the build's pin). */
 export function moneyServices(): MoneyServices {
-  if (services === null) services = { wallet: createKeplrWallet(), keys: browserConsentKeys(), pending: browserPendingTxStore(), pin: pinnedDeployment, now: () => Date.now() };
+  if (services === null) services = { wallet: createKeplrWallet(), keys: browserConsentKeys(), pending: browserPendingTxStore(), pin: pinnedDeployment, now: () => Date.now(), sameWalletAcks: browserSameWalletAcks() };
   return services;
 }
 

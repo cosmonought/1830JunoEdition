@@ -18,6 +18,7 @@ import type { BroadcastOutcome, ConnectedWallet, SignedWalletTx, TxStatus, Walle
 import type { MoneyServices } from "./moneySession";
 import { createPendingTxStore, type KeyValueStorage } from "./pendingTx";
 import type { ChainGameFacts, WalletMessage } from "./walletChecks";
+import { createSameWalletAcks } from "./sameWalletAck";
 
 export const TEST_CONTRACT = "juno14hj2tavq8fpesdwxxcu44rty3hh90vhujrvcmstl4zr3txmfvw9skjuwg8";
 export const TEST_WALLET = "juno12gdmst084pz888ds7g80nv27p9wadknwdl783a";
@@ -226,6 +227,8 @@ export function testServices(over: { wallet?: FakeWallet; keys?: ConsentKeys; st
     /* Each test world has its own Keplr lock (this page alone): an action a test leaves running never holds the next
        test's Keplr. The cross-tab lock itself is `keplrLock.test.ts`'s. */
     keplrLock: createKeplrLock(),
+    /* Owner ruling 2026-10-07: each test world keeps its own same-wallet acknowledgements (on its own storage). */
+    sameWalletAcks: createSameWalletAcks(() => storage),
   };
 }
 

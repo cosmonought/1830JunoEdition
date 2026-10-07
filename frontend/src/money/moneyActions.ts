@@ -46,6 +46,7 @@ import {
 import { ANTE_STATUS, linkRequestEndedSentence, reconfirmSentence, type DisputeRead } from "./moneyFlow";
 import { bumpLocal, moneyServices, moneySession, recordProofRenewed, updateMoneySession, type MoneyServices } from "./moneySession";
 import type { PendingWalletTx } from "./pendingTx";
+import { browserSameWalletAcks, SAME_WALLET_SENTENCE, sameWalletAccountKey } from "./sameWalletAck";
 import { checkTerminalSettlement, type SealedReplay } from "./settlementCheck";
 import {
   admissionProblem,
@@ -72,11 +73,19 @@ import type { ClockOverdueView } from "../utils/clockProtocol";
 
 /** The step a refusal asks for before the action can run again. W2-M adds `reprove`: the server refused a deposit's
  *  approval for want of a fresh wallet proof (AUD-20.02). */
-export type OutcomeNeeds = "confirm" | "connect" | "replace" | "reprove";
+export type OutcomeNeeds = "confirm" | "connect" | "replace" | "reprove" | "same-wallet";
 
 export type ActionOutcome =
   | { readonly ok: true; readonly notice?: string }
-  | { readonly ok: false; readonly reason: string; readonly needs?: OutcomeNeeds; readonly replace?: { readonly from: string; readonly to: string } };
+  | {
+      readonly ok: false;
+      readonly reason: string;
+      readonly needs?: OutcomeNeeds;
+      readonly replace?: { readonly from: string; readonly to: string };
+      /** Owner ruling 2026-10-07 (`needs: "same-wallet"`): the wallet about to be bound is the account's Authorization
+       *  Wallet. Nothing was signed or linked; the panel warns once and the player may continue. */
+      readonly sameWallet?: { readonly wallet: string };
+    };
 
 const done = (notice?: string): ActionOutcome => ({ ok: true, ...(notice !== undefined ? { notice } : {}) });
 const refuse = (reason: string, needs?: OutcomeNeeds): ActionOutcome => ({ ok: false, reason, ...(needs !== undefined ? { needs } : {}) });
@@ -235,6 +244,19 @@ export async function linkWallet(ctx: TableContext, options: LinkOptions = {}): 
     }
   } else if (standing !== undefined && standing !== null && standing !== wallet) {
     return { ok: false, reason: `This seat is linked to ${standing}. Replace it with ${wallet}?`, needs: "replace", replace: { from: standing, to: wallet } };
+  }
+  /* OWNER RULING (2026-10-07): the account's Authorization Wallet MAY also be this table's financial wallet. It is here
+     only because the player chose it -- it is the wallet Keplr is on now; nothing selects it for them. Before that same
+     address is FIRST bound to a seat, the server's word (`authorizationWallet`) has the panel warn once per account and
+     Authorization Wallet (`sameWalletAck.ts`) -- recommending a separate wallet, refusing nothing. Nothing is signed or
+     linked until the player continues. A re-proof, the relink of its own deposit and a wallet this seat already holds
+     are not a first binding. The roles stay apart: the link binds THIS seat's money only; the account is unchanged. */
+  const alreadyBound = you.link?.wallet === wallet || you.payoutWallet === wallet || you.unlinkedDeposit?.wallet === wallet;
+  if (challenge.value.authorizationWallet === true && options.reprove !== true && !alreadyBound) {
+    const acks = services.sameWalletAcks ?? browserSameWalletAcks();
+    if (!acks.has(sameWalletAccountKey((ctx.port ?? sessionPort()).account?.username), wallet)) {
+      return { ok: false, reason: SAME_WALLET_SENTENCE, needs: "same-wallet", sameWallet: { wallet } };
+    }
   }
   const site = ctx.site ?? (typeof window === "undefined" ? "" : window.location.origin);
   const checked = checkLinkChallenge(challenge.value.text, { appName: APP_NAME, site, pin, gameId: ctx.gameId, playerId: you.playerId, wallet, now: services.now() });

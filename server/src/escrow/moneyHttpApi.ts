@@ -6,7 +6,7 @@
 //
 //   POST /gs/api/money/config            {}                                   whether real-money tables can be opened here,
 //                                                                              the pinned deployment, fee, minimum ante
-//   POST /gs/api/money/wallet-challenge  {gameId, wallet}                     SENSITIVE -> {text, nonce, expiresAt, replaces?}
+//   POST /gs/api/money/wallet-challenge  {gameId, wallet}                     SENSITIVE -> {text, nonce, expiresAt, replaces?, authorizationWallet?}
 //   POST /gs/api/money/wallet-link       {gameId, nonce, pubKey, signature,   SENSITIVE -> {mode, wallet, epoch, ticket}
 //                                         consentKey, replace?}
 //   POST /gs/api/money/join-admission    {gameId}                             the seat's Join admission (ESCROW-JOIN)

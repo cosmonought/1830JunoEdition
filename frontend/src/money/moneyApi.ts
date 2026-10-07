@@ -119,17 +119,24 @@ export interface WalletChallenge {
    *  it), null when nothing would be replaced, undefined from a server that doesn't say. A hint for asking first; the
    *  link's own answer still decides. */
   readonly replaces?: string | null;
+  /** Owner ruling 2026-10-07: true when the wallet asked about is the account's own Authorization Wallet (the panel
+   *  warns once before that same address first becomes a game's financial wallet; nothing is refused). */
+  readonly authorizationWallet?: true;
 }
 
 /** SENSITIVE: needs a live "Confirm it's you" on this session. */
 export async function walletChallenge(gameId: string, wallet: string, port: SessionPort = sessionPort()): Promise<MoneyResult<WalletChallenge>> {
   const got = await post(port, "wallet-challenge", { gameId, wallet }, [200]);
   if (!got.ok) return got;
-  const { text, nonce, expiresAt, replaces } = got.value;
+  const { text, nonce, expiresAt, replaces, authorizationWallet } = got.value;
   if (!str(text, 2048) || !str(nonce, 64) || !num(expiresAt)) return badAnswer();
-  if (replaces === undefined) return { ok: true, value: { text, nonce, expiresAt } };
+  /* Owner ruling 2026-10-07: the server's word that this wallet is the account's own Authorization Wallet (said only
+     then; absent otherwise and from an older server). */
+  if (authorizationWallet !== undefined && authorizationWallet !== true) return badAnswer();
+  const same = authorizationWallet === true ? { authorizationWallet: true as const } : {};
+  if (replaces === undefined) return { ok: true, value: { text, nonce, expiresAt, ...same } };
   if (replaces !== null && !str(replaces, 96)) return badAnswer();
-  return { ok: true, value: { text, nonce, expiresAt, replaces } };
+  return { ok: true, value: { text, nonce, expiresAt, replaces, ...same } };
 }
 
 export interface WalletLinkAnswer {

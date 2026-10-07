@@ -708,7 +708,14 @@ function restoreUndo(x: Draft, batch: ClockBatch): void {
         : current !== null && current.seat === prior.seat && current.began_index === target && current.initial_ms !== null && current.timer !== null
           ? clamp(current.initial_ms - remainingAt(current.timer, at))
           : 0;
-    const restoredTimer = prior.timer === null ? null : { remaining_ms: clamp(prior.timer.remaining_ms - charge), since: at };
+    const parkedNow = d.parked;
+    /* LIVE: undoing a seat's OWN qualifying offer (it stands parked behind it since the undone batch) settles the offer's
+       wait exactly as its withdrawal would -- frozen within the budget left, charged to the clock beyond it -- never the
+       whole wait to the clock. */
+    const ownPark = parkedSince && prior.trade === null && prior.timer !== null && d.policy.class === "live" ? (parkedNow.find((p) => p.seat === prior.seat && p.since === undefined && p.freeze_ms !== undefined) ?? null) : null;
+    const split = ownPark !== null ? liveParkAt(ownPark, current, at) : null;
+    const restoredTimer = prior.timer === null ? null : { remaining_ms: split !== null ? split.remaining : clamp(prior.timer.remaining_ms - charge), since: at };
+    const used = split !== null && prior.timer !== null ? clamp(prior.timer.remaining_ms - split.remaining) : charge;
     restored = {
       ...prior,
       kind: D.kind,
@@ -718,13 +725,13 @@ function restoreUndo(x: Draft, batch: ClockBatch): void {
       timer: restoredTimer,
       /* An action run: the charge is not part of its own use (a later measure of the run excludes it). A Live RESPONSE
          timer: the wait it had measured is settled into the restored park below, so it measures afresh from here. */
-      initial_ms: prior.trade !== null && restoredTimer !== null ? restoredTimer.remaining_ms : prior.initial_ms === null ? null : clamp(prior.initial_ms - charge),
+      initial_ms: prior.trade !== null && restoredTimer !== null ? restoredTimer.remaining_ms : prior.initial_ms === null ? null : clamp(prior.initial_ms - used),
+      freeze_ms: split !== null ? Math.min(split.freeze, prior.freeze_ms ?? 0) : prior.freeze_ms,
     };
     /* AN UNDO NEVER GIVES TIME, NOR FREEZE BUDGET (owner ruling, 2026-10-07): a restored park is first SETTLED at the
        snapshot (the wait its response timer had measured, split into frozen and charged), charged its seat's own run
        since the undone batch, and never restored above what that seat holds NOW (its current action clock and budget, or
        its current park as it stands). A running (Timed Async) park is restored as it stands now. */
-    const parkedNow = d.parked;
     const standingNow = (seat: string): { readonly remaining: number; readonly freeze: number } | null => {
       if (current !== null && current.seat === seat && current.trade === null && current.timer !== null) return { remaining: remainingAt(current.timer, at), freeze: current.freeze_ms ?? 0 };
       const park = parkedNow.find((q) => q.seat === seat) ?? null;
@@ -740,7 +747,7 @@ function restoreUndo(x: Draft, batch: ClockBatch): void {
       const freeze = Math.min(settled.freeze, now?.freeze ?? Number.MAX_SAFE_INTEGER);
       return parkOf(true, p.seat, p.offer_key, remaining, p.key, at, freeze);
     });
-    how = charge > 0 ? "undo-restored-charged" : "undo-restored";
+    how = (split !== null ? used + (prior.freeze_ms ?? 0) - (restored.freeze_ms ?? 0) : charge) > 0 ? "undo-restored-charged" : "undo-restored";
   } else if (D === null) {
     restored = null;
     how = "undo-nobody-owes";

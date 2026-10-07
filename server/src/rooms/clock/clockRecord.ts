@@ -497,22 +497,27 @@ export function parseClockDocument(raw: string, gameId: string): GameClockRecord
   } catch {
     throw new ClockUnreadableError(`the clock of ${gameId} is not JSON`, gameId);
   }
+  /* Only a VERSION-2 record is carried forward (every field migration below applies to it alone): a version-3 record
+     missing a field is unreadable, never guessed at. */
+  let migrating = false;
   if (isObject(parsed) && parsed.format === CLOCK_FORMAT && typeof parsed.version === "number") {
     if (parsed.version > CLOCK_VERSION) throw new ClockUnreadableError(`the clock of ${gameId} was written by a newer build (version ${parsed.version})`, gameId, "newer");
     if (parsed.version < CLOCK_VERSION - 1) throw new ClockUnreadableError(`the clock of ${gameId} is the provisional version ${parsed.version} (never read by this build)`, gameId, "older");
-    /* Version 2: carried forward by the field migrations below. */
-    if (parsed.version === CLOCK_VERSION - 1) parsed = { ...parsed, version: CLOCK_VERSION };
+    if (parsed.version === CLOCK_VERSION - 1) {
+      parsed = { ...parsed, version: CLOCK_VERSION };
+      migrating = true;
+    }
   }
   /* A record written before the owner-policy correction (2026-10-06) carried the offer budget (`offers`): it never
      entered the evidence or any decision that remains, so it is dropped on read (the record is otherwise the same v2). */
-  if (isObject(parsed) && Object.prototype.hasOwnProperty.call(parsed, "offers")) {
+  if (migrating && isObject(parsed) && Object.prototype.hasOwnProperty.call(parsed, "offers")) {
     const { offers: _legacy, ...rest } = parsed as Record<string, unknown>;
     void _legacy;
     parsed = rest;
   }
   /* Before the round-instance correction (2026-10-07) the declines' scope was named `or_key` (null outside an Operating
      Round): read as `round_key` -- the next fold re-scopes it to the board's round instance. */
-  if (isObject(parsed)) {
+  if (migrating && isObject(parsed)) {
     const renamed = (declines: unknown): unknown => {
       if (!isObject(declines) || !Object.prototype.hasOwnProperty.call(declines, "or_key")) return declines;
       const { or_key: legacyKey, ...rest } = declines as Record<string, unknown>;

@@ -364,12 +364,18 @@ describe("Live optional-offer FREEZE BUDGET: at most 10:00 in total per required
     const o2 = t.index;
     t.advance(9 * MIN + 50 * SEC);
     t.move(A, facts(turn(A, 0)), "revert", { revertTarget: o2 });
-    assert.deepEqual([t.remaining(), budget(t)], [5 * MIN + 10 * SEC, 9 * MIN + 59 * SEC], "undoing its own offer, A is charged the time it stood");
+    assert.deepEqual([t.remaining(), budget(t)], [15 * MIN, 9 * SEC], "undoing its own offer, A pays the 9:50 it stood from its budget, as a withdrawal would");
     t.move(A, offering(offerOf("private", A, B, 1)), "revert", { revertTarget: rescindIndex });
     const park = t.record.parked.find((p) => p.seat === A);
-    assert.deepEqual([park?.remaining_ms, park?.freeze_ms], [5 * MIN + 10 * SEC, 9 * MIN + 59 * SEC], "the restored park is never above what A holds now (it was 15:00)");
+    assert.deepEqual([park?.remaining_ms, park?.freeze_ms], [15 * MIN, 9 * SEC], "the restored park is never above what A holds now (its budget was 9:59)");
     t.move(A, facts(turn(A, 0)), "rescind");
-    assert.deepEqual([t.remaining(), budget(t)], [5 * MIN + 10 * SEC, 9 * MIN + 59 * SEC]);
+    assert.deepEqual([t.remaining(), budget(t)], [15 * MIN, 9 * SEC], "the cycle refunded nothing: 9:51 of the 10:00 used in all");
+    /* A second cycle: the budget is spent, so O3's wait is charged to A's clock -- the episode cannot run on. */
+    t.move(A, offering(offerOf("trade", A, C, 3)), "propose");
+    const o3 = t.index;
+    t.advance(5 * MIN);
+    t.move(A, facts(turn(A, 0)), "revert", { revertTarget: o3 });
+    assert.deepEqual([t.remaining(), budget(t)], [10 * MIN + 9 * SEC, 0]);
     /* The answerer undoing its own acceptance after A ran: the wait already measured stays used. */
     const u = new Table("live");
     u.move(A, offering(offerOf("trade", A, B, 1)), "propose");
@@ -395,6 +401,27 @@ describe("Live optional-offer FREEZE BUDGET: at most 10:00 in total per required
     h.move(C, offering(offerOf("trade", A, B, 1)), "revert", { revertTarget: rejectIndex });
     h.move(B, facts(turn(A, 0)), "reject");
     assert.deepEqual([h.remaining(), h.record.obligation?.freeze_ms], [LIVE_ACTION_MS - 2 * MIN, 2 * SEC], "the host's undo refunded nothing");
+  });
+
+  test("REVIEW: undoing one's own offer settles its wait as its withdrawal would -- frozen within the budget, charged beyond it -- never the whole wait to the clock", () => {
+    for (const how of ["undo", "rescind"] as const) {
+      const t = new Table("live");
+      t.advance(10 * MIN); // A has 10:00, budget 10:00
+      t.move(A, offering(offerOf("trade", A, B, 1)), "propose");
+      const proposeIndex = t.index;
+      t.advance(9 * MIN);
+      if (how === "undo") t.move(A, facts(turn(A, 0)), "revert", { revertTarget: proposeIndex });
+      else t.move(A, facts(turn(A, 0)), "rescind");
+      assert.deepEqual([t.remaining(), budget(t)], [10 * MIN, MIN], `${how}: the 9:00 wait came from the budget`);
+    }
+    const t = new Table("live");
+    cycle(t, 1, 9 * MIN, "reject"); // budget 1:00
+    t.advance(19 * MIN); // A has 1:00
+    t.move(A, offering(offerOf("trade", A, B, 2)), "propose");
+    const proposeIndex = t.index;
+    t.advance(30 * SEC);
+    t.move(A, facts(turn(A, 0)), "revert", { revertTarget: proposeIndex });
+    assert.deepEqual([t.remaining(), budget(t), t.record.phase], [MIN, 30 * SEC, "active"], "not overdue: the 0:30 came from the budget");
   });
 
   test("REVIEW: a recovered gap settles the wait already measured (never a refund); a replaced offer's wait is settled before the new one waits; a proposer deadline is never back-dated across a pause", () => {
@@ -440,6 +467,7 @@ describe("Live optional-offer FREEZE BUDGET: at most 10:00 in total per required
     const t = new Table("live");
     t.move(A, offering(offerOf("trade", A, B, 1)), "propose");
     const legacy = JSON.parse(JSON.stringify(t.record)) as Record<string, unknown> & { parked: Array<Record<string, unknown>>; obligation: Record<string, unknown>; snapshots: Array<{ obligation: Record<string, unknown> | null; parked: Array<Record<string, unknown>> }> };
+    legacy.version = 2;
     for (const p of legacy.parked) delete p.freeze_ms;
     delete legacy.obligation.freeze_ms;
     for (const snap of legacy.snapshots) {
@@ -447,7 +475,9 @@ describe("Live optional-offer FREEZE BUDGET: at most 10:00 in total per required
       for (const p of snap.parked) delete p.freeze_ms;
     }
     const read = parseClockDocument(JSON.stringify(legacy), GAME);
-    assert.deepEqual([read.parked[0]?.freeze_ms, read.obligation?.freeze_ms, read.snapshots[read.snapshots.length - 1]?.obligation?.freeze_ms], [LIVE_FREEZE_BUDGET_MS, null, LIVE_FREEZE_BUDGET_MS]);
+    assert.deepEqual([read.version, read.parked[0]?.freeze_ms, read.obligation?.freeze_ms, read.snapshots[read.snapshots.length - 1]?.obligation?.freeze_ms], [3, LIVE_FREEZE_BUDGET_MS, null, LIVE_FREEZE_BUDGET_MS]);
+    /* The same fields missing from a VERSION-3 record: unreadable, never guessed at. */
+    assert.throws(() => parseClockDocument(JSON.stringify({ ...legacy, version: 3 }), GAME), ClockUnreadableError);
   });
 });
 
@@ -1925,8 +1955,9 @@ describe("Review fixes: requests, breaks, gaps, offers, approvals", () => {
     assert.deepEqual(clockViewOf(t.record, t.t).remedy?.stale, [C]);
     t.take(remedyProgress(t.record, "submitted", null, t.t, true));
     assert.deepEqual([t.record.remedy?.status, t.record.remedy?.stale], ["submitted", []]);
-    const legacy = JSON.stringify({ ...t.record, offers: { key: "OperatingRound/1/1", counts: { [A]: 3 } } });
-    assert.deepEqual(parseClockDocument(legacy, GAME), t.record, "the legacy offer budget is dropped on read; nothing else changes");
+    const legacy = JSON.stringify({ ...t.record, version: 2, offers: { key: "OperatingRound/1/1", counts: { [A]: 3 } } });
+    assert.deepEqual(parseClockDocument(legacy, GAME), t.record, "the legacy (version-2) offer budget is dropped on read; nothing else changes");
+    assert.throws(() => parseClockDocument(JSON.stringify({ ...t.record, offers: { key: "x", counts: {} } }), GAME), ClockUnreadableError, "a version-3 record carrying it is malformed, never guessed at");
   });
 
   test("a sealed N-1 decision whose approvals can no longer land is HELD unchanged (owner decision required): never converted, never re-voted", () => {

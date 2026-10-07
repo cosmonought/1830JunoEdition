@@ -682,6 +682,8 @@ function endGame(x: Draft, kind: ClockEndKind, at: number, seat: string | null):
   d.pause = { ...d.pause, request: null, paused_at: null };
   d.system = null;
   d.annul = null;
+  /* No undo reaches an ended game: its undo snapshots are dropped (the record stays small). */
+  d.snapshots = [];
   if (d.obligation !== null && d.obligation.timer !== null) d.obligation = { ...d.obligation, timer: freeze(d.obligation.timer, at) };
   if (d.overdue !== null && d.overdue.cure !== null) d.overdue = { ...d.overdue, cure: freeze(d.overdue.cure, at) };
   x.emit("ended", at, { kind, seat });
@@ -1428,7 +1430,10 @@ export function clockViewOf(record: GameClockRecord, now: number): RoomClockView
             stale: [...record.remedy.stale],
             overdue: { seat: record.remedy.seat, strike: record.remedy.strike, epoch: record.remedy.epoch, overdueAt: record.remedy.overdue_ms, logLen: record.remedy.log_len, logHash: record.remedy.log_hash },
           },
-    declines: Object.entries(record.declines.counts).map(([key, count]) => {
+    /* (A key with a kind prefix is a pre-correction development record's: not a direction, not shown.) */
+    declines: Object.entries(record.declines.counts)
+      .filter(([key]) => !key.includes(":"))
+      .map(([key, count]) => {
       const [from, to] = key.split(">");
       return { from, to, count };
     }),

@@ -424,8 +424,9 @@ export function createClockController(deps: ClockControllerDeps) {
       /* Nothing landed since what this process last knew the store held: the decided record stands (the next flush
          writes it). */
     } else if (stored.authority === deps.authority && stored.revision <= entry.record.revision) {
-      /* Our own write landed (or an earlier one did): the decided record stands; the next flush writes it. */
-      entry.stored = stored.revision;
+      /* Our own write landed (or an earlier one did): the decided record stands; the next flush writes it. A read that
+         raced a later write of ours never steps what is known stored backwards. */
+      entry.stored = Math.max(entry.stored ?? -1, stored.revision);
       entry.provenAt = Math.max(entry.provenAt ?? 0, stored.trusted_at);
       if (stored.revision === entry.record.revision) deliver(entry, stored);
     } else {
@@ -444,6 +445,8 @@ export function createClockController(deps: ClockControllerDeps) {
     entry.provenAt = stored?.trusted_at ?? null;
     entry.pending = [];
     entry.pendingEffects = [];
+    /* Nothing of it is decided here any more: it keeps no table resident. */
+    pinFor(entry, false);
     deps.warn(`  clock: ${entry.gameId}: ${why}; this process stops deciding it`);
     deps.ops.audit("clock.lost", { game_id: entry.gameId });
   }
@@ -1347,7 +1350,12 @@ export function createClockController(deps: ClockControllerDeps) {
       /* A money change (a remedy intent resolved -- an expired attestation mooted, say) for a table not open here: open
          it, so a sealed remedy is carried on (rate-limited per table). */
       if (!entries.has(gameId)) {
-        kickLoad(gameId);
+        void deps.store
+          .load(gameId)
+          .then((stored) => {
+            if (stored !== null && stored.remedy !== null && stored.remedy.status !== "confirmed" && stored.remedy.status !== "superseded") kickLoad(gameId);
+          })
+          .catch(() => undefined);
         return;
       }
       void track(deps.runOn(gameId, "clock-money", async (game, tx) => {

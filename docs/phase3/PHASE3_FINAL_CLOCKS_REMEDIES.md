@@ -160,7 +160,7 @@ it -- the player-reporting lane's interface (that branch is not merged here).
 only a bounded, CHECKPOINTED window: the events since the current obligation's ORIGINAL grant (reset only by a new
 obligation while nothing is overdue -- never by a resumption after an offer, an undo's restoration or a recovered gap,
 nor while a proposer stands parked, so a sealed document carries the defaulting obligation's grant and every park /
-resume since), at most `CLOCK_EVIDENCE_WINDOW` = 512 -- past that the oldest are folded into the
+resume since -- unless more than 512 facts fell inside it), at most `CLOCK_EVIDENCE_WINDOW` = 512 -- past that the oldest are folded into the
 window's starting head (`window_from`, `truncated: true`), so the window still folds to the chain head and a sealed
 document still folds to its attested hash -- and the strike ledger's newest 64 events (a Live game has at most five per
 seat). Every event also goes, as it happens, to the reporting hook and the ops audit (the archive; best effort). At
@@ -222,8 +222,9 @@ key (never the selected Keplr wallet) only after a confirmation naming the defau
   answerer's run time (so propose-and-rescind cannot stop the proposer's clock).
 - **OWNER DECISION -- a timed table at the LIVE-2 log cap.** With no offer count, offer churn (propose-and-rescind on a
   seat's own clock) can still grow a game's log toward the general 10,000-entry cap, at the transport rate only: about
-  60 entries an hour sustained. In Live the churner's own 20:00 is charged for it (unreachable in practice); in Timed
-  Async it takes about 130 hours of the churner's own obligations from a typical 2,000 entries -- several turns at
+  60 entries an hour sustained. In Live the churner's own 20:00 is charged for it -- unless a confederate keeps
+  ACCEPTING (the next item: each acceptance refreshes the proposer), when only the transport rate bounds it (about 130
+  hours, impractical but possible); in Timed Async it takes about 130 hours of the churner's own obligations from a typical 2,000 entries -- several turns at
   12 h - 48 h paces, fewer at 3 d / 7 d -- and No-deadline has no time bound. A table at the cap is FROZEN (every move
   refused, timers stopped; votes, annulment and a sealed remedy carry on), as before this lane, so a timed money table
   could then end only by unanimous or exceptional-review annulment. What a frozen timed money table's outcome should be
@@ -233,8 +234,12 @@ key (never the selected Keplr wallet) only after a confirmation naming the defau
   indefinitely by trading a private back and forth (each acceptance refreshes the proposer), now that no offer count
   bounds it -- at the transport rate only. Resuming the parked remainder after an accepted offer that leaves the
   proposer owing the same decision would close it, but changes the settled refresh rule: owner's call.
-- A truncated evidence document (more than 512 facts in one obligation, e.g. hours of rebuffed resume requests during a
-  pause) folds to its attested hash but its earliest facts are only in the best-effort archive; a lost clock record of
+- A truncated evidence document (more than 512 facts in one obligation: hours of rebuffed resume requests during a
+  pause, or about 256 Async offer cycles within one obligation -- a churner can strip its own grant from the window
+  that way in a few hours of its own pace) folds to its attested hash but its earliest facts, the grant included, are
+  only in the best-effort archive; a recovered gap holding two or more unfolded offer batches, or an undo older than
+  the snapshot ring, can put a Live answerer on an ordinary clock (free tables only: a money table takes no move until
+  the previous clock write is stored, and has no host undo); a lost clock record of
   a dealt money table starts a new clock (the game is then system-paused; its escrow's own remedy intents and chain
   state still stand); an Async confederate answerer can sit up to its pace per offer (no decline limit by the ruling).
 - Live outages and stalls under about 60 s are charged (the continuity limit); host undo on FREE tables can hand the

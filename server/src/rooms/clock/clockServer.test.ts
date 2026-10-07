@@ -571,7 +571,7 @@ describe("Offers through the server: no game-rule cap, no history bound; frequen
   test("frequency is transport: past a burst of landed offers the next answers rate-limited WITH its wait (never a game rule) and is taken once it passes; a refused proposal spends nothing; the history's length is never a rule", () =>
     withDir("offers-rate", async (dir) => {
       const time = fakeTime(T0);
-      const { server, port } = await boot(dir, time, "auth-1", { limits: { logEntryAlarm: 1, rooms: { offersPerSeat: { capacity: 3, refillPerSecond: 20 }, offersPerSeatSustained: { capacity: 1e6, refillPerSecond: 1e6 } } } });
+      const { server, port } = await boot(dir, time, "auth-1", { limits: { logEntryAlarm: 1, rooms: { offersPerSeat: { capacity: 3, refillPerSecond: 0.2 }, offersPerSeatSustained: { capacity: 1e6, refillPerSecond: 1e6 } } } });
       try {
         const { gameId, ids } = await openTable(port, TWO);
         const watcher = await tab(port, ALICE, gameId);

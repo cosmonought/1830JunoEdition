@@ -45,6 +45,7 @@ module "host" {
   trusted_proxy_hops      = var.trusted_proxy_hops
   money_tables_nonmainnet = var.money_tables_nonmainnet
   edge_diagnostic_staging = var.edge_diagnostic_staging
+  conduct_reviewers       = var.conduct_reviewers
   caddy_image             = var.caddy_image
   ecr_repository_name     = var.ecr_repository_name
   manage_ecr_lifecycle    = var.manage_ecr_lifecycle

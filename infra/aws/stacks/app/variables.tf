@@ -48,6 +48,11 @@ variable "edge_diagnostic_staging" {
   default = false
 }
 
+variable "conduct_reviewers" {
+  type    = list(string)
+  default = []
+}
+
 variable "network" {
   type = any
 }

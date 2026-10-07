@@ -181,6 +181,16 @@ variable "edge_diagnostic_staging" {
   }
 }
 
+variable "conduct_reviewers" {
+  description = "GS_CONDUCT_REVIEWERS: the USERNAMES that may open the conduct-report review panel (player reporting; usernames, no secret). Each must be held by an account when the server starts, or the server refuses to start (fail closed). Empty (the default): reports are received and kept, and nobody can review them; the rendered environment is then byte-identical to a module without this input."
+  type        = list(string)
+  default     = []
+  validation {
+    condition     = length(var.conduct_reviewers) <= 32 && alltrue([for name in var.conduct_reviewers : can(regex("^[^\\s,\\p{Cc}\\p{Cf}]{1,64}$", name))])
+    error_message = "conduct_reviewers: at most 32 usernames, each 1-64 characters with no whitespace, comma or control character."
+  }
+}
+
 variable "container_port" {
   description = "The game server's port inside its container; published on the host's LOOPBACK only."
   type        = number

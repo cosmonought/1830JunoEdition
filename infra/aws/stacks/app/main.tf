@@ -39,6 +39,7 @@ module "app" {
   escrow                            = var.escrow
   money_tables_nonmainnet           = var.money_tables_nonmainnet
   edge_diagnostic_staging           = var.edge_diagnostic_staging
+  conduct_reviewers                 = var.conduct_reviewers
   network                           = var.network
   build_id                          = var.build_id
   container_port                    = var.container_port

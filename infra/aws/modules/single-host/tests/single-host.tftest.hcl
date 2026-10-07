@@ -378,6 +378,39 @@ run "edge_diagnostic_refused_in_prod" {
   expect_failures = [var.edge_diagnostic_staging]
 }
 
+# Consolidated final pre-playtest integration: player reporting's reviewer list (GS_CONDUCT_REVIEWERS). Absent by default --
+# the rendered server.env (and so the user data, which replaces the host on change) is exactly what it was without it.
+run "conduct_reviewers_absent_by_default" {
+  command = plan
+  assert {
+    condition     = !strcontains(local.server_env, "GS_CONDUCT_REVIEWERS")
+    error_message = "no reviewer list unless one is given"
+  }
+  assert {
+    condition     = endswith(local.server_env, "GS_METRICS_PROFILE=single-host\n")
+    error_message = "with no reviewer (and no money tables / edge mirror), server.env ends exactly as before the reviewer input existed"
+  }
+}
+
+run "conduct_reviewers_rendered" {
+  command = plan
+  variables {
+    conduct_reviewers = ["Rita", "Moderator"]
+  }
+  assert {
+    condition     = strcontains(local.server_env, "\nGS_CONDUCT_REVIEWERS=Rita,Moderator\n")
+    error_message = "the reviewer usernames, comma-separated, as the server parses them"
+  }
+}
+
+run "conduct_reviewers_refuse_separators" {
+  command = plan
+  variables {
+    conduct_reviewers = ["Rita,Mallory"]
+  }
+  expect_failures = [var.conduct_reviewers]
+}
+
 run "budget_off_by_default" {
   command = plan
   assert {

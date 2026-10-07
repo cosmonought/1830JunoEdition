@@ -78,6 +78,12 @@ variable "edge_diagnostic_staging" {
   default = false
 }
 
+variable "conduct_reviewers" {
+  description = "GS_CONDUCT_REVIEWERS (the module validates it). Changing it changes the host's user data: see infra/aws/SINGLE_HOST_MIGRATION.md before planning it on a running host."
+  type        = list(string)
+  default     = []
+}
+
 variable "caddy_image" {
   type    = string
   default = "public.ecr.aws/docker/library/caddy:2-alpine@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b"

@@ -131,6 +131,7 @@ locals {
       ],
       var.money_tables_nonmainnet ? [{ name = "ESCROW_MONEY_TABLES", value = "nonmainnet" }] : [],
       var.edge_diagnostic_staging ? [{ name = "GS_EDGE_DIAGNOSTIC", value = "staging" }] : [],
+      length(var.conduct_reviewers) > 0 ? [{ name = "GS_CONDUCT_REVIEWERS", value = join(",", var.conduct_reviewers) }] : [],
     )
   }
 

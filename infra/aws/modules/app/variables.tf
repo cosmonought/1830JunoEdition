@@ -200,6 +200,16 @@ variable "money_tables_nonmainnet" {
   }
 }
 
+variable "conduct_reviewers" {
+  description = "GS_CONDUCT_REVIEWERS: the USERNAMES that may open the conduct-report review panel (usernames, no secret; each must be held by an account at startup or the task refuses to start). Empty (the default): no reviewer, and the task environment is exactly as without this input."
+  type        = list(string)
+  default     = []
+  validation {
+    condition     = length(var.conduct_reviewers) <= 32 && alltrue([for name in var.conduct_reviewers : can(regex("^[^\\s,\\p{Cc}\\p{Cf}]{1,64}$", name))])
+    error_message = "conduct_reviewers: at most 32 usernames, each 1-64 characters with no whitespace, comma or control character."
+  }
+}
+
 variable "edge_diagnostic_staging" {
   description = "LIVE-6 L6-6: sets GS_EDGE_DIAGNOSTIC=staging, mounting /gs/diag/edge (a hashed mirror of each request) for the staging certification's edge probe. Never with a mainnet escrow, never in a prod* environment."
   type        = bool

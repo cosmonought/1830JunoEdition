@@ -251,6 +251,11 @@ shows nothing: every later guard then judges its own change alone.
    - `escrow_enabled`, `money_tables_nonmainnet` as staging;
    - `edge_diagnostic_staging = true` for the edge probes;
    - `manage_ecr_lifecycle = false` (step 22b);
+   - `conduct_reviewers` left EMPTY (the default; player reporting's `GS_CONDUCT_REVIEWERS`, wired at the consolidated
+     final pre-playtest integration). Empty renders `server.env` -- and so the user data -- byte-identically to the
+     reviewed host-create commit (pinned by `single-host.tftest.hcl` `conduct_reviewers_absent_by_default`). Naming
+     reviewers later CHANGES the user data, and `user_data_replace_on_change` then REPLACES the instance: that is its own
+     reviewed host change, planned and judged as a host replacement, never folded into this migration;
    - **the budget, ENABLED, with an owner-named subscriber** (required). AWS Budgets in a member account sees only that account's costs:
      - if the ledger is a separate account and the two accounts are not under one Organizations payer, create the same budget in the ledger account too;
      - if they are under one payer, create it in the management account, where it covers both.

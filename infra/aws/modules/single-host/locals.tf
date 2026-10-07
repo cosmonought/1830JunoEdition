@@ -70,6 +70,7 @@ locals {
     trusted_proxy_hops    = var.trusted_proxy_hops
     money_tables          = var.money_tables_nonmainnet
     edge_diagnostic       = var.edge_diagnostic_staging
+    conduct_reviewers     = var.conduct_reviewers
   })
   caddyfile = templatefile("${path.module}/templates/Caddyfile.tftpl", {
     origin_hostname = var.origin_hostname

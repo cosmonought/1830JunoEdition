@@ -793,6 +793,28 @@ run "edge_diagnostic_is_off_by_default" {
   }
 }
 
+run "conduct_reviewers_are_explicit" {
+  command = apply
+
+  variables {
+    conduct_reviewers = ["Rita"]
+  }
+
+  assert {
+    condition     = contains([for e in jsondecode(aws_ecs_task_definition.pool["p1"].container_definitions)[0].environment : "${e.name}=${e.value}"], "GS_CONDUCT_REVIEWERS=Rita")
+    error_message = "Player reporting: the reviewer usernames reach the task's environment."
+  }
+}
+
+run "conduct_reviewers_absent_by_default" {
+  command = apply
+
+  assert {
+    condition     = alltrue([for id, td in aws_ecs_task_definition.pool : !contains([for e in jsondecode(td.container_definitions)[0].environment : e.name], "GS_CONDUCT_REVIEWERS")])
+    error_message = "Player reporting: no task names reviewers unless asked (the task definition is unchanged)."
+  }
+}
+
 /* ------------------------------------------------------------------ */
 /* Refusals                                                             */
 /* ------------------------------------------------------------------ */

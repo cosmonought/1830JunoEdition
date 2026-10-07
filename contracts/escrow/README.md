@@ -6,9 +6,13 @@
 > `claude/PHASE3_ESCROW21_TIMED_REMEDY_PASS_2026-10-06.md`). What it does
 > NOT contain is the server's action clock: which seat is overdue, the 20/30
 > race, voluntary and system pauses, the N−1 vote and outage continuity are
-> the **server clock / system-pause lane, not complete**; until it exists no
-> remedy is ever attested or relayed (the server's remedy gate is absent and
-> fails closed). The canonical money artifact remains escrow **2.0.0**
+> the **server clock / system-pause lane**, implemented on
+> `phase3/preplaytest-final-clocks-remedies` (2026-10-06, not integrated;
+> `docs/phase3/PHASE3_FINAL_CLOCKS_REMEDIES.md`): the sealed decision, the
+> dedicated REMEDY signer port (fail closed when absent), the durable intent
+> and the clock lane's remedy gate. No KMS remedy signer is deployed, 2.1.0 is
+> not deployed and its canonical checksum is not certified; nothing here is
+> mainnet ready. The canonical money artifact remains escrow **2.0.0**
 > (`5ecc3022…09e8`, the JX-1 deployment, untouched); a 2.1.0 artifact needs the
 > official optimizer gate on the owner's machine before it can hold money.
 
@@ -515,7 +519,11 @@ VM gas plus modelled KV/event gas for every path.
     obligation of the clock lane). The approval horizon bounds the approvals'
     part of that window; the client lane must pick it (Live: about the overdue
     moment + the 10-minute cure window + a relay / pause allowance; Async: the
-    proposal's life). The contract does not cap it.
+    proposal's life). The contract does not cap it. (Lane A's branch posts the
+    fencing checkpoint on cure and signs Live approvals to the overdue moment
+    + 6 h − 60 s, Async approvals to 29 days from the server's time; the
+    server accepts a Live approval only strictly beyond the projected finality
+    + 300 s.)
   * An admin `SetResolver` to a seated wallet delays the `Start` of FUNDED
     2.1.0 games (deposits stay withdrawable and cancellable): denial of service
     only.

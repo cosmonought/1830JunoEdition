@@ -317,7 +317,13 @@ export function createConductService(deps: ConductServiceDeps): ConductService {
     let related: CaseView["related"] = { total: 0, active: 0, reporters: 0, games: 0, confirmed: 0, closedNoViolation: 0, known: false };
     try {
       const reportedAccount = value.reported.principal_id;
-      const others = (await readAll()).cases.filter((other) => other.case_id !== value.case_id && other.reported.principal_id === reportedAccount);
+      const candidates = (await readAll()).cases.filter((other) => other.case_id !== value.case_id && other.reported.principal_id === reportedAccount);
+      /* Only cases this reviewer may handle are counted (consolidated integration, review finding): a case at a table the
+         reviewer is or was seated at must stay as absent here as it is from the queue -- counting it would reveal its
+         existence and outcome. A roster that cannot be read leaves the counts incomplete: `known` false. */
+      const rosters = new Map<string, Promise<readonly string[] | null>>();
+      const standings = await Promise.all(candidates.map((other) => standingOf(other, reviewerPrincipalId, rosters)));
+      const others = candidates.filter((_, i) => standings[i] === "clear");
       related = {
         total: others.length,
         active: others.filter((other) => isConductCaseActive(other.status)).length,
@@ -325,7 +331,7 @@ export function createConductService(deps: ConductServiceDeps): ConductService {
         games: new Set(others.map((other) => other.game_id)).size,
         confirmed: others.filter((other) => other.status === "conduct-confirmed").length,
         closedNoViolation: others.filter((other) => other.status === "no-violation").length,
-        known: true,
+        known: !standings.includes("unknown"),
       };
     } catch (error) {
       deps.warn(`  conduct: related cases of ${value.case_id} could not be counted -- ${error instanceof Error ? error.message.slice(0, 200) : String(error)}`);

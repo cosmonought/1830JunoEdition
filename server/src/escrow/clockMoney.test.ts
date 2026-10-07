@@ -16,7 +16,8 @@ import assert from "node:assert/strict";
 
 import { NO_DEADLINE_DISCLOSURE, type RoomClockView } from "../../../frontend/src/utils/clockProtocol";
 import { quietConsole } from "../rooms/testSupport";
-import { hostCreates, linkWallet, moneyServer, openMoneyTable, player, testConsentKey, testWallet, viewOf, type MoneyServer } from "./escrow4Support";
+import { hostCreates, joinerFunds, linkWallet, moneyServer, openMoneyTable, player, testConsentKey, testWallet, viewOf, type MoneyServer } from "./escrow4Support";
+import { RESTORE_READ_ONLY_SENTENCE } from "./escrowService";
 
 quietConsole();
 
@@ -138,6 +139,69 @@ describe("Money tables: a TIMED money table fails closed without the dedicated R
       signer.on = true;
       const admitted = await joiner.who.api("join-admission", { gameId: table.gameId });
       assert.equal(admitted.status, 200, admitted.text);
+    } finally {
+      await world.close();
+    }
+  });
+});
+
+describe("Consolidated final integration (independent review): the fail-closed REMEDY-signer rule at every money step; the clock held during a restore check", () => {
+  test("the signer goes away AFTER the timed table was opened: the host's own ante (challenge and link) and the Start are refused, never frozen; with the signer back each goes through", async () => {
+    const signer = { on: true };
+    const world = await moneyServer({ clock: true, remedySigner: signer });
+    try {
+      const host = await player(world, "Hana");
+      const table = await openMoneyTable(host, 2);
+      const hostWallet = testWallet("host-late");
+      const hostKey = testConsentKey("host-late");
+      /* The host's ante: refused while the signer is away -- before any challenge is minted. */
+      signer.on = false;
+      await host.confirm();
+      const challenge = await host.api("wallet-challenge", { gameId: table.gameId, wallet: hostWallet.address });
+      assert.deepEqual([challenge.status, challenge.body?.error], [503, "money-unavailable"], challenge.text);
+      assert.match(String(challenge.body?.reason), /can't enforce this table's deadline/);
+      signer.on = true;
+      const linked = await linkWallet(host, table.gameId, hostWallet, hostKey);
+      assert.equal(linked.status, 200, linked.text);
+      await hostCreates(world, host, table.gameId, hostWallet, hostKey, linked.body?.ticket as string);
+      await world.observe();
+      const joiner = await seatJoiner(world, "Jo", table.code);
+      const joWallet = testWallet("jo-late");
+      const joKey = testConsentKey("jo-late");
+      const joLinked = await linkWallet(joiner.who, table.gameId, joWallet, joKey);
+      assert.equal(joLinked.status, 200, joLinked.text);
+      await joinerFunds(world, joiner.who, table.gameId, joWallet, joKey, joLinked.body?.ticket as string);
+      await world.observe();
+      /* Fully funded; the signer goes away: Start is refused and nothing is frozen. */
+      signer.on = false;
+      const refused = await host.client.op({ type: "start-game" }, table.gameId);
+      assert.deepEqual([refused.ok, refused.code], [false, "money-unavailable"], JSON.stringify(refused));
+      assert.match(String(refused.reason), /can't enforce this table's deadline right now, so the game was not started/);
+      assert.equal((await world.financial.load(table.gameId))?.roster ?? null, null, "no roster was frozen");
+      signer.on = true;
+      const started = await host.client.op({ type: "start-game" }, table.gameId);
+      assert.equal(started.ok, true, JSON.stringify(started));
+    } finally {
+      await world.close();
+    }
+  });
+
+  test("a restored money table awaiting its L6-2 restore check holds its clock (no clock op changes it); the clock answers again once the check passes", async () => {
+    const world = await moneyServer({ clock: true });
+    try {
+      const host = await player(world, "Hana");
+      const table = await openMoneyTable(host, 2, { variants: ASYNC, deadline: "no-deadline", noDeadlineAck: true });
+      const original = world.service.restoreGate;
+      world.service.restoreGate = (gameId: string) => (gameId === table.gameId ? RESTORE_READ_ONLY_SENTENCE : original(gameId));
+      try {
+        const held = await host.client.op({ type: "clock-ack" }, table.gameId);
+        assert.equal(held.ok, false, JSON.stringify(held));
+        assert.match(String(held.reason), /held; its clock cannot change now/, JSON.stringify(held));
+      } finally {
+        world.service.restoreGate = original;
+      }
+      const answered = await host.client.op({ type: "clock-ack" }, table.gameId);
+      assert.ok(!/held; its clock cannot change now/.test(String(answered.reason ?? "")), JSON.stringify(answered));
     } finally {
       await world.close();
     }

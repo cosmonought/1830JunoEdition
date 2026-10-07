@@ -149,6 +149,8 @@ describe("ESCROW-4: the money panel", () => {
     await render(<MoneyPanel room={room(view)} onStart={() => undefined} services={services} />);
     expect(byTestId("money-action-ante")?.textContent).toBe("Ante 1 JUNOX");
     expect(byTestId("money-compact-terms")?.textContent).toMatch(/You send 1 JUNOX · escrow fee 0\.01 JUNOX \(not refunded\) · pot when full 1\.98 JUNOX · winnings go to juno12gdm…783a/);
+    /* Consolidated integration (review): the deadline the escrow is funded under, on the compact line too. */
+    expect(byTestId("money-compact-terms")?.textContent).toMatch(/· deadline Live · 20:00 per action · Keplr shows the network fee/);
     const review = byTestId("money-review");
     expect(review?.closest("details")?.getAttribute("data-testid")).toBe("money-full-terms");
     expect(review?.textContent).toMatch(/You send1 JUNOX from juno12gdm…783a/);

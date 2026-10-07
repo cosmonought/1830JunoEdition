@@ -187,7 +187,7 @@ function exitSentence(money: RoomMoneyView, kind: AskedKind): string {
 }
 
 /** P3-ACCT: the deposit's terms in one line, before the Ante press (the full card is one click away). */
-function CompactTerms({ money, wallet }: { money: RoomMoneyView; wallet: string | null }): JSX.Element {
+function CompactTerms({ money, wallet, clock }: { money: RoomMoneyView; wallet: string | null; clock?: RoomClockView | null }): JSX.Element {
   const exponent = money.deployment.exponent;
   const symbol = money.deployment.symbol;
   const fmt = (base: string | null) => formatAmount(base, exponent, symbol);
@@ -199,7 +199,9 @@ function CompactTerms({ money, wallet }: { money: RoomMoneyView; wallet: string 
     <p style={styles.faint} data-testid="money-compact-terms">
       You send {fmt(money.terms.anteGross)}
       {fee !== null ? ` · escrow fee ${fmt(fee)} (not refunded)` : ""}
-      {pot !== null ? ` · pot when full ${fmt(pot)}` : ""} · winnings go to {wallet === null ? "the wallet you deposit from" : shortWallet(wallet)} · Keplr shows the network fee. <TermsLink className="wr-touch" />
+      {pot !== null ? ` · pot when full ${fmt(pot)}` : ""} · winnings go to {wallet === null ? "the wallet you deposit from" : shortWallet(wallet)}
+      {/* Consolidated final integration (review): the deadline the escrow is funded under, beside the Ante, as in the full terms. */}
+      {clock !== null && clock !== undefined ? ` · deadline ${deadlineLabel(clock)}` : money.terms.mode === "live" ? " · deadline Live · 20:00 per action" : ""} · Keplr shows the network fee. <TermsLink className="wr-touch" />
     </p>
   );
 }
@@ -316,7 +318,7 @@ export function MoneyPanel({ room, onStart, busy = false, port, services }: Mone
       {/* P3-ACCT: before the Ante press, the terms are on the panel -- one line, the full card a click away. */}
       {(flow.primary?.kind === "ante" || flow.primary?.kind === "verify") && !table.reviewing ? (
         <>
-          <CompactTerms money={money} wallet={money.you?.link?.wallet ?? (table.wallet.kind === "connected" ? table.wallet.address : null)} />
+          <CompactTerms money={money} wallet={money.you?.link?.wallet ?? (table.wallet.kind === "connected" ? table.wallet.address : null)} clock={room.clock ?? null} />
           <details data-testid="money-full-terms">
             <summary style={styles.disclosure}>Full deposit terms</summary>
             <ReviewCard money={money} isHost={room.you.role === "host"} wallet={money.you?.link?.wallet ?? (table.wallet.kind === "connected" ? table.wallet.address : null)} now={table.now} clock={room.clock ?? null} />

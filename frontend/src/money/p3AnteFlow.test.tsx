@@ -234,6 +234,25 @@ describe("P3-ACCT anteNow: only the steps still needed, in order, with the owner
     expect(port.requests).toEqual([]);
   });
 
+  it("consolidated integration (review): at a No-deadline table this seat has not acknowledged, the Ante asks Keplr and the server NOTHING -- it says the disclosure first; verifying a wallet alone is not gated", async () => {
+    const services = testServices();
+    installMoneyServicesForTests(services);
+    updateMoneySession({ wallet: "disconnected", address: null, confirmedUntil: null });
+    const port = scriptedPort();
+    const view = hostTable();
+    const deadline = { deadline: "no-deadline" as const, paceSecs: null, acknowledged: false };
+    const outcome = await anteNow({ gameId: "g_table", view, variants: resolveVariants({ mode: "async" } as never), isHost: false, port, services, site: SITE, deadline }, hooksFor(() => null, [], view));
+    expect(outcome).toEqual({ ok: false, reason: expect.stringMatching(/Acknowledge this before your deposit\.$/) });
+    expect(prompts(services.wallet)).toEqual([]);
+    expect(port.requests).toEqual([]);
+    /* "Verify wallet (free)" commits no money: it goes ahead. */
+    port.answer("money/wallet-challenge", 200, challenge());
+    port.answer("money/wallet-link", 200, { ok: true, mode: "issued", wallet: TEST_WALLET, epoch: 1, ticket: TICKET });
+    const verified = await anteNow({ gameId: "g_table", view, variants: resolveVariants({ mode: "async" } as never), isHost: false, port, services, site: SITE, deadline }, { ...hooksFor(() => null, [], view), verifyOnly: true });
+    expect(verified.ok).toBe(true);
+    expect(prompts(services.wallet)).toEqual(["connect", `signLink:${TEST_WALLET}:18COSMOS/WALLET-LINK/v1`]);
+  });
+
   it("cancelled in Keplr at the link: nothing is linked or sent; pressing again resumes from there (no second connect)", async () => {
     const services = testServices();
     installMoneyServicesForTests(services);

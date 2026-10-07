@@ -1338,6 +1338,19 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
     conflict: "The table changed while it was being started. Start again.",
   });
 
+  /** CONSOLIDATED FINAL INTEGRATION (independent review): the clock lane's fail-closed rule -- a TIMED money table is
+   *  neither opened, funded nor started on a server that cannot enforce its deadline (no dedicated REMEDY signer, or a
+   *  clock that cannot be read) -- held at every step that commits money to the table, not only at its creation and a
+   *  joiner's admission: the host's own ante (its wallet challenge and link open the escrow with that deposit) and the
+   *  Start. `null`: enforceable (or no clock on this server). The wording is the admission's. */
+  async function deadlineNotEnforceable(record: GameRecord, playerId: string): Promise<{ readonly status: number; readonly code: string; readonly reason: string } | null> {
+    if (deps.noDeadlineAck === undefined) return null;
+    const acked = await deps.noDeadlineAck(record.game_id, playerId).catch(() => "unknown" as const);
+    if (acked === "unknown") return { status: 503, code: "money-unavailable", reason: "This table's deadline can't be read right now, so no deposit is approved. Try again later." };
+    if (acked === "unenforceable") return { status: 503, code: "money-unavailable", reason: "This server can't enforce this table's deadline right now, so no deposit is approved. Try again later." };
+    return null;
+  }
+
   async function startInTask(record: GameRecord, principalId: string): Promise<{ readonly kind: "deal" } | { readonly kind: "starting" } | { readonly kind: "refused"; readonly code: string; readonly reason: string }> {
     const no = (code: string, reason: string) => ({ kind: "refused" as const, code, reason });
     if (!deps.service.isReady()) return no("unavailable", "The Juno escrow isn't reachable right now. Try again in a minute.");
@@ -1389,6 +1402,9 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
     if (game.game.state !== "FUNDED" || record.seats.length !== record.exact_players || [...claims.bySeat.values()].some((claim) => claim.funding !== "funded")) {
       return no("need-funding", "Every seat has to be funded on Juno before the game can start.");
     }
+    /* A timed table starts only where its deadline can be enforced (see `deadlineNotEnforceable`): nothing is frozen. */
+    const unenforceable = await deadlineNotEnforceable(record, seat.player_id);
+    if (unenforceable !== null) return no(unenforceable.code, "This server can't enforce this table's deadline right now, so the game was not started. Try again later.");
     const started = await deps.service.requestStart(record.game_id, record.seats);
     soon(record.game_id);
     if (!started.ok) return no(started.code === "retry" ? "retry" : "not-ready", START_REFUSALS[started.code] ?? `The game could not be started (${started.code}).`);
@@ -1442,6 +1458,11 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
     if (!isTable(table)) return table;
     const restoring = restoreHeld(table.record);
     if (restoring !== null) return restoring;
+    /* The host's ante opens the escrow with its deposit: a timed table's deadline must be enforceable first. */
+    if (table.isHost) {
+      const unenforceable = await deadlineNotEnforceable(table.record, table.record.host_player_id);
+      if (unenforceable !== null) return refusal(unenforceable.status, unenforceable.code, unenforceable.reason);
+    }
     const wallet = canonicalJunoWallet(body.wallet);
     if (wallet === null) return refusal(400, "bad-wallet", "That isn't a Juno wallet address.");
     /* The grant, or the account's own Authorization Wallet (its fresh signature, next, is the proof). */
@@ -1587,6 +1608,11 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
     if (!isTable(table)) return table;
     const restoring = restoreHeld(table.record);
     if (restoring !== null) return restoring;
+    if (table.isHost) {
+      /* Before the challenge is spent: the same signed link goes through once the deadline is enforceable again. */
+      const unenforceable = await deadlineNotEnforceable(table.record, table.record.host_player_id);
+      if (unenforceable !== null) return refusal(unenforceable.status, unenforceable.code, unenforceable.reason);
+    }
     const elsewhere = await notServedHere(table.record);
     if (elsewhere !== null) return elsewhere;
     const context = { sessionId: caller.sessionId, familyId: caller.familyId, recoverySelector: caller.recoverySelector, principalId: caller.principalId };

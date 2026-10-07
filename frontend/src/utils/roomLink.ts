@@ -290,7 +290,11 @@ export function renewRoomLinks(): void {
   for (const channel of Array.from(channels.values())) {
     if (channel.retired) continue;
     const old = channel.socket;
+    /* Consolidated final integration (review): the old socket's own close is ignored once it is swapped out, so the
+       link watchers (the clock chip's "connected" state) hear the renewal here, or never. */
+    const wasOpen = channel.open;
     channel.open = false;
+    if (wasOpen) notifyLink(channel);
     const unsent = new Set(channel.backlog.map((queued) => queued.requestId).filter((id): id is string => id !== undefined));
     channel.pending.forEach((settle, requestId) => {
       if (unsent.has(requestId)) return;

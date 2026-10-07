@@ -163,6 +163,30 @@ describe("Consolidated integration A: a reviewer seated at the reported table is
   });
 });
 
+describe("Consolidated integration A (review follow-up): related-case counts never reveal a case the reviewer may not see", () => {
+  test("a case at a table the reviewer sits at is left out of another case's related counts; an unreadable roster makes the counts unknown", async () => {
+    const { createConductService } = await import("./conductService");
+    const store = createMemoryConductCaseStore();
+    const T1 = "g_0000000000000000000000000w";
+    const T2 = "g_000000000000000000000000r0";
+    const rosters = new Map<string, readonly string[] | null>([[T1, []], [T2, ["pr_reviewer"]]]);
+    const service = createConductService({ store, build: "t", now: () => 1, warn: () => undefined, tableRosterOf: async (gameId) => (rosters.has(gameId) ? (rosters.get(gameId) as readonly string[] | null) : []) });
+    const first = minimalCase(T1);
+    const secondOpen = { ...minimalCase(T2), case_id: "cc_" + "b".repeat(32) } as ConductCase;
+    const second = { ...secondOpen, status: "conduct-confirmed", revision: 2, history: [{ at: 2, from: "open", to: "conduct-confirmed", note: null, reviewer: "acct-000000000000" }] } as ConductCase;
+    await store.create(first);
+    await store.create(secondOpen);
+    assert.equal((await store.save(second, 1)).kind, "committed");
+    const view = await service.caseView(first.case_id, "pr_reviewer", async () => null);
+    assert.deepEqual([view?.related.total, view?.related.confirmed, view?.related.known], [0, 0, true], "the case at the reviewer's own table is not counted");
+    const other = await service.caseView(first.case_id, "pr_someone_else", async () => null);
+    assert.deepEqual([other?.related.total, other?.related.confirmed], [1, 1], "an unconflicted reviewer sees it counted");
+    rosters.set(T2, null);
+    const unknown = await service.caseView(first.case_id, "pr_someone_else", async () => null);
+    assert.equal(unknown?.related.known, false, "a roster that cannot be read leaves the counts incomplete");
+  });
+});
+
 function minimalCase(gameId: string): ConductCase {
   const party = (id: string, principal: string) => ({ player_id: id, principal_id: principal, nickname: id, joined_at: 1 });
   const counts = { offers: 0, accepted: 0, declined: 0, rescinded: 0, forgone: 0, undos: 0, passes: 0, actions: 0 };
@@ -261,6 +285,16 @@ describe("Consolidated integration B: the clock lane's evidence in a conduct cas
     assert.equal(value.omitted, 42 - value.events.length);
     assert.doesNotMatch(JSON.stringify(value), /signature|log_hash|"zz"/);
     assert.equal(conductClockEvidenceOf({ record: null, recent: [] }), null, "nothing known: not captured");
+    /* A SEALED remedy's window (moved out of the live window by the seal) is still read after a restart or a handoff. */
+    const sealed = {
+      ...(record as object),
+      evidence: { ...(record as { evidence: object }).evidence, window: [ev(60, "remedy-status", { remedy: 1, status: "attesting" })], seq: 60, head: HEAD(60) },
+      remedy: { evidence: { events: [ev(55, "proposal", { epoch: 2, id: 1, kind: "foreclose", by: "p-bob" }), ev(56, "vote", { epoch: 2, id: 1, seat: "p-bob", yes: true, signature: "aa" }), ev(57, "final", { epoch: 2, seat: "p-ann", outcome: "foreclosure" }), ev(58, "remedy-sealed", { remedy: 2, seat: "p-ann", strike: 2, signature: "x" })], ledger: { from: HEAD(0), events: [ev(52, "overdue", { seat: "p-ann", strike: 2 })] } } },
+    } as unknown as Parameters<typeof conductClockEvidenceOf>[0]["record"];
+    const afterSeal = conductClockEvidenceOf({ record: sealed, recent: [] }) as ConductClockEvidence;
+    assert.deepEqual(afterSeal.events.slice(-5).map((fact) => fact.kind), ["proposal", "vote", "final", "remedy-sealed", "remedy-status"], "the sealed decision's facts are in the case");
+    assert.ok(afterSeal.ledger.some((fact) => fact.seq === 52), "the sealed document's ledger too");
+    assert.doesNotMatch(JSON.stringify(afterSeal), /signature/);
     const unread = conductClockEvidenceOf({ record: "unreadable", recent }) as ConductClockEvidence;
     assert.deepEqual([unread.record, unread.deadline, unread.events.length], ["unreadable", null, 2]);
   });

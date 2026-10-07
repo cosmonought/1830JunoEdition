@@ -12,7 +12,7 @@
 
 jest.mock("../config", () => ({ ...jest.requireActual("../config"), GAME_SERVER_URL: "wss://play.example/gs" }));
 
-import { onRoomLinksRenewed, renewRoomLinks, resetRoomLinks, roomLinkRenewals, roomOp, setRoomSocketFactory, type SocketLike } from "./roomLink";
+import { onRoomLinksRenewed, renewRoomLinks, resetRoomLinks, roomLinkRenewals, roomOp, setRoomSocketFactory, watchRoomLink, type SocketLike } from "./roomLink";
 import { installSessionPort, type SessionPort, type SessionState } from "./sessionBootstrap";
 
 interface Fake {
@@ -81,6 +81,21 @@ describe("P3-ACCT renewRoomLinks (review M2): only what was SENT is ambiguous", 
     expect(opFrames(made[0])).toHaveLength(0);
     made[1].deliver({ kind: "room-ack", requestId: frame.requestId, ok: true, data: { tables: [] } });
     await expect(queued).resolves.toEqual({ ok: true, data: { tables: [] } });
+  });
+
+  it("consolidated integration (review): a table's link watchers (the clock chip) hear that the renewed link is down until the new socket opens", async () => {
+    const heard: boolean[] = [];
+    const stop = watchRoomLink("g_0000000000000000000000000w", (open) => heard.push(open));
+    const opened = made[made.length - 1];
+    opened.open();
+    await flush();
+    expect(heard[heard.length - 1]).toBe(true);
+    renewRoomLinks();
+    expect(heard[heard.length - 1]).toBe(false);
+    made[made.length - 1].open();
+    await flush();
+    expect(heard[heard.length - 1]).toBe(true);
+    stop();
   });
 
   it("every renewal is counted and announced", () => {

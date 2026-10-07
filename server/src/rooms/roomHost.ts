@@ -481,10 +481,17 @@ export function createRoomHost(deps: RoomHostDeps) {
             }
           },
           closeOffer: (game, tx, input) => closeExpiredOffer(game, tx, input),
-          /* LIVE-3C: a held, incompatible or unreconciled table takes no move -- its clock does not run either. */
+          /* LIVE-3C: a held, incompatible or unreconciled table takes no move -- its clock does not run either. So does a
+             RESTORED money table whose L6-2 restore check has not passed (`restoreGate`: every move and money write is
+             refused until it does) -- consolidated final integration, independent review: otherwise its clock ran on a
+             table nobody could move at (strikes, a minute-30 seal, a Timed Async expiry). When the gate opens, the
+             stall rule judges the held time as for any hold. */
           held: (gameId) => {
             const game = peekLoaded(gameId);
-            return game !== undefined && (game.view.hold !== null || game.view.incompatible !== null || unreconciled.has(gameId));
+            if (game === undefined) return false;
+            if (game.view.hold !== null || game.view.incompatible !== null || unreconciled.has(gameId)) return true;
+            const record = game.view.record;
+            return record !== null && record.money !== null && (deps.escrow?.restoreGate?.(gameId) ?? null) !== null;
           },
           ...(deps.clock.remedy !== undefined ? { remedy: deps.clock.remedy } : {}),
           ...(deps.clock.moneyTerminal !== undefined ? { moneyTerminal: deps.clock.moneyTerminal } : {}),

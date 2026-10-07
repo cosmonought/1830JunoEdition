@@ -55,6 +55,7 @@ import {
   challengeProblem,
   checkLinkChallenge,
   createGameMessage,
+  deadlineChoiceFor,
   finalizeMessage,
   joinMessage,
   livenessSettleMessage,
@@ -549,6 +550,13 @@ export async function anteNow(ctx: TableContext, hooks: AnteHooks): Promise<Acti
   if (view.you === null) return refuse("You don't have a seat at this table.");
   const table = tableSigningProblem(pinned.pin, view);
   if (table !== null) return refuse(table);
+  /* Consolidated final integration (review): a No-deadline table's disclosure is acknowledged BEFORE the Ante asks
+     anything of Keplr -- not after a link signature the deposit's own check (`deadlineChoiceFor`) would then refuse.
+     Verifying a wallet alone (`verifyOnly`) commits no money and is not gated. */
+  if (hooks.verifyOnly !== true && ctx.deadline?.deadline === "no-deadline" && !ctx.deadline.acknowledged) {
+    const gate = deadlineChoiceFor("async", ctx.deadline);
+    if (!gate.ok) return refuse(gate.reason);
+  }
 
   /* 1. Keplr on this page. */
   const session = moneySession();

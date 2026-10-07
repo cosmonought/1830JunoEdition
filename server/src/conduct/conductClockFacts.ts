@@ -10,7 +10,10 @@
 //   - as it becomes DURABLE, to the reporting hook (`ClockConductHook`, `clockEvidence.ts`) -- each evidence event with
 //     the chain head right after it;
 //   - in the table's durable clock record (`GameClockRecord.evidence`): the window of events since the current
-//     defaulting obligation began and the never-reset STRIKE LEDGER (every overdue and cure).
+//     defaulting obligation began and the never-reset STRIKE LEDGER (every overdue and cure); and, once a remedy is
+//     SEALED, in that remedy's own evidence document (`GameClockRecord.remedy.evidence`: the window the seal closed --
+//     responsibility, overdue, proposal, votes, veto, consensus, finality, the seal itself -- and its ledger), which the
+//     record keeps after it starts a fresh window.
 //
 // A report reads both and keeps a small, SAFE copy of the most recent facts in the case (`ConductEvidence.clock`, and
 // each re-report's own snapshot). Nothing here runs, replays or judges a clock: there is no clock state machine in the
@@ -274,7 +277,10 @@ export function conductClockEvidenceOf(input: { readonly record: GameClockRecord
   let headSeq: number | null = null;
   let head: string | null = null;
   if (record !== null) {
-    for (const event of record.evidence.window) {
+    /* A sealed remedy's own window first (the seal moved it out of the live window: review finding, consolidated
+       integration -- without it a report after a restart or a pool handoff lost the remedy's facts), then the live
+       window; one fact per sequence number either way. */
+    for (const event of [...(record.remedy?.evidence.events ?? []), ...record.evidence.window]) {
       const fact = conductClockFactOf(event);
       if (fact !== null) bySeq.set(fact.seq, fact);
     }
@@ -290,9 +296,9 @@ export function conductClockEvidenceOf(input: { readonly record: GameClockRecord
   }
   const ledgerAll: ConductClockFact[] = [];
   if (record !== null) {
-    for (const event of record.evidence.ledger) {
+    for (const event of [...(record.remedy?.evidence.ledger.events ?? []), ...record.evidence.ledger]) {
       const fact = conductClockFactOf(event);
-      if (fact !== null) ledgerAll.push(fact);
+      if (fact !== null && !ledgerAll.some((other) => other.seq === fact.seq)) ledgerAll.push(fact);
     }
   }
   for (const fact of bySeq.values()) if ((fact.kind === "overdue" || fact.kind === "cure") && !ledgerAll.some((other) => other.seq === fact.seq)) ledgerAll.push(fact);

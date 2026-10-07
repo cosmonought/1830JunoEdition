@@ -14,6 +14,9 @@ import { NO_DEADLINE_DISCLOSURE, type RoomClockView } from "../utils/clockProtoc
 import type { GameVariants } from "../gameEngine/gameVariants";
 import type { RoomSetup } from "../utils/sandboxRoomSummary";
 import type { RoomOpBody, RoomOpResult } from "../utils/roomProtocol";
+import { installSessionPort } from "../utils/sessionBootstrap";
+import { resetPinnedDeploymentForTests } from "../money/escrowDeployment";
+import { scriptedPort, TEST_CONTRACT, TEST_PIN } from "../money/moneyTestSupport";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -36,18 +39,59 @@ afterEach(() => {
   host.remove();
   act(() => layerRoot.unmount());
   layerHost.remove();
+  installSessionPort(null);
+  delete process.env.REACT_APP_ESCROW_DEPLOYMENT;
+  resetPinnedDeploymentForTests();
 });
+
+/* CONSOLIDATED FINAL INTEGRATION: every player game is anted (the final account lane, `utils/tablePolicy.ts`), so the
+   host card creates only with a real-money offer and a valid stake -- the deadline is chosen on that card. */
+function offerMoneyTables(): void {
+  process.env.REACT_APP_ESCROW_DEPLOYMENT = JSON.stringify(TEST_PIN);
+  resetPinnedDeploymentForTests();
+  const port = scriptedPort();
+  port.answer("money/config", 200, {
+    ok: true,
+    enabled: true,
+    why: null,
+    reason: null,
+    deployment: { backend: "juno-cosmwasm", chainId: "uni-7", networkClass: "testnet", contract: TEST_CONTRACT, codeChecksum: TEST_PIN.codeChecksum, denom: "ujunox", symbol: "JUNOX", exponent: 6 },
+    feeBps: 100,
+    minAnte: "1000",
+  });
+  installSessionPort(port);
+}
+const settle = async () => {
+  await act(async () => {
+    for (let round = 0; round < 3; round += 1) {
+      for (let n = 0; n < 40; n += 1) await Promise.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+  });
+};
+const typeInto = (input: HTMLInputElement | null, value: string) => {
+  expect(input).toBeTruthy();
+  act(() => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+    input!.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+};
 
 const byTestId = <T extends HTMLElement = HTMLElement>(id: string): T | null => document.querySelector<T>(`[data-testid="${id}"]`);
 const click = (node: HTMLElement | null) => act(() => node?.click());
 
 describe("Phase 3 final clocks: the host's action deadline", () => {
-  it("an Async table's pace (or No deadline) is chosen in the house rules and sent with the create", () => {
+  it("an Async table's pace (or No deadline) is chosen in the house rules and sent with the create", async () => {
+    offerMoneyTables();
     const created: Array<{ variants: GameVariants; setup: RoomSetup }> = [];
     act(() => root.render(<HostSetupCard busy={false} error={null} onClose={() => {}} onCreate={(variants, setup) => created.push({ variants, setup })} />));
+    await settle();
     const pace = Array.from(document.querySelectorAll<HTMLButtonElement>('[role="radio"]')).find((node) => /async/i.test(node.textContent ?? ""));
     click(pace ?? null);
     click(byTestId("host-continue"));
+    await settle();
+    typeInto(byTestId<HTMLInputElement>("host-stake-amount"), "2.5");
+    await settle();
     const select = byTestId<HTMLSelectElement>("host-deadline");
     expect(select).not.toBeNull();
     expect(Array.from(select!.options).map((option) => option.textContent)).toEqual(["12 hours per action", "24 hours per action", "2 days per action", "3 days per action", "7 days per action", "No deadline"]);
@@ -57,7 +101,36 @@ describe("Phase 3 final clocks: the host's action deadline", () => {
     });
     click(byTestId("host-create-room"));
     expect(created[0].variants.mode).toBe("async");
-    expect(created[0].setup).toMatchObject({ deadline: "async-pace", paceSecs: 259_200 });
+    expect(created[0].setup).toMatchObject({ deadline: "async-pace", paceSecs: 259_200, anteUjuno: "2500000" });
+  });
+
+  it("an Async No-deadline table with its required stake waits for the host's acknowledgement of the disclosure, and sends it with the create", async () => {
+    offerMoneyTables();
+    const created: Array<{ variants: GameVariants; setup: RoomSetup }> = [];
+    act(() => root.render(<HostSetupCard busy={false} error={null} onClose={() => {}} onCreate={(variants, setup) => created.push({ variants, setup })} />));
+    await settle();
+    const pace = Array.from(document.querySelectorAll<HTMLButtonElement>('[role="radio"]')).find((node) => /async/i.test(node.textContent ?? ""));
+    click(pace ?? null);
+    click(byTestId("host-continue"));
+    await settle();
+    typeInto(byTestId<HTMLInputElement>("host-stake-amount"), "2.5");
+    await settle();
+    const select = byTestId<HTMLSelectElement>("host-deadline");
+    act(() => {
+      select!.value = "none";
+      select!.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    const create = byTestId<HTMLButtonElement>("host-create-room");
+    expect(create?.disabled).toBe(true);
+    click(create);
+    expect(created).toHaveLength(0);
+    const ack = byTestId<HTMLInputElement>("host-no-deadline-ack");
+    expect(ack).not.toBeNull();
+    click(ack);
+    expect(byTestId<HTMLButtonElement>("host-create-room")?.disabled).toBe(false);
+    click(byTestId("host-create-room"));
+    expect(created).toHaveLength(1);
+    expect(created[0].setup).toMatchObject({ deadline: "no-deadline", paceSecs: null, noDeadlineAck: true, anteUjuno: "2500000" });
   });
 
   it("a Live table states its 20:00 action clock (nothing to choose)", () => {

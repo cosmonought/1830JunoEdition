@@ -19,8 +19,9 @@
 // by whoever registers it first. There is no other way to become one: no route grants it, no client claim is read, and
 // an account without a username (a legacy profile) never is. Every review route answers a signed-in non-reviewer
 // 404 `not-found` (after the transport's usual method / origin / body checks, which every `/gs/api/*` route makes
-// first). A DECISION also needs the session's live sensitive grant ("Confirm it's you", the same grant a wallet change
-// asks for): 403 `reauth-required` otherwise. A reviewer never sees -- in the queue, a case or a decision -- a case
+// first). A DECISION also needs the session's live sensitive grant (`hasSensitiveAuth`: a "Confirm it's you" or the
+// fresh sign-in's own five-minute grant -- the grant a seat's wallet link asks for; only an Authorization Wallet
+// replacement demands an explicit confirmation): 403 `reauth-required` otherwise. A reviewer never sees -- in the queue, a case or a decision -- a case
 // they are a party to (the reporter, the reported account, anyone seated at its table at a report, or anyone on the
 // table's durable roster now, whichever pool owns the game): those are answered as cases that do not exist. A case
 // whose table roster cannot be read just now is withheld (queue: counted with the unreadable; case / decide: 503).
@@ -243,7 +244,9 @@ async function serve(request: IncomingMessage, response: ServerResponse, api: Co
     }
     return;
   }
-  /* review/decide: a live "Confirm it's you" first (the same sensitive grant a wallet change needs). */
+  /* review/decide: a live sensitive grant first ("Confirm it's you", or a fresh sign-in's own grant -- as a seat's wallet
+     link; consolidated integration: the final account lane keeps the explicit-confirmation-only grant for the
+     Authorization Wallet replacement alone). */
   if (!api.identity.hasSensitiveAuth(read, now)) {
     json(response, 403, { error: "reauth-required" });
     return;

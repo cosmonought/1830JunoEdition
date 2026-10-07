@@ -281,27 +281,33 @@ describe("Live train offer: the proposer's clock freezes; the recipient has a di
     assert.equal(t.remaining(), LIVE_ACTION_MS);
   });
 
-  test("non-train offers (Live) and every Async offer: a rejection charges the proposer the time the answerer's clock ran (never fresh); the offer budget bounds proposals per round", () => {
+  test("every Live offer runs the 10:00 response timer (proposer frozen exactly; no strike); a rejection or expiry resumes the proposer exactly and counts a decline of its kind; Async offers resume exactly too", () => {
     const t = new Table("live");
     t.advance(19 * MIN + 50 * SEC);
     const priv = offerOf("private", A, B, 9);
     t.move(A, offering(priv), "propose");
-    assert.equal(t.record.obligation?.seat, B, "B owes the answer (an ordinary action clock)");
+    assert.deepEqual([t.record.obligation?.seat, t.record.obligation?.trade?.proposer, t.remaining()], [B, A, LIVE_TRADE_MS], "B's distinct 10:00 response timer");
+    assert.equal(clockViewOf(t.record, t.t).trade?.kind, "private");
+    t.advance(4 * MIN);
     t.move(B, facts(turn(A, 0)), "reject");
-    assert.equal(t.remaining(), 10 * SEC, "no fresh 20:00 for A: the lowball-offer stall is gone");
-    /* A confederate sitting on a non-train offer stalls nothing: the time it sat is A's. */
+    assert.equal(t.remaining(), 10 * SEC, "A resumes exactly: never fresh, never charged for B's time");
+    assert.equal(t.record.declines.counts[`private:${A}>${B}`], 1, "a private-offer decline (the train counter is untouched)");
+    assert.equal(t.record.declines.counts[`${A}>${B}`] ?? 0, 0);
+    /* A confederate sitting on the offer: at most 10:00, then it expires (no strike for anyone), one more decline. */
     const sat = new Table("live");
     sat.advance(5 * MIN);
-    sat.move(A, offering(offerOf("private", A, B, 10)), "propose");
-    sat.advance(14 * MIN);
-    sat.move(B, facts(turn(A, 0)), "reject");
-    assert.equal(sat.remaining(), MIN, "15:00 parked, less the 14:00 B sat on it");
+    sat.move(A, offering(offerOf("trade", A, B, 10)), "propose");
+    const expiry = sat.advance(LIVE_TRADE_MS);
+    assert.notEqual(expiry, null, "the response time ran out");
+    sat.commit(A, facts(turn(A, 0)), "server-expiry");
+    assert.deepEqual([sat.remaining(), sat.record.strikes, sat.record.declines.counts[`trade:${A}>${B}`]], [15 * MIN, {}, 1]);
     const paced = new Table("async-pace", { pace: 86_400 });
     paced.advance(20 * HOUR);
     paced.move(A, offering(offerOf("train", A, B, 3)), "propose");
     paced.advance(3 * HOUR);
     paced.move(B, facts(turn(A, 0)), "reject");
-    assert.equal(paced.remaining(), HOUR, "Async: A's 4 hours less the 3 B took");
+    assert.equal(paced.remaining(), 4 * HOUR, "Async: A resumes exactly its 4 hours");
+    assert.equal(paced.record.declines.counts[`async-train:${A}>${B}`], 1);
     /* The budget: 16 proposals in one round, then none until the next. */
     const budget = new Table("live");
     for (let n = 1; n <= 16; n += 1) {
@@ -312,7 +318,7 @@ describe("Live train offer: the proposer's clock freezes; the recipient has a di
     budget.move(A, facts(turn(B, 1)));
     assert.equal(budget.refusal(A, "propose")?.code, "rate-limited", "a new action in the same round does not refund it");
     budget.move(B, facts(turn(A, 2), { orKey: "OperatingRound/1/2" }));
-    assert.equal(gate(budget.record, { actor: A, msg: "propose", closeRoom: false, revertTarget: null, trainRecipient: null, nameOf: (x) => x, orKey: "OperatingRound/1/2" }), null, "the next round opens a new budget");
+    assert.equal(gate(budget.record, { actor: A, msg: "propose", closeRoom: false, revertTarget: null, trainRecipient: null, nameOf: (x) => x, roundKey: "OperatingRound/1/2" }), null, "the next round opens a new budget");
   });
 
   test("the proposer's own rescission is no decline, and is charged the time its offer stood (a propose-and-rescind never gives time)", () => {

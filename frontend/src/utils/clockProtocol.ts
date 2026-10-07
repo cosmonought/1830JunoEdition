@@ -147,7 +147,14 @@ export interface RoomClockView {
    *  `trade`), or nobody responsible. */
   readonly action: ClockTimerView | null;
   /** Live: a train offer awaiting its answer. */
-  readonly trade: { readonly proposer: string; readonly recipient: string; readonly respond: ClockTimerView; readonly proposerRemainingMs: number } | null;
+  readonly trade: {
+    readonly proposer: string;
+    readonly recipient: string;
+    readonly respond: ClockTimerView;
+    readonly proposerRemainingMs: number;
+    /** The offer's kind (absent: a train offer). Every Live offer runs the 10:00 response timer. */
+    readonly kind?: "train" | "private" | "trade" | "funding";
+  } | null;
   readonly overdue: ClockOverdueView | null;
   /** Live: each seat's ordinary overdue count in this game. */
   readonly strikes: Readonly<Record<string, number>>;

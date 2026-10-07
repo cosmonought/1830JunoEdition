@@ -312,10 +312,10 @@ export function presentClock(input: ClockPresentationInput): ClockPresentation {
       controls,
       banner: clock.trade.proposer === me ? `Your action clock is paused at ${formatClockDuration(clock.trade.proposerRemainingMs)}.` : warning,
       state: "trade",
-      label: `Train offer — ${value ?? "10:00"} to respond`,
+      label: `${clock.trade.kind === undefined || clock.trade.kind === "train" ? "Train offer" : "Offer"} — ${value ?? "10:00"} to respond`,
       value: null,
       lines: [
-        `${name(clock.trade.recipient)} ${clock.trade.recipient === me ? "have" : "has"} a train offer from ${clock.trade.proposer === me ? "you" : input.nameOf(clock.trade.proposer)}.`,
+        `${name(clock.trade.recipient)} ${clock.trade.recipient === me ? "have" : "has"} ${clock.trade.kind === undefined || clock.trade.kind === "train" ? "a train offer" : "an offer"} from ${clock.trade.proposer === me ? "you" : input.nameOf(clock.trade.proposer)}.`,
         `${clock.trade.proposer === me ? "Your" : `${input.nameOf(clock.trade.proposer)}'s`} action clock is paused at ${formatClockDuration(clock.trade.proposerRemainingMs)}.`,
         TRADE_NOT_OVERDUE_DETAIL,
         ...extra,

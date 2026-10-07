@@ -99,6 +99,8 @@ export interface ClockBoardFacts {
   readonly offer: StandingOffer | null;
   /** The Operating Round (`OperatingRound/macro/sub`), or `null` outside one. */
   readonly orKey: string | null;
+  /** The round, whatever its kind (`<type>/macro/sub`): the offer budget's scope. */
+  readonly roundKey?: string | null;
 }
 
 /** `optional`: an accepted action that is never a REQUIRED decision (a private company's own power, taken at any time):
@@ -445,7 +447,7 @@ export function foldBatch(record: GameClockRecord, batch: ClockBatch, now: numbe
     const answerer = after.answerer;
     /* The offer budget: proposals per seat in the round (the Operating Round, or the stretch outside ORs). */
     if (proposer !== null) {
-      const key = batch.before.orKey ?? CLOCK_OFFERS_OUTSIDE_OR;
+      const key = batch.before.roundKey ?? batch.before.orKey ?? CLOCK_OFFERS_OUTSIDE_OR;
       const counts = d.offers.key === key ? { ...d.offers.counts } : {};
       counts[proposer] = (counts[proposer] ?? 0) + 1;
       d.offers = { key, counts: Object.fromEntries(Object.entries(counts).slice(-8)) };
@@ -454,8 +456,11 @@ export function foldBatch(record: GameClockRecord, batch: ClockBatch, now: numbe
       if (current !== null && current.seat === proposer && current.timer !== null) {
         d.parked = [...d.parked.filter((p) => p.seat !== proposer), { seat: proposer, offer_key: after.key, remaining_ms: remainingAt(current.timer, at) }];
       }
-      if (isLive && after.slot === "train") {
-        fresh(D, "train-offer", { proposer, offer_key: after.key });
+      if (isLive) {
+        /* LIVE: every offer -- a train offer by the owner's rule, and (for the same reasons) a private, funding or
+           private-trade offer -- gives its answerer the distinct 10:00 RESPONSE timer (never an overdue or a strike)
+           with the proposer frozen exactly. */
+        fresh(D, after.slot === "train" ? "train-offer" : "offer", { proposer, offer_key: after.key });
         x.emit("trade-begin", at, { proposer, recipient: answerer, offer: after.key, index: batch.first, parked_ms: d.parked.find((p) => p.seat === proposer)?.remaining_ms ?? null });
       } else {
         fresh(D, "offer");
@@ -473,18 +478,20 @@ export function foldBatch(record: GameClockRecord, batch: ClockBatch, now: numbe
     /* An unanswered expiry is a fence: no undo may resurrect the expired offer. */
     if (batch.msg === "server-expiry") d.undo_floor = Math.max(d.undo_floor, batch.last);
     const selfOffer = before.proposer !== null && before.proposer === before.answerer;
-    const trainLive = isLive && before.slot === "train" && !selfOffer;
-    if (trainLive && (batch.msg === "reject" || batch.msg === "server-expiry") && before.proposer !== null && before.answerer !== null) {
-      bumpDeclines(x, batch.before.orKey, before.proposer, before.answerer, before.key);
+    const liveOffer = isLive && !selfOffer;
+    /* A rejection, or a Live offer's unanswered expiry, is one DECLINE for its direction in the current round (per offer
+       kind; the train counter is the owner's rule, the others bound offer stalls the same way, Live and Async). */
+    if (!selfOffer && (batch.msg === "reject" || batch.msg === "server-expiry") && before.proposer !== null && before.answerer !== null) {
+      bumpDeclines(x, batch.before.orKey, declineKey(isLive, before.slot, before.proposer, before.answerer), before.key);
     }
-    if (trainLive) {
+    if (liveOffer) {
       x.emit("trade-end", at, {
         result: batch.msg === "accept" ? "accept" : batch.msg === "reject" ? "reject" : batch.msg === "server-expiry" ? "expire" : batch.msg === "rescind" ? "rescind" : "other",
         proposer: before.proposer,
         recipient: before.answerer,
         offer: before.key,
         index: batch.first,
-        declines: before.proposer !== null && before.answerer !== null ? (d.declines.counts[`${before.proposer}>${before.answerer}`] ?? 0) : 0,
+        declines: before.proposer !== null && before.answerer !== null ? (d.declines.counts[declineKey(isLive, before.slot, before.proposer, before.answerer)] ?? 0) : 0,
       });
     }
     const answered = (batch.msg === "accept" || batch.msg === "reject") && batch.actor === before.answerer;
@@ -504,11 +511,11 @@ export function foldBatch(record: GameClockRecord, batch: ClockBatch, now: numbe
          by the proposer is charged the time the answerer's clock actually RAN while the offer stood (never a pause or
          an outage): an offer can never be used to stop the proposer's own clock. */
       const ran = current !== null && current.key === `offer:${before.key}` && current.initial_ms !== null && current.timer !== null ? clamp(current.initial_ms - remainingAt(current.timer, at)) : 0;
-      /* Only a LIVE TRAIN offer freezes its proposer outright (the owner's special rule: its rejection or expiry resumes
-         the exact remainder). Every other offer -- a Live private / funding / trade offer, any Async offer -- is the
-         proposer's own negotiation: its rejection charges the proposer the time the answerer's clock actually ran, so a
-         confederate sitting on offers can never stall the table on the proposer's behalf. */
-      const charged = (batch.msg === "rescind" && batch.actor === parked.seat) || (batch.msg === "reject" && !trainLive);
+      /* A rejection or an expiry resumes the proposer EXACTLY (the answerer can never pick the moment of the proposer's
+         overdue); a stall by a confederate answerer is bounded by the response timer (Live 10:00), the two declines per
+         direction per round and the offer budget. Only the proposer's own RESCISSION is charged (the time the answerer's
+         clock actually ran). */
+      const charged = batch.msg === "rescind" && batch.actor === parked.seat;
       const stood = charged ? ran : 0;
       const resumed = clamp(parked.remaining_ms - stood);
       d.obligation = obligationFor(d, D, at, batch.first, resumed, null);
@@ -554,14 +561,19 @@ function finishFold(x: Draft, batch: ClockBatch): void {
   normalize(x, batch.at);
 }
 
-function bumpDeclines(x: Draft, orKey: string | null, from: string, to: string, offerKey: string): void {
+/** The decline counter of one direction: `from>to` for a Live TRAIN offer (the owner's rule, shown on the table),
+ *  `<slot>:from>to` for every other kind (and every Async offer). */
+export function declineKey(live: boolean, slot: string, from: string, to: string): string {
+  return live && slot === "train" ? `${from}>${to}` : `${live ? "" : "async-"}${slot}:${from}>${to}`;
+}
+
+function bumpDeclines(x: Draft, orKey: string | null, key: string, offerKey: string): void {
   const d = x.d;
   const same = d.declines.or_key === orKey;
   const offers = same ? d.declines.offers : [];
   /* One offer is declined at most once (an answer undone and given again is the same decline). */
   if (offers.includes(offerKey)) return;
   const counts = same ? { ...d.declines.counts } : {};
-  const key = `${from}>${to}`;
   counts[key] = (counts[key] ?? 0) + 1;
   d.declines = { or_key: orKey, counts, offers: [...offers, offerKey].slice(-64) };
 }
@@ -1293,8 +1305,8 @@ export interface GateInput {
   readonly trainRecipient: string | null;
   /** Names, for the owner's copy. */
   readonly nameOf: (seat: string) => string;
-  /** The board's Operating Round key (`null`: outside an OR) -- the offer budget's round. Absent: the record's own. */
-  readonly orKey?: string | null;
+  /** The board's round key (any round) -- the offer budget's round. Absent: the record's own. */
+  readonly roundKey?: string | null;
 }
 
 export function gate(record: GameClockRecord, input: GateInput): ClockRefusal | null {
@@ -1316,7 +1328,7 @@ export function gate(record: GameClockRecord, input: GateInput): ClockRefusal | 
     return { code: CLOCK_REFUSAL.interrupted, reason: "You're overdue: make your owed move first. An offer can't cure an overdue." };
   }
   if (input.msg === "propose") {
-    const key = input.orKey === undefined ? record.offers.key : (input.orKey ?? CLOCK_OFFERS_OUTSIDE_OR);
+    const key = input.roundKey === undefined ? record.offers.key : (input.roundKey ?? CLOCK_OFFERS_OUTSIDE_OR);
     const used = record.offers.key === key ? (record.offers.counts[input.actor] ?? 0) : 0;
     if (used >= CLOCK_OFFERS_PER_ROUND) return { code: "rate-limited", reason: `You have made ${CLOCK_OFFERS_PER_ROUND} offers this round. Offers open again next round.` };
   }
@@ -1386,7 +1398,10 @@ export function clockViewOf(record: GameClockRecord, now: number): RoomClockView
     revision: record.revision,
     responsible: ob === null || record.phase === "ended" ? null : { seat: ob.seat, kind: ob.kind },
     action: ob === null || ob.trade !== null || record.phase === "ended" ? null : timerView(ob.timer),
-    trade: ob?.trade && record.phase !== "ended" ? { proposer: ob.trade.proposer, recipient: ob.seat, respond: timerView(ob.timer) ?? { remainingMs: 0, running: false }, proposerRemainingMs: parked } : null,
+    trade:
+      ob?.trade && record.phase !== "ended"
+        ? { proposer: ob.trade.proposer, recipient: ob.seat, respond: timerView(ob.timer) ?? { remainingMs: 0, running: false }, proposerRemainingMs: parked, kind: offerKindOf(ob.trade.offer_key) }
+        : null,
     overdue:
       od === null || record.phase !== "overdue"
         ? null
@@ -1429,7 +1444,9 @@ export function clockViewOf(record: GameClockRecord, now: number): RoomClockView
             stale: [...record.remedy.stale],
             overdue: { seat: record.remedy.seat, strike: record.remedy.strike, epoch: record.remedy.epoch, overdueAt: record.remedy.overdue_ms, logLen: record.remedy.log_len, logHash: record.remedy.log_hash },
           },
-    declines: Object.entries(record.declines.counts).map(([key, count]) => {
+    declines: Object.entries(record.declines.counts)
+      .filter(([key]) => !key.includes(":"))
+      .map(([key, count]) => {
       const [from, to] = key.split(">");
       return { from, to, count };
     }),
@@ -1437,6 +1454,12 @@ export function clockViewOf(record: GameClockRecord, now: number): RoomClockView
     noDeadlineAcks: Object.keys(record.acks).sort(),
     seats: [...record.seats],
   };
+}
+
+/** The kind of a standing offer from its key (`train:`, `private:`, `trade:`, `funding:`). */
+function offerKindOf(key: string): "train" | "private" | "trade" | "funding" {
+  const prefix = key.slice(0, key.indexOf(":"));
+  return prefix === "private" || prefix === "trade" || prefix === "funding" ? prefix : "train";
 }
 
 /** The obligation kind a message class closes, for tests and diagnostics. */

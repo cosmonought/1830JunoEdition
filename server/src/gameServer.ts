@@ -1071,6 +1071,16 @@ export function createGameServer(options: GameServerOptions): {
     const endedAfter = board.ended;
     const closedAfter = board.closed;
     const boardAfter = session.state; // ESCROW-3B: the board this batch commits (the session is not read after the commit)
+    /* Phase 3 final clocks: an offer may not exceed its direction's two declines this round (the board, after the
+       proposal, names its answerer); refused before anything is committed. */
+    if (clockGate !== null && host.clock !== null && result.kind === "applied" && clockGate.cls === "propose") {
+      const blocked = host.clock.offerBlocked(game, { actor, board: boardAfter });
+      if (blocked !== null) {
+        tx.rollback();
+        answer({ kind: "refused", code: blocked.code, reason: blocked.reason, build: options.build });
+        return;
+      }
+    }
     const settled = await tx.commitBatch(batch, (settled) => submitDelivery(settled, batch, result, inReplyTo));
     /* ESCROW-3B: the committed board, for a money game's checkpoint seam. */
     if (settled.kind === "committed") host.afterGameplay(game, endedAfter, closedAfter, boardAfter);

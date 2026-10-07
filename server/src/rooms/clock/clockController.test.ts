@@ -450,3 +450,21 @@ describe("Controller review fixes (fourth pass)", () => {
     assert.equal(h.store.saves.length, writes, "no heartbeat writes while overdue");
   });
 });
+
+describe("Controller review fixes (fifth pass): every offer kind is bounded by its direction's declines", () => {
+  test("after two declines, the board's own offer (any kind) is refused before it is committed -- the answerer named by the board", async () => {
+    const h = harness();
+    await h.deal();
+    await h.submit(P1, proposeTrain(NYC, "2", "50"));
+    const standing = structuredClone(h.room.state);
+    assert.equal(h.clock.offerBlocked(h.game, { actor: P1, board: standing }), null, "no declines yet");
+    await h.submit(P2, answerTrain(NYC, false));
+    await h.submit(P1, proposeTrain(NYC, "2", "60"));
+    await h.time.advance(LIVE_TRADE_MS);
+    await h.serial(async () => undefined);
+    const blocked = h.clock.offerBlocked(h.game, { actor: P1, board: standing });
+    assert.equal(blocked?.code, CLOCK_REFUSAL.declines);
+    assert.equal(blocked?.reason, declinesReachedSentence(P2));
+    assert.equal(h.clock.offerBlocked(h.game, { actor: P2, board: standing }), null, "only the proposer named by the board is judged");
+  });
+});

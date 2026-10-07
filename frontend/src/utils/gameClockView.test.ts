@@ -222,3 +222,12 @@ describe("Phase 3 final clocks: the closed schema of the clock ops", () => {
     expect(frame({ type: "clock-reapprove", approveUntil: 1_802_000_000, signature: "ab".repeat(64), seat: "p-x" }).ok).toBe(false);
   });
 });
+
+describe("Phase 3 final clocks: every Live offer's response timer", () => {
+  it("a private / trade / funding offer reads 'Offer — m:ss to respond' (a train offer keeps the owner's words)", () => {
+    const trade = (kind?: "train" | "private") => view({ state: "trade", action: null, responsible: { seat: BOB, kind: "offer-answer" }, trade: { proposer: ME, recipient: BOB, respond: { remainingMs: 10 * MIN, running: true }, proposerRemainingMs: 5 * MIN, ...(kind !== undefined ? { kind } : {}) } });
+    expect(present(trade("private")).label).toBe("Offer — 10:00 to respond");
+    expect(present(trade("train")).label).toBe("Train offer — 10:00 to respond");
+    expect(present(trade()).label).toBe("Train offer — 10:00 to respond");
+  });
+});

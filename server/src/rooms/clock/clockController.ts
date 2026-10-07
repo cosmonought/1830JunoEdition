@@ -38,7 +38,7 @@ import { operatingRoundKeyOf, requiredDecisionOf, standingOfferOf } from "../../
 import { logHash } from "../../../../frontend/src/gameEngine/logHash";
 import { sellerPresident } from "../../../../frontend/src/gameEngine/trainSaleAuthority";
 import type { ClockDeadlineClass, RoomClockView } from "../../../../frontend/src/utils/clockProtocol";
-import { CLOCK_REFUSAL } from "../../../../frontend/src/utils/clockProtocol";
+import { CLOCK_REFUSAL, declinesReachedSentence } from "../../../../frontend/src/utils/clockProtocol";
 import type { RoomSession, ServerLogEntry } from "../../../../frontend/src/utils/roomSession";
 import type { UndoPolicy } from "../../../../frontend/src/gameEngine/logRevert";
 import type { OpsRecorder } from "../../persistence/opsRecorder";
@@ -55,6 +55,7 @@ import {
   classifyMessage,
   clockViewOf,
   continuityBreak,
+  declineKey,
   escrowEnded,
   foldBatch,
   gate,
@@ -79,7 +80,7 @@ import {
   type ClockRefusal,
   type ClockStep,
 } from "./clockModel";
-import { ClockUnreadableError, LIVE_CURE_MS, type ClockVote, type GameClockRecord } from "./clockRecord";
+import { ClockUnreadableError, LIVE_CURE_MS, LIVE_DECLINES_PER_OR, type ClockVote, type GameClockRecord } from "./clockRecord";
 import type { ClockStore } from "./clockStore";
 
 /* ==================================================================
@@ -239,29 +240,48 @@ export function boardFactsOf(state: GameStateResponse, end?: { readonly ended: b
     decision: over || closed ? null : requiredDecisionOf(state, state.waterfall ?? null),
     offer: over || closed ? null : standingOfferOf(state),
     orKey: operatingRoundKeyOf(state),
+    roundKey: `${String(state.current_round_type ?? "none")}/${state.macro_round_number ?? 0}/${state.sub_round_index ?? 0}`,
   };
 }
 
-/** The SERVER's own move when a Live train offer's response time ran out unanswered: the proposer's `RescindTrainPurchase`
- *  (the one legal message that withdraws a standing train offer; the engine has no expiry), speculated on the task's
- *  session with every entry stamped at the exact moment the response time ended. The caller commits the batch. */
+/** The proposer's own withdrawal of the standing offer of `slot` (the one legal message that withdraws it; the engine
+ *  has no expiry), or `null` when the board holds no such offer. */
+function rescindMessageFor(state: GameStateResponse, slot: string): Record<string, unknown> | null {
+  if (slot === "train") {
+    const offer = state.train_purchase_offer ?? null;
+    return offer === null ? null : { RescindTrainPurchase: { seller_protocol_id: offer.seller_protocol_id } };
+  }
+  const purchase = state.private_purchase_offer ?? null;
+  if (slot === "private" && purchase !== null) return { RescindPrivatePurchase: { private_id: purchase.private_id } };
+  if (slot === "funding" && purchase !== null) return { RescindFundingPrivateOffer: { private_id: purchase.private_id } };
+  const trade = state.private_trade_offer ?? null;
+  if (slot === "trade" && trade !== null) return { RescindPrivateTrade: { private_id: trade.private_id } };
+  return null;
+}
+
+/** The SERVER's own move when a Live offer's response time ran out unanswered: the proposer's rescission of THAT offer
+ *  (`RescindTrainPurchase`, `RescindPrivatePurchase`, `RescindPrivateTrade` or `RescindFundingPrivateOffer`),
+ *  speculated on the task's session with every entry stamped at the exact moment the response time ended. The caller
+ *  commits the batch. */
 export function rescindExpiredOffer(
   session: RoomSession,
   input: { readonly proposer: string; readonly at: number; readonly offerKey?: string; readonly build: string; readonly host: string; readonly hostUndo: UndoPolicy["host_undo"] },
   stampAt?: <T>(at: number, fn: () => T) => T,
 ): { readonly ok: true; readonly batch: readonly ServerLogEntry[]; readonly before: ClockBoardFacts; readonly after: ClockBoardFacts; readonly board: GameStateResponse } | { readonly ok: false; readonly why: string } {
   const state = session.state;
-  const offer = state.train_purchase_offer ?? null;
-  if (offer === null || offer.accepted === true) return { ok: false, why: "no train offer stands" };
   const before = boardFactsOf(state);
+  const standing = before.offer;
+  if (standing === null) return { ok: false, why: "no offer stands" };
   /* Only THE offer whose response time ran out is closed: a different offer standing now is never rescinded. */
-  if (input.offerKey !== undefined && before.offer?.key !== input.offerKey) return { ok: false, why: "a different train offer stands" };
+  if (input.offerKey !== undefined && standing.key !== input.offerKey) return { ok: false, why: "a different offer stands" };
+  const rescind = rescindMessageFor(state, standing.slot);
+  if (rescind === null) return { ok: false, why: "the standing offer has no withdrawal message" };
   const start = session.entries.length;
   const submit = () =>
     session.submit({
-      actor: input.proposer,
+      actor: standing.proposer ?? input.proposer,
       build: input.build,
-      msg: { RescindTrainPurchase: { seller_protocol_id: offer.seller_protocol_id } },
+      msg: rescind as never,
       baseIndex: session.nextIndex - 1,
       /* Outside the client submission-id pattern ([A-Za-z0-9_-]): no player can pre-empt or replay the server's own move. */
       submissionId: `clock:expiry:${input.at}`,
@@ -876,7 +896,7 @@ export function createClockController(deps: ClockControllerDeps) {
     if (typeof body === "object" && body !== null && typeof (body as { seller_protocol_id?: unknown }).seller_protocol_id === "number") {
       trainRecipient = sellerPresident(state, (body as { seller_protocol_id: number }).seller_protocol_id);
     }
-    const refusal = gate(current, { actor: input.actor, msg: cls.cls, closeRoom: cls.closeRoom, revertTarget: cls.revertTarget, trainRecipient, nameOf: (seat) => name(game.gameId, seat), orKey: factsOfGame(game.gameId, state).orKey });
+    const refusal = gate(current, { actor: input.actor, msg: cls.cls, closeRoom: cls.closeRoom, revertTarget: cls.revertTarget, trainRecipient, nameOf: (seat) => name(game.gameId, seat), roundKey: factsOfGame(game.gameId, state).roundKey ?? null });
     /* A move is judged only against a STORED clock: an overdue (a strike) decided but not yet durable must not be cured
        -- or played past -- by a move a crash could then separate from it. */
     const durable = entry.stored === current.revision ? true : await settle(entry, game.gameId);
@@ -889,6 +909,23 @@ export function createClockController(deps: ClockControllerDeps) {
       return { ok: false, code: CLOCK_REFUSAL.unavailable, reason: "The server could not record the game clock just now, so no move was taken. Try again in a moment." };
     }
     return { ok: true, now: at, before: factsOfGame(game.gameId, state), cls: cls.cls, revertTarget: cls.revertTarget };
+  }
+
+  /** After a PROPOSAL was speculated (before it is committed): the offer it made may not exceed its direction's two
+   *  declines this round (every offer kind -- the train counter is the owner's rule; the board names the answerer). */
+  function offerBlocked(game: GameActor, input: { readonly actor: string; readonly board: GameStateResponse }): { readonly code: string; readonly reason: string } | null {
+    const record = entries.get(game.gameId)?.record ?? null;
+    if (record === null || record.phase === "setup" || record.phase === "ended") return null;
+    const offer = factsOfGame(game.gameId, input.board).offer;
+    if (offer === null || offer.proposer !== input.actor || offer.answerer === null || offer.answerer === offer.proposer) return null;
+    const live = record.policy.class === "live";
+    const orKey = operatingRoundKeyOf(input.board);
+    if (record.declines.or_key !== orKey) return null;
+    const count = record.declines.counts[declineKey(live, offer.slot, offer.proposer, offer.answerer)] ?? 0;
+    if (count < LIVE_DECLINES_PER_OR) return null;
+    const who = name(game.gameId, offer.answerer);
+    counters.refusals += 1;
+    return { code: CLOCK_REFUSAL.declines, reason: live && offer.slot === "train" ? declinesReachedSentence(who) : `${who} has declined two offers like this from you this round.` };
   }
 
   /** After a committed batch (in the same task): fold it and write the record before the task ends. */
@@ -1221,6 +1258,7 @@ export function createClockController(deps: ClockControllerDeps) {
   return {
     counters,
     gateSubmit,
+    offerBlocked,
     afterCommit,
     op,
     tick,

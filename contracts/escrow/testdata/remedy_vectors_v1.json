@@ -1295,11 +1295,11 @@
       "mutates": "block_time"
     },
     {
-      "name": "approval-expired",
-      "note": "the same, relayed at the approvals' approve_until: refused whatever the remedy key attests (a cured overdue's approvals die at their horizon)",
+      "name": "approval-past-horizon",
+      "note": "the same sealed decision attested again and relayed an hour after its approvals' approve_until: they were valid at final_at, so it lands",
       "game": "live",
       "replay": true,
-      "block_time": "1790090000",
+      "block_time": "1790093600",
       "attestation": {
         "version": 1,
         "domain": "8a5d293125fd3f7dc30ba7b4c59a9a821ddba1af964de7aa8aed74a06c2cd2d5",
@@ -1313,15 +1313,15 @@
         "allowance_secs": "1200",
         "overdue_at": "1790003000",
         "final_at": "1790003600",
-        "attested_at": "1790090000",
-        "expires_at": "1790090600",
+        "attested_at": "1790093600",
+        "expires_at": "1790094200",
         "evidence_hash": "423de6e9f104fb84440b5b2d219bb9557862d1877adc67a922d287a1a6bf587e",
         "remedy_key_id": 1
       },
-      "encoding": "018a5d293125fd3f7dc30ba7b4c59a9a821ddba1af964de7aa8aed74a06c2cd2d50000000000000001020102000000000000000800000000000000009d0b0417ad17b94ca024d02bb6b6ee097428408e88c09462e37a1f3166536e6100000000000004b0000000006ab14738000000006ab14990000000006ab29b10000000006ab29d68423de6e9f104fb84440b5b2d219bb9557862d1877adc67a922d287a1a6bf587e0001",
-      "preimage": "31384a554e4f2f52454d4544592f7631018a5d293125fd3f7dc30ba7b4c59a9a821ddba1af964de7aa8aed74a06c2cd2d50000000000000001020102000000000000000800000000000000009d0b0417ad17b94ca024d02bb6b6ee097428408e88c09462e37a1f3166536e6100000000000004b0000000006ab14738000000006ab14990000000006ab29b10000000006ab29d68423de6e9f104fb84440b5b2d219bb9557862d1877adc67a922d287a1a6bf587e0001",
-      "digest": "5cf2794aa090166bc24cbbac26dc79e9b4f8a5f186dd1df42cfac1a5153bb832",
-      "signature": "e43efd75c1c240099cdc81bd99a69e8f8a45549fee43f7a02ee4597c5c7094df739fc62504b86355c5ec54edab840377a6644fde7d341b0224df75decffeb540",
+      "encoding": "018a5d293125fd3f7dc30ba7b4c59a9a821ddba1af964de7aa8aed74a06c2cd2d50000000000000001020102000000000000000800000000000000009d0b0417ad17b94ca024d02bb6b6ee097428408e88c09462e37a1f3166536e6100000000000004b0000000006ab14738000000006ab14990000000006ab2a920000000006ab2ab78423de6e9f104fb84440b5b2d219bb9557862d1877adc67a922d287a1a6bf587e0001",
+      "preimage": "31384a554e4f2f52454d4544592f7631018a5d293125fd3f7dc30ba7b4c59a9a821ddba1af964de7aa8aed74a06c2cd2d50000000000000001020102000000000000000800000000000000009d0b0417ad17b94ca024d02bb6b6ee097428408e88c09462e37a1f3166536e6100000000000004b0000000006ab14738000000006ab14990000000006ab2a920000000006ab2ab78423de6e9f104fb84440b5b2d219bb9557862d1877adc67a922d287a1a6bf587e0001",
+      "digest": "d508f5a84b93fc239e153e70caccb6476373bf08e0e2f3ac808849e5a20e48a4",
+      "signature": "f0d5d22a07ce4c26b0f0922320d1f385f3b8e9ef6d57181080b3ad0b2bc6140f0606288048aa1c97808e7694cf375c6fba54b5a97823b707fcac9a54a236f0b2",
       "signature_verifies": true,
       "approvals": [
         {
@@ -1343,8 +1343,61 @@
           "signature_verifies": true
         }
       ],
+      "valid": true,
+      "expect": "ok:settled",
+      "mutates": "block_time"
+    },
+    {
+      "name": "approval-expired",
+      "note": "a foreclosure FINAL at the approvals' approve_until: refused whatever the block time (a lapsed approval never decides a finality)",
+      "game": "live",
+      "replay": true,
+      "block_time": "1790090000",
+      "attestation": {
+        "version": 1,
+        "domain": "8a5d293125fd3f7dc30ba7b4c59a9a821ddba1af964de7aa8aed74a06c2cd2d5",
+        "chain_game_id": "1",
+        "remedy": 2,
+        "defaulting_seat": 1,
+        "strike": 2,
+        "overdue_epoch": "8",
+        "log_len": "0",
+        "log_hash": "9d0b0417ad17b94ca024d02bb6b6ee097428408e88c09462e37a1f3166536e61",
+        "allowance_secs": "1200",
+        "overdue_at": "1790089400",
+        "final_at": "1790090000",
+        "attested_at": "1790090000",
+        "expires_at": "1790090600",
+        "evidence_hash": "423de6e9f104fb84440b5b2d219bb9557862d1877adc67a922d287a1a6bf587e",
+        "remedy_key_id": 1
+      },
+      "encoding": "018a5d293125fd3f7dc30ba7b4c59a9a821ddba1af964de7aa8aed74a06c2cd2d50000000000000001020102000000000000000800000000000000009d0b0417ad17b94ca024d02bb6b6ee097428408e88c09462e37a1f3166536e6100000000000004b0000000006ab298b8000000006ab29b10000000006ab29b10000000006ab29d68423de6e9f104fb84440b5b2d219bb9557862d1877adc67a922d287a1a6bf587e0001",
+      "preimage": "31384a554e4f2f52454d4544592f7631018a5d293125fd3f7dc30ba7b4c59a9a821ddba1af964de7aa8aed74a06c2cd2d50000000000000001020102000000000000000800000000000000009d0b0417ad17b94ca024d02bb6b6ee097428408e88c09462e37a1f3166536e6100000000000004b0000000006ab298b8000000006ab29b10000000006ab29b10000000006ab29d68423de6e9f104fb84440b5b2d219bb9557862d1877adc67a922d287a1a6bf587e0001",
+      "digest": "4143f9e5e652c6318dba35f14dd49e038e8b6e8c8adfbcdf8dbb3bdbe80b12ec",
+      "signature": "397abb1e4d7d1571403ae849a0c20387b667fd27123cc56af3f7f3dd2faf5b2107857eb39fe7afacda6fede374f6b1f246468474194865a1ecf6ab82974020cb",
+      "signature_verifies": true,
+      "approvals": [
+        {
+          "seat_index": 0,
+          "approve_until": "1790090000",
+          "preimage": "31384a554e4f2f52454d4544592d415050524f56452f76318a5d293125fd3f7dc30ba7b4c59a9a821ddba1af964de7aa8aed74a06c2cd2d50000000000000001020102000000000000000800000000000000009d0b0417ad17b94ca024d02bb6b6ee097428408e88c09462e37a1f3166536e61000000006ab298b8000000006ab29b1000",
+          "digest": "b24dfcbebc31153c52ab76c9ca06ce17107508e4aac176dfc97bb13cc9a0421f",
+          "signed_digest": "b24dfcbebc31153c52ab76c9ca06ce17107508e4aac176dfc97bb13cc9a0421f",
+          "signature": "253090d919151f7eebb8ccf0abd2125dc29b05fe8f8e8632a8ca4fd1f4f04ca54d04269c298172dc2a6940ed573a3133290b1f033b5880d914eb426ad5994394",
+          "signature_verifies": true
+        },
+        {
+          "seat_index": 2,
+          "approve_until": "1790090000",
+          "preimage": "31384a554e4f2f52454d4544592d415050524f56452f76318a5d293125fd3f7dc30ba7b4c59a9a821ddba1af964de7aa8aed74a06c2cd2d50000000000000001020102000000000000000800000000000000009d0b0417ad17b94ca024d02bb6b6ee097428408e88c09462e37a1f3166536e61000000006ab298b8000000006ab29b1002",
+          "digest": "f3a1926408c9aa7d2f933bd0f395b3a917c3d05c34c94dfad180bfce694a51c5",
+          "signed_digest": "f3a1926408c9aa7d2f933bd0f395b3a917c3d05c34c94dfad180bfce694a51c5",
+          "signature": "392f393574cacf15993b680f23006c9510d017247ce05c944e1040e0ef8cefd8410182b5bd55d4035d33d8d9855192086ec3b880f5ed7abc926d4a36058304b8",
+          "signature_verifies": true
+        }
+      ],
       "valid": false,
-      "expect": "ApprovalExpired { seat_index: 0, approve_until: 1790090000 }",
+      "expect": "ApprovalExpired { seat_index: 0, approve_until: 1790090000, final_at: 1790090000 }",
       "mutates": "approvals"
     },
     {

@@ -119,8 +119,9 @@ export interface ClockPauseView {
   readonly request: { readonly kind: "pause" | "resume"; readonly id: number; readonly by: string; readonly yes: readonly string[]; readonly needed: readonly string[] } | null;
 }
 
-/** Money tables: the sealed remedy decision's progress, and (N-1 remedies) the seats whose approvals can no longer land
- *  -- the sealed decision is then held unchanged for an owner decision (never converted, never re-voted). */
+/** Money tables: the sealed remedy decision's progress, and (N-1 remedies) the seats whose approvals were not valid at
+ *  the decision's own final moment -- the sealed decision is then held unchanged for an owner decision (never
+ *  converted, never re-voted). An approval valid at that moment lands however late (owner ruling, 2026-10-07). */
 export interface ClockRemedyView {
   readonly kind: number;
   readonly status: string;

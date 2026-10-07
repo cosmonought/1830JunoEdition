@@ -24,7 +24,7 @@ use sha2::{Digest, Sha256};
 
 const FILE: &str = include_str!("../testdata/remedy_vectors_v1.json");
 /// The frozen file. Regenerating it is a certified-byte change.
-const FILE_SHA256: &str = "6613f137eaa07cfd20a70aa4d52a7db5588cf0ef8782a2247261750c1d2b191a";
+const FILE_SHA256: &str = "c25ede6d4d48aabd285c774cfed6ae635cfcbfb56f599f3e80ce2a349a09c872";
 
 fn doc() -> Value {
     serde_json::from_str(FILE).unwrap()
@@ -113,10 +113,11 @@ fn the_file_is_the_frozen_one() {
             "async-annul",
             "async-foreclose",
             "reattested-foreclose",
-            "approval-last-second"
+            "approval-last-second",
+            "approval-past-horizon"
         ]
     );
-    assert_eq!(d["vectors"].as_array().unwrap().len(), 41);
+    assert_eq!(d["vectors"].as_array().unwrap().len(), 42);
 }
 
 /// The test keys are the Suite's: remedy key id 1, signer 1, admission 1,
@@ -289,7 +290,7 @@ fn every_vector_replays_on_chain_with_the_recorded_verdict() {
         s.assert_custody();
         replayed += 1;
     }
-    assert_eq!(replayed, 40);
+    assert_eq!(replayed, 41);
 }
 
 /// The signature verdict the generator recorded (low-s ECDSA by remedy key

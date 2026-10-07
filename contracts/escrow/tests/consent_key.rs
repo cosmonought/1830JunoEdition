@@ -8,7 +8,7 @@ use common::*;
 use cosmwasm_std::{coins, HexBinary};
 use eighteen_cosmos_escrow::crypto::{self, DomainInputs};
 use eighteen_cosmos_escrow::msg::{ExecuteMsg, SeatSignature};
-use eighteen_cosmos_escrow::state::{GameState, Mode};
+use eighteen_cosmos_escrow::state::{GamePolicy, GameState, Mode, MAX_RETIRED_CONSENT_KEYS};
 use eighteen_cosmos_escrow::ContractError;
 
 fn rotate(id: u64, key: &HexBinary) -> ExecuteMsg {
@@ -44,6 +44,99 @@ fn rotation_records_the_new_key_and_repeating_it_is_a_no_op() {
     let res = s.exec(&alice, &rotate(id, &k.pubkey), &[]).unwrap();
     assert_eq!(attr(&res, "changed"), "false");
     assert_eq!(s.game(id).game.seats[1].consent_key_rotated_at, Some(t));
+}
+
+/// Escrow 2.1.0 (owner ruling, 2026-10-07): a rotation while a
+/// `TimedRemedyV1` game is IN_PROGRESS keeps the replaced key with the
+/// rotation's block time, so a remedy final before it still verifies its
+/// approvals under the key held then; nowhere else is a key kept (before Start,
+/// SETTLEABLE, a no-deadline game). At most `MAX_RETIRED_CONSENT_KEYS` per
+/// seat: the next rotation in play is refused and changes nothing, while
+/// re-setting the current key stays a no-op and other seats are unaffected.
+#[test]
+fn only_a_rotation_in_play_keeps_the_replaced_key_and_the_history_is_bounded() {
+    let mut s = Suite::new();
+    // Before Start: nothing kept.
+    let id = s.create(0, 3, Mode::Live, ANTE);
+    s.join(id, 1, ANTE);
+    let alice = s.players[1].clone();
+    s.exec(
+        &alice,
+        &rotate(id, &Key::from_label("18JUNO/TEST/pre-start").pubkey),
+        &[],
+    )
+    .unwrap();
+    assert!(s.game(id).game.seats[1].retired_consent_keys.is_empty());
+
+    // In play: every rotation keeps the replaced key, up to the bound.
+    let id = s.started(3);
+    assert_eq!(
+        s.game(id).game.terms.policy,
+        Some(GamePolicy::TimedRemedyV1)
+    );
+    let alice = s.players[1].clone();
+    let mut current = Key::seat(1);
+    let mut expected = Vec::new();
+    for i in 0..MAX_RETIRED_CONSENT_KEYS {
+        s.advance(60);
+        let k = Key::from_label(&format!("18JUNO/TEST/seat/1/in-play/{i}"));
+        s.exec(&alice, &rotate(id, &k.pubkey), &[]).unwrap();
+        expected.push((current.pubkey.clone(), s.now()));
+        current = k;
+    }
+    let kept: Vec<_> = s.game(id).game.seats[1]
+        .retired_consent_keys
+        .iter()
+        .map(|r| (r.pubkey.clone(), r.retired_at))
+        .collect();
+    assert_eq!(kept, expected);
+    let before = s.game(id).game;
+    s.advance(60);
+    assert_eq!(
+        s.exec(&alice, &rotate(id, &rotated(1).pubkey), &[])
+            .unwrap_err(),
+        ContractError::ConsentKeyHistoryFull {
+            seat_index: 1,
+            max: MAX_RETIRED_CONSENT_KEYS as u8
+        }
+    );
+    assert_eq!(s.game(id).game, before);
+    let res = s.exec(&alice, &rotate(id, &current.pubkey), &[]).unwrap();
+    assert_eq!(attr(&res, "changed"), "false");
+    let bob = s.players[2].clone();
+    s.exec(&bob, &rotate(id, &rotated(2).pubkey), &[]).unwrap();
+    let g = s.game(id).game;
+    assert_eq!(g.seats[2].retired_consent_keys.len(), 1);
+    assert_eq!(
+        g.seats[2].retired_consent_keys[0].pubkey,
+        Key::seat(2).pubkey
+    );
+    assert!(g.seats[0].retired_consent_keys.is_empty());
+
+    // SETTLEABLE (no remedy can land any more): nothing kept.
+    let (id, _) = s.settleable(3);
+    let alice = s.players[1].clone();
+    s.exec(
+        &alice,
+        &rotate(id, &Key::from_label("18JUNO/TEST/settleable").pubkey),
+        &[],
+    )
+    .unwrap();
+    assert!(s.game(id).game.seats[1].retired_consent_keys.is_empty());
+
+    // A no-deadline game has no remedies: nothing kept.
+    s.no_deadline = true;
+    let id = s.started(3);
+    s.no_deadline = false;
+    assert_eq!(s.game(id).game.terms.policy, Some(GamePolicy::NoDeadline));
+    let alice = s.players[1].clone();
+    s.exec(
+        &alice,
+        &rotate(id, &Key::from_label("18JUNO/TEST/no-deadline").pubkey),
+        &[],
+    )
+    .unwrap();
+    assert!(s.game(id).game.seats[1].retired_consent_keys.is_empty());
 }
 
 #[test]

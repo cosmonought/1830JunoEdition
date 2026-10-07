@@ -17,8 +17,10 @@
 //      with NO system pause and NO player vote (owner, 2026-10-06), and an attestation that expired during the outage
 //      is attested AGAIN for the same decision;
 //   5. N-1 approvals: a seat's REMEDY-APPROVE verifies under its CURRENT consent key for exactly that overdue and
-//      horizon; a horizon too short (or a self-approval, or a wrong key) is refused; a sealed decision whose approvals
-//      can no longer land is held unchanged (owner decision required) -- never converted, never re-voted;
+//      horizon; a horizon not beyond minute 30 (or a self-approval, or a wrong key) is refused; SEALED APPROVAL
+//      FINALITY (owner ruling, 2026-10-07): a sealed decision's approvals are judged at its own final_at -- one valid
+//      then lands after its horizon passed or its seat rotated, attested again with the same decision; one that ended
+//      or was re-keyed at or before final_at is held unchanged (owner decision required) -- never converted, re-voted;
 //   5b. the sealed decision is revalidated against its own evidence before anything is signed;
 //   6. the async bind: an async chain game is bound only under the table's recorded deadline (the same pace, or none).
 
@@ -231,19 +233,19 @@ describe("FP4 remedy pipeline: N-1 approvals", () => {
     assert.equal(await check(BOB, until, signed(1, until)), null, "a valid approval");
     assert.match((await check(BOB, until, signed(1, until, seatSecret(2)))) ?? "", /does not verify under your seat's current consent key/);
     assert.match((await check(BOB, until, signed(1, until, seatSecret(1), { log_len: 2 }))) ?? "", /does not verify/, "bound to the exact overdue instance");
-    const short = Number(secsUp(finalNotBefore)) + 30;
-    assert.match((await check(BOB, short, signed(1, short))) ?? "", /must last beyond/);
-    /* Exactly at finality plus the margin is not enough (the clock requires strictly beyond it). */
-    const edge = Number(secsUp(finalNotBefore)) + 300;
+    /* Valid AT minute 30 decides it (owner ruling, 2026-10-07): strictly beyond the final second, no relay margin. */
+    const edge = Number(secsUp(finalNotBefore));
     assert.match((await check(BOB, edge, signed(1, edge))) ?? "", /must last beyond/);
     assert.equal(await check(BOB, edge + 1, signed(1, edge + 1)), null);
+    const short = Number(secsUp(finalNotBefore)) + 30;
+    assert.equal(await check(BOB, short, signed(1, short)), null, "half a minute past minute 30 is enough");
     const far = Number(secsUp(remedy.overdue_ms)) + 7 * 3600;
     assert.match((await check(BOB, far, signed(1, far))) ?? "", /six hours/);
     assert.match((await check(ALICE, until, signed(0, until))) ?? "", /cannot approve a remedy against itself/);
     assert.equal(await check(BOB, until, "zz"), "the approval is not a 64-byte signature");
   });
 
-  test("a Live foreclosure with a valid N-1 approval is attested with it; one whose approval LAPSED is held unchanged (owner decision required) -- never converted to the neutral annulment", async () => {
+  test("SEALED APPROVAL FINALITY: a Live foreclosure whose approval was valid at final_at lands after its horizon passed; one whose approval ended AT final_at is held unchanged (owner decision required) -- never converted to the neutral annulment", async () => {
     const { world, chainGameId } = await liveWorld();
     const port = pipeline(world);
     const g = gameOf(world, chainGameId);
@@ -265,22 +267,28 @@ describe("FP4 remedy pipeline: N-1 approvals", () => {
       ).toString("hex"),
     });
     advanceTo(world, finalSecs + 10);
-    const lapsed = await port.attest(GAME_A, withEvidence({ ...base, approvals: [approval(finalSecs + 5)] }));
+    /* Ended AT the final second: never valid at finality (the clock would not have sealed it; a race it could not see). */
+    const lapsed = await port.attest(GAME_A, withEvidence({ ...base, approvals: [approval(finalSecs)] }));
     assert.equal(lapsed.status, "refused");
-    assert.deepEqual(lapsed.unlandable, [BOB], "the seat whose approval can no longer land");
+    assert.deepEqual(lapsed.unlandable, [BOB], "the seat whose approval was not valid at final_at");
     assert.match(lapsed.detail ?? "", /owner decision required/);
+    assert.match(lapsed.detail ?? "", /not valid at its own final_at/);
     assert.equal("fallback" in lapsed, false, "no neutral fallback exists any more");
     assert.deepEqual(await remedyIntents(world), [], "nothing signed, nothing converted");
-    const valid = withEvidence({ ...base, approvals: [approval(finalSecs + 3_600)] });
+    /* Valid at final_at, its horizon already PAST at the attestation and block time: the same decision lands. */
+    const valid = withEvidence({ ...base, approvals: [approval(finalSecs + 5)] });
+    assert.ok(world.chain.time > finalSecs + 5);
     const good = await port.attest(GAME_A, valid);
     assert.deepEqual([good.status, good.attested], ["submitted", true], JSON.stringify(good));
+    const [intent] = await remedyIntents(world);
+    assert.equal(intent.op.kind === "remedy" ? intent.op.usable_until : null, intent.op.kind === "remedy" ? intent.op.expires_at : "?", "only the attestation's expiry bounds the intent");
     await world.drive(async () => (await port.progress(GAME_A, valid)) === "confirmed");
     assert.equal(gameOf(world, chainGameId).remedy?.kind, "live_foreclose");
   });
 });
 
-describe("FP4 remedy pipeline: approvals are re-checked under the CURRENT consent keys before anything is signed", () => {
-  test("a key that moved since the approval: the sealed decision (Live or Async N-1) is held unchanged with the seat named; staleApprovals finds them in one read", async () => {
+describe("FP4 remedy pipeline: approvals are re-checked under the consent key each seat held AT final_at before anything is signed", () => {
+  test("a key replaced at or before final_at: the sealed decision (Live or Async N-1) is held unchanged with the seat named; staleApprovals finds them in one read", async () => {
     const { world, chainGameId } = await liveWorld();
     const port = pipeline(world);
     const g = gameOf(world, chainGameId);
@@ -313,6 +321,64 @@ describe("FP4 remedy pipeline: approvals are re-checked under the CURRENT consen
     const facts = { remedy: 2 as const, defaultingSeat: ALICE, strike: base.strike, epoch: 1, logLen: 1, logHash: base.log_hash, overdueMs: base.overdue_ms };
     assert.deepEqual(await port.staleApprovals(GAME_A, facts, [{ seat: BOB, approveUntil: until, signature: moved.signature }]), [BOB]);
     assert.deepEqual(await port.staleApprovals(GAME_A, facts, [{ seat: BOB, approveUntil: until, signature: signedBy(2, seatSecret(1), until) }]), []);
+  });
+
+  test("SEALED APPROVAL FINALITY: a seat that rotates AFTER final_at revokes nothing (the same decision lands); one that rotated AT or before final_at voids its old approval (held); staleApprovals judges at the moment asked", async () => {
+    const signedBy = (world: World, chainGameId: string, base: ClockRemedy, secret: Buffer, until: number) =>
+      signDigest(
+        secret,
+        Buffer.from(
+          remedyApproveDigestV1(
+            { domain: gameOf(world, chainGameId).domain, chain_game_id: BigInt(chainGameId), remedy: 2, defaulting_seat: 0, strike: base.strike, overdue_epoch: BigInt(1), log_len: BigInt(1), log_hash: base.log_hash, overdue_at: secsUp(base.overdue_ms) },
+            BigInt(until),
+            1,
+          ),
+          "hex",
+        ),
+      ).toString("hex");
+    const rotate = (world: World, chainGameId: string, label: string) => {
+      const seats = (world.chain.games.get(Number(chainGameId)) as unknown as { seats: { wallet: string }[] }).seats;
+      const done = world.chain.setConsentKey(chainGameId, seats[1].wallet, publicKeyOf(sha(label)).toString("hex"));
+      assert.equal(done.ok, true, JSON.stringify(done));
+    };
+    /* AFTER final_at: BOB rotates a minute after minute 30; his approval, signed under the key he held then, lands. */
+    {
+      const { world, chainGameId } = await liveWorld();
+      const port = pipeline(world);
+      const base = sealed(world, chainGameId, 2);
+      const finalSecs = Number(remedyTimes(base).finalAt);
+      const until = finalSecs + 600;
+      const approval = { seat: BOB, approve_until: until, signature: signedBy(world, chainGameId, base, seatSecret(1), until) };
+      advanceTo(world, finalSecs + 60);
+      rotate(world, chainGameId, "bob-after-final");
+      const facts = { remedy: 2 as const, defaultingSeat: ALICE, strike: base.strike, epoch: 1, logLen: 1, logHash: base.log_hash, overdueMs: base.overdue_ms };
+      const pair = [{ seat: BOB, approveUntil: until, signature: approval.signature }];
+      assert.deepEqual(await port.staleApprovals(GAME_A, facts, pair), [BOB], "under the CURRENT key (a new vote): replaced");
+      assert.deepEqual(await port.staleApprovals(GAME_A, facts, pair, { atSecs: finalSecs }), [], "at final_at: the key he held then");
+      advanceTo(world, until + 3_600);
+      const decision = withEvidence({ ...base, approvals: [approval] });
+      const good = await port.attest(GAME_A, decision);
+      assert.deepEqual([good.status, good.attested], ["submitted", true], JSON.stringify(good));
+      await world.drive(async () => (await port.progress(GAME_A, decision)) === "confirmed");
+      assert.equal(gameOf(world, chainGameId).remedy?.kind, "live_foreclose");
+    }
+    /* AT final_at (the same second): the old key's approval is void -- held, never converted. */
+    {
+      const { world, chainGameId } = await liveWorld();
+      const port = pipeline(world);
+      const base = sealed(world, chainGameId, 2);
+      const finalSecs = Number(remedyTimes(base).finalAt);
+      const until = finalSecs + 600;
+      const approval = { seat: BOB, approve_until: until, signature: signedBy(world, chainGameId, base, seatSecret(1), until) };
+      advanceTo(world, finalSecs);
+      rotate(world, chainGameId, "bob-at-final");
+      const facts = { remedy: 2 as const, defaultingSeat: ALICE, strike: base.strike, epoch: 1, logLen: 1, logHash: base.log_hash, overdueMs: base.overdue_ms };
+      assert.deepEqual(await port.staleApprovals(GAME_A, facts, [{ seat: BOB, approveUntil: until, signature: approval.signature }], { atSecs: finalSecs }), [BOB]);
+      advanceTo(world, finalSecs + 10);
+      const held = await port.attest(GAME_A, withEvidence({ ...base, approvals: [approval] }));
+      assert.deepEqual([held.status, held.unlandable], ["refused", [BOB]], JSON.stringify(held));
+      assert.deepEqual(await remedyIntents(world), [], "nothing was signed");
+    }
   });
 });
 

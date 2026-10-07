@@ -158,12 +158,10 @@ export const secsUpOf = (ms: number): number => Number((BigInt(ms) + BigInt(999)
 /** Whole seconds of a ms instant, rounded DOWN -- integers only. */
 export const secsDownOf = (ms: number): number => Number(BigInt(ms) / BigInt(1000));
 
-/** Live: a foreclosure's approvals must outlive its finality by this much (seconds) to decide minute 30 -- the relay's
- *  room to land it before the first approval lapses. Shorter, or lapsed: the neutral timeout annulment. */
-export const LIVE_FINALITY_APPROVAL_MARGIN_SECS = 300;
-/** Async (money): an approval counts toward completing the N-1 consensus only while it outlives the completion by this
- *  much (seconds); a seat whose approval has less left is asked to approve again (its YES is set aside). */
-export const ASYNC_COMPLETION_APPROVAL_MARGIN_SECS = 3_600;
+/* Owner ruling (2026-10-07): a money approval counts when it is VALID AT FINALITY -- its horizon strictly after the
+   attested final second, under the consent key its seat holds then. The sealed decision then lands however late
+   (escrow 2.1.0 judges every approval at `final_at`, never at the block time), so no relay margin is kept: Live, an
+   approval that outlives minute 30 decides it; Async, one that outlives the completing vote completes the consensus. */
 
 export function remainingAt(timer: ClockTimer, at: number): number {
   if (timer.since === null || at <= timer.since) return timer.remaining_ms;
@@ -697,9 +695,33 @@ function endGame(x: Draft, kind: ClockEndKind, at: number, seat: string | null):
     TIME: OVERDUE, FINALITY, THE TRADE RESPONSE (`advance`)
    ================================================================== */
 
+/** Live (money): the controller's chain read of the standing YES approvals AT a foreclosure's final second -- the seats
+ *  whose approval does not verify under the consent key their seat held then (`RemedyPort.staleApprovals` with
+ *  `atSecs`). Bound to one overdue, one proposal and one final second; anything else is ignored. */
+export interface FinalityKeyCheck {
+  readonly epoch: number;
+  readonly proposal: number;
+  readonly final_secs: number;
+  readonly stale: readonly string[];
+}
+
+/** Live (money): the finality a key check must be made for before `advance` reaches it at `now` -- a COMPLETE N-1
+ *  foreclosure whose minute 30 falls due by `now` -- or null (none due, or nothing to check). */
+export function finalityKeyCheckDue(record: GameClockRecord, now: number): { readonly epoch: number; readonly proposal: number; readonly final_secs: number; readonly votes: readonly ClockVote[] } | null {
+  const od = record.overdue;
+  if (record.money === null || record.policy.class !== "live" || record.phase !== "overdue" || od === null || od.cure === null) return null;
+  if (record.system !== null || record.pause.paused_at !== null) return null;
+  const proposal = od.proposal;
+  if (proposal === null || proposal.kind !== "foreclose" || proposal.complete_at === null) return null;
+  const due = dueOf(od.cure);
+  if (due === null || due > now) return null;
+  return { epoch: od.epoch, proposal: proposal.id, final_secs: finalSecsOf(od, due), votes: proposal.votes.filter((v) => v.yes && v.approval !== null) };
+}
+
 /** Processes every transition due by `now`, in time order, each AT ITS OWN MOMENT (never at `now`). Stops at a train
- *  offer's expiry: that needs the log (the controller closes the offer, then folds it and advances again). */
-export function advance(record: GameClockRecord, now: number, position: LogPosition): ClockStep & { readonly tradeExpiry: Extract<ClockEffect, { kind: "trade-expiry" }> | null } {
+ *  offer's expiry: that needs the log (the controller closes the offer, then folds it and advances again). `keys`: the
+ *  controller's key check for a Live money finality due by `now` (`finalityKeyCheckDue`); null when none was made. */
+export function advance(record: GameClockRecord, now: number, position: LogPosition, keys: FinalityKeyCheck | null = null): ClockStep & { readonly tradeExpiry: Extract<ClockEffect, { kind: "trade-expiry" }> | null } {
   const x = new Draft(record, now);
   const d = x.d;
   for (let guard = 0; guard < 8; guard += 1) {
@@ -721,7 +743,7 @@ export function advance(record: GameClockRecord, now: number, position: LogPosit
     if (d.phase === "overdue" && od !== null && od.cure !== null) {
       const due = dueOf(od.cure);
       if (due !== null && due <= now) {
-        finality(x, due);
+        finality(x, due, keys);
         continue;
       }
     }
@@ -772,15 +794,22 @@ function becomeOverdue(x: Draft, at: number, position: LogPosition): void {
   }
 }
 
-function finality(x: Draft, at: number): void {
+function finality(x: Draft, at: number, keys: FinalityKeyCheck | null): void {
   const d = x.d;
   const od = d.overdue as ClockOverdue;
   const proposal = od.proposal;
-  /* The attestation's own final moment (whole seconds, never earlier than the overdue plus the 10-minute window), and
-     the relay's margin past it: an approval that cannot outlive both cannot decide minute 30. */
+  /* The attestation's own final moment (whole seconds, never earlier than the overdue plus the 10-minute window): an
+     approval that does not outlive it cannot decide minute 30. */
   const finalSecs = finalSecsOf(od, at);
   const complete = proposal !== null && proposal.kind === "foreclose" && proposal.complete_at !== null;
-  const valid = complete && (!d.money || approvalsOutlive((proposal as ClockProposal).votes, finalSecs));
+  /* Money: a YES whose seat's consent key was replaced at or before this final second (the controller's chain read AT
+     finality, bound to this overdue and proposal) is void before the seal -- the N-1 consensus is then incomplete. */
+  const moved =
+    d.money && complete && keys !== null && keys.epoch === od.epoch && keys.proposal === (proposal as ClockProposal).id && keys.final_secs === finalSecs
+      ? (proposal as ClockProposal).votes.filter((v) => v.yes && keys.stale.includes(v.seat)).map((v) => v.seat)
+      : [];
+  for (const seat of moved) x.emit("vote-stale", at, { epoch: od.epoch, id: (proposal as ClockProposal).id, seat, reason: "key-moved" });
+  const valid = complete && (!d.money || (approvalsOutlive((proposal as ClockProposal).votes, finalSecs) && moved.length === 0));
   const foreclose = complete && valid;
   x.emit("final", at, { epoch: od.epoch, seat: od.seat, outcome: foreclose ? "foreclosure" : "timeout-annul", proposal: proposal?.id ?? null, approvals_valid: complete ? valid : null });
   if (d.money) seal(x, foreclose ? 2 : 1, od, at, foreclose ? (proposal as ClockProposal).votes : []);
@@ -800,9 +829,9 @@ export function finalSecsOf(od: Pick<ClockOverdue, "at">, finalMs: number): numb
   return Math.max(secsUpOf(finalMs), secsUpOf(od.at) + LIVE_CURE_MS / 1000);
 }
 
-/** Live (money): every YES approval of the complete foreclosure outlives `finalSecs` by the relay's margin. */
+/** Live (money): every YES approval of the complete foreclosure outlives `finalSecs` (valid at finality). */
 function approvalsOutlive(votes: readonly ClockVote[], finalSecs: number): boolean {
-  return votes.every((v) => !v.yes || (v.approval !== null && v.approval.approve_until > finalSecs + LIVE_FINALITY_APPROVAL_MARGIN_SECS));
+  return votes.every((v) => !v.yes || (v.approval !== null && v.approval.approve_until > finalSecs));
 }
 
 /** Live: would minute 30, as it stands now, end the game by foreclosure (a complete N-1 foreclosure whose money
@@ -883,11 +912,11 @@ export function remedyProgress(record: GameClockRecord, status: RemedyStatus, de
   return x.done();
 }
 
-/** A sealed N-1 remedy (Live foreclosure 2; Async annulment 4 or foreclosure 5) whose seat approvals can no longer land
- *  (a horizon passed -- the contract checks it against the block time -- or a seat's consent key moved since it signed).
- *  The owner's rule (policy correction, 2026-10-06): a sealed terminal remedy is never changed, recalculated, converted
- *  to another outcome or put to a new vote. Escrow 2.1.0 has no way to land approvals past their horizon, so the SAME
- *  decision stays sealed and is HELD (`refused`, its detail naming the owner decision it needs); `stale` names the seats
+/** A sealed N-1 remedy (Live foreclosure 2; Async annulment 4 or foreclosure 5) whose seat approvals were NOT valid at
+ *  its own final second (a horizon at or before it, or a seat's consent key replaced at or before it -- escrow 2.1.0
+ *  judges each approval at `final_at`, owner ruling 2026-10-07; a race the pre-seal checks could not see). The owner's
+ *  rule (policy correction, 2026-10-06): a sealed terminal remedy is never changed, recalculated, converted to another
+ *  outcome or put to a new vote. Such approvals can never land, so the SAME decision stays sealed and is HELD (`refused`, its detail naming the owner decision it needs); `stale` names the seats
  *  (informational). Nothing is attested on it; nobody is asked to approve again. */
 export function remedyBlocked(record: GameClockRecord, seats: readonly string[], detail: string, now: number): ClockStep {
   const r = record.remedy;
@@ -973,16 +1002,18 @@ export function vote(
 }
 
 /** Completes the N-1 set when every non-defaulting seat's YES is in. On a money table a YES counts only while its
- *  approval can still land: an Async one must outlive the completion by `ASYNC_COMPLETION_APPROVAL_MARGIN_SECS`, and
- *  none whose seat's consent key moved since it signed (`stale`, found by the caller's chain read) -- those YES votes are
- *  set aside (evidence: `vote-stale`) and the seat is asked again; nothing is sealed on an approval that cannot land. */
+ *  approval is valid NOW: an Async one must outlive the completing moment (it is then final -- owner ruling,
+ *  2026-10-07: valid at finality decides), and none whose seat's consent key moved since it signed (`stale`, found by
+ *  the caller's chain read) -- those YES votes are set aside (evidence: `vote-stale`) and the seat is asked again;
+ *  nothing is sealed on an approval that was not valid when the decision became final. */
 function completeIfUnanimous(x: Draft, now: number, stale: readonly string[] = []): void {
   const d = x.d;
   let od = d.overdue as ClockOverdue;
   let proposal = od.proposal as ClockProposal;
   if (proposal.complete_at !== null) return;
   if (d.money) {
-    const horizon = secsDownOf(now) + (d.policy.class === "async-pace" ? ASYNC_COMPLETION_APPROVAL_MARGIN_SECS : 0);
+    /* The completing moment's attested second (`remedyTimes`: rounded up): an approval must end strictly after it. */
+    const horizon = secsUpOf(now);
     const lapsed = proposal.votes.filter((v) => v.yes && (stale.includes(v.seat) || (d.policy.class === "async-pace" && (v.approval === null || v.approval.approve_until <= horizon))));
     if (lapsed.length > 0) {
       for (const v of lapsed) x.emit("vote-stale", now, { epoch: od.epoch, id: proposal.id, seat: v.seat, reason: stale.includes(v.seat) ? "key-moved" : "lapsed" });

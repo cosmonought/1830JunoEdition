@@ -2,7 +2,9 @@
 """Independent generator for the escrow 2.1.0 REMEDY cross-language vectors.
 
 Re-implements, from the specification text only (contracts/escrow/src/crypto.rs
-and src/remedy.rs module comments, owner decision R1 of 2026-10-06):
+and src/remedy.rs module comments, owner decision R1 of 2026-10-06, and the
+owner ruling of 2026-10-07 that a seat's approval is judged at the remedy's
+attested final_at -- `final_at < approve_until` -- never at the block time):
 
     remedy  = SHA-256("18JUNO/REMEDY/v1" ‖ encode(attestation))
     encode  = u8(version=1) ‖ domain(32) ‖ u64(chain_game_id) ‖ u8(remedy)
@@ -443,10 +445,14 @@ def main():
     reattested = dict(fore, attested_at=late, expires_at=late + 600)
     ahead = dict(annul, attested_at=B + 30, expires_at=B + 600)
     # The seats' horizon on the foreclosure's approvals (one day after its
-    # finality), and the decision attested again at its last second and at it.
+    # finality); the decision attested again at its last second and an hour
+    # past it (the approvals were valid at final_at: it still lands); and a
+    # foreclosure that became FINAL only at that horizon (never counts).
     horizon = fore["final_at"] + DAY
     at_last = dict(fore, attested_at=horizon - 1, expires_at=horizon + 599)
-    at_horizon = dict(fore, attested_at=horizon, expires_at=horizon + 600)
+    past = dict(fore, attested_at=horizon + HOUR, expires_at=horizon + HOUR + 600)
+    final_at_horizon = dict(fore, overdue_at=horizon - 600, final_at=horizon,
+                            attested_at=horizon, expires_at=horizon + 600)
     vectors += [
         vector("reattested-foreclose", "live", reattested,
                approvals=approvals_of(reattested, [0, 2]), block_time=late, expect="ok:settled",
@@ -466,11 +472,18 @@ def main():
                block_time=horizon - 1, expect="ok:settled",
                note="the foreclosure attested again and relayed at its approvals' last usable second",
                mutates="block_time"),
-        vector("approval-expired", "live", at_horizon, approvals=approvals_of(at_horizon, [0, 2]),
+        vector("approval-past-horizon", "live", past, approvals=approvals_of(past, [0, 2]),
+               block_time=horizon + HOUR, expect="ok:settled",
+               note="the same sealed decision attested again and relayed an hour after its "
+                    "approvals' approve_until: they were valid at final_at, so it lands",
+               mutates="block_time"),
+        vector("approval-expired", "live", final_at_horizon,
+               approvals=approvals_of(final_at_horizon, [0, 2], until=horizon),
                block_time=horizon,
-               expect=f"ApprovalExpired {{ seat_index: 0, approve_until: {horizon} }}",
-               note="the same, relayed at the approvals' approve_until: refused whatever the "
-                    "remedy key attests (a cured overdue's approvals die at their horizon)",
+               expect=f"ApprovalExpired {{ seat_index: 0, approve_until: {horizon}, "
+                      f"final_at: {horizon} }}",
+               note="a foreclosure FINAL at the approvals' approve_until: refused whatever the "
+                    "block time (a lapsed approval never decides a finality)",
                mutates="approvals"),
         vector("approval-extended", "live", fore,
                approvals=approvals_of(fore, [0, 2], until=horizon + DAY, signed_until=horizon),

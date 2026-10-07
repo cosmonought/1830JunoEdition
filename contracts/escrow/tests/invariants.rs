@@ -50,7 +50,17 @@
 //!     and every other seat its net deposit plus ⌊net_D/(N−1)⌋ with the
 //!     remainder to the treasury, and a third strike stores a challengeable
 //!     1/0 settlement; a third-strike settlement whose REMEDY key is
-//!     compromised is never paid directly (17)
+//!     compromised is never paid directly (17); every approval is judged at
+//!     the attested `final_at` (owner ruling, 2026-10-07): its horizon after
+//!     `final_at`, signed under the key its seat held then -- never at the
+//!     block time -- so a sealed decision relayed days late, after horizons
+//!     passed and seats rotated, still lands, and a key replaced at or before
+//!     `final_at` never counts
+//! 21. consent-key history: a rotation keeps the replaced key (stamped with
+//!     the block time) exactly when its game is a 2.1.0 `TimedRemedyV1` game
+//!     IN_PROGRESS, at most `MAX_RETIRED_CONSENT_KEYS` per seat (a further
+//!     rotation in play is refused `ConsentKeyHistoryFull`); the history is
+//!     time-ordered and is exactly the rotations made in play
 //!
 //! The checker mixes three kinds of game: escrow 2.1.0 `TimedRemedyV1` (Live
 //! and paced Async) and `NoDeadline` games, and games rewritten into the shape
@@ -72,7 +82,7 @@ use eighteen_cosmos_escrow::payload::{Payload, KIND_CHECKPOINT, KIND_TERMINAL};
 use eighteen_cosmos_escrow::remedy::RemedyAttestation;
 use eighteen_cosmos_escrow::state::{
     Game, GamePolicy, GameState, Mode, RemedyKind, Route, SettlementRecord, SettlementSource,
-    ASYNC_PACES_SECS, MAX_REMEDY_TTL_SECS,
+    ASYNC_PACES_SECS, MAX_REMEDY_TTL_SECS, MAX_RETIRED_CONSENT_KEYS,
 };
 use eighteen_cosmos_escrow::ContractError;
 
@@ -177,8 +187,8 @@ struct RemedyPlan {
     key_status: &'static str,
     /// The signature is by the key registered under `a.remedy_key_id`.
     sig_ok: bool,
-    /// (seat index, signed by that seat's current key over the right digest,
-    /// its `approve_until`).
+    /// (seat index, signed by the key that seat held at `a.final_at` over the
+    /// right digest, its `approve_until`).
     approvals: Vec<(u8, bool, u64)>,
 }
 
@@ -235,6 +245,9 @@ struct Fuzz {
     games: Vec<u64>,
     /// Current consent key of (game, player index).
     keys: HashMap<(u64, usize), Key>,
+    /// The keys (game, player index) replaced while its 2.1.0 game was
+    /// IN_PROGRESS, oldest first, each with the rotation's block time.
+    key_history: HashMap<(u64, usize), Vec<(Key, u64)>>,
     key_counter: u64,
     /// Every registered settlement key.
     signers: Vec<(u16, Key)>,
@@ -278,6 +291,10 @@ struct Fuzz {
     next_remedy_label: usize,
     /// Accepted remedies by kind (20).
     remedies_ok: BTreeMap<&'static str, usize>,
+    /// Accepted N−1 remedies that landed after an approval's horizon had
+    /// passed / after an approving seat replaced the key it signed with.
+    landed_after_horizon: usize,
+    landed_after_rotation: usize,
     /// Remedies refused, by the model's label (20).
     remedies_refused: BTreeMap<&'static str, usize>,
     /// Third-strike settlements that reached a terminal state (20).
@@ -300,6 +317,7 @@ impl Fuzz {
             rng: Rng(seed),
             games: Vec::new(),
             keys: HashMap::new(),
+            key_history: HashMap::new(),
             key_counter: 0,
             signers: vec![(1, signer)],
             retired: BTreeSet::new(),
@@ -330,6 +348,8 @@ impl Fuzz {
             remedy_compromised: BTreeSet::new(),
             next_remedy_label: 2,
             remedies_ok: BTreeMap::new(),
+            landed_after_horizon: 0,
+            landed_after_rotation: 0,
             remedies_refused: BTreeMap::new(),
             strike3_closed: BTreeMap::new(),
             focus: false,
@@ -523,6 +543,34 @@ impl Fuzz {
             signer_key_id: key_id,
             issued_at: 1_790_000_000,
         }
+    }
+
+    /// The key `seat` held at `at` (the contract's `consent_key_at`, modelled
+    /// from the rotations this fuzzer made): the first key retired strictly
+    /// after `at`, else the current one.
+    fn key_at(&self, id: u64, g: &Game, seat: usize, at: u64) -> Key {
+        let p = self
+            .player_index(&g.seats[seat].wallet)
+            .expect("seats are players");
+        self.key_history
+            .get(&(id, p))
+            .and_then(|h| h.iter().find(|(_, retired_at)| *retired_at > at))
+            .map(|(k, _)| k.clone())
+            .unwrap_or_else(|| self.current_key(id, g, seat))
+    }
+
+    /// Every key `seat` ever held in play (retired ones and the current one).
+    fn keys_ever(&self, id: u64, g: &Game, seat: usize) -> Vec<Key> {
+        let p = self
+            .player_index(&g.seats[seat].wallet)
+            .expect("seats are players");
+        let mut all: Vec<Key> = self
+            .key_history
+            .get(&(id, p))
+            .map(|h| h.iter().map(|(k, _)| k.clone()).collect())
+            .unwrap_or_default();
+        all.push(self.current_key(id, g, seat));
+        all
     }
 
     fn current_key(&self, id: u64, g: &Game, seat: usize) -> Key {
@@ -808,10 +856,32 @@ impl Fuzz {
                     chain_game_id: id,
                     new_pubkey: key.pubkey.clone(),
                 };
+                // A rotation in a 2.1.0 game's play keeps the replaced key
+                // (bounded); anywhere else nothing is kept.
+                let in_play =
+                    g.state == InProgress && g.terms.policy == Some(GamePolicy::TimedRemedyV1);
+                let p_own = own.map(|_| self.player_index(&who).unwrap());
+                let kept = p_own
+                    .and_then(|p| self.key_history.get(&(id, p)))
+                    .map_or(0, Vec::len);
+                let old = own.map(|o| self.current_key(id, &g, o));
+                let now = self.s.now().seconds();
                 let res = self.exec(&who, &msg, &[]);
                 assert!(!(reuse && res.is_ok()), "rotated onto another seat's key");
+                let full = matches!(res, Err(ContractError::ConsentKeyHistoryFull { .. }));
+                assert_eq!(
+                    full,
+                    own.is_some() && !reuse && in_play && kept >= MAX_RETIRED_CONSENT_KEYS,
+                    "consent key history cap: {res:?}"
+                );
                 if res.is_ok() {
                     let p = self.player_index(&who).unwrap();
+                    if in_play && old.as_ref().is_some_and(|o| o.pubkey != key.pubkey) {
+                        self.key_history
+                            .entry((id, p))
+                            .or_default()
+                            .push((old.clone().unwrap(), now));
+                    }
                     self.keys.insert((id, p), key);
                 }
                 Some(Self::done(act, Some(id), who, res))
@@ -1514,7 +1584,7 @@ impl Fuzz {
                     }
                 }
                 let mutation = if self.rng.chance(if self.focus { 50 } else { 30 }) {
-                    Some(self.rng.below(19))
+                    Some(self.rng.below(20))
                 } else {
                     None
                 };
@@ -1552,6 +1622,63 @@ impl Fuzz {
                     return None;
                 }
                 let plan = self.build_remedy(id, &g, kind, defaulting, mutation);
+                // (20, 21) Sealed approval finality: now and then an approving
+                // seat replaces its consent key AFTER the remedy's final_at and
+                // before the relay (its own checked step). Its approval, signed
+                // under the key it held at final_at, still counts.
+                let candidates: Vec<usize> = plan
+                    .approvals
+                    .iter()
+                    .map(|(seat, _, _)| usize::from(*seat))
+                    .filter(|seat| *seat < g.seats.len() && *seat != usize::from(defaulting))
+                    .collect();
+                if self.focus
+                    && g.state == InProgress
+                    && g.terms.policy == Some(GamePolicy::TimedRemedyV1)
+                    && plan.a.final_at < self.s.now().seconds()
+                    && !candidates.is_empty()
+                    && self.rng.chance(40)
+                {
+                    let seat = self.rng.pick(&candidates);
+                    let who = g.seats[seat].wallet.clone();
+                    let p = self.player_index(&who).expect("seats are players");
+                    if self.key_history.get(&(id, p)).map_or(0, Vec::len) < MAX_RETIRED_CONSENT_KEYS
+                    {
+                        let before = self.begin();
+                        let key = self.fresh_key();
+                        let old = self.current_key(id, &g, seat);
+                        let now = self.s.now().seconds();
+                        let res = self.exec(
+                            &who,
+                            &ExecuteMsg::SetConsentKey {
+                                chain_game_id: id,
+                                new_pubkey: key.pubkey.clone(),
+                            },
+                            &[],
+                        );
+                        assert!(res.is_ok(), "a rotation in play was refused: {res:?}");
+                        self.key_history
+                            .entry((id, p))
+                            .or_default()
+                            .push((old, now));
+                        self.keys.insert((id, p), key);
+                        let d = Self::done(Act::SetKey, Some(id), who, res);
+                        self.check(&d, &before);
+                        let before = self.begin();
+                        let g = self.game_of(id);
+                        let who = self.any_caller();
+                        let res = self.exec(&who, &plan.msg, &[]);
+                        let retired = plan.key_status == "retired";
+                        self.expect_remedy(id, &g, &plan, &res);
+                        if res.is_ok() {
+                            self.accepted.push((id, plan.msg.clone()));
+                        }
+                        let mut d = Self::done(act, Some(id), who, res);
+                        d.retired_signer = retired;
+                        self.check(&d, &before);
+                        return None;
+                    }
+                }
                 let who = self.any_caller();
                 let res = self.exec(&who, &plan.msg, &[]);
                 let retired = plan.key_status == "retired";
@@ -1926,6 +2053,18 @@ impl Fuzz {
                         assert_eq!(a, b, "re-setting the same consent key changed the game");
                     } else {
                         assert_eq!(a.consent_bitmap, b.consent_bitmap & !bit);
+                        // (21) only a rotation in a 2.1.0 game's play keeps
+                        // the replaced key, stamped with the rotation time.
+                        let mut kept = b.seats[i].retired_consent_keys.clone();
+                        if b.state == GameState::InProgress
+                            && b.terms.policy == Some(GamePolicy::TimedRemedyV1)
+                        {
+                            kept.push(eighteen_cosmos_escrow::state::RetiredConsentKey {
+                                pubkey: b.seats[i].consent_pubkey.clone(),
+                                retired_at: a.seats[i].consent_key_rotated_at.unwrap(),
+                            });
+                        }
+                        assert_eq!(a.seats[i].retired_consent_keys, kept);
                     }
                 }
                 // (15) only the game's own resolver adjudicates.
@@ -2068,7 +2207,30 @@ impl Fuzz {
             keys.sort();
             keys.dedup();
             assert_eq!(keys.len(), g.seats.len(), "shared consent key in game {id}");
-            for seat in &g.seats {
+            for (i, seat) in g.seats.iter().enumerate() {
+                // (21) a bounded, time-ordered key history, only in a 2.1.0
+                // game, exactly the rotations this fuzzer made in its play.
+                assert!(seat.retired_consent_keys.len() <= MAX_RETIRED_CONSENT_KEYS);
+                assert!(seat
+                    .retired_consent_keys
+                    .windows(2)
+                    .all(|w| w[0].retired_at <= w[1].retired_at));
+                if g.terms.policy != Some(GamePolicy::TimedRemedyV1) {
+                    assert!(seat.retired_consent_keys.is_empty());
+                }
+                if let Some(p) = self.player_index(&seat.wallet) {
+                    let model: Vec<(Vec<u8>, u64)> = self
+                        .key_history
+                        .get(&(*id, p))
+                        .map(|h| h.iter().map(|(k, t)| (k.pubkey.to_vec(), *t)).collect())
+                        .unwrap_or_default();
+                    let chain: Vec<(Vec<u8>, u64)> = seat
+                        .retired_consent_keys
+                        .iter()
+                        .map(|r| (r.pubkey.to_vec(), r.retired_at.seconds()))
+                        .collect();
+                    assert_eq!(chain, model, "seat {i}'s key history in game {id}");
+                }
                 // (6) one subsidy per deposit, recorded on the seat.
                 assert_eq!(seat.gross_deposit, g.ante_gross);
                 assert_eq!(seat.subsidy_paid.u128(), g.ante_gross.u128() * 250 / 10_000);
@@ -2602,7 +2764,11 @@ impl Fuzz {
         };
         let earliest = started + g.terms.allowance_secs;
         let slack = now.saturating_sub(earliest + cure);
-        let final_at = now - self.rng.below(slack.min(120) + 1);
+        // Usually final within the last two minutes; now and then days ago (a
+        // sealed decision relayed late, its approvals' horizons and the
+        // seats' keys moved since).
+        let reach = if self.rng.chance(20) { 3 * DAY } else { 120 };
+        let final_at = now - self.rng.below(slack.min(reach) + 1);
         let overdue_at = match kind {
             RemedyKind::LiveTimeoutAnnul | RemedyKind::LiveForeclose => {
                 // Now and then a cure window a pause stretched.
@@ -2620,7 +2786,8 @@ impl Fuzz {
                 final_at - self.rng.below(room.min(g.terms.allowance_secs) + 1)
             }
         };
-        let attested_at = final_at + self.rng.below(now - final_at + 1);
+        // Attested (again) within the last two minutes, never before final_at.
+        let attested_at = now - self.rng.below((now - final_at).min(120) + 1);
         let strike = match kind {
             RemedyKind::LiveTimeoutAnnul | RemedyKind::LiveForeclose => 1 + self.rng.below(2) as u8,
             RemedyKind::LiveStrike3Foreclose => 3,
@@ -2667,6 +2834,7 @@ impl Fuzz {
         let mut bad_approval: Option<usize> = None;
         let mut stale_approvals = false;
         let mut expired_approval: Option<usize> = None;
+        let mut other_era_key: Option<usize> = None;
         match mutation {
             Some(0) => {
                 // The other mode's remedy.
@@ -2749,10 +2917,18 @@ impl Fuzz {
                 }
             }
             Some(18) => {
-                // One approval used from its own `approve_until` on (its
-                // seat's horizon ran out before the relay).
+                // One approval whose own `approve_until` is at or before the
+                // remedy's final_at (it lapsed before the decision was final).
                 if !approval_seats.is_empty() {
                     expired_approval = Some(self.rng.below(approval_seats.len() as u64) as usize);
+                }
+            }
+            Some(19) => {
+                // One approval under a key its seat did NOT hold at final_at
+                // (one it replaced at or before final_at, or one it took
+                // after): never counts.
+                if !approval_seats.is_empty() {
+                    other_era_key = Some(self.rng.below(approval_seats.len() as u64) as usize);
                 }
             }
             Some(_) => {
@@ -2779,12 +2955,16 @@ impl Fuzz {
             } else {
                 (a.log_len, a.overdue_at)
             };
-            // Each seat bounds its own approval: a horizon ahead of the block
-            // time, or (mutation 18) at or before it.
+            // Each seat bounds its own approval: a horizon after final_at
+            // (often already past at the block time: it still counts), or
+            // (mutation 18) at or before final_at.
             let approve_until = if expired_approval == Some(k) {
-                now - self.rng.below(2)
+                a.final_at - self.rng.below(2)
+            } else if self.rng.chance(30) {
+                // A short horizon, usually already past at the block time.
+                a.final_at + 1 + self.rng.below(now.saturating_sub(a.final_at) + 1)
             } else {
-                now + 1 + self.rng.below(2 * DAY)
+                a.final_at + 1 + self.rng.below(2 * DAY)
             };
             let digest = crypto::remedy_approve_digest(
                 &domain,
@@ -2800,9 +2980,22 @@ impl Fuzz {
                 *seat,
             );
             let in_range = usize::from(*seat) < n;
-            let good = in_range && bad_approval != Some(k) && !stale;
+            let other_era = in_range && other_era_key == Some(k);
+            let good = in_range && bad_approval != Some(k) && !stale && !other_era;
             let signer_key = if good {
-                self.current_key(id, g, usize::from(*seat))
+                self.key_at(id, g, usize::from(*seat), a.final_at)
+            } else if other_era {
+                let held = self.key_at(id, g, usize::from(*seat), a.final_at);
+                let others: Vec<Key> = self
+                    .keys_ever(id, g, usize::from(*seat))
+                    .into_iter()
+                    .filter(|key| key.pubkey != held.pubkey)
+                    .collect();
+                if others.is_empty() {
+                    Key::from_label("18JUNO/TEST/fuzz/approval-forger")
+                } else {
+                    self.rng.pick(&others)
+                }
             } else {
                 Key::from_label("18JUNO/TEST/fuzz/approval-forger")
             };
@@ -2935,7 +3128,8 @@ impl Fuzz {
                 if !seen.insert(*seat) {
                     return Err("duplicate");
                 }
-                if now >= *approve_until {
+                // Judged at final_at, never at the block time.
+                if a.final_at >= *approve_until {
                     return Err("approval expired");
                 }
                 if !good {
@@ -2965,6 +3159,17 @@ impl Fuzz {
             (Ok(_), Ok(())) => {
                 let kind = RemedyKind::from_byte(plan.a.remedy).unwrap();
                 *self.remedies_ok.entry(kind.as_str()).or_default() += 1;
+                let now = self.s.now().seconds();
+                if plan.approvals.iter().any(|(_, _, until)| *until <= now) {
+                    self.landed_after_horizon += 1;
+                }
+                if plan.approvals.iter().any(|(seat, _, _)| {
+                    self.key_at(id, g, usize::from(*seat), plan.a.final_at)
+                        .pubkey
+                        != g.seats[usize::from(*seat)].consent_pubkey
+                }) {
+                    self.landed_after_rotation += 1;
+                }
                 let after = self.s.game(id).game;
                 let r = after
                     .remedy
@@ -3362,9 +3567,12 @@ fn remedy_focused_sequences_preserve_every_invariant() {
     let mut remedies_refused: BTreeMap<&'static str, usize> = BTreeMap::new();
     let mut strike3_closed: BTreeMap<String, usize> = BTreeMap::new();
     let mut routes: BTreeSet<String> = BTreeSet::new();
-    for seed in 0..16u64 {
+    let (mut after_horizon, mut after_rotation) = (0usize, 0usize);
+    for seed in 0..24u64 {
         let mut f = Fuzz::new_focused(0x2e_3e_d1_e5 ^ seed.wrapping_mul(0x9000_0011));
         f.run(700);
+        after_horizon += f.landed_after_horizon;
+        after_rotation += f.landed_after_rotation;
         for (k, n) in &f.remedies_ok {
             *remedies_ok.entry(k).or_default() += n;
         }
@@ -3378,7 +3586,17 @@ fn remedy_focused_sequences_preserve_every_invariant() {
     }
     eprintln!(
         "remedy fuzz: accepted {remedies_ok:?}; refused {remedies_refused:?}; \
-         third-strike settlements closed by {strike3_closed:?}; routes {routes:?}"
+         third-strike settlements closed by {strike3_closed:?}; routes {routes:?}; \
+         landed after an approval horizon {after_horizon}, after a rotation {after_rotation}"
+    );
+    // Sealed approval finality is exercised, not just permitted.
+    assert!(
+        after_horizon > 0,
+        "no remedy landed after an approval's horizon"
+    );
+    assert!(
+        after_rotation > 0,
+        "no remedy landed after an approving seat rotated"
     );
     for kind in [
         "live_timeout_annul",

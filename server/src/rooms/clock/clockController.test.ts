@@ -309,6 +309,47 @@ describe("Live train offers through the controller (real engine offers)", () => 
     assert.equal(pins[pins.length - 1], false, "released once final on chain");
   });
 
+  test("SEALED APPROVAL FINALITY (Live money): minute 30 reads the approvers' keys AT the final second -- a seat whose key moved at or before it voids its YES (the neutral outcome); none moved, or the chain unread in time, seals the foreclosure", async () => {
+    const approval = (byte: string) => ({ approve_until: 9_999_999_999, signature: byte.repeat(64) });
+    const run = async (answer: readonly string[] | null) => {
+      const calls: Array<{ seats: string[]; atSecs: number | undefined }> = [];
+      const port = {
+        configured: true,
+        annulOpen: async () => false,
+        attest: async () => ({ status: "sealed", detail: null, attested: false }),
+        progress: async () => "none",
+        fence: () => undefined,
+        staleApprovals: async (_gameId: string, _facts: unknown, approvals: readonly { seat: string }[], options?: { atSecs?: number }) => {
+          calls.push({ seats: approvals.map((a) => a.seat), atSecs: options?.atSecs });
+          return answer;
+        },
+      } as unknown as RemedyPort;
+      const h = harness({ money: true, remedy: port });
+      await h.deal();
+      await h.time.advance(LIVE_ACTION_MS);
+      await h.clock.idle();
+      assert.equal(h.record().overdue?.seat, P1);
+      const proposed = await h.serial(() => h.clock.op(h.game, h.tx, { type: "clock-propose", seat: P2, kind: "foreclose", approval: approval("22"), verifiedFor: null, stale: [] }));
+      assert.equal(proposed.ok, true, JSON.stringify(proposed));
+      const id = h.record().overdue?.proposal?.id as number;
+      const voted = await h.serial(() => h.clock.op(h.game, h.tx, { type: "clock-vote", seat: P3, proposalId: id, yes: true, approval: approval("33"), verifiedFor: null, stale: [], renew: false }));
+      assert.equal(voted.ok, true, JSON.stringify(voted));
+      assert.equal(calls.length, 0, "no key read before minute 30");
+      const finalSecs = Math.ceil((T0 + LIVE_ACTION_MS + LIVE_CURE_MS) / 1000);
+      await h.time.advance(LIVE_CURE_MS);
+      await h.clock.idle();
+      assert.deepEqual(calls, [{ seats: [P2, P3], atSecs: finalSecs }], "one read, at the final second");
+      return h.record();
+    };
+    const moved = await run([P3]);
+    assert.deepEqual([moved.ended?.kind, moved.remedy?.kind], ["live-timeout-annul", 1], "P3's key moved before the seal: incomplete");
+    const kept = await run([]);
+    assert.deepEqual([kept.ended?.kind, kept.remedy?.kind], ["live-foreclosure", 2]);
+    assert.deepEqual(kept.remedy?.approvals.map((a) => a.seat), [P2, P3]);
+    const unread = await run(null);
+    assert.deepEqual([unread.ended?.kind, unread.remedy?.kind], ["live-foreclosure", 2], "the chain unread in time: decided on the vote-time checks (the contract judges at final_at again)");
+  });
+
   test("the recipient's response timer is never an overdue: no strike, no interruption, no remedy", async () => {
     const h = harness();
     await h.deal();

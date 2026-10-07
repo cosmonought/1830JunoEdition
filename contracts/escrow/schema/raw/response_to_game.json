@@ -833,6 +833,28 @@
       },
       "additionalProperties": false
     },
+    "RetiredConsentKey": {
+      "description": "A consent key a seat replaced during play (see `Seat::retired_consent_keys`). It was the seat's key from the previous rotation (or the seat's join) until strictly before `retired_at`.",
+      "type": "object",
+      "required": [
+        "pubkey",
+        "retired_at"
+      ],
+      "properties": {
+        "pubkey": {
+          "$ref": "#/definitions/HexBinary"
+        },
+        "retired_at": {
+          "description": "Block time of the `SetConsentKey` that replaced it.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Timestamp"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
     "ReviewRequest": {
       "description": "A seated wallet's request for the exceptional review of an escrow 2.1.0 game (`RequestReview`). Only the first request is recorded; an accepted `Checkpoint` above `trusted_seq` (proof the table kept playing after the request) withdraws it.",
       "type": "object",
@@ -985,7 +1007,7 @@
           ]
         },
         "consent_pubkey": {
-          "description": "33-byte compressed secp256k1 key for CONSENT and ANNUL signatures. The key current at verification time is the one checked.",
+          "description": "33-byte compressed secp256k1 key for CONSENT and ANNUL signatures. The key current at verification time is the one checked. (A REMEDY-APPROVE is checked against the key the seat held at the remedy's `final_at`: see `retired_consent_keys`.)",
           "allOf": [
             {
               "$ref": "#/definitions/HexBinary"
@@ -1013,6 +1035,13 @@
               "$ref": "#/definitions/Uint128"
             }
           ]
+        },
+        "retired_consent_keys": {
+          "description": "Escrow 2.1.0 (owner ruling, 2026-10-07): the consent keys this seat replaced while its `TimedRemedyV1` game was IN_PROGRESS, oldest first, each with the block time of the rotation that retired it. A sealed remedy's approvals are verified against the key each seat held at the attested `final_at` (`helpers::consent_key_at`), so a rotation AFTER the remedy became final cannot revoke it, while one at or before `final_at` still voids the old key's approval. At most [`MAX_RETIRED_CONSENT_KEYS`]. Empty (and absent from the stored JSON) for every 2.0.0 game and every seat that never rotated during play.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RetiredConsentKey"
+          }
         },
         "subsidy_paid": {
           "$ref": "#/definitions/Uint128"

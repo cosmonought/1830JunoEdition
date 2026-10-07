@@ -11,9 +11,11 @@
 //
 //   - `remedyChainIntent`  builds the record from one FINAL attestation (pure; refuses anything the contract would
 //                          refuse on shape alone or against the game's start, approvals that do not match the remedy
-//                          and the roster or whose seat's own horizon (`approve_until`) cannot outlast the
-//                          attestation time, and any signature that does not verify -- low-s ECDSA -- against the
-//                          REMEDY key and the seats' CURRENT consent keys the caller read from the chain);
+//                          and the roster or whose seat's own horizon (`approve_until`) is not after the decision's
+//                          `final_at`, and any signature that does not verify -- low-s ECDSA -- against the REMEDY key
+//                          and the consent key each seat held AT `final_at` (owner ruling, 2026-10-07: approvals are
+//                          judged at finality, never at the block time; the caller read the keys and their retired
+//                          history from the chain);
 //   - `prepareRemedyIntent` writes it once, behind the per-game fence (`remedyFence`, chainIntents.ts): never two open
 //                          remedy intents for a game, nothing after one landed, idempotent across a restart (the same
 //                          slot holding the same work answers `exists`); an earlier intent refused for good (held, no
@@ -46,7 +48,7 @@ import {
   type RemedyKindByte,
 } from "../../../../frontend/src/gameEngine/escrow/junoRemedyV1";
 import { ChainIntentUnreadableError, newChainIntent, remedyFence, supersededIntent, type ChainIntentRecord, type ChainIntentStore } from "../chainIntents";
-import { RELAYER_EXECUTE } from "./junoContract";
+import { consentKeyAt, RELAYER_EXECUTE } from "./junoContract";
 import { verifyDigest } from "./secp256k1";
 
 /** The escrow's roster bounds (`contracts/escrow/src/helpers.rs` MIN_PLAYERS..=MAX_PLAYERS: 2..=7 seats). */
@@ -66,9 +68,12 @@ export interface RemedyIntentInput {
   readonly signature: string;
   /** The active REMEDY key `attestation.remedy_key_id` names, as the chain's registry holds it (33-byte hex). */
   readonly remedy_pubkey: string;
-  /** Every seat's CURRENT consent key, in chain seat order, as the chain holds it now (the roster size is its length):
-   *  the contract verifies each approval against it, so an approval under a since-rotated key is refused here first. */
+  /** Every seat's CURRENT consent key, in chain seat order, as the chain holds it now (the roster size is its length). */
   readonly consent_pubkeys: readonly string[];
+  /** Every seat's consent keys retired during play (chain seat order; escrow 2.1.0 `Seat::retired_consent_keys`):
+   *  with `consent_pubkeys`, the key each seat held at `final_at`, which the contract verifies each approval against
+   *  (an approval under a key replaced at or before `final_at` is refused here first). Absent: no seat rotated. */
+  readonly retired_consent_keys?: readonly (readonly { readonly pubkey: string; readonly retired_at_secs: string }[])[];
   /** The chain game's `started_at` (Unix seconds) as the chain holds it: no seat is overdue before one whole allowance
    *  has run since it (the contract's floor). */
   readonly started_at: bigint;
@@ -120,13 +125,15 @@ export function remedyIntentProblem(input: RemedyIntentInput): string | null {
     if (approval.seat_index === a.defaulting_seat) return `the defaulting seat ${a.defaulting_seat} cannot approve a remedy against itself`;
     if (seen.has(approval.seat_index)) return `seat ${approval.seat_index} approves twice`;
     if (typeof approval.approve_until !== "bigint" || approval.approve_until < BigInt(0) || approval.approve_until > U64_MAX) return `seat ${approval.seat_index}'s approve_until is not a u64`;
-    /* The contract refuses an approval from its horizon on, and the attestation before its attestation time: an
-       approval whose horizon is not after the attestation time (or already past) could never land. */
-    if (approval.approve_until <= a.attested_at) return `seat ${approval.seat_index}'s approval ends (${approval.approve_until}) before this attestation can be used`;
-    if (approval.approve_until <= BigInt(Math.floor(input.now / 1000))) return `seat ${approval.seat_index}'s approval expired at ${approval.approve_until}`;
+    /* The contract judges an approval at the decision's own final_at (owner ruling, 2026-10-07): its horizon must lie
+       after final_at. A horizon already past at the attestation or block time changes nothing. */
+    if (approval.approve_until <= a.final_at) return `seat ${approval.seat_index}'s approval ended (${approval.approve_until}) at or before the remedy became final (${a.final_at})`;
     if (!SIGNATURE.test(approval.signature)) return `seat ${approval.seat_index}'s approval is not 64 bytes of lowercase hex`;
-    if (!verifies(input.consent_pubkeys[approval.seat_index], remedyApproveDigestV1(a, approval.approve_until, approval.seat_index), approval.signature)) {
-      return `seat ${approval.seat_index}'s approval does not verify under its current consent key (for this overdue instance and horizon)`;
+    const retired = input.retired_consent_keys?.[approval.seat_index] ?? [];
+    if (!retired.every((entry) => PUBKEY.test(entry.pubkey) && /^(0|[1-9][0-9]{0,19})$/.test(entry.retired_at_secs))) return `seat ${approval.seat_index}'s retired consent keys are malformed`;
+    const held = consentKeyAt({ consent_pubkey: input.consent_pubkeys[approval.seat_index], retired_consent_keys: retired }, a.final_at);
+    if (!verifies(held, remedyApproveDigestV1(a, approval.approve_until, approval.seat_index), approval.signature)) {
+      return `seat ${approval.seat_index}'s approval does not verify under the consent key it held at final_at (for this overdue instance and horizon)`;
     }
     seen.add(approval.seat_index);
   }
@@ -138,7 +145,7 @@ export function remedyIntentProblem(input: RemedyIntentInput): string | null {
 /** The `submit-remedy` intent for one FINAL attestation (throws `RemedyIntentError` on any `remedyIntentProblem`).
  *  Its slot is (decision, expiry); its subject binds the exact REMEDY digest; its message is the contract's
  *  `submit_remedy` with the approvals in seat order; `usable_until` is the first block second it can no longer land:
- *  the attestation's expiry or the earliest approval horizon, whichever comes first. */
+ *  the attestation's expiry (approvals are judged at `final_at`, so their horizons never end its usable life). */
 export function remedyChainIntent(input: RemedyIntentInput): ChainIntentRecord {
   const problem = remedyIntentProblem(input);
   if (problem !== null) throw new RemedyIntentError(problem);
@@ -148,7 +155,7 @@ export function remedyChainIntent(input: RemedyIntentInput): ChainIntentRecord {
   const approvals = [...input.approvals].sort((x, y) => x.seat_index - y.seat_index).map((x) => remedyApprovalWire(x));
   const bitmap = approvals.reduce((mask, x) => mask | (1 << x.seat_index), 0);
   const expiresAt = a.expires_at.toString();
-  const usableUntil = input.approvals.reduce((min, x) => (x.approve_until < min ? x.approve_until : min), a.expires_at).toString();
+  const usableUntil = expiresAt;
   return newChainIntent({
     game_id: input.game_id,
     instance: input.instance,

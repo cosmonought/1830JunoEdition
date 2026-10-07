@@ -41,7 +41,7 @@ import {
 } from "../gameEngine/escrow/junoRemedyV1";
 
 const FILE = join(__dirname, "..", "..", "..", "contracts", "escrow", "testdata", "remedy_vectors_v1.json");
-const FILE_SHA256 = "6613f137eaa07cfd20a70aa4d52a7db5588cf0ef8782a2247261750c1d2b191a";
+const FILE_SHA256 = "c25ede6d4d48aabd285c774cfed6ae635cfcbfb56f599f3e80ce2a349a09c872";
 const SECP_N = BigInt("0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141");
 
 interface Approval {
@@ -116,8 +116,8 @@ describe("FP4: the frozen remedy vectors", () => {
     expect(doc.format).toBe("18JUNO/REMEDY/vectors/v1");
     expect(doc.tag).toBe(JUNO_REMEDY_TAG_V1);
     expect(doc.approve_tag).toBe(JUNO_REMEDY_APPROVE_TAG_V1);
-    expect(doc.vectors).toHaveLength(41);
-    expect(doc.vectors.filter((v) => v.valid).map((v) => v.name)).toEqual(["live-timeout-annul", "live-foreclose", "live-strike3", "async-annul", "async-foreclose", "reattested-foreclose", "approval-last-second"]);
+    expect(doc.vectors).toHaveLength(42);
+    expect(doc.vectors.filter((v) => v.valid).map((v) => v.name)).toEqual(["live-timeout-annul", "live-foreclose", "live-strike3", "async-annul", "async-foreclose", "reattested-foreclose", "approval-last-second", "approval-past-horizon"]);
     expect([LIVE_ACTION_SECS, LIVE_CURE_WINDOW_SECS, REVIEW_DELAY_SECS, MAX_REMEDY_TTL_SECS]).toEqual([1200, 600, 604800, 3600]);
     expect([...ASYNC_PACES_SECS]).toEqual([43200, 86400, 172800, 259200, 604800]);
   });

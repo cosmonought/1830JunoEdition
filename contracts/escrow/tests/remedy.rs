@@ -21,6 +21,27 @@ use eighteen_cosmos_escrow::msg::{
     ExecuteMsg, QueryMsg, RemedyApproval, RemedyAttestationV1, RemedyKeyResponse,
     RemedyKeysResponse, ResolveOutcome, SeatSignature,
 };
+
+/// One seat's REMEDY-APPROVE for `a` under an explicit consent `key`.
+fn approval_by(a: &RemedyAttestation, seat: u8, key: &Key, until: u64) -> RemedyApproval {
+    RemedyApproval {
+        seat_index: seat,
+        approve_until: Uint64::new(until),
+        signature: key.sign(&crypto::remedy_approve_digest(
+            &a.domain,
+            a.chain_game_id,
+            a.remedy,
+            a.defaulting_seat,
+            a.strike,
+            a.overdue_epoch,
+            a.log_len,
+            &a.log_hash,
+            a.overdue_at,
+            until,
+            seat,
+        )),
+    }
+}
 use eighteen_cosmos_escrow::remedy::RemedyAttestation;
 use eighteen_cosmos_escrow::state::{
     DisputeResolution, GameState, Mode, RemedyKind, Route, SettlementSource, ASYNC_PACES_SECS,
@@ -1228,7 +1249,8 @@ fn approvals_bind_the_overdue_instance_not_just_its_epoch() {
         refused(&mut s, &m),
         ContractError::ApprovalExpired {
             seat_index: 0,
-            approve_until: short_until
+            approve_until: short_until,
+            final_at: later.final_at
         }
     );
     // ... and with a week's it still never counts for another instance.
@@ -1261,13 +1283,15 @@ fn approvals_bind_the_overdue_instance_not_just_its_epoch() {
     assert_eq!(s.state(id), GameState::Settled);
 }
 
-/// Each approval carries its seat's own horizon (`approve_until`, signed):
-/// usable up to the second before it, refused from it on whatever the remedy
-/// key attests, and never extendable by whoever relays it. So the approvals of
-/// an overdue the seat later cured stop counting at their horizon even before
-/// a checkpoint past the stall reaches the chain (crypto re-review R1).
+/// Each approval carries its seat's own horizon (`approve_until`, signed),
+/// judged at the moment the remedy became FINAL (owner ruling, 2026-10-07):
+/// it counts when `final_at < approve_until`, never when its horizon is at or
+/// before `final_at` -- however fresh the attestation -- and it is never
+/// extendable by whoever relays it. The block time it lands at plays no part.
+/// So the approvals of an overdue the seat later cured never count for a
+/// finality after their horizon (crypto re-review R1, restated).
 #[test]
-fn approvals_expire_at_their_own_horizon() {
+fn approvals_are_judged_at_final_at_not_at_landing() {
     let mut s = Suite::new();
     let id = live(&mut s, 3);
     let id2 = live(&mut s, 3);
@@ -1276,7 +1300,9 @@ fn approvals_expire_at_their_own_horizon() {
     let until = s.now().seconds() + 600;
     let approvals = s.approvals_until(&a, &[0, 1], until);
     let approvals_b = s.approvals_until(&b, &[0, 1], until);
-    let fresh = |s: &Suite, x: &RemedyAttestation| {
+    // The same sealed decision attested again: same final_at, fresh
+    // attestation time.
+    let again = |s: &Suite, x: &RemedyAttestation| {
         let mut y = x.clone();
         y.attested_at = s.now().seconds();
         y.expires_at = y.attested_at + 600;
@@ -1290,42 +1316,297 @@ fn approvals_expire_at_their_own_horizon() {
         refused(&mut s, &m),
         ContractError::InvalidConsent { seat_index: 0 }
     );
-    // A seat that chose an earlier horizon refuses alone once it passes.
-    let mut mixed = approvals.clone();
-    mixed[1] = s.approvals_until(&a, &[1], until - 300).remove(0);
-    s.advance(300);
-    let m = msg_with(&s, &fresh(&s, &a), &s.remedy.clone(), mixed);
-    assert_eq!(
-        refused(&mut s, &m),
-        ContractError::ApprovalExpired {
-            seat_index: 1,
-            approve_until: until - 300
-        }
-    );
-    // At the approvals' last second game B lands ...
-    s.advance(299);
-    let m = msg_with(&s, &fresh(&s, &b), &s.remedy.clone(), approvals_b);
-    s.submit(&m).unwrap();
-    assert_eq!(s.state(id2), GameState::Settled);
-    // ... and from the horizon on game A's never does, however fresh the
-    // attestation.
-    for wait in [1, DAY] {
+    // A finality AT or after a seat's horizon: that seat's approval never
+    // counts (the decision would have been sealed on a lapsed approval).
+    for (offset, wait) in [(0u64, 0u64), (1, 0), (DAY, DAY)] {
         s.advance(wait);
-        let m = msg_with(&s, &fresh(&s, &a), &s.remedy.clone(), approvals.clone());
+        let mut late = s.attestation(id, RemedyKind::LiveForeclose, 2, 0);
+        late.final_at = until + offset;
+        late.overdue_at = late.final_at - LIVE_CURE_WINDOW_SECS;
+        late.attested_at = s.now().seconds().max(late.final_at);
+        late.expires_at = late.attested_at + 600;
+        if late.attested_at > s.now().seconds() {
+            s.advance(late.attested_at - s.now().seconds());
+        }
+        let m = msg_with(
+            &s,
+            &late,
+            &s.remedy.clone(),
+            s.approvals_until(&late, &[0, 1], until),
+        );
         assert_eq!(
             refused(&mut s, &m),
             ContractError::ApprovalExpired {
                 seat_index: 0,
-                approve_until: until
+                approve_until: until,
+                final_at: late.final_at
             }
         );
     }
-    assert_eq!(s.state(id), GameState::InProgress);
-    // Approvals given anew land it.
-    let m = s.remedy_msg(&fresh(&s, &a));
+    // Final one second before the horizon (B) -- landing a day after the
+    // horizon passed, attested again with the SAME final_at: it lands.
+    assert!(s.now().seconds() > until + DAY);
+    let m = msg_with(&s, &again(&s, &b), &s.remedy.clone(), approvals_b);
+    s.submit(&m).unwrap();
+    assert_eq!(s.state(id2), GameState::Settled);
+    // A's approvals (valid at A's final_at) land A just as late.
+    let m = msg_with(&s, &again(&s, &a), &s.remedy.clone(), approvals);
     s.submit(&m).unwrap();
     assert_eq!(s.state(id), GameState::Settled);
     s.assert_custody();
+}
+
+/// Owner ruling, 2026-10-07 (SEALED APPROVAL FINALITY): a decision sealed on
+/// N−1 approvals valid at `final_at` lands however late, even after every
+/// approval's horizon passed AND every approving seat rotated its consent key
+/// after finality -- one attestation dying unlanded, attested again with the
+/// same decision; no second vote. The retired keys are recorded with the
+/// rotation's block time.
+#[test]
+fn a_sealed_decision_survives_later_expiry_and_later_rotation() {
+    let mut s = Suite::new();
+    let id = live(&mut s, 4);
+    let a = s.attestation(id, RemedyKind::LiveForeclose, 3, 0);
+    let final_at = a.final_at;
+    let until = final_at + 300;
+    let approvals = s.approvals_until(&a, &[0, 1, 2], until);
+    // Every approving seat rotates after finality.
+    s.advance(60);
+    let rotated_at = s.now();
+    for seat in 0..3 {
+        let wallet = s.players[seat].clone();
+        let fresh = Key::from_label(&format!("18JUNO/TEST/seat/{seat}/after-final"));
+        s.exec(
+            &wallet,
+            &ExecuteMsg::SetConsentKey {
+                chain_game_id: id,
+                new_pubkey: fresh.pubkey.clone(),
+            },
+            &[],
+        )
+        .unwrap();
+    }
+    let g = s.game(id).game;
+    for seat in 0..3 {
+        assert_eq!(g.seats[seat].retired_consent_keys.len(), 1);
+        assert_eq!(
+            g.seats[seat].retired_consent_keys[0].pubkey,
+            Key::seat(seat).pubkey
+        );
+        assert_eq!(g.seats[seat].retired_consent_keys[0].retired_at, rotated_at);
+    }
+    assert!(g.seats[3].retired_consent_keys.is_empty());
+    // The first attestation dies unlanded (an outage), every horizon passes.
+    s.advance(2 * HOUR);
+    assert!(s.now().seconds() > a.expires_at && s.now().seconds() > until);
+    let m = msg_with(&s, &a, &s.remedy.clone(), approvals.clone());
+    assert_eq!(
+        refused(&mut s, &m),
+        ContractError::RemedyExpired {
+            expires_at: a.expires_at
+        }
+    );
+    // The SAME decision attested again (same final_at, same approvals) lands.
+    let mut again = a.clone();
+    again.attested_at = s.now().seconds();
+    again.expires_at = again.attested_at + HOUR;
+    let m = msg_with(&s, &again, &s.remedy.clone(), approvals);
+    s.submit(&m).unwrap();
+    let g = s.game(id).game;
+    assert_eq!(g.state, GameState::Settled);
+    let r = g.remedy.unwrap();
+    assert_eq!(r.final_at, Uint64::new(final_at));
+    assert_eq!(r.approvals_bitmap, 0b0111);
+    s.assert_custody();
+}
+
+/// Before finality a rotation still voids the old key's approval: a seat that
+/// rotated AT or before `final_at` (the same second included) is checked
+/// against its new key, and only an approval under the key it held at
+/// `final_at` counts -- across several rotations, each key for exactly its
+/// own span. The newest key never rescues a finality it was not yet held at.
+#[test]
+fn a_rotation_at_or_before_final_at_voids_the_old_approval() {
+    let mut s = Suite::new();
+    let id = live(&mut s, 3);
+    let wallet = s.players[1].clone();
+    let k1 = Key::from_label("18JUNO/TEST/seat/1/k1");
+    let k2 = Key::from_label("18JUNO/TEST/seat/1/k2");
+    let rotate = |s: &mut Suite, key: &Key| {
+        s.exec(
+            &wallet,
+            &ExecuteMsg::SetConsentKey {
+                chain_game_id: id,
+                new_pubkey: key.pubkey.clone(),
+            },
+            &[],
+        )
+        .unwrap();
+    };
+    let t0 = s.now().seconds();
+    let before = s.attestation(id, RemedyKind::LiveForeclose, 2, 0);
+    s.advance(60);
+    rotate(&mut s, &k1);
+    let t1 = s.now().seconds();
+    let at_t1 = s.attestation(id, RemedyKind::LiveForeclose, 2, 0);
+    s.advance(60);
+    rotate(&mut s, &k2);
+    let t2 = s.now().seconds();
+    let at_t2 = s.attestation(id, RemedyKind::LiveForeclose, 2, 0);
+    assert_eq!(
+        (before.final_at, at_t1.final_at, at_t2.final_at),
+        (t0, t1, t2)
+    );
+    let until = t2 + DAY;
+    let by = |s: &Suite, a: &RemedyAttestation, key: &Key| {
+        let mut set = s.approvals_until(a, &[0], until);
+        set.push(approval_by(a, 1, key, until));
+        set
+    };
+    let fresh = |s: &Suite, a: &RemedyAttestation| {
+        let mut y = a.clone();
+        y.attested_at = s.now().seconds();
+        y.expires_at = y.attested_at + HOUR;
+        y
+    };
+    let original = Key::seat(1);
+    // Final at t1 (the first rotation's own second): k1 only.
+    for key in [&original, &k2] {
+        let m = msg_with(
+            &s,
+            &fresh(&s, &at_t1),
+            &s.remedy.clone(),
+            by(&s, &at_t1, key),
+        );
+        assert_eq!(
+            refused(&mut s, &m),
+            ContractError::InvalidConsent { seat_index: 1 }
+        );
+    }
+    // Final at t2: k2 only.
+    for key in [&original, &k1] {
+        let m = msg_with(
+            &s,
+            &fresh(&s, &at_t2),
+            &s.remedy.clone(),
+            by(&s, &at_t2, key),
+        );
+        assert_eq!(
+            refused(&mut s, &m),
+            ContractError::InvalidConsent { seat_index: 1 }
+        );
+    }
+    // Final at t0 (before any rotation): the original key only.
+    for key in [&k1, &k2] {
+        let m = msg_with(
+            &s,
+            &fresh(&s, &before),
+            &s.remedy.clone(),
+            by(&s, &before, key),
+        );
+        assert_eq!(
+            refused(&mut s, &m),
+            ContractError::InvalidConsent { seat_index: 1 }
+        );
+    }
+    let g = s.game(id).game;
+    let history: Vec<(HexBinary, u64)> = g.seats[1]
+        .retired_consent_keys
+        .iter()
+        .map(|r| (r.pubkey.clone(), r.retired_at.seconds()))
+        .collect();
+    assert_eq!(
+        history,
+        vec![(original.pubkey.clone(), t1), (k1.pubkey.clone(), t2)]
+    );
+    // The key held at t1 lands the decision final at t1.
+    let m = msg_with(
+        &s,
+        &fresh(&s, &at_t1),
+        &s.remedy.clone(),
+        by(&s, &at_t1, &k1),
+    );
+    s.submit(&m).unwrap();
+    assert_eq!(s.state(id), GameState::Settled);
+    s.assert_custody();
+}
+
+/// Timed Async: the same rule. A neutral annulment completed (final) while
+/// its approvals were valid lands after they lapse and after a rotation; an
+/// approval that lapsed before completion never counts.
+#[test]
+fn async_approvals_are_judged_at_completion() {
+    let mut s = Suite::new();
+    let id = timed_async(&mut s, 3, DAY);
+    let a = s.attestation(id, RemedyKind::AsyncAnnul, 0, 0);
+    let until = a.final_at + HOUR;
+    let approvals = s.approvals_until(&a, &[1, 2], until);
+    // Lapsed at completion: never counts.
+    let mut lapsed = s.approvals_until(&a, &[1], a.final_at);
+    lapsed.push(approvals[1].clone());
+    let m = msg_with(&s, &a, &s.remedy.clone(), lapsed);
+    assert_eq!(
+        refused(&mut s, &m),
+        ContractError::ApprovalExpired {
+            seat_index: 1,
+            approve_until: a.final_at,
+            final_at: a.final_at
+        }
+    );
+    s.advance(10);
+    let wallet = s.players[2].clone();
+    s.exec(
+        &wallet,
+        &ExecuteMsg::SetConsentKey {
+            chain_game_id: id,
+            new_pubkey: Key::from_label("18JUNO/TEST/seat/2/async-later").pubkey,
+        },
+        &[],
+    )
+    .unwrap();
+    s.advance(2 * DAY);
+    let mut again = a.clone();
+    again.attested_at = s.now().seconds();
+    again.expires_at = again.attested_at + HOUR;
+    let refund_before = s.balance(&s.players[0].clone());
+    let m = msg_with(&s, &again, &s.remedy.clone(), approvals);
+    s.submit(&m).unwrap();
+    assert_eq!(s.state(id), GameState::Annulled);
+    assert_eq!(s.balance(&s.players[0].clone()) - refund_before, NET);
+    s.assert_custody();
+}
+
+/// A sealed decision is immutable on chain: once one remedy landed nothing
+/// replaces it (another kind, the same kind attested again, an earlier or
+/// later final_at), and approvals that were never part of a sealed decision
+/// -- an instance whose finality the remedy key never attested -- do nothing
+/// on their own (a relayer cannot submit them without a REMEDY signature).
+#[test]
+fn a_landed_remedy_is_never_replaced_and_unsealed_approvals_do_nothing() {
+    let mut s = Suite::new();
+    let id = live(&mut s, 3);
+    let a = s.attestation(id, RemedyKind::LiveForeclose, 2, 0);
+    let approvals = s.approvals(&a, &[0, 1]);
+    // Unsealed: the seats' approvals with no REMEDY signature (anyone's key
+    // but the remedy key's) never move anything.
+    for key in [Key::seat(0), Key::from_label("18JUNO/TEST/relayer")] {
+        let m = msg_with(&s, &a, &key, approvals.clone());
+        assert_eq!(refused(&mut s, &m), ContractError::InvalidSignature {});
+    }
+    let m = msg_with(&s, &a, &s.remedy.clone(), approvals.clone());
+    s.submit(&m).unwrap();
+    assert_eq!(s.state(id), GameState::Settled);
+    for kind in [RemedyKind::LiveTimeoutAnnul, RemedyKind::LiveForeclose] {
+        let mut b = a.clone();
+        b.remedy = kind.as_byte();
+        b.attested_at = s.now().seconds();
+        b.expires_at = b.attested_at + HOUR;
+        let m = s.remedy_msg(&b);
+        assert!(matches!(
+            refused(&mut s, &m),
+            ContractError::WrongState { .. }
+        ));
+    }
 }
 
 /// Timeouts stay safe: nobody challenges → the SETTLEABLE liveness exit pays

@@ -183,6 +183,10 @@ export interface RemedyChainContext {
   readonly trustedSeq: bigint;
   /** Every chain seat's CURRENT consent key (seat order). */
   readonly consentPubkeys: readonly string[];
+  /** Every chain seat's consent keys retired during play, oldest first, with the rotation's block time (seat order;
+   *  escrow 2.1.0 `Seat::retired_consent_keys`): what `consentKeyAt` needs to name the key a seat held at a remedy's
+   *  attested `final_at` (owner ruling, 2026-10-07). */
+  readonly retiredConsentKeys: readonly (readonly { readonly pubkey: string; readonly retired_at_secs: string }[])[];
   /** player id -> chain seat index (the frozen roster). */
   readonly seatOf: Readonly<Record<string, number>>;
   /** The REMEDY key registry entry at `remedyKeyId`, as the chain holds it (`null`: not registered). */
@@ -1703,6 +1707,7 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
       allowanceSecs: g.allowance_secs ?? 0,
       trustedSeq: BigInt(response.trusted_seq),
       consentPubkeys: g.seats.map((seat) => seat.consent_pubkey),
+      retiredConsentKeys: g.seats.map((seat) => seat.retired_consent_keys),
       seatOf,
       remedyKey,
       blockTimeSecs,

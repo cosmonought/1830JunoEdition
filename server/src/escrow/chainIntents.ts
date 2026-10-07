@@ -137,7 +137,8 @@ export type ChainIntentOp =
       readonly final_at: string;
       readonly attested_at: string;
       readonly expires_at: string;
-      /** The first block second this intent can no longer land: min(attestation expiry, every approval's horizon). */
+      /** The first block second this intent can no longer land: the attestation's expiry (escrow 2.1.0 judges every
+       *  approval at the attested final_at, never at the block time -- owner ruling, 2026-10-07). */
       readonly usable_until: string;
       readonly remedy_key_id: number;
       readonly remedy_digest: string;
@@ -257,8 +258,9 @@ export function isChainIntentRecord(value: unknown): value is ChainIntentRecord 
 
 /** FP4: whether a remedy intent's message is exactly the attestation its op names -- the chain game, every attested
  *  field, the REMEDY digest and decision recomputed from the message itself, the approvals' seats (the op's bitmap,
- *  each once, each with a u64 horizon and a 64-byte hex signature) and the usable life (`usable_until`: the expiry or
- *  the earliest horizon). A damaged record never relays an attestation its slot was not made for. */
+ *  each once, each with a u64 horizon after the attested final_at and a 64-byte hex signature) and the usable life
+ *  (`usable_until`: the attestation's expiry -- approvals are judged at final_at, owner ruling 2026-10-07). A damaged
+ *  record never relays an attestation its slot was not made for. */
 export function remedyMessageAgrees(op: Record<string, unknown>, msgJson: string): boolean {
   const lead = /^\{"submit_remedy":\{"chain_game_id":(0|[1-9][0-9]{0,19}),/.exec(msgJson);
   if (lead === null || lead[1] !== op.chain_game_id) return false;
@@ -319,19 +321,20 @@ export function remedyMessageAgrees(op: Record<string, unknown>, msgJson: string
   ];
   if (!same.every(([x, y]) => x === y)) return false;
   let bitmap = 0;
-  let usableUntil = a.expires_at;
   for (const entry of body.approvals as unknown[]) {
     if (!isObject(entry) || Object.keys(entry).length !== 3 || !Number.isInteger(entry.seat_index) || (entry.seat_index as number) < 0 || (entry.seat_index as number) > 7) return false;
     if (typeof entry.signature !== "string" || !/^[0-9a-f]{128}$/.test(entry.signature)) return false;
     if (typeof entry.approve_until !== "string" || !/^(0|[1-9][0-9]{0,19})$/.test(entry.approve_until)) return false;
     const until = BigInt(entry.approve_until);
     if (until > (BigInt(1) << BigInt(64)) - BigInt(1)) return false;
-    if (until < usableUntil) usableUntil = until;
+    /* Judged at final_at (owner ruling, 2026-10-07): an approval that ended at or before it never belongs here. */
+    if (until <= a.final_at) return false;
     const bit = 1 << (entry.seat_index as number);
     if ((bitmap & bit) !== 0) return false;
     bitmap |= bit;
   }
-  return bitmap === op.approvals && usableUntil.toString() === op.usable_until;
+  /* The approvals never shorten the intent's usable life: only the attestation's expiry does. */
+  return bitmap === op.approvals && a.expires_at.toString() === op.usable_until;
 }
 
 /** LIVE-4 (L4-4): the intent-file schemas this build reads and writes (`CHAIN_INTENT_SCHEMA`). */

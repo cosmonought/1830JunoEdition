@@ -677,14 +677,17 @@ export async function agreeToAnnul(ctx: TableContext): Promise<ActionOutcome> {
    itself where it can: the domain and this seat's chain position from Juno through the pinned endpoint (the seat that
    carries a key this browser made), the defaulting player's chain seat from the frozen roster, and the overdue instance
    (strike, epoch, stalled position, its hash, the overdue moment) from the clock. The server verifies it against the
-   seat's CURRENT key by quorum before it counts; the contract verifies it again. No amount is computed anywhere. */
+   seat's CURRENT key by quorum before it counts; the contract verifies it again under the key the seat held at the
+   remedy's final moment (owner ruling, 2026-10-07: an approval valid when the outcome became final keeps counting for
+   that sealed outcome, whatever expires or rotates later). No amount is computed anywhere. */
 
-/** Live: an approval reaches as far as the contract allows past the overdue (six hours, a minute short). A pause or an
- *  outage that outlasts it lapses the approval: a decision already sealed on it is then held unchanged for an owner
- *  decision (never converted, never re-voted -- owner policy correction, 2026-10-06). */
+/** Live: an approval reaches as far as the server allows past the overdue (six hours, a minute short). A pause that
+ *  outlasts it BEFORE minute 30 lapses the approval (the vote is then incomplete); once minute 30 seals the outcome,
+ *  its expiry no longer matters. */
 export const LIVE_APPROVAL_REACH_SECS = 6 * 3600 - 60;
-/** An Async approval lasts 29 days: long enough for slow N-1 voters (the server refuses one that ends within an hour of
- *  completing), short of the server's 30-day ceiling with a day of clock skew to spare. */
+/** An Async approval lasts 29 days: long enough for slow N-1 voters (the server refuses one with less than an hour of
+ *  life), short of the server's 30-day ceiling with a day of clock skew to spare. Once the consensus completes (final at
+ *  once), its expiry no longer matters. */
 export const ASYNC_APPROVAL_REACH_SECS = 29 * 86_400;
 
 export async function signRemedyApproval(

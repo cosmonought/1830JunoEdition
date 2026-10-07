@@ -15,8 +15,9 @@ use crate::msg::{CreateGameResponse, DeadlineChoice, JoinAdmission};
 use crate::payload::fixed_bytes;
 use crate::payout::{bond_amount, subsidy_cut};
 use crate::state::{
-    Game, GamePolicy, GameState, GameTerms, Mode, Route, Seat, ASYNC_PACES_SECS, CONFIG,
-    LIVE_ACTION_SECS, LIVE_CURE_WINDOW_SECS, NEXT_GAME_ID, REVIEW_DELAY_SECS,
+    Game, GamePolicy, GameState, GameTerms, Mode, RetiredConsentKey, Route, Seat, ASYNC_PACES_SECS,
+    CONFIG, LIVE_ACTION_SECS, LIVE_CURE_WINDOW_SECS, MAX_RETIRED_CONSENT_KEYS, NEXT_GAME_ID,
+    REVIEW_DELAY_SECS,
 };
 
 #[allow(clippy::too_many_arguments)]
@@ -127,6 +128,7 @@ pub fn create_game(
             wallet: info.sender.clone(),
             consent_pubkey,
             consent_key_rotated_at: None,
+            retired_consent_keys: Vec::new(),
             join_ticket,
             gross_deposit: gross,
             subsidy_paid: subsidy,
@@ -263,6 +265,7 @@ pub fn join(
         wallet: info.sender.clone(),
         consent_pubkey,
         consent_key_rotated_at: None,
+        retired_consent_keys: Vec::new(),
         join_ticket,
         gross_deposit: gross,
         subsidy_paid: subsidy,
@@ -357,6 +360,13 @@ pub fn cancel(
 /// withdraws the seat's recorded consent to the stored settlement: a consent
 /// counts only while the key that gave it is the seat's current key, so a key
 /// that consented for one seat cannot move to another seat and count again.
+///
+/// Escrow 2.1.0 (owner ruling, 2026-10-07): a rotation while a `TimedRemedyV1`
+/// game is IN_PROGRESS records the replaced key with the block time
+/// (`Seat::retired_consent_keys`), so a remedy that became FINAL before this
+/// rotation still verifies its approvals against the key held at its
+/// `final_at`; one final at or after it needs the new key. At most
+/// `MAX_RETIRED_CONSENT_KEYS` per seat: a further rotation in play is refused.
 pub fn set_consent_key(
     deps: DepsMut,
     env: Env,
@@ -379,6 +389,11 @@ pub fn set_consent_key(
     parse_compressed_pubkey("new_pubkey", new_pubkey.as_slice())?;
     require_unique_consent_key(&game, &new_pubkey, Some(index))?;
     let bit = seat_bit(index)?;
+    // Only an IN_PROGRESS 2.1.0 game can still take a remedy, and every
+    // remedy's `final_at` lies after the game's Start: a key replaced earlier
+    // (or in a 2.0.0 game) can never be the one a remedy needs.
+    let keeps_key_history =
+        game.state == GameState::InProgress && game.terms.policy == Some(GamePolicy::TimedRemedyV1);
     let seat = game
         .seats
         .get_mut(index)
@@ -388,6 +403,19 @@ pub fn set_consent_key(
     let changed = seat.consent_pubkey != new_pubkey;
     let mut consent_withdrawn = false;
     if changed {
+        if keeps_key_history {
+            if seat.retired_consent_keys.len() >= MAX_RETIRED_CONSENT_KEYS {
+                return Err(ContractError::ConsentKeyHistoryFull {
+                    seat_index: u8::try_from(index).map_err(|_| ContractError::Overflow {})?,
+                    max: u8::try_from(MAX_RETIRED_CONSENT_KEYS)
+                        .map_err(|_| ContractError::Overflow {})?,
+                });
+            }
+            seat.retired_consent_keys.push(RetiredConsentKey {
+                pubkey: seat.consent_pubkey.clone(),
+                retired_at: env.block.time,
+            });
+        }
         seat.consent_pubkey = new_pubkey;
         seat.consent_key_rotated_at = Some(env.block.time);
         consent_withdrawn = game.consent_bitmap & bit != 0;

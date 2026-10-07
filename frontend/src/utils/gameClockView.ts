@@ -79,9 +79,10 @@ export interface ClockPresentation {
 
 export const NO_CONTROLS: ClockControls = Object.freeze({ requestPause: false, requestResume: false, answerRequest: null, systemResume: false, propose: Object.freeze([]), vote: null, annul: null });
 
-/** Shown when a sealed outcome's player approvals can no longer reach Juno (a horizon passed, or a key changed): the
- *  outcome stays exactly as recorded and waits for the operator -- it is never changed and never voted on again. */
-export const REMEDY_UNLANDABLE_DETAIL = "This outcome is recorded but can't be sent to Juno as signed (an approval expired or a player's key changed). It stays exactly as recorded and waits for the operator's decision.";
+/** Shown when a sealed outcome's player approvals cannot reach Juno because they were not valid when the outcome became
+ *  final (a horizon already over, or a key already changed -- a later expiry or key change never matters): the outcome
+ *  stays exactly as recorded and waits for the operator -- it is never changed and never voted on again. */
+export const REMEDY_UNLANDABLE_DETAIL = "This outcome is recorded but can't be sent to Juno as signed (an approval had already expired, or a player's key had already changed, when it became final). It stays exactly as recorded and waits for the operator's decision.";
 
 export const CLOCK_NOT_CURRENT_DETAIL = "This tab is catching up with the room, so its clock is not shown as current.";
 export const CLOCK_PAUSED_DETAIL = "Paused by every player. Nothing is timed until every player agrees to resume.";

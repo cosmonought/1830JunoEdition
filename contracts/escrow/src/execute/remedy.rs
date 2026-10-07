@@ -29,6 +29,12 @@
 //! least `overdue_at + 600` (later by exactly the time a voluntary or system
 //! pause froze the cure window, which the clock evidence accounts for); every
 //! remedy's `overdue_at` lies at least one allowance after the game's start.
+//! Approvals (owner ruling, 2026-10-07): each must have been valid when the
+//! remedy became FINAL — `final_at < approve_until`, signed under the key the
+//! seat held at `final_at` — and is never measured against the block time, so
+//! a sealed decision survives a later approval horizon, a later key rotation,
+//! an outage and a late relay (attested again with the same `final_at`), while
+//! an approval that lapsed or was re-keyed at or before finality never counts.
 //! Pause: no foreclosing remedy (2, 3, 5) ENTERS while the contract is paused;
 //! the neutral ones (1, 4) do. (A third strike already stored keeps the 2.0.0
 //! pause semantics of any stored settlement: `Finalize` and `Consent` wait,
@@ -189,7 +195,8 @@ fn strike3_payload_record(
 /// foreclosing kinds) → shape against the game and its terms → finality, attestation time and
 /// expiry against block time → sequence → remedy key → signature → approvals
 /// (each: seat range, not the defaulter, not a duplicate, `approve_until`
-/// against block time, signature; then all N−1 present).
+/// after the attested `final_at` — never the block time — and the signature
+/// under the seat's key at `final_at`; then all N−1 present).
 /// A refusal changes nothing.
 pub fn submit_remedy(
     deps: DepsMut,
@@ -247,7 +254,7 @@ pub fn submit_remedy(
         key.pubkey.as_slice(),
     )?;
     let approvals_bitmap = if kind.needs_approvals() {
-        verify_remedy_approvals(deps.api, &game, &attestation, &approvals, now_secs)?
+        verify_remedy_approvals(deps.api, &game, &attestation, &approvals)?
     } else if approvals.is_empty() {
         0
     } else {

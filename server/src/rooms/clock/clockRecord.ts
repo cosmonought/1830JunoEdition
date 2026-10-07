@@ -182,8 +182,9 @@ export interface ClockRemedy {
   /** Always `null` since the owner-policy correction (2026-10-06): a sealed decision is never replaced by another. Kept
    *  in the sealed shape (and its seal event) for format stability. */
   readonly replaces: RemedyKind | null;
-  /** N-1 remedies (2, 4, 5): the approving seats whose REMEDY-APPROVE can no longer land (a horizon passed, or the
-   *  seat's consent key moved since it signed). Informational: the SAME decision stays sealed and held (`refused`, owner
+  /** N-1 remedies (2, 4, 5): the approving seats whose REMEDY-APPROVE was not valid at the decision's own final second
+   *  (a horizon at or before it, or the seat's consent key replaced at or before it -- a race the pre-seal checks did not
+   *  see; owner ruling 2026-10-07: anything AFTER final_at changes nothing). Informational: the SAME decision stays sealed and held (`refused`, owner
    *  decision required) -- nobody is asked to approve again, nothing is converted (`remedyBlocked`). */
   readonly stale: readonly string[];
 }

@@ -59,6 +59,7 @@ import {
   continuityBreak,
   declineKey,
   escrowEnded,
+  finalityKeyCheckDue,
   foldBatch,
   gate,
   heartbeat,
@@ -76,6 +77,7 @@ import {
   type ClockBatch,
   type ClockBoardFacts,
   type ClockEffect,
+  type FinalityKeyCheck,
   type ClockMsgClass,
   type ClockRefusal,
   type ClockStep,
@@ -127,6 +129,8 @@ export const CLOCK_RETRY_MAX_MS = 30_000;
  *  looked at again. Its timers do not advance and no continuity is proven meanwhile, so when the hold lifts the stall
  *  check treats the held time as a continuity break (Live: SYSTEM PAUSE; Async: credited) -- never charged. */
 export const CLOCK_HELD_RECHECK_MS = 60_000;
+/** Live (money): the longest minute 30 waits on the chain read of the approvers' consent keys at the final second. */
+export const FINALITY_KEY_CHECK_MS = 5_000;
 const MAX_TIMER_MS = 2 ** 31 - 1;
 
 /** The server's own closing of an expired train offer (a `RescindTrainPurchase` as its proposer, in the game's task).
@@ -310,7 +314,7 @@ const dealt = (state: GameStateResponse): boolean => Array.isArray(state.player_
 export function createClockController(deps: ClockControllerDeps) {
   const timers = deps.timers ?? REAL_CLOCK_TIMERS;
   const entries = new Map<string, Entry>();
-  const counters = { loads: 0, breaks: 0, systemPauses: 0, overdues: 0, finalities: 0, tradeExpiries: 0, writes: 0, writeFailures: 0, remedyAttempts: 0, remedyRefused: 0, refusals: 0 };
+  const counters = { loads: 0, breaks: 0, systemPauses: 0, overdues: 0, finalities: 0, finalityKeyChecks: 0, finalityKeysUnread: 0, tradeExpiries: 0, writes: 0, writeFailures: 0, remedyAttempts: 0, remedyRefused: 0, refusals: 0 };
   const now = () => deps.now();
   /** When this authority began serving: a restart's outage ends here for a table nobody opened since (Async). */
   const startedAt = deps.now();
@@ -795,14 +799,42 @@ export function createClockController(deps: ClockControllerDeps) {
     return boardFactsOf(state, deps.boardEnd?.(gameId, state) ?? null);
   }
 
+  /** Live (money), BEFORE minute 30 is processed: the standing YES approvals of a complete foreclosure judged under the
+   *  consent key each seat held AT the final second (one bounded quorum read). Owner ruling (2026-10-07): before the
+   *  seal a key rotation still voids the old approval (the consensus is then incomplete: the neutral outcome); after it,
+   *  nothing does. A chain that cannot be read in time decides nothing here: the foreclosure is decided on its
+   *  vote-time checks, and escrow 2.1.0 judges each approval at `final_at` again. */
+  async function finalityKeys(gameId: string, record: GameClockRecord, at: number): Promise<FinalityKeyCheck | null> {
+    const due = finalityKeyCheckDue(record, at);
+    const od = record.overdue;
+    if (due === null || due.votes.length === 0 || od === null) return null;
+    const port = deps.remedy?.() ?? null;
+    if (port === null) return null;
+    counters.finalityKeyChecks += 1;
+    const approvals = due.votes.map((v) => ({ seat: v.seat, approveUntil: (v.approval as { approve_until: number }).approve_until, signature: (v.approval as { signature: string }).signature }));
+    const facts = { remedy: 2 as const, defaultingSeat: od.seat, strike: od.strike, epoch: od.epoch, logLen: od.log_len, logHash: od.log_hash, overdueMs: od.at };
+    const found = await port.staleApprovals(gameId, facts, approvals, { atSecs: due.final_secs, timeoutMs: FINALITY_KEY_CHECK_MS }).catch(() => null);
+    if (found === null) {
+      counters.finalityKeysUnread += 1;
+      deps.warn(`  clock: ${gameId}: the consent keys could not be read at minute 30; the foreclosure is decided on its vote-time checks (escrow 2.1.0 judges each approval at final_at)`);
+      return null;
+    }
+    if (found.length > 0) deps.ops.audit("clock.finality-key-moved", { game_id: gameId, epoch: due.epoch, seats: found.length });
+    return { epoch: due.epoch, proposal: due.proposal, final_secs: due.final_secs, stale: found };
+  }
+
   /** Every transition due by now, at its own moment; a train offer's expiry closes the offer in the log first. Returns
    *  whether an expiry was committed in this task (the caller then does not use `tx.session` again). */
   async function catchUp(entry: Entry, game: GameActor, tx: Tx, at: number): Promise<boolean> {
     let expired = false;
     for (let round = 0; round < 4; round += 1) {
+      if (entry.record === null) return expired;
+      const keys = await finalityKeys(game.gameId, entry.record, at);
+      /* Re-read after the chain read: the check binds its overdue, proposal and final second, so it never applies to
+         anything else. */
       const record = entry.record;
       if (record === null) return expired;
-      const step = advance(record, at, positionOf(game));
+      const step = advance(record, at, positionOf(game), keys);
       applyStep(entry, step, game.gameId);
       if (step.tradeExpiry === null) break;
       /* A close that failed is retried only after its backoff (a submit meanwhile is judged on the record as it is). */

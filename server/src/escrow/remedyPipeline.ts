@@ -30,9 +30,14 @@
 // never while a unanimous annulment of the game is open. A sealed remedy is never gated by a player vote (the owner's
 // ruling, policy correction 2026-10-06: a system pause protects only a game that is still playable). An attestation that
 // expired before it landed is attested AGAIN for the same decision (`attestations` counts them) -- the protocol's own
-// recovery (a fresh `attested_at`, the same decision digest). A sealed N-1 decision whose seat approvals can no longer
-// land (escrow 2.1.0 checks each horizon against the block time; a seat's consent key may have moved) is NEVER converted
-// into another outcome and never put to a new vote: it stays sealed and held (`unlandable`), and needs an owner decision.
+// recovery (a fresh `attested_at`, the same decision digest, the same `final_at`). Owner ruling (2026-10-07): the N-1
+// vote decided the outcome at finality, so escrow 2.1.0 judges every seat approval AT THE ATTESTED `final_at` -- its
+// horizon after `final_at`, its signature under the key the seat held then (`consentKeyAt`, from the chain's retired-key
+// history) -- never at the block time it lands: a later horizon, a later key rotation, an outage or a late relay revoke
+// nothing. Before the seal, a lapsed approval or a moved key still voids a YES (the vote-time checks; Live: once more at
+// finality, `staleApprovals` at the final moment). A sealed N-1 decision whose approvals were NOT valid at its own
+// `final_at` (a race the pre-seal checks could not see) is NEVER converted into another outcome and never put to a new
+// vote: it stays sealed and held (`unlandable`), and needs an owner decision.
 // NO payout is computed here or in any browser: the contract's `foreclosure_split` decides every amount.
 
 import {
@@ -43,10 +48,10 @@ import {
   type RemedyKindByte,
 } from "../../../frontend/src/gameEngine/escrow/junoRemedyV1";
 import type { ClockRemedy, RemedyKind, RemedyStatus } from "../rooms/clock/clockRecord";
-import { LIVE_FINALITY_APPROVAL_MARGIN_SECS } from "../rooms/clock/clockModel";
 import { evidenceHashOf, ledgerHeadOf, signatureDigest } from "../rooms/clock/clockEvidence";
 import { isLiveAttempt, type ChainIntentRecord } from "./chainIntents";
 import type { EscrowService, RemedyChainContext } from "./escrowService";
+import { consentKeyAt } from "./juno/junoContract";
 import { remedyChainIntent, RemedyIntentError } from "./juno/remedyIntents";
 import type { RemedySigner } from "./juno/remedySigner";
 import { verifyDigest } from "./juno/secp256k1";
@@ -57,8 +62,9 @@ export interface RemedyAttempt {
   readonly detail: string | null;
   /** A new attestation was signed and its intent written. */
   readonly attested: boolean;
-  /** An N-1 remedy (2, 4, 5): the seats whose approvals can no longer land (a horizon passed, or the seat's consent key
-   *  moved since it signed). The sealed decision is held as it is (`remedyBlocked`): owner decision required. */
+  /** An N-1 remedy (2, 4, 5): the seats whose approvals were not valid at the decision's own `final_at` (a horizon at
+   *  or before it, or the seat's consent key replaced at or before it). The sealed decision is held as it is
+   *  (`remedyBlocked`): owner decision required. */
   readonly unlandable?: readonly string[];
 }
 
@@ -73,9 +79,10 @@ export interface RemedyPort {
   /** A seat's REMEDY-APPROVE for an overdue instance: `null` when it verifies under the seat's CURRENT consent key (a
    *  quorum chain read) and its horizon is acceptable, else why not. */
   verifyApproval(gameId: string, input: ApprovalCheck): Promise<string | null>;
-  /** The seats among `approvals` whose REMEDY-APPROVE no longer verifies under their CURRENT consent key (one quorum
-   *  read; `null`: the chain could not be read now). */
-  staleApprovals(gameId: string, facts: ApprovalFacts, approvals: readonly { readonly seat: string; readonly approveUntil: number; readonly signature: string }[]): Promise<readonly string[] | null>;
+  /** The seats among `approvals` whose REMEDY-APPROVE does not verify under the consent key their seat holds (one quorum
+   *  read; `null`: the chain could not be read in time). `atSecs`: judge under the key each seat held at that moment
+   *  (Live finality: the attested final second -- a rotation after it moves nothing); absent: the CURRENT key. */
+  staleApprovals(gameId: string, facts: ApprovalFacts, approvals: readonly { readonly seat: string; readonly approveUntil: number; readonly signature: string }[], options?: { readonly atSecs?: number; readonly timeoutMs?: number }): Promise<readonly string[] | null>;
   /** The chain seat of each player (the frozen roster), for the clock's money view. */
   chainSeats(gameId: string): Promise<Readonly<Record<string, number>> | null>;
   /** Post a fencing checkpoint (a cure ended an overdue instance). */
@@ -106,9 +113,9 @@ export interface ApprovalCheck {
   readonly nowMs: number;
 }
 
-/** Live approvals must outlive finality by this much (seconds) -- the clock's own margin, so an approval the server
- *  accepts can decide minute 30 -- and may not reach further than `LIVE_APPROVAL_MAX_SECS`. */
-export const APPROVAL_MARGIN_SECS = LIVE_FINALITY_APPROVAL_MARGIN_SECS;
+/** Live approvals must outlive minute 30 as it stands (strictly beyond the attested final second: an approval valid at
+ *  finality decides it -- owner ruling, 2026-10-07; no relay margin is needed, the contract judges it at `final_at`)
+ *  and may not reach further than `LIVE_APPROVAL_MAX_SECS`. */
 export const LIVE_APPROVAL_MAX_SECS = 6 * 60 * 60;
 /** Async approvals: at least an hour of life, at most 30 days. */
 export const ASYNC_APPROVAL_MIN_SECS = 60 * 60;
@@ -199,9 +206,17 @@ function progressOf(intents: readonly ChainIntentRecord[]): "none" | "open" | "c
   return intents.length === 0 ? "none" : "dead";
 }
 
-/** Whether a seat's REMEDY-APPROVE verifies under the chain seat's CURRENT consent key. */
-function approvalVerifies(ctx: RemedyChainContext, remedy: Pick<ClockRemedy, "kind" | "strike" | "epoch" | "log_len" | "log_hash" | "overdue_ms">, defaulting: number, approving: number, approveUntil: number, signature: string): boolean {
-  const key = ctx.consentPubkeys[approving];
+/** The consent key chain seat `approving` holds now (`atSecs` null) or held at `atSecs` (escrow 2.1.0
+ *  `consent_key_at`: the first key retired strictly after it, else the current one). */
+function seatKeyAt(ctx: RemedyChainContext, approving: number, atSecs: bigint | null): string | undefined {
+  const current = ctx.consentPubkeys[approving];
+  if (current === undefined || atSecs === null) return current;
+  return consentKeyAt({ consent_pubkey: current, retired_consent_keys: ctx.retiredConsentKeys[approving] ?? [] }, atSecs);
+}
+
+/** Whether a seat's REMEDY-APPROVE verifies under the key its chain seat holds now (`atSecs` null) or held at `atSecs`. */
+function approvalVerifies(ctx: RemedyChainContext, remedy: Pick<ClockRemedy, "kind" | "strike" | "epoch" | "log_len" | "log_hash" | "overdue_ms">, defaulting: number, approving: number, approveUntil: number, signature: string, atSecs: bigint | null): boolean {
+  const key = seatKeyAt(ctx, approving, atSecs);
   if (typeof key !== "string" || !/^0[23][0-9a-f]{64}$/.test(key) || !/^[0-9a-f]{128}$/.test(signature)) return false;
   try {
     const digest = remedyApproveDigestV1(
@@ -280,17 +295,19 @@ export function createRemedyPipeline(deps: RemedyPipelineDeps): RemedyPort {
       for (const approval of remedy.approvals) {
         const seat = ctx.seatOf[approval.seat];
         if (seat === undefined) return { status: "refused", detail: `an approving player (${approval.seat}) is not in the frozen roster`, attested: false };
-        /* Checked HERE, before anything is signed: an approval that lapsed by the attestation time, or that no longer
-           verifies under the seat's CURRENT consent key (it rotated since), could never land with it. */
-        if (BigInt(approval.approve_until) <= attestedAt || !approvalVerifies(ctx, remedy, defaulting, seat, approval.approve_until, approval.signature)) invalid.push(approval.seat);
+        /* Checked HERE, before anything is signed, exactly as escrow 2.1.0 judges it: AT THE DECISION'S OWN final_at (owner
+           ruling, 2026-10-07) -- its horizon after final_at, its signature under the key the seat held then. A horizon
+           that passed since, or a key the seat replaced after final_at, changes nothing; the attestation time and the
+           block time play no part. */
+        if (BigInt(approval.approve_until) <= finalAt || !approvalVerifies(ctx, remedy, defaulting, seat, approval.approve_until, approval.signature, finalAt)) invalid.push(approval.seat);
         approvals.push({ seat_index: seat, approve_until: BigInt(approval.approve_until), signature: approval.signature });
       }
       if (invalid.length > 0) {
-        /* Escrow 2.1.0 has no way to land an approval past its horizon (or under a moved key), and the sealed decision
-           is never converted or re-voted: it is held as it is -- owner decision required. */
+        /* An approval that was not valid at the decision's own final_at can never land (the contract judges it there),
+           and the sealed decision is never converted or re-voted: it is held as it is -- owner decision required. */
         return {
           status: "refused",
-          detail: "owner decision required: the sealed decision's seat approvals can no longer land on escrow 2.1.0 (a horizon passed, or a consent key moved); it is held unchanged -- never converted, never re-voted",
+          detail: "owner decision required: the sealed decision's seat approvals were not valid at its own final_at on escrow 2.1.0 (a horizon at or before it, or a consent key replaced at or before it); it is held unchanged -- never converted, never re-voted",
           attested: false,
           unlandable: [...invalid].sort(),
         };
@@ -323,6 +340,7 @@ export function createRemedyPipeline(deps: RemedyPipelineDeps): RemedyPort {
           signature: signed.signature_hex,
           remedy_pubkey: signer.publicKeyHex,
           consent_pubkeys: ctx.consentPubkeys,
+          retired_consent_keys: ctx.retiredConsentKeys,
           started_at: ctx.startedAtSecs,
           approvals,
           now: deps.now(),
@@ -349,10 +367,9 @@ export function createRemedyPipeline(deps: RemedyPipelineDeps): RemedyPort {
       const nowSecs = Math.floor(input.nowMs / 1000);
       const live = input.remedy <= 3;
       if (live) {
-        /* The clock's own rule (`clockModel.ts` finality): strictly beyond the attested final second plus the margin. */
+        /* The clock's own rule (`clockModel.ts` finality): strictly beyond the attested final second. */
         const finalSecs = Math.max(Number(secsUp(input.finalNotBeforeMs)), Number(secsUp(input.overdueMs)) + LIVE_CURE_WINDOW_SECS);
-        const minimum = finalSecs + APPROVAL_MARGIN_SECS;
-        if (input.approveUntil <= minimum) return `a Live approval must last beyond ${minimum} (finality plus ${APPROVAL_MARGIN_SECS} s)`;
+        if (input.approveUntil <= finalSecs) return `a Live approval must last beyond ${finalSecs} (minute 30 as it stands)`;
         if (input.approveUntil > Number(secsUp(input.overdueMs)) + LIVE_APPROVAL_MAX_SECS) return "a Live approval may not reach more than six hours past the overdue";
       } else {
         if (input.approveUntil < nowSecs + ASYNC_APPROVAL_MIN_SECS) return "an Async approval must last at least an hour";
@@ -365,6 +382,7 @@ export function createRemedyPipeline(deps: RemedyPipelineDeps): RemedyPort {
       const approving = ctx.seatOf[input.approvingSeat];
       if (defaulting === undefined || approving === undefined) return "a player is not in the frozen roster";
       if (approving === defaulting) return "the defaulting seat cannot approve a remedy against itself";
+      /* A YES before the seal: the seat's CURRENT key (a key it replaced no longer approves anything new). */
       const key = ctx.consentPubkeys[approving];
       if (typeof key !== "string" || !/^0[23][0-9a-f]{64}$/.test(key)) return "the approving seat has no consent key on chain";
       const digest = remedyApproveDigestV1(
@@ -386,16 +404,30 @@ export function createRemedyPipeline(deps: RemedyPipelineDeps): RemedyPort {
       return null;
     },
 
-    async staleApprovals(gameId, facts, approvals) {
+    async staleApprovals(gameId, facts, approvals, options = {}) {
       if (approvals.length === 0) return [];
-      const found = await context(gameId, false);
-      if ("refused" in found) return null;
-      const defaulting = found.seatOf[facts.defaultingSeat];
+      const atSecs = options.atSecs === undefined ? null : BigInt(options.atSecs);
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      let found: RemedyChainContext | { readonly refused: string } | null;
+      try {
+        const timeout = new Promise<null>((resolve) => {
+          timer = setTimeout(() => resolve(null), options.timeoutMs ?? 10_000);
+          (timer as { unref?: () => void }).unref?.();
+        });
+        found = await Promise.race([context(gameId, false), timeout]);
+      } catch {
+        found = null;
+      } finally {
+        if (timer !== null) clearTimeout(timer);
+      }
+      if (found === null || "refused" in found) return null;
+      const ctx = found;
+      const defaulting = ctx.seatOf[facts.defaultingSeat];
       const decision = { kind: facts.remedy, strike: facts.strike, epoch: facts.epoch, log_len: facts.logLen, log_hash: facts.logHash, overdue_ms: facts.overdueMs };
       const stale: string[] = [];
       for (const approval of approvals) {
-        const approving = found.seatOf[approval.seat];
-        if (defaulting === undefined || approving === undefined || approving === defaulting || !approvalVerifies(found, decision, defaulting, approving, approval.approveUntil, approval.signature)) stale.push(approval.seat);
+        const approving = ctx.seatOf[approval.seat];
+        if (defaulting === undefined || approving === undefined || approving === defaulting || !approvalVerifies(ctx, decision, defaulting, approving, approval.approveUntil, approval.signature, atSecs)) stale.push(approval.seat);
       }
       return stale.sort();
     },

@@ -35,7 +35,7 @@ use crate::payload::{fixed_bytes, Payload, PayloadUse};
 use crate::payout::{foreclosure_split, proportional_split, weights_have_positive_sum};
 use crate::remedy::RemedyAttestation;
 use crate::state::{
-    CheckpointRecord, Config, Game, GameState, Outcome, PayloadRecord, RemedyKey, Route,
+    CheckpointRecord, Config, Game, GameState, Outcome, PayloadRecord, RemedyKey, Route, Seat,
     SettlementRecord, SettlementSource, SignerKey, CHECKPOINTS, REMEDY_KEYS, SIGNER_KEYS,
 };
 
@@ -404,19 +404,41 @@ pub fn verify_seat_signatures(
     Ok(mask)
 }
 
+/// The consent key `seat` held at `at_secs`: the first key it retired at a
+/// block time strictly after `at_secs` (it was still current then), else its
+/// current key. A rotation AT `at_secs` already counts (the new key is the
+/// one). Retired keys are only recorded during a 2.1.0 game's play, which is
+/// the only span a remedy's `final_at` can fall in.
+pub fn consent_key_at(seat: &Seat, at_secs: u64) -> &HexBinary {
+    seat.retired_consent_keys
+        .iter()
+        .find(|retired| retired.retired_at.seconds() > at_secs)
+        .map(|retired| &retired.pubkey)
+        .unwrap_or(&seat.consent_pubkey)
+}
+
 /// Escrow 2.1.0: verifies the REMEDY-APPROVE signatures carried by a
 /// `SubmitRemedy` that needs them. Each must come from a seat in range other
-/// than the defaulting one, at most once per seat, be unexpired at the block
-/// time (`now_secs < approve_until`), and verify against that seat's CURRENT
-/// consent key over the approval digest naming that seat and its
-/// `approve_until`; and every non-defaulting seat must be present (all N−1).
-/// Returns the bit mask of the approving seats.
+/// than the defaulting one, at most once per seat, have been valid when the
+/// remedy became FINAL (`final_at < approve_until`), and verify against the
+/// consent key that seat held at `final_at` (`consent_key_at`) over the
+/// approval digest naming that seat and its `approve_until`; and every
+/// non-defaulting seat must be present (all N−1).
+///
+/// Owner ruling (2026-10-07): the N−1 vote decides the outcome at finality,
+/// and the server SEALS that exact decision then. An approval valid at the
+/// attested `final_at` keeps counting for that decision however late the
+/// attestation lands (an approval horizon passing, the approving seat
+/// rotating its key, an outage, a delayed relay); one that lapsed, or whose
+/// key was replaced, at or before `final_at` never counts. Validity is bound
+/// to that one finality event: the digest names the exact overdue instance,
+/// `final_at` is signed by the remedy key with the decision, and a remedy
+/// lands at most once per game. Returns the bit mask of the approving seats.
 pub fn verify_remedy_approvals(
     api: &dyn Api,
     game: &Game,
     attestation: &RemedyAttestation,
     approvals: &[RemedyApproval],
-    now_secs: u64,
 ) -> Result<u8, ContractError> {
     let domain = game_domain(game)?;
     let defaulting = usize::from(attestation.defaulting_seat);
@@ -441,10 +463,11 @@ pub fn verify_remedy_approvals(
             });
         }
         let approve_until = entry.approve_until.u64();
-        if now_secs >= approve_until {
+        if attestation.final_at >= approve_until {
             return Err(ContractError::ApprovalExpired {
                 seat_index: entry.seat_index,
                 approve_until,
+                final_at: attestation.final_at,
             });
         }
         let digest = remedy_approve_digest(
@@ -464,7 +487,7 @@ pub fn verify_remedy_approvals(
             api,
             &digest,
             entry.signature.as_slice(),
-            seat.consent_pubkey.as_slice(),
+            consent_key_at(seat, attestation.final_at).as_slice(),
         )
         .map_err(|_| ContractError::InvalidConsent {
             seat_index: entry.seat_index,

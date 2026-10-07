@@ -237,15 +237,24 @@ describe("FP4: the remedy intent is exactly one attestation, never one the contr
     /* The game's start (read from the chain): no overdue before one whole allowance has run. */
     assert.match(String(remedyIntentProblem(pureInput(a1, [], { started_at: a1.overdue_at - a1.allowance_secs + n(1) }))), /first allowance after the game's start/);
     assert.equal(remedyIntentProblem(pureInput(a1, [], { started_at: a1.overdue_at - a1.allowance_secs })), null);
-    /* Each approval's own horizon (signed): one presented with another horizon is not the seat's; one that ends at or
-       before the attestation time could never land; one already past is expired. */
+    /* Each approval's own horizon (signed), judged at the decision's final_at (owner ruling, 2026-10-07): one presented
+       with another horizon is not the seat's; one that ends at or before final_at never counts; one valid at final_at
+       counts however late it is relayed (an attestation made after its horizon, a wall clock long past it). */
     const extended = approvalsOf(a2, [0, 1]).map((x, at) => (at === 0 ? { ...x, approve_until: x.approve_until + n(1) } : x));
     assert.match(String(remedyIntentProblem({ ...pureInput(a2), approvals: extended })), /seat 0's approval does not verify/);
-    assert.match(String(remedyIntentProblem({ ...pureInput(a2), approvals: approvalsOf(a2, [0, 1], a2.attested_at) })), /seat 0's approval ends \(\d+\) before this attestation can be used/);
-    assert.equal(remedyIntentProblem({ ...pureInput(a2), approvals: approvalsOf(a2, [0, 1], a2.attested_at + n(1)) }), null);
-    const late = Number(a2.attested_at + n(86_400)) * 1000;
-    assert.match(String(remedyIntentProblem(pureInput(a2, [0, 1], { now: late }))), /seat 0's approval expired at/);
-    assert.equal(remedyIntentProblem(pureInput(a2, [0, 1], { now: late - 1000 })), null);
+    assert.match(String(remedyIntentProblem({ ...pureInput(a2), approvals: approvalsOf(a2, [0, 1], a2.final_at) })), /seat 0's approval ended \(\d+\) at or before the remedy became final/);
+    assert.equal(remedyIntentProblem({ ...pureInput(a2), approvals: approvalsOf(a2, [0, 1], a2.final_at + n(1)) }), null);
+    const reattested = { ...a2, attested_at: a2.final_at + n(7_200), expires_at: a2.final_at + n(7_800) };
+    assert.equal(remedyIntentProblem({ ...pureInput(reattested), approvals: approvalsOf(reattested, [0, 1], a2.final_at + n(60)) }), null, "attested again after the horizon passed");
+    const late = Number(a2.attested_at + n(86_400 * 30)) * 1000;
+    assert.equal(remedyIntentProblem(pureInput(a2, [0, 1], { now: late })), null, "the wall clock plays no part");
+    /* The key each seat held AT final_at (the chain's retired-key history): seat 0 rotated after final_at -> its old
+       key still counts; rotated at final_at -> the old key is void (and the new one did not sign). */
+    const rotated0 = [publicKeyOf(sha("rotated-0")).toString("hex"), PURE_SEATS[1], PURE_SEATS[2]];
+    const after = [[{ pubkey: PURE_SEATS[0], retired_at_secs: (a2.final_at + n(1)).toString() }], [], []];
+    assert.equal(remedyIntentProblem(pureInput(a2, [0, 1], { consent_pubkeys: rotated0, retired_consent_keys: after })), null);
+    const atFinal = [[{ pubkey: PURE_SEATS[0], retired_at_secs: a2.final_at.toString() }], [], []];
+    assert.match(String(remedyIntentProblem(pureInput(a2, [0, 1], { consent_pubkeys: rotated0, retired_consent_keys: atFinal }))), /seat 0's approval does not verify under the consent key it held at final_at/);
   });
 
   test("its slot is (decision, expiry); its subject the exact REMEDY digest; its message the contract's submit_remedy, no address, no amount", () => {
@@ -278,10 +287,10 @@ describe("FP4: the remedy intent is exactly one attestation, never one the contr
     assert.deepEqual(msg.submit_remedy.attestation, remedyAttestationWire(a));
     assert.deepEqual(msg.submit_remedy.approvals.map((x) => x.seat_index), [0, 2], "approvals in seat order");
     assert.deepEqual(msg.submit_remedy.approvals.map((x) => x.approve_until), [(a.attested_at + n(86_400)).toString(), (a.attested_at + n(86_400)).toString()]);
-    /* The usable life is the earliest of the expiry and every horizon. */
-    const early = a.attested_at + n(60);
+    /* The usable life is the attestation's expiry: an approval horizon never shortens it (judged at final_at). */
+    const early = a.final_at + n(60);
     const shortLived = remedyChainIntent({ ...pureInput(a), approvals: [...approvalsOf(a, [0]), ...approvalsOf(a, [2], early)] });
-    assert.equal(shortLived.op.kind === "remedy" && shortLived.op.usable_until, early.toString());
+    assert.equal(shortLived.op.kind === "remedy" && shortLived.op.usable_until, a.expires_at.toString());
     assert.equal(shortLived.intent_id, record.intent_id, "the slot is the decision and the attestation's expiry");
     assert.doesNotMatch(record.msg_json, /juno1|amount|denom|funds/);
     assert.equal(record.status, "pending");
@@ -663,12 +672,13 @@ describe("FP4 end to end: the relayer, the remedy intent and an escrow 2.1.0 gam
     assert.match(JSON.stringify(await prepareRemedyIntent(world.intents, intentFor(world, chainGameId, other))), /already confirmed/);
   });
 
-  test("a seat's approval horizon ends the intent like an expiry: a foreclosure held up past it never lands (superseded, nothing sent)", async () => {
+  test("SEALED APPROVAL FINALITY: a seat's approval horizon passing does NOT end the intent -- a foreclosure held up past it still lands (approvals judged at final_at)", async () => {
     const { world, chainGameId } = await liveWorld();
     const fore = attestationFor(world, chainGameId, 2, { defaulting_seat: 1 });
     const until = fore.final_at + n(120);
     const record = intentFor(world, chainGameId, fore, [0], until);
-    assert.equal(record.op.kind === "remedy" && record.op.usable_until, until.toString());
+    assert.equal(record.op.kind === "remedy" && record.op.usable_until, fore.expires_at.toString());
+    assert.ok(until < fore.expires_at);
     await prepare(world, record);
     advanceTo(world, Number(fore.final_at));
     world.chain.paused = true; // a foreclosing remedy waits out the pause ...
@@ -679,12 +689,11 @@ describe("FP4 end to end: the relayer, the remedy intent and an escrow 2.1.0 gam
       world.clock.now += 6_000;
     }
     assert.equal(await statusOf(world, record), "pending");
-    advanceTo(world, Number(until)); // ... past seat 0's horizon
+    advanceTo(world, Number(until) + 60); // ... past seat 0's horizon
     world.chain.paused = false;
-    await world.drive(async () => (await statusOf(world, record)) === "superseded");
-    assert.match(String((await world.intents.load(GAME_A, record.intent_id))?.superseded?.why), /approval expired at/);
-    assert.equal(sequenceOf(world), sequence, "nothing sent");
-    assert.equal(gameOf(world, chainGameId).state, "in_progress");
+    await world.drive(async () => (await statusOf(world, record)) === "confirmed");
+    assert.equal(gameOf(world, chainGameId).remedy?.remedy_digest, remedyDigestV1(fore));
+    assert.equal(sequenceOf(world), sequence + BigInt(1), "sent once");
   });
 
   test("play went on past the attested position: the remedy is moot (superseded, nothing sent)", async () => {

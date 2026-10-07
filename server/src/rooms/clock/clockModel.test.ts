@@ -20,6 +20,7 @@ import {
   classifyMessage,
   clockViewOf,
   continuityBreak,
+  finalityKeyCheckDue,
   foldBatch,
   gate,
   newClockRecord,
@@ -1403,16 +1404,63 @@ describe("Review fixes: requests, breaks, gaps, offers, approvals", () => {
     assert.equal(t.remaining(), 15 * MIN, "an optional power never refreshes the clock");
   });
 
-  test("Live money: a complete foreclosure decides minute 30 only if every approval outlives the finality by the margin", () => {
-    const t = new Table("live", { money: true });
-    t.advance(LIVE_ACTION_MS);
+  test("Live money: a complete foreclosure decides minute 30 when every approval is VALID AT FINALITY (owner ruling, 2026-10-07: no relay margin); one ending at the final second cannot", () => {
     const finalSecs = Math.ceil((T0 + LIVE_ACTION_MS + LIVE_CURE_MS) / 1000);
-    t.ok(propose(t.record, B, "foreclose", sig(finalSecs + 301), t.t));
-    t.ok(vote(t.record, C, t.record.overdue?.proposal?.id as number, true, sig(finalSecs + 300, "55"), t.t));
-    assert.equal(clockViewOf(t.record, t.t).overdue?.outcomeIfUncured, "timeout-annul", "C's approval ends exactly at the margin: it cannot decide minute 30");
-    t.advance(LIVE_CURE_MS);
-    assert.equal(t.record.ended?.kind, "live-timeout-annul");
-    assert.equal(t.record.remedy?.kind, 1);
+    const lapsing = new Table("live", { money: true });
+    lapsing.advance(LIVE_ACTION_MS);
+    lapsing.ok(propose(lapsing.record, B, "foreclose", sig(finalSecs + 1), lapsing.t));
+    lapsing.ok(vote(lapsing.record, C, lapsing.record.overdue?.proposal?.id as number, true, sig(finalSecs, "55"), lapsing.t));
+    assert.equal(clockViewOf(lapsing.record, lapsing.t).overdue?.outcomeIfUncured, "timeout-annul", "C's approval ends AT the final second: not valid at finality");
+    lapsing.advance(LIVE_CURE_MS);
+    assert.equal(lapsing.record.ended?.kind, "live-timeout-annul");
+    assert.equal(lapsing.record.remedy?.kind, 1);
+    const valid = new Table("live", { money: true });
+    valid.advance(LIVE_ACTION_MS);
+    valid.ok(propose(valid.record, B, "foreclose", sig(finalSecs + 1), valid.t));
+    valid.ok(vote(valid.record, C, valid.record.overdue?.proposal?.id as number, true, sig(finalSecs + 1, "55"), valid.t));
+    assert.equal(clockViewOf(valid.record, valid.t).overdue?.outcomeIfUncured, "foreclosure", "one second past minute 30 decides it");
+    valid.advance(LIVE_CURE_MS);
+    assert.equal(valid.record.ended?.kind, "live-foreclosure");
+    assert.equal(valid.record.remedy?.kind, 2);
+    assert.deepEqual(valid.record.remedy?.approvals.map((a) => a.approve_until), [finalSecs + 1, finalSecs + 1], "sealed with approvals that end a second after finality: the contract judges them at final_at");
+  });
+
+  test("Live money: a key that moved AT or before minute 30 voids that YES before the seal (the neutral outcome); the check binds its overdue, proposal and final second; no check (chain unread) decides on the vote-time checks", () => {
+    const finalSecs = Math.ceil((T0 + LIVE_ACTION_MS + LIVE_CURE_MS) / 1000);
+    const complete = () => {
+      const t = new Table("live", { money: true });
+      t.advance(LIVE_ACTION_MS);
+      t.ok(propose(t.record, B, "foreclose", sig(finalSecs + 600), t.t));
+      t.ok(vote(t.record, C, t.record.overdue?.proposal?.id as number, true, sig(finalSecs + 600, "55"), t.t));
+      return t;
+    };
+    const at = T0 + LIVE_ACTION_MS + LIVE_CURE_MS;
+    /* The controller asks for a check exactly when minute 30 falls due, with the standing YES approvals. */
+    const t0 = complete();
+    assert.equal(finalityKeyCheckDue(t0.record, at - 1), null, "not yet due");
+    const due = finalityKeyCheckDue(t0.record, at);
+    assert.deepEqual([due?.epoch, due?.final_secs, due?.votes.map((v) => v.seat)], [1, finalSecs, [B, C]]);
+    const id = t0.record.overdue?.proposal?.id as number;
+    /* C's key moved at or before the final second: C's YES is void, the consensus incomplete -> the neutral outcome. */
+    const moved = complete();
+    moved.t = at;
+    moved.take(advance(moved.record, at, () => ({ len: moved.logLen, hash: HASH }), { epoch: 1, proposal: id, final_secs: finalSecs, stale: [C] }));
+    assert.equal(moved.record.ended?.kind, "live-timeout-annul");
+    assert.equal(moved.record.remedy?.kind, 1);
+    assert.ok(moved.events.includes("vote-stale"));
+    /* A check for another proposal, or another final second, decides nothing (the foreclosure stands). */
+    for (const keys of [{ epoch: 1, proposal: id + 1, final_secs: finalSecs, stale: [C] }, { epoch: 1, proposal: id, final_secs: finalSecs + 1, stale: [C] }, { epoch: 2, proposal: id, final_secs: finalSecs, stale: [C] }]) {
+      const other = complete();
+      other.take(advance(other.record, at, () => ({ len: other.logLen, hash: HASH }), keys));
+      assert.equal(other.record.ended?.kind, "live-foreclosure", JSON.stringify(keys));
+    }
+    /* No seat moved (or the chain could not be read in time): the foreclosure is sealed. */
+    for (const keys of [{ epoch: 1, proposal: id, final_secs: finalSecs, stale: [] }, null]) {
+      const kept = complete();
+      kept.take(advance(kept.record, at, () => ({ len: kept.logLen, hash: HASH }), keys));
+      assert.equal(kept.record.ended?.kind, "live-foreclosure");
+      assert.equal(kept.record.remedy?.kind, 2);
+    }
   });
 
   test("a money YES checked for one kind never counts toward the other; a seat whose key moved is set aside", () => {
@@ -1431,14 +1479,22 @@ describe("Review fixes: requests, breaks, gaps, offers, approvals", () => {
     assert.equal(t.record.ended?.kind, "async-annul");
   });
 
-  test("Async money: an approval with under an hour left never completes the consensus", () => {
-    const t = new Table("async-pace", { pace: 86_400, money: true });
-    t.advance(86_400 * SEC);
-    const nowSecs = Math.floor(t.t / 1000);
-    t.ok(propose(t.record, B, "foreclose", sig(nowSecs + 3_600), t.t));
-    t.ok(vote(t.record, C, t.record.overdue?.proposal?.id as number, true, sig(nowSecs + 7 * 86_400, "55"), t.t));
-    assert.equal(t.record.phase, "overdue");
-    assert.deepEqual(t.record.overdue?.proposal?.votes.map((v) => v.seat), [C], "B's lapsing YES is set aside; B is asked again");
+  test("Async money: an approval VALID at the completing vote completes the consensus (final at once -- owner ruling, 2026-10-07: no margin); one that lapsed by then is set aside", () => {
+    const short = new Table("async-pace", { pace: 86_400, money: true });
+    short.advance(86_400 * SEC);
+    const nowSecs = Math.ceil(short.t / 1000);
+    short.ok(propose(short.record, B, "foreclose", sig(nowSecs + 1), short.t));
+    short.ok(vote(short.record, C, short.record.overdue?.proposal?.id as number, true, sig(nowSecs + 7 * 86_400, "55"), short.t));
+    assert.equal(short.record.ended?.kind, "async-foreclosure", "B's approval is valid at the completion: final");
+    assert.equal(short.record.remedy?.kind, 5);
+    const lapsed = new Table("async-pace", { pace: 86_400, money: true });
+    lapsed.advance(86_400 * SEC);
+    const then = Math.ceil(lapsed.t / 1000);
+    lapsed.ok(propose(lapsed.record, B, "foreclose", sig(then + 10), lapsed.t));
+    lapsed.advance(10 * SEC);
+    lapsed.ok(vote(lapsed.record, C, lapsed.record.overdue?.proposal?.id as number, true, sig(then + 7 * 86_400, "55"), lapsed.t));
+    assert.equal(lapsed.record.phase, "overdue");
+    assert.deepEqual(lapsed.record.overdue?.proposal?.votes.map((v) => v.seat), [C], "B's YES lapsed before the completion: set aside; B is asked again");
   });
 
   test("REVIEW: seats named unlandable are cleared once the SAME decision is carried on again; a pre-correction record (with its offer budget) still reads", () => {

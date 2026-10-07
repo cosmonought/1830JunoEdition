@@ -169,6 +169,18 @@ export interface FakeSeat {
   /** ESCROW-4: chain seconds the seat joined (the creator's CreateGame, or its Join); the fake's clock when absent. */
   joined_at?: number;
   consent_key_rotated_at?: number | null;
+  /** Escrow 2.1.0 (owner ruling, 2026-10-07): keys this seat replaced while its `timed_remedy_v1` game was IN_PROGRESS,
+   *  oldest first, with the rotation's chain seconds (`Seat::retired_consent_keys`). */
+  retired_consent_keys?: { pubkey: string; retired_at: number }[];
+}
+
+/** `state.rs::MAX_RETIRED_CONSENT_KEYS`. */
+export const FAKE_MAX_RETIRED_CONSENT_KEYS = 8;
+
+/** `helpers.rs::consent_key_at`: the key `seat` held at `atSecs` (the first retired strictly after it, else current). */
+export function fakeConsentKeyAt(seat: FakeSeat, atSecs: bigint): string {
+  const retired = (seat.retired_consent_keys ?? []).find((entry) => BigInt(entry.retired_at) > atSecs);
+  return retired === undefined ? seat.consent_pubkey : retired.pubkey;
 }
 
 interface PayloadRecordJson {
@@ -470,6 +482,12 @@ export class FakeJunoChain implements JunoRest {
     const other = game.seats.findIndex((seat, at) => at !== index && seat.consent_pubkey === pubkey);
     if (other >= 0) return { ok: false, error: `this consent key is already used by seat ${other} of this game` };
     if (game.seats[index].consent_pubkey !== pubkey) {
+      /* Escrow 2.1.0: a rotation in a remedy game's play keeps the replaced key (bounded). */
+      if (game.state === "in_progress" && game.policy === "timed_remedy_v1") {
+        const kept = game.seats[index].retired_consent_keys ?? [];
+        if (kept.length >= FAKE_MAX_RETIRED_CONSENT_KEYS) return { ok: false, error: `seat ${index} already retired ${FAKE_MAX_RETIRED_CONSENT_KEYS} consent keys during play; no further rotation until the game leaves IN_PROGRESS` };
+        game.seats[index].retired_consent_keys = [...kept, { pubkey: game.seats[index].consent_pubkey, retired_at: this.time }];
+      }
       game.seats[index].consent_pubkey = pubkey;
       game.seats[index].consent_key_rotated_at = this.time;
       game.consent_bitmap &= ~(1 << index);
@@ -640,6 +658,8 @@ export class FakeJunoChain implements JunoRest {
           wallet: seat.wallet,
           consent_pubkey: seat.consent_pubkey,
           consent_key_rotated_at: seat.consent_key_rotated_at === undefined || seat.consent_key_rotated_at === null ? null : nanos(seat.consent_key_rotated_at),
+          /* `skip_serializing_if = "Vec::is_empty"`: absent unless the seat rotated in play. */
+          ...(seat.retired_consent_keys !== undefined && seat.retired_consent_keys.length > 0 ? { retired_consent_keys: seat.retired_consent_keys.map((r) => ({ pubkey: r.pubkey, retired_at: nanos(r.retired_at) })) } : {}),
           join_ticket: seat.join_ticket,
           gross_deposit: game.ante_gross,
           subsidy_paid: game.subsidy_per_seat,
@@ -937,9 +957,11 @@ export class FakeJunoChain implements JunoRest {
         if ((bitmap & (1 << approval.seat_index)) !== 0) throw new ContractFailure(`duplicate signature for seat ${approval.seat_index}`);
         if (typeof approval.approve_until !== "string" || !/^(0|[1-9][0-9]{0,19})$/.test(approval.approve_until)) throw new ContractFailure("Error parsing into type eighteen_cosmos_escrow::msg::ExecuteMsg: approve_until");
         const until = BigInt(approval.approve_until);
-        if (BigInt(this.time) >= until) throw new ContractFailure(`seat ${approval.seat_index}'s remedy approval expired at ${approval.approve_until}`);
+        /* Owner ruling (2026-10-07): judged at the attested final_at, never at the block time; under the key the seat
+           held at final_at (`helpers.rs::verify_remedy_approvals`). */
+        if (a.final_at >= until) throw new ContractFailure(`seat ${approval.seat_index}'s remedy approval expired at ${approval.approve_until}, not after the remedy's final_at ${a.final_at}`);
         const approve = remedyApproveDigestV1(a, until, approval.seat_index);
-        if (!/^[0-9a-f]{128}$/.test(approval.signature) || !verifyDigest(Buffer.from(seat.consent_pubkey, "hex"), Buffer.from(approve, "hex"), Buffer.from(approval.signature, "hex"))) {
+        if (!/^[0-9a-f]{128}$/.test(approval.signature) || !verifyDigest(Buffer.from(fakeConsentKeyAt(seat, a.final_at), "hex"), Buffer.from(approve, "hex"), Buffer.from(approval.signature, "hex"))) {
           throw new ContractFailure(`invalid signature for seat ${approval.seat_index}`);
         }
         bitmap |= 1 << approval.seat_index;

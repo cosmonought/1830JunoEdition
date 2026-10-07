@@ -254,8 +254,15 @@ pub enum ContractError {
     #[error("the defaulting seat {seat_index} cannot approve a remedy against itself")]
     DefaulterCannotApprove { seat_index: u8 },
 
-    #[error("seat {seat_index}'s remedy approval expired at {approve_until}")]
-    ApprovalExpired { seat_index: u8, approve_until: u64 },
+    #[error("seat {seat_index}'s remedy approval expired at {approve_until}, not after the remedy's final_at {final_at}")]
+    ApprovalExpired {
+        seat_index: u8,
+        approve_until: u64,
+        final_at: u64,
+    },
+
+    #[error("seat {seat_index} already retired {max} consent keys during play; no further rotation until the game leaves IN_PROGRESS")]
+    ConsentKeyHistoryFull { seat_index: u8, max: u8 },
 
     #[error("a third-strike foreclosure can only be upheld or annulled, never replaced")]
     RemedySettlementNotReplaceable {},

@@ -154,6 +154,17 @@ export interface JunoSeat {
   readonly net_deposit: string;
   /** ESCROW-4: when the seat joined (Unix seconds, the chain's clock); null when a node's answer does not carry it. */
   readonly joined_at_secs: string | null;
+  /** Escrow 2.1.0 (owner ruling, 2026-10-07): the consent keys this seat replaced during its remedy game's play, oldest
+   *  first, each with the rotation's block time (whole seconds, decimal). A sealed remedy's approvals are verified
+   *  against the key the seat held at the attested `final_at` (`consentKeyAt`). Empty when absent from the answer. */
+  readonly retired_consent_keys: readonly { readonly pubkey: string; readonly retired_at_secs: string }[];
+}
+
+/** `helpers.rs::consent_key_at`: the consent key `seat` held at `atSecs` -- the first key it retired at a block time
+ *  strictly after `atSecs`, else its current key. Integer arithmetic only. */
+export function consentKeyAt(seat: Pick<JunoSeat, "consent_pubkey" | "retired_consent_keys">, atSecs: bigint): string {
+  const retired = seat.retired_consent_keys.find((entry) => BigInt(entry.retired_at_secs) > atSecs);
+  return retired === undefined ? seat.consent_pubkey : retired.pubkey;
 }
 
 export interface JunoGame {
@@ -235,6 +246,16 @@ export function parseGameResponse(data: unknown): JunoGameResponse {
       gross_deposit: dec(seat.gross_deposit, `game.seats[${i}].gross_deposit`),
       net_deposit: dec(seat.net_deposit, `game.seats[${i}].net_deposit`),
       joined_at_secs: orNull(seat.joined_at, (v) => secondsOf(v, `game.seats[${i}].joined_at`)),
+      retired_consent_keys:
+        seat.retired_consent_keys === undefined || seat.retired_consent_keys === null
+          ? []
+          : need(Array.isArray(seat.retired_consent_keys) && seat.retired_consent_keys.length <= 8, seat.retired_consent_keys as unknown[], `game.seats[${i}].retired_consent_keys`).map((entry, k) => {
+              if (!isObject(entry)) throw new JunoAbiError(`game.seats[${i}].retired_consent_keys[${k}]`);
+              return {
+                pubkey: hexOf(entry.pubkey, HEX(33), `game.seats[${i}].retired_consent_keys[${k}].pubkey`),
+                retired_at_secs: secondsOf(entry.retired_at, `game.seats[${i}].retired_consent_keys[${k}].retired_at`),
+              };
+            }),
     };
   });
   const terms = isObject(g.terms) ? g.terms : {};
@@ -531,7 +552,8 @@ export const JUNO_ERROR_TEMPLATES: Readonly<Record<string, string>> = Object.fre
   DuplicateRemedyKey: "this public key is already registered as remedy key {key_id}",
   ApprovalsNotAllowed: "remedy {remedy} carries no seat approvals",
   DefaulterCannotApprove: "the defaulting seat {seat_index} cannot approve a remedy against itself",
-  ApprovalExpired: "seat {seat_index}'s remedy approval expired at {approve_until}",
+  ApprovalExpired: "seat {seat_index}'s remedy approval expired at {approve_until}, not after the remedy's final_at {final_at}",
+  ConsentKeyHistoryFull: "seat {seat_index} already retired {max} consent keys during play; no further rotation until the game leaves IN_PROGRESS",
   RemedySettlementNotReplaceable: "a third-strike foreclosure can only be upheld or annulled, never replaced",
   RemedyKeyIdsExhausted: "the remedy key registry is full",
 });

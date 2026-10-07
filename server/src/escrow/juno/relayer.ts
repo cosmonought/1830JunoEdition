@@ -738,9 +738,9 @@ export function createJunoRelayer(deps: RelayerDeps): Relayer {
         /* FP4: an expired attestation never lands (the remedy lane may attest the same final decision again, in a new
            slot); a foreclosing remedy waits out a pause (a neutral one lands while paused); nothing is submitted before
            its finality and its attestation time are both reached on chain. */
-        if (blockTime >= Number(op.usable_until)) {
-          return { kind: "moot", why: op.usable_until === op.expires_at ? `the remedy attestation expired at ${op.expires_at}` : `a seat's remedy approval expired at ${op.usable_until}` };
-        }
+        /* `usable_until` is the attestation's expiry: approvals are judged at final_at (owner ruling, 2026-10-07), so a
+           horizon passing never moots a sealed decision's intent. */
+        if (blockTime >= Number(op.usable_until)) return { kind: "moot", why: `the remedy attestation expired at ${op.expires_at}` };
         if (game.paused && (op.remedy === 2 || op.remedy === 3 || op.remedy === 5)) return { kind: "wait", untilMs: soon, why: "the escrow is paused (a foreclosing remedy waits; a neutral one lands)" };
         const usableAt = Math.max(Number(op.final_at), Number(op.attested_at));
         if (blockTime < usableAt) return { kind: "wait", untilMs: deps.now() + Math.max(pollMs, (usableAt - blockTime + 6) * 1000), why: `the remedy is final and attested by ${usableAt} (block time)` };

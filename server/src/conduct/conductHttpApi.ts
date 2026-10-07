@@ -21,8 +21,9 @@
 // 404 `not-found` (after the transport's usual method / origin / body checks, which every `/gs/api/*` route makes
 // first). A DECISION also needs the session's live sensitive grant ("Confirm it's you", the same grant a wallet change
 // asks for): 403 `reauth-required` otherwise. A reviewer never sees -- in the queue, a case or a decision -- a case
-// they are a party to (the reporter, the reported account, or anyone seated at its table): those are answered as cases
-// that do not exist.
+// they are a party to (the reporter, the reported account, anyone seated at its table at a report, or anyone on the
+// table's durable roster now, whichever pool owns the game): those are answered as cases that do not exist. A case
+// whose table roster cannot be read just now is withheld (queue: counted with the unreadable; case / decide: 503).
 //
 // Reporting itself is not here: a seated player reports through the table's own socket (`room-op report-player`), in
 // the pool that serves the game, where the seat and the committed log are authoritative.
@@ -43,7 +44,7 @@ import { KeyedBuckets } from "../ingress/limits";
 import type { ServerLogEntry } from "../../../frontend/src/utils/roomSession";
 import { MAX_REVIEW_NOTE_LENGTH } from "../../../frontend/src/utils/conductReport";
 import { ConductCaseUnreadableError } from "./conductCase";
-import type { ConductService } from "./conductService";
+import { ConductRosterUnavailableError, type ConductService } from "./conductService";
 
 export const CONDUCT_API_PREFIX = "/gs/api/conduct/";
 export const CONDUCT_REVIEWERS_ENV = "GS_CONDUCT_REVIEWERS";
@@ -232,6 +233,10 @@ async function serve(request: IncomingMessage, response: ServerResponse, api: Co
     } catch (error) {
       if (error instanceof ConductCaseUnreadableError) {
         json(response, 409, { error: "case-unreadable" });
+        return;
+      }
+      if (error instanceof ConductRosterUnavailableError) {
+        json(response, 503, { error: "unavailable" });
         return;
       }
       throw error;

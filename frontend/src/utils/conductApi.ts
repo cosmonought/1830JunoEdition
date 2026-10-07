@@ -81,6 +81,28 @@ export interface OfferCounts {
   readonly actions: number;
 }
 
+/** One of the table clock's own facts, as the server projected it (consolidated final integration): the clock lane's
+ *  evidence kind, its chain sequence number and server time, and safe flat fields (seat ids, results, counts, ms). */
+export interface ClockFactView {
+  readonly seq: number;
+  readonly kind: string;
+  readonly at: number;
+  readonly fields: ReadonlyArray<readonly [string, string]>;
+}
+
+/** The table clock's facts in a case (or one of its additions): what the clock lane itself recorded. */
+export interface ClockEvidenceView {
+  readonly record: "read" | "none" | "unreadable";
+  readonly deadline: string | null;
+  readonly paceSecs: number | null;
+  readonly strikes: ReadonlyArray<readonly [string, number]>;
+  readonly seq: number | null;
+  readonly head: string | null;
+  readonly ledger: readonly ClockFactView[];
+  readonly events: readonly ClockFactView[];
+  readonly omitted: number;
+}
+
 export interface CaseEvidence {
   readonly capturedAt: number;
   readonly serverBuild: string;
@@ -91,6 +113,8 @@ export interface CaseEvidence {
   readonly counts: { readonly reporter: OfferCounts; readonly reported: OfferCounts };
   readonly chat: ReadonlyArray<{ readonly id: string; readonly at: number; readonly by: "reporter" | "reported"; readonly text: string }> | null;
   readonly money: { readonly phase: string | null; readonly held: boolean } | null;
+  /** The table clock's facts when the report was made (`null`: none captured -- the not-captured list says why). */
+  readonly clock: ClockEvidenceView | null;
   readonly notCaptured: readonly string[];
 }
 
@@ -101,6 +125,8 @@ export interface ReReportView {
   readonly log: { readonly captured: boolean; readonly entries: number; readonly hash: string | null };
   readonly counts: { readonly reporter: OfferCounts; readonly reported: OfferCounts };
   readonly chat: ReadonlyArray<{ readonly id: string; readonly at: number; readonly by: "reporter" | "reported"; readonly text: string }>;
+  /** The table clock's facts at this addition (`null`: none). */
+  readonly clock: ClockEvidenceView | null;
 }
 
 export interface RelatedCases {
@@ -176,7 +202,37 @@ function reReportOf(raw: unknown): ReReportView | null {
   const reporter = countsOf(raw.counts.reporter);
   const reported = countsOf(raw.counts.reported);
   if (reporter === null || reported === null) return null;
-  return { at: raw.at, note: raw.note as string | null, log: { captured: raw.log.captured !== false, entries: raw.log.entries, hash: hashOf(raw.log.hash) }, counts: { reporter, reported }, chat: chatOf(raw.chat) };
+  return { at: raw.at, note: raw.note as string | null, log: { captured: raw.log.captured !== false, entries: raw.log.entries, hash: hashOf(raw.log.hash) }, counts: { reporter, reported }, chat: chatOf(raw.chat), clock: clockOf(raw.clock) };
+}
+
+function clockFactOf(raw: unknown): ClockFactView | null {
+  if (!isRecord(raw) || !int(raw.seq) || !int(raw.at) || !str(raw.kind, 32) || !isRecord(raw.f)) return null;
+  const fields: Array<readonly [string, string]> = [];
+  for (const [name, value] of Object.entries(raw.f)) {
+    if (!str(name, 32)) continue;
+    if (value === null || typeof value === "boolean" || (typeof value === "number" && Number.isSafeInteger(value))) fields.push([name, String(value)]);
+    else if (str(value, 48)) fields.push([name, value]);
+    else if (Array.isArray(value) && value.every((item) => str(item, 48))) fields.push([name, value.join(", ")]);
+  }
+  return { seq: raw.seq, kind: raw.kind, at: raw.at, fields };
+}
+
+/** The clock facts the server sent (`null`: none, or not in this build's shape). */
+export function clockOf(raw: unknown): ClockEvidenceView | null {
+  if (!isRecord(raw) || raw.source !== "clock-evidence" || !(raw.record === "read" || raw.record === "none" || raw.record === "unreadable")) return null;
+  if (!Array.isArray(raw.events) || !Array.isArray(raw.ledger) || !isRecord(raw.strikes)) return null;
+  const facts = (list: unknown[]): ClockFactView[] => list.map(clockFactOf).filter((fact): fact is ClockFactView => fact !== null);
+  return {
+    record: raw.record,
+    deadline: str(raw.deadline, 32) ? raw.deadline : null,
+    paceSecs: int(raw.pace_secs) ? raw.pace_secs : null,
+    strikes: Object.entries(raw.strikes).filter((entry): entry is [string, number] => str(entry[0], 48) && int(entry[1])),
+    seq: int(raw.seq) ? raw.seq : null,
+    head: hashOf(raw.head),
+    ledger: facts(raw.ledger),
+    events: facts(raw.events),
+    omitted: int(raw.omitted) ? raw.omitted : 0,
+  };
 }
 
 function evidenceOf(raw: unknown): CaseEvidence | null {
@@ -212,6 +268,7 @@ function evidenceOf(raw: unknown): CaseEvidence | null {
     counts: { reporter, reported },
     chat,
     money,
+    clock: clockOf(raw.clock),
     notCaptured: raw.not_captured.filter((line): line is string => str(line, 300)),
   };
 }

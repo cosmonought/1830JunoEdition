@@ -30,7 +30,10 @@
 //   - the two parties' most recent stored chat lines (chat is already a server-kept record of the table, shown to its
 //     seats; it is copied because its sidecar is lossy by design);
 //   - a real-money table's financial phase and whether it is held (its dispute standing), when the money layer can say;
-//   - what could NOT be captured in this build, said in words (no clock lane, no overdue / foreclosure events).
+//   - the table clock's own facts (`conductClockFacts.ts`): a SAFE projection of the final clock lane's evidence events --
+//     responsibility, offers and their freeze / charge split, declines, overdues, cures and strikes, votes, pauses and
+//     system pauses, finality and sealed remedies -- read from the lane's hook and its durable record, never re-derived;
+//   - what could NOT be captured, said in words (no clock record, an unreadable one, an unreadable log or chat).
 // No session id, cookie, recovery key or selector, password material, IP address, device data or wallet-proof material
 // is ever read into a case.
 
@@ -51,6 +54,7 @@ import {
   type ConductStatus,
 } from "../../../frontend/src/utils/conductReport";
 import { effectiveStatus, GAME_ID_PATTERN, type GameRecord, type LogFacts } from "../rooms/gameRecord";
+import { isConductClockEvidence, type ConductClockEvidence } from "./conductClockFacts";
 
 export const CONDUCT_CASE_FORMAT = "gs-conduct-case";
 export const CONDUCT_CASE_VERSION = 1;
@@ -163,8 +167,9 @@ export interface ConductEvidence {
   readonly chat: { readonly lines: readonly ChatEvidenceLine[] } | null;
   /** A real-money table's financial standing when the report was made (`null`: a free table, or not readable). */
   readonly money: { readonly phase: string | null; readonly held: boolean } | null;
-  /** A clock lane's own snapshot when one is wired (JSON, bounded); `null` otherwise. */
-  readonly clock: unknown;
+  /** The table clock's facts when the report was made (`conductClockFacts.ts`; bounded); `null`: none known;
+   *  `{omitted}`: a snapshot larger than the bound (never written by this build, which fits its own). */
+  readonly clock: ConductClockEvidence | { readonly omitted: string } | null;
   /** What this build could not capture, in words (so "absent" is never read as "nothing happened"). */
   readonly not_captured: readonly string[];
 }
@@ -187,6 +192,8 @@ export interface ReReport {
   readonly log: { readonly captured: boolean; readonly entries: number; readonly hash: string | null };
   readonly counts: { readonly reporter: OfferCounts; readonly reported: OfferCounts };
   readonly chat: readonly ChatEvidenceLine[];
+  /** The table clock's facts at this addition (absent in a case written before clock facts were wired). */
+  readonly clock?: ConductClockEvidence | null;
 }
 
 export interface ConductCase {
@@ -294,7 +301,7 @@ export interface EvidenceInput {
   readonly reported: ConductParty;
   readonly chat: readonly RoomChatEntry[] | null;
   readonly money: { readonly phase: string | null; readonly held: boolean } | null;
-  readonly clock: unknown;
+  readonly clock: ConductClockEvidence | null;
   readonly build: string;
   readonly now: number;
   /** Why the committed log could not be read (a held game serves no history), in words; recorded as not captured. */
@@ -355,7 +362,7 @@ export function deriveEvidence(input: EvidenceInput): ConductEvidence {
     hash = null; // two entries claiming one index: the pointer is left unbound and the reviewer is told
   }
   const chat = input.chat === null ? null : { lines: partyChat(input.chat, reporter, reported, CHAT_LINES_LIMIT) };
-  let clock: unknown = null;
+  let clock: ConductEvidence["clock"] = null;
   if (input.clock !== null && input.clock !== undefined) {
     try {
       const text = JSON.stringify(input.clock);
@@ -366,8 +373,9 @@ export function deriveEvidence(input: EvidenceInput): ConductEvidence {
   }
   const notCaptured: string[] = [];
   if (input.unreadableHistory !== undefined) notCaptured.push(input.unreadableHistory.slice(0, 300));
-  if (clock === null) notCaptured.push("Clock and turn-responsibility transitions: this server keeps no gameplay clock record for this table.");
-  notCaptured.push("Overdue and foreclosure events: this build has no such events.");
+  if (clock === null) notCaptured.push("Clock facts: this server holds no clock record for this table (a table dealt before its clock existed, or one with no clock).");
+  else if (!("source" in clock)) notCaptured.push(`Clock facts: ${clock.omitted}.`);
+  else if (clock.record === "unreadable") notCaptured.push("Clock facts: the table's stored clock record could not be read when the report was made; only the clock facts this server saw as they happened are included.");
   if (input.chat === null) notCaptured.push("Chat: the table's stored chat could not be read when the report was made.");
   if (record.money !== null && input.money === null) notCaptured.push("Money: the table's financial record could not be read when the report was made.");
   if (hash === null && ordered.length > 0) notCaptured.push("Log hash: the committed log could not be hashed (two entries claim one index).");
@@ -455,6 +463,12 @@ export const lastReportAt = (value: ConductCase): number => (value.rereports.len
 /** The log length the case's latest report saw. */
 export const lastReportEntries = (value: ConductCase): number => (value.rereports.length === 0 ? value.evidence.log.entries : value.rereports[value.rereports.length - 1].log.entries);
 
+/** The clock evidence sequence number the latest report saw (`null`: none recorded). */
+export const lastReportClockSeq = (value: ConductCase): number | null => {
+  const clock = value.rereports.length === 0 ? value.evidence.clock : (value.rereports[value.rereports.length - 1].clock ?? null);
+  return clock === null || !("source" in clock) ? null : clock.seq;
+};
+
 /** Whether `principalId` is a party to the case: the reporter, the reported account, or anyone seated at that table. */
 export const isCaseParty = (value: ConductCase, principalId: string): boolean =>
   principalId === value.reporter.principal_id || principalId === value.reported.principal_id || value.table_principals.includes(principalId);
@@ -470,23 +484,28 @@ export const partyChattedSince = (value: ConductCase, chat: readonly RoomChatEnt
 /** Whether a repeat of the latest report is the SAME report (nothing has moved on): the log is no longer, neither party
  *  has chatted since, and the quiet window has not passed. Judged against the latest case of the sequence, whatever its
  *  status. */
-export const isQuietRepeat = (latest: ConductCase, entries: number, at: number, chat: readonly RoomChatEntry[] | null = null): boolean =>
-  entries <= lastReportEntries(latest) && at - lastReportAt(latest) < REREPORT_QUIET_MS && !partyChattedSince(latest, chat);
+export const isQuietRepeat = (latest: ConductCase, entries: number, at: number, chat: readonly RoomChatEntry[] | null = null, clockSeq: number | null = null): boolean =>
+  entries <= lastReportEntries(latest) &&
+  at - lastReportAt(latest) < REREPORT_QUIET_MS &&
+  !partyChattedSince(latest, chat) &&
+  /* The table clock moved on (an overdue, a cure, a pause ...: stalling rarely grows the log either). */
+  !(clockSeq !== null && clockSeq > (lastReportClockSeq(latest) ?? -1));
 
 /** The same reporter adds to an ACTIVE case (the caller has checked it is active and charged the budget). The case's
  *  serialized bound is kept: the addition's chat is trimmed to fit, and an addition that cannot fit is `full`. */
 export function addReReport(
   current: ConductCase,
-  input: { readonly at: number; readonly note: string | null; readonly entries: readonly ServerLogEntry[]; readonly captured: boolean; readonly chat: readonly RoomChatEntry[] | null; readonly seatPrincipals: readonly string[] },
+  input: { readonly at: number; readonly note: string | null; readonly entries: readonly ServerLogEntry[]; readonly captured: boolean; readonly chat: readonly RoomChatEntry[] | null; readonly seatPrincipals: readonly string[]; readonly clock?: ConductClockEvidence | null },
 ): { readonly next: ConductCase } | { readonly code: "full" | "quiet" } {
   if (current.rereports.length >= MAX_REREPORTS) return { code: "full" };
   const pointer = logPointerOf(input.entries);
-  if (isQuietRepeat(current, pointer.entries, input.at, input.chat)) return { code: "quiet" };
+  const clock = input.clock ?? null;
+  if (isQuietRepeat(current, pointer.entries, input.at, input.chat, clock?.seq ?? null)) return { code: "quiet" };
   const counts = partyCounts([...input.entries].sort((left, right) => left.index - right.index), current.reporter.player_id, current.reported.player_id);
   let chat = input.chat === null ? [] : partyChat(input.chat, current.reporter, current.reported, REREPORT_CHAT_LIMIT, lastReportAt(current));
   const principals = [...new Set([...current.table_principals, ...input.seatPrincipals])].slice(0, MAX_TABLE_PRINCIPALS);
   for (;;) {
-    const rereport: ReReport = { at: input.at, note: input.note, log: { captured: input.captured, ...pointer }, counts, chat };
+    const rereport: ReReport = { at: input.at, note: input.note, log: { captured: input.captured, ...pointer }, counts, chat, clock };
     const next: ConductCase = { ...current, table_principals: principals, revision: current.revision + 1, rereports: [...current.rereports, rereport] };
     if (serializeConductCase(next) !== null) return { next };
     if (chat.length === 0) return { code: "full" };
@@ -560,7 +579,7 @@ const isChatLines = (value: unknown, limit: number): boolean =>
   value.every((line) => isObject(line) && exact(line, ["id", "at", "by", "text"]) && text(line.id, 64) && time(line.at) && (line.by === "reporter" || line.by === "reported") && text(line.text, 600));
 
 const isReReport = (value: unknown): value is ReReport => {
-  if (!isObject(value) || !exact(value, ["at", "note", "log", "counts", "chat"])) return false;
+  if (!isObject(value) || !(exact(value, ["at", "note", "log", "counts", "chat"]) || (exact(value, ["at", "note", "log", "counts", "chat", "clock"]) && isConductClockEvidence(value.clock)))) return false;
   const { log, counts } = value;
   if (!isObject(log) || typeof log.captured !== "boolean") return false;
   return (
@@ -620,6 +639,8 @@ function isEvidence(value: unknown): value is ConductEvidence {
   }
   if (money !== null && (!isObject(money) || !exact(money, ["phase", "held"]) || !(money.phase === null || text(money.phase, 32)) || typeof money.held !== "boolean")) return false;
   if (!Array.isArray(notCaptured) || notCaptured.length > 16 || !notCaptured.every((line) => text(line, 300))) return false;
+  const clock = value.clock;
+  if (!(isConductClockEvidence(clock) || (isObject(clock) && exact(clock, ["omitted"]) && text(clock.omitted, 200)))) return false;
   return true;
 }
 

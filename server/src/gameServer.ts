@@ -96,6 +96,7 @@ import { createMoneyLimiter, handleMoneyHttp } from "./escrow/moneyHttpApi";
 import { createTrustFacts } from "./rooms/trustFacts";
 import { createTrustLimiter, handleTrustHttp } from "./rooms/trustHttpApi";
 import { createConductService } from "./conduct/conductService";
+import { chainClockHooks, createConductClockFeed } from "./conduct/conductClockFacts";
 import type { ConductCaseStore } from "./conduct/conductStore";
 import { createConductLimiter, handleConductHttp } from "./conduct/conductHttpApi";
 import type { MoneyTables } from "./escrow/moneyTables";
@@ -1573,6 +1574,28 @@ export function createGameServer(options: GameServerOptions): {
      ================================================================== */
   /* Phase 3 (P3-N035): conduct reports -- their own durable store, read by reviewers only, writing nothing else. */
   const conductSeats: { current: ((gameId: string) => readonly string[]) | null } = { current: null };
+  /** CONSOLIDATED FINAL INTEGRATION (the cross-pool reviewer rule): a table's AUTHORITATIVE roster -- the durable,
+   *  shared GameRecord, read through the record store every pool reads (never only this pool's index), with this
+   *  pool's resident view beside it. Seats, kicked principals and the creator are parties. `null`: not readable now. */
+  const tableRosterOf = async (gameId: string): Promise<readonly string[] | null> => {
+    if (!GAME_ID_PATTERN.test(gameId)) return [];
+    let record: GameRecord | null;
+    try {
+      record = await recordStore.load(gameId);
+    } catch {
+      return null;
+    }
+    const roster = new Set<string>(conductSeats.current?.(gameId) ?? []);
+    if (record !== null) {
+      for (const seat of record.seats) roster.add(seat.principal_id);
+      for (const principal of record.kicked_principals) roster.add(principal);
+      roster.add(record.created_by_principal);
+    }
+    return [...roster];
+  };
+  /* The clock lane's reporting hook (`ClockConductHook`): every durable clock evidence event, kept per table in this
+     process so a report carries the clock's own facts (`conduct/conductClockFacts.ts`; never a clock re-derived). */
+  const conductClockFeed = createConductClockFeed();
   const conduct = createConductService({
     store: options.conduct?.store ?? null,
     build: options.build,
@@ -1581,8 +1604,9 @@ export function createGameServer(options: GameServerOptions): {
     warn: (line) => console.warn(line),
     ...(options.ops !== undefined ? { ops: options.ops } : {}),
     ...(options.conduct?.reporterBudget !== undefined ? { reporterBudget: options.conduct.reporterBudget } : {}),
-    /* Who is seated at a case's table NOW (a reviewer seated there is a party too): the room host's record, read-only. */
-    seatPrincipalsOf: (gameId) => conductSeats.current?.(gameId) ?? [],
+    /* Who is on a case's table roster NOW (a reviewer seated there, kicked from it or its creator is a party too): the
+       durable record every pool reads -- never only this pool's index. */
+    tableRosterOf,
   });
   const host: RoomHost = createRoomHost({
     build: options.build,
@@ -1628,7 +1652,8 @@ export function createGameServer(options: GameServerOptions): {
     ...(options.freeTables !== undefined ? { freeTables: options.freeTables } : {}),
     boardFacts,
     /* Phase 3 final clocks */
-    ...(options.clock !== undefined ? { clock: { ...options.clock, now: clockTime } } : {}),
+    ...(options.clock !== undefined ? { clock: { ...options.clock, now: clockTime, conduct: chainClockHooks(options.clock.conduct, conductClockFeed.hook) } } : {}),
+    conductClockFeed,
     stampAt,
     /* LIVE-4 (L4-3): the room channel's client check. A game this pool does not continue is shown as such by its view
        (`holdKind: "incompatible"`, with its reason), so only a `reload` refuses a room socket. */

@@ -28,6 +28,8 @@ import { resolveVariants } from "../../../frontend/src/gameEngine/gameVariants";
 import { sanitizeText } from "../../../frontend/src/gameEngine/messageSchema";
 import type { RoomChatEntry } from "../../../frontend/src/utils/roomProtocol";
 import type { ConductService } from "../conduct/conductService";
+import { conductClockEvidenceOf, type ConductClockEvidence, type ConductClockFeed } from "../conduct/conductClockFacts";
+import type { GameClockRecord } from "./clock/clockRecord";
 import type { PresenceState } from "../../../frontend/src/utils/presence";
 import type { ServerLogEntry } from "../../../frontend/src/utils/roomSession";
 import type { ServerMessage } from "../../../frontend/src/utils/serverProtocol";
@@ -215,6 +217,9 @@ export interface RoomHostDeps {
   /** Phase 3 (P3-N035): where a seated player's conduct report goes (`conduct/conductService.ts`). Absent: every report
    *  is refused `unavailable` -- never kept in memory only. It writes its own store and nothing else. */
   conduct?: ConductService;
+  /** Consolidated final integration: the clock lane's durable evidence events as the reporting hook kept them in this
+   *  process (`conduct/conductClockFacts.ts`). With the table's stored clock record, a report's clock facts. */
+  conductClockFeed?: ConductClockFeed;
 }
 
 /** Phase 3 final clocks: what the room host needs to run the table clock. */
@@ -2165,9 +2170,23 @@ export function createRoomHost(deps: RoomHostDeps) {
         money = null;
       }
     }
+    /* The table clock's own facts (consolidated final integration): the clock lane's durable record -- its evidence window
+       and strike ledger -- and the evidence events its reporting hook delivered in this process, merged by the lane's
+       sequence number and projected safely (`conductClockFacts.ts`). Read only: nothing here runs or judges a clock. */
+    let clockFacts: ConductClockEvidence | null = null;
+    if (deps.clock !== undefined) {
+      let stored: GameClockRecord | null | "unreadable";
+      try {
+        stored = await deps.clock.store.load(record.game_id);
+      } catch {
+        stored = "unreadable";
+      }
+      clockFacts = conductClockEvidenceOf({ record: stored, recent: deps.conductClockFeed?.recent(record.game_id) ?? [] });
+    }
     const answer = await deps.conduct.report({
       record,
       facts: factsFromView(view, record),
+      clock: clockFacts,
       /* A held or incompatible game serves no history: the case says so rather than pretending the log was empty. */
       entries: held ? [] : view.entries,
       ...(held ? { unreadableHistory: "The game was held or could not be continued on this server, so its log was not read into the report." } : {}),

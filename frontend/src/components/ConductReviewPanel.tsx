@@ -15,8 +15,11 @@
 //                    the reporter's note, as plain text; the server's evidence -- the log pointer and whether it still
 //                    verifies against the authoritative log NOW, both parties' offer / answer / rescind / undo / pass
 //                    counts, the recent timeline (index, time, who, message type -- no payload), the parties' stored
-//                    chat lines, a real-money table's financial standing, and what this build could not capture; other
-//                    cases naming the same reported account (counts only); and the case's review history.
+//                    chat lines, a real-money table's financial standing, the table CLOCK's own facts (the final clock
+//                    lane's evidence: who owed what, offers and their freeze budget, overdues / strikes / cures, votes,
+//                    pauses, system pauses, finality -- as the clock recorded them, never re-derived here), and what
+//                    could not be captured; other cases naming the same reported account (counts only); and the case's
+//                    review history.
 //   a decision       the next status (only the transitions the workflow allows) and an optional reviewer note; it asks
 //                    "Confirm it's you" when the server wants it (a decision needs the session's live grant), and a
 //                    case that changed meanwhile is reloaded rather than overwritten.
@@ -30,7 +33,7 @@ import { NativeModal } from "./NativeModal";
 import { ConfirmItsYou } from "./ConfirmItsYou";
 import { disabledLook, profileStyles as styles } from "./profileStyles";
 import { CONDUCT_STATUS_LABELS, CONDUCT_TRANSITIONS, MAX_REVIEW_NOTE_LENGTH, isConductCaseActive, type ConductStatus } from "../utils/conductReport";
-import { decideCase, reviewCase, reviewErrorSentence, reviewQueue, type CaseSummary, type CaseView, type OfferCounts } from "../utils/conductApi";
+import { decideCase, reviewCase, reviewErrorSentence, reviewQueue, type CaseSummary, type CaseView, type ClockEvidenceView, type OfferCounts } from "../utils/conductApi";
 import { sessionPort, type SessionPort } from "../utils/sessionBootstrap";
 import { SANDBOX_INK, SANDBOX_PANEL, SANDBOX_RULE, SANDBOX_TEXT } from "../styles/palette";
 import { FONT_FAMILY, FONT_FAMILY_MONO, FONT_SIZE } from "../styles/typography";
@@ -46,6 +49,47 @@ const COUNT_ROWS: ReadonlyArray<[keyof OfferCounts, string]> = [
   ["undos", "Undos"],
   ["passes", "Passes"],
 ];
+
+/** Field names whose value is a public seat id: shown as the party's nickname when it is the reporter or reported. */
+const SEAT_FIELDS: ReadonlySet<string> = new Set(["seat", "proposer", "recipient", "by", "actor", "park_seat"]);
+
+/** The table clock's facts in a case (or one addition): exactly what the clock lane recorded, one row per fact. */
+function ClockFacts({ clock, view, testId }: { clock: ClockEvidenceView; view: CaseView; testId: string }): JSX.Element {
+  const name = (seat: string): string => (seat === view.reporter.playerId ? `${view.reporter.nickname} (reporter)` : seat === view.reported.playerId ? `${view.reported.nickname} (reported)` : seat);
+  const rows = [...clock.ledger.filter((fact) => !clock.events.some((other) => other.seq === fact.seq)), ...clock.events].sort((a, b) => a.seq - b.seq);
+  return (
+    <details data-testid={testId}>
+      <summary>
+        Clock facts ({rows.length}
+        {clock.omitted > 0 ? `, ${clock.omitted} older not kept` : ""}) · {clock.deadline ?? "deadline unknown"}
+        {clock.paceSecs !== null ? ` (${clock.paceSecs} s pace)` : ""}
+        {clock.strikes.length > 0 ? ` · overdue strikes: ${clock.strikes.map(([seat, n]) => `${name(seat)} ${n}`).join(", ")}` : ""}
+        {clock.record === "unreadable" ? " · the stored clock record could not be read; facts seen live only" : ""}
+      </summary>
+      <table style={table}>
+        <thead>
+          <tr>
+            <th style={cell}>#</th>
+            <th style={cell}>Time</th>
+            <th style={cell}>Clock fact</th>
+            <th style={cell}>Details</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((fact) => (
+            <tr key={fact.seq}>
+              <td style={cell}>{fact.seq}</td>
+              <td style={cell}>{when(fact.at)}</td>
+              <td style={cell}>{fact.kind}</td>
+              <td style={cell}>{fact.fields.map(([field, value]) => `${field}: ${SEAT_FIELDS.has(field) ? name(value) : value}`).join(" · ")}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {clock.head !== null ? <div style={mono}>clock evidence head {clock.head.slice(0, 16)}… at #{clock.seq}</div> : null}
+    </details>
+  );
+}
 
 export function ConductReviewPanel({ onClose, port = sessionPort() }: { onClose: () => void; port?: SessionPort }): JSX.Element {
   const [cases, setCases] = useState<readonly CaseSummary[] | null>(null);
@@ -323,6 +367,7 @@ function CaseDetail({ view, port, onDecided, onReload }: { view: CaseView; port:
           </tbody>
         </table>
       </details>
+      {evidence.clock !== null ? <ClockFacts clock={evidence.clock} view={view} testId="conduct-case-clock" /> : null}
       {view.rereports.length > 0 ? (
         <>
           <h4 style={sectionHeading}>Reported again ({view.rereports.length})</h4>
@@ -338,6 +383,7 @@ function CaseDetail({ view, port, onDecided, onReload }: { view: CaseView; port:
                   <>{when(entry.at)} · the game's log was not captured for this report (the game could not be read then), so it has no counts</>
                 )}
                 {entry.note !== null ? <div style={styles.text}>{entry.note}</div> : null}
+                {entry.clock !== null ? <ClockFacts clock={entry.clock} view={view} testId={`conduct-rereport-clock-${at}`} /> : null}
                 {entry.chat.length > 0 ? (
                   <ul style={plainList}>
                     {entry.chat.map((line) => (

@@ -22,6 +22,14 @@
 // (`conductReport.ts`), CONDITIONAL on the revision the reviewer read, with a bounded note, recorded in the case's own
 // history under the reviewer's account fingerprint. A reviewer never decides a case they are a party to. A decision
 // changes the case and nothing else: no game, seat, profile, trust fact, escrow or money is touched by any outcome.
+//
+// WHO IS A PARTY (consolidated final integration -- the cross-pool rule): the case's reporter and reported accounts,
+// every principal seated at the table at any report (captured durably in the case itself, `table_principals`), AND the
+// table's AUTHORITATIVE roster read from the durable GameRecord at the moment of review (`tableRosterOf`: its seats, its
+// kicked principals and its creator -- read from the shared record store, never from this pool's in-memory index, so a
+// game owned by ANOTHER pool, a restart, a pool handoff or a review answered by another host decide exactly the same).
+// A roster that cannot be read is NOT "nobody": the case is withheld (queue), not shown (case) and not decided
+// (decide) until it can be read -- fail closed.
 
 import { KeyedBuckets, type BucketSpec } from "../ingress/limits";
 import type { OpsRecorder } from "../persistence/opsRecorder";
@@ -63,6 +71,15 @@ import {
   type ReReport,
 } from "./conductCase";
 import type { ConductCaseStore } from "./conductStore";
+import type { ConductClockEvidence } from "./conductClockFacts";
+
+/** A case whose table roster could not be read just now: it is not shown (fail closed) -- "try again", never "absent". */
+export class ConductRosterUnavailableError extends Error {
+  constructor(readonly caseId: string) {
+    super(`the table roster of conduct case ${caseId} could not be read`);
+    this.name = "ConductRosterUnavailableError";
+  }
+}
 
 /** Per reporting account: three new reports at once, then one more every twenty minutes (a duplicate costs nothing). */
 export const DEFAULT_REPORTER_BUDGET: BucketSpec = Object.freeze({ capacity: 3, refillPerSecond: 1 / 1200 });
@@ -101,8 +118,9 @@ export interface ReportInput {
   readonly chat: readonly RoomChatEntry[] | null;
   /** A real-money table's financial standing (`null`: free table, or not readable). */
   readonly money: { readonly phase: string | null; readonly held: boolean } | null;
-  /** A clock lane's snapshot, when one is wired (bounded in the evidence). */
-  readonly clock?: unknown;
+  /** The table clock's facts (`conductClockFacts.ts`: the clock lane's own evidence, safely projected and bounded);
+   *  `null` / absent: no clock record is known for the table. */
+  readonly clock?: ConductClockEvidence | null;
   /** Why the committed log could not be read into the report (a held or incompatible game), in words. */
   readonly unreadableHistory?: string;
 }
@@ -115,8 +133,11 @@ export interface ConductServiceDeps {
   readonly warn: (line: string) => void;
   readonly ops?: OpsRecorder;
   readonly reporterBudget?: BucketSpec;
-  /** Who is seated at a table now (server-side; reviewers seated there are parties). Absent: the case's own record. */
-  readonly seatPrincipalsOf?: (gameId: string) => readonly string[];
+  /** The table's AUTHORITATIVE roster now, read from the durable, shared GameRecord (every pool and host reads the same
+   *  one): its seats, kicked principals and creator -- each a party to the table's cases. `null`: it could not be read
+   *  now (the case is withheld: fail closed); `[]`: no record exists (the case's own captured principals decide).
+   *  Absent (tests built without a record store): the case's own captured principals only. */
+  readonly tableRosterOf?: (gameId: string) => Promise<readonly string[] | null>;
 }
 
 /* ---- the reviewer's views (never a principal id; parties as public seat ids, nicknames and fingerprints) ---- */
@@ -197,9 +218,24 @@ export function createConductService(deps: ConductServiceDeps): ConductService {
      the residual is recorded in the report.) */
   const budget = new KeyedBuckets(deps.reporterBudget ?? DEFAULT_REPORTER_BUDGET, deps.now, 50_000);
   const store = deps.store;
-  /** A party to a case: its reporter, its reported account, anyone seated at its table when it was reported (or re-reported),
-   *  or anyone seated there NOW. Such a reviewer never sees the case. */
-  const partyTo = (value: ConductCase, principalId: string): boolean => isCaseParty(value, principalId) || (deps.seatPrincipalsOf?.(value.game_id) ?? []).includes(principalId);
+  /** Whether the reviewer may handle the case: "party" -- its reporter, its reported account, anyone seated at its table
+   *  when it was reported (or re-reported), or anyone on the table's durable roster NOW (seated, kicked, its creator);
+   *  "unknown" -- the roster could not be read (withheld, fail closed); "clear" otherwise. A per-request `rosters` map
+   *  reads each table once. */
+  type Standing = "party" | "unknown" | "clear";
+  async function standingOf(value: ConductCase, principalId: string, rosters: Map<string, Promise<readonly string[] | null>>): Promise<Standing> {
+    if (isCaseParty(value, principalId)) return "party";
+    if (deps.tableRosterOf === undefined) return "clear";
+    let roster = rosters.get(value.game_id);
+    if (roster === undefined) {
+      const read = deps.tableRosterOf;
+      roster = read(value.game_id).catch(() => null);
+      rosters.set(value.game_id, roster);
+    }
+    const principals = await roster;
+    if (principals === null) return "unknown";
+    return principals.includes(principalId) ? "party" : "clear";
+  }
   let cached: { readonly at: number; readonly value: Promise<{ readonly cases: ConductCase[]; readonly unreadable: number }> } | null = null;
 
   const summaryOf = (value: ConductCase): CaseSummary => ({
@@ -299,7 +335,7 @@ export function createConductService(deps: ConductServiceDeps): ConductService {
       ...summaryOf(value),
       note: value.note,
       evidence: value.evidence,
-      rereports: value.rereports.map((entry) => ({ at: entry.at, note: entry.note, log: entry.log, counts: entry.counts, chat: entry.chat })),
+      rereports: value.rereports.map((entry) => ({ at: entry.at, note: entry.note, log: entry.log, counts: entry.counts, chat: entry.chat, clock: entry.clock ?? null })),
       history: value.history.map((event) => ({ ...event, byYou: event.reviewer === mine })),
       related,
       verification,
@@ -378,7 +414,8 @@ export function createConductService(deps: ConductServiceDeps): ConductService {
              coming;
            - "received": a new case, or an addition to the active one -- one sentence for both. */
       const latest = mostRecent(cases);
-      if (latest !== null && isQuietRepeat(latest, input.entries.length, now, input.chat)) return { ok: true, received: "already", message: REPORT_SENTENCES.already };
+      const clockSeq = input.clock?.seq ?? null;
+      if (latest !== null && isQuietRepeat(latest, input.entries.length, now, input.chat, clockSeq)) return { ok: true, received: "already", message: REPORT_SENTENCES.already };
       const wait = budget.take(reporterSeat.principal_id);
       if (wait > 0) return { ok: false, code: "rate-limited", reason: REPORT_SENTENCES.budget, retryAfterMs: wait };
       const recorded = cases.reduce((sum, value) => sum + reportsIn(value), 0);
@@ -399,6 +436,7 @@ export function createConductService(deps: ConductServiceDeps): ConductService {
           captured: input.unreadableHistory === undefined,
           chat: input.chat,
           seatPrincipals: record.seats.map((seat) => seat.principal_id),
+          clock: input.clock ?? null,
         });
         if ("next" in probe) {
           const written = await store.save(probe.next, active.revision);
@@ -413,7 +451,7 @@ export function createConductService(deps: ConductServiceDeps): ConductService {
                case again once, and if it now holds this same report, say so. */
             try {
               const now2 = await store.load(active.case_id);
-              if (now2 !== null && isQuietRepeat(now2, input.entries.length, now, input.chat)) return { ok: true, received: "already", message: REPORT_SENTENCES.already };
+              if (now2 !== null && isQuietRepeat(now2, input.entries.length, now, input.chat, clockSeq)) return { ok: true, received: "already", message: REPORT_SENTENCES.already };
             } catch {
               /* the refusal below stands */
             }
@@ -450,16 +488,27 @@ export function createConductService(deps: ConductServiceDeps): ConductService {
 
     async queue(reviewerPrincipalId) {
       const { cases, unreadable } = await readAll();
-      /* A case the reviewer is a party to (reporter, reported, or seated at its table) is not theirs to see. */
-      const ordered = cases.filter((value) => !partyTo(value, reviewerPrincipalId)).sort((left, right) => lastReportAt(right) - lastReportAt(left) || (left.case_id < right.case_id ? -1 : 1));
-      return { cases: ordered.map((value) => summaryOf(value)), unreadable };
+      /* A case the reviewer is a party to (reporter, reported, seated at its table at a report, or on its durable roster
+         now) is not theirs to see; one whose roster cannot be read now is withheld and counted as not readable now. */
+      const rosters = new Map<string, Promise<readonly string[] | null>>();
+      const standings: Standing[] = [];
+      for (let at = 0; at < cases.length; at += LOAD_CONCURRENCY) {
+        standings.push(...(await Promise.all(cases.slice(at, at + LOAD_CONCURRENCY).map((value) => standingOf(value, reviewerPrincipalId, rosters)))));
+      }
+      const withheld = standings.filter((standing) => standing === "unknown").length;
+      const ordered = cases.filter((_, i) => standings[i] === "clear").sort((left, right) => lastReportAt(right) - lastReportAt(left) || (left.case_id < right.case_id ? -1 : 1));
+      return { cases: ordered.map((value) => summaryOf(value)), unreadable: unreadable + withheld };
     },
 
     async caseView(caseId, reviewerPrincipalId, readLog) {
       if (store === null || !CASE_ID_PATTERN.test(caseId)) return null;
       const value = await store.load(caseId); // an unreadable case rejects: the caller says so
-      /* A party is answered exactly as for a case that does not exist. */
-      return value === null || partyTo(value, reviewerPrincipalId) ? null : viewOf(value, reviewerPrincipalId, readLog);
+      if (value === null) return null;
+      /* A party is answered exactly as for a case that does not exist; so is a case whose table roster cannot be read
+         now (fail closed: never shown to someone who may be a party). */
+      const standing = await standingOf(value, reviewerPrincipalId, new Map());
+      if (standing === "unknown") throw new ConductRosterUnavailableError(value.case_id);
+      return standing === "clear" ? viewOf(value, reviewerPrincipalId, readLog) : null;
     },
 
     async decide(input, readLog): Promise<DecideAnswer> {
@@ -477,7 +526,10 @@ export function createConductService(deps: ConductServiceDeps): ConductService {
         throw error;
       }
       /* A party -- who cannot see the case at all -- is answered as for a case that does not exist. */
-      if (current === null || partyTo(current, input.reviewerPrincipalId)) return { ok: false, code: "not-found", reason: "There is no such case." };
+      if (current === null) return { ok: false, code: "not-found", reason: "There is no such case." };
+      const standing = await standingOf(current, input.reviewerPrincipalId, new Map());
+      if (standing === "party") return { ok: false, code: "not-found", reason: "There is no such case." };
+      if (standing === "unknown") return { ok: false, code: "unavailable", reason: "The case's table could not be checked just now. Try again in a moment." };
       const decided = decideCase(current, { expectedRevision: input.revision, to: input.status, note: note.note, reviewerPrincipalId: input.reviewerPrincipalId, now: deps.now() });
       if (!("next" in decided)) return { ok: false, code: decided.code, reason: decided.reason };
       const written: StoreWriteOutcome = await store.save(decided.next, current.revision);

@@ -268,7 +268,7 @@ const caseBody = (over: Record<string, unknown> = {}) => ({
     chat: { lines: [{ id: "c1", at: 1_780_000_003_000, by: "reported", text: "lol" }] },
     money: null,
     clock: null,
-    not_captured: ["Overdue and foreclosure events: this build has no such events."],
+    not_captured: ["Clock facts: this server holds no clock record for this table (a table dealt before its clock existed, or one with no clock)."],
   },
   rereports: [],
   history: [],
@@ -334,6 +334,45 @@ describe("P3-N035 the review panel", () => {
     expect(byId("conduct-reauth-confirm")).not.toBeNull();
     const decide = server.calls.find((call) => call.path === "/gs/api/conduct/review/decide");
     expect(decide?.body).toEqual({ caseId: CASE_ID, revision: 1, status: "under-review", note: null });
+  });
+
+  test("consolidated integration: the table clock's own facts are shown as the clock recorded them (seats by nickname), in the case and in an addition", async () => {
+    const fact = (seq: number, kind: string, f: Record<string, unknown>) => ({ seq, kind, at: 1_780_000_000_000 + seq * 1_000, f });
+    const clock = {
+      source: "clock-evidence",
+      record: "read",
+      deadline: "live",
+      pace_secs: null,
+      strikes: { "p-bbbbbbbbbbbbbbbb": 1 },
+      seq: 9,
+      head: "a".repeat(64),
+      ledger: [fact(7, "overdue", { seat: "p-bbbbbbbbbbbbbbbb", strike: 1 })],
+      events: [
+        fact(3, "trade-end", { result: "proposer-deadline", proposer: "p-bbbbbbbbbbbbbbbb", recipient: "p-aaaaaaaaaaaaaaaa", freeze_left_ms: 0, charged_ms: 180_000 }),
+        fact(7, "overdue", { seat: "p-bbbbbbbbbbbbbbbb", strike: 1 }),
+        fact(9, "system-pause", { preserved_at: 5, again: false }),
+      ],
+      omitted: 2,
+    };
+    expect(caseViewOf(caseBody({ evidence: { ...caseBody().evidence, clock } }))?.evidence.clock?.events.length).toBe(3);
+    const server = reviewServer();
+    server.queue("/gs/api/conduct/review/queue", 200, { ok: true, cases: [summary()], unreadable: 0 });
+    server.queue("/gs/api/conduct/review/case", 200, {
+      ok: true,
+      case: caseBody({
+        evidence: { ...caseBody().evidence, clock, not_captured: [] },
+        rereports: [{ at: 2, note: null, log: { captured: true, entries: 14, hash: "e".repeat(64) }, counts: { reporter: counts, reported: counts }, chat: [], clock: { ...clock, seq: 10, events: [fact(10, "final", { seat: "p-bbbbbbbbbbbbbbbb", outcome: "timeout-annul" })], ledger: [], omitted: 0 } }],
+      }),
+    });
+    act(() => show(<ConductReviewPanel onClose={() => undefined} port={server.port} />));
+    await flush();
+    click(`conduct-case-${CASE_ID}`);
+    await flush();
+    const shown = byId("conduct-case-clock")?.textContent ?? "";
+    expect(shown).toMatch(/Clock facts \(3, 2 older not kept\) · live · overdue strikes: Ben \(reported\) 1/);
+    expect(shown).toMatch(/trade-end.*result: proposer-deadline · proposer: Ben \(reported\) · recipient: Ann \(reporter\) · freeze_left_ms: 0/);
+    expect(shown).toMatch(/system-pause.*preserved_at: 5/);
+    expect(byId("conduct-rereport-clock-0")?.textContent).toMatch(/final.*seat: Ben \(reported\) · outcome: timeout-annul/);
   });
 
   test("a stale case offers a reload; a case the server will not serve (a party's) says so and offers nothing", async () => {

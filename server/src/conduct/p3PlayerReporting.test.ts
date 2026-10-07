@@ -153,8 +153,11 @@ describe("P3-N035 A: a seated player reports another seat of the same table", ()
       assert.equal(evidence.timeline.length, before.length);
       assert.equal(evidence.counts.reported.actions >= 1, true, "bob's own moves are counted");
       assert.deepEqual(evidence.chat?.lines.map((line) => [line.by, line.text]), [["reported", "hurry up[31m"]], "the stored (sanitized) chat line of the reported seat");
+      /* This server is built without a table clock: the case says the clock was not captured -- in words, never as an
+         empty list (consolidated final integration: overdue / foreclosure events exist now, so no line denies them). */
+      assert.equal(evidence.clock, null);
       assert.ok(evidence.not_captured.some((line) => /clock/i.test(line)), "what this build cannot capture is said in words");
-      assert.ok(evidence.not_captured.some((line) => /overdue/i.test(line)));
+      assert.ok(!evidence.not_captured.some((line) => /no such events/i.test(line)), "no line denies that overdue / foreclosure events exist");
       assert.doesNotMatch(JSON.stringify(evidence), /\b(?:pr|pf|se|sf|rk)_[0-9a-z]|cookie|password|127\.0\.0\.1|::1/, "no session, credential or address in the evidence");
       /* The reporter is alice (dev claim), never a client claim: the case id is the server's. */
       assert.equal(value.case_id, conductCaseId(game.gameId, "pr_dev_alice", "pr_dev_bob", "offer-spam", 0));

@@ -1199,7 +1199,10 @@ jank in real playtesting justifies a later repaint-scope / cached-board fix. No 
 
 **D-35 — OO RESERVATION MARKER.** Not an owner-design question: REQUIRED REMAINING PHASE-3 FLOURISH IMPLEMENTATION (lane B).
 The marker moves with its city's geometry and resolves to the correct final city at commit; on an OO tile the transition
-keeps which of the two city identities the marker belongs to. No gameplay / state / rules change.
+keeps which of the two city identities the marker belongs to. No gameplay / state / rules change. **Owner ruling (2026-10-05, on the lane-B finding
+that no single-city placement can follow city identity and draw the same board after a reload -- #59@0 and #59@1 both
+upgrade to #66@0 with opposite correspondences):** a laid OO home is reserved in BOTH its cities, one marker per city, as
+#1283 drew both printed circles. Implemented on `phase3/preplaytest-d35-oo-marker` (from `b8d5246`; NOT integrated).
 
 **AUD-25.02 — C&SL / D&H RULES REFERENCE COPY.** A copy-only correction is approved: B20 -- while the C&SL is player-owned the
 ordinary private-hex restriction applies, and its owning corporation has its extra-lay exception; F16 -- another railroad may

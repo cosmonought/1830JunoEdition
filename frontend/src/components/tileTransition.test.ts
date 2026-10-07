@@ -57,6 +57,7 @@ const {
   piecesOf,
   planTileTransition,
   proposedTileFrame,
+  reservationPlaceFor,
   reservationPositionAt,
   ringCoveredArcs,
   ringUnionArcs,
@@ -1105,26 +1106,24 @@ describe("a token is a piece seated in its station, and a reservation marker rid
     });
   });
 
-  it("converges an OO home's two markers on the one city a tile gives them: the one whose circle becomes it rides, the other goes straight (#1473)", () => {
+  it("keeps an OO home's two markers two: each printed circle's marker rides the city its circle becomes (#1473, VF D-35)", () => {
     under("standard", () => {
       const plan = acceptedPlan("E11", { kind: "printed", label: "E11" }, 59);
       const cities = plan.toArt.markers.flatMap((marker, index) => (marker.kind === "city" ? [index] : []));
-      // The board draws an OO home's reservation in a tile's second city, and on both printed circles before that.
-      const to = plan.toArt.markers[cities[1]].at;
-      const successors = plan.cities[cities[1]].sources;
-      expect(successors).toHaveLength(1);
+      // VF D-35 (owner ruling 2026-10-05): the board draws an OO home's reservation in every city of a laid tile, as on
+      // both printed circles before it, and pairs each marker with its own city's successor (`reservationPlaceFor`).
+      const places = cities.map((index) => plan.toArt.markers[index].at);
+      const taken = new Set<number>();
       plan.fromArt.markers.forEach((circle, index) => {
-        const marker = { from: circle.at, to };
+        const place = reservationPlaceFor(plan, circle.at, places);
+        expect(taken.has(place)).toBe(false);
+        taken.add(place);
+        expect(plan.cities[cities[place]].sources).toContain(index);
+        const marker = { from: circle.at, to: places[place] };
         expect(reservationPositionAt(plan, 0, marker)).toEqual(marker.from);
-        expect(reservationPositionAt(plan, 1, marker)).toEqual(to);
+        expect(reservationPositionAt(plan, 1, marker)).toEqual(marker.to);
         for (const ms of [200, 500, 900]) {
-          const at = reservationPositionAt(plan, ms / plan.durationMs, marker);
-          if (successors.includes(index)) {
-            expect(outsideStation(at, activeCity(plan, ms, 1))).toBeLessThanOrEqual(1e-9);
-          } else {
-            const along = transitionEasings(plan, ms / plan.durationMs).geometry;
-            expect(dist(at, { x: circle.at.x + (to.x - circle.at.x) * along, y: circle.at.y + (to.y - circle.at.y) * along })).toBeLessThan(1e-9);
-          }
+          expect(outsideStation(reservationPositionAt(plan, ms / plan.durationMs, marker), activeCity(plan, ms, place))).toBeLessThanOrEqual(1e-9);
         }
       });
     });

@@ -2480,8 +2480,9 @@ export function badgePresentationAt(plan: TileTransitionPlan, t: number): BadgeP
  *     draws it: the one city whose centre or slot it stands on, on each tile (`reservationPositionAt`). It then rides
  *     exactly a token's seat. A marker on a city's centre stays on that centre through a split or a reorganisation
  *     -- it never follows a branch, so new capacity cannot split it -- and travels with a migrating or merging city.
- *     Where no city is read, or the old city is not a source of the new one (an OO home's second margin marker, whose
- *     circle becomes the other city, D-21), it moves straight to its place, as #1466 moved it.
+ *     Where no city is read, or the old city is not a source of the new one, it moves straight to its place, as #1466
+ *     moved it. Since VF D-35 an OO home's markers are paired with their places by the plan's own correspondence
+ *     (`reservationPlaceFor`), so none of them is that case: each rides its own city.
  *   A TOKEN THE LAY MOVES HAS A PLANNED PLACE. "This is where the token is planned to end up -> confirm -> this is the
  *     real physical token moving there." While a tile is being chosen, a token the lay will move is drawn only at its
  *     planned place, faint (`PROVISIONAL.pieceAlpha`); from the confirm that planned place stays, under every piece,
@@ -2557,6 +2558,48 @@ function cityMarkerAt(art: HexArt, at: Vec): number | undefined {
 export function reservationPositionAt(plan: TileTransitionPlan, t: number, motion: ReservationMotion): Vec {
   const piece: TokenMotion = { from: motion.from, fromRadius: 0, to: motion.to, toRadius: 0 };
   return rideAt(plan, t, piece, cityMarkerAt(plan.fromArt, motion.from), cityMarkerAt(plan.toArt, motion.to)).at;
+}
+
+/* ==================================================================
+ *  VF D-35: AN OO HOME'S RESERVATION KEEPS ITS OWN CITY
+ * ==================================================================
+ * OWNER RULE (2026-10-05, Phase-3 lane B): a station / reservation marker moves WITH its city's geometry and
+ * resolves to that city's final place at commit; an OO tile carries two distinct city identities, so the
+ * transition keeps WHICH city a marker belongs to. Owner ruling on the finding below (2026-10-05): an OO home's
+ * reservation stands on BOTH cities of a laid tile, as #1283 already drew it on both printed circles.
+ *
+ * THE DEFECT WAS THE PAIRING, NOT THE RIDE. The renderer sent each marker to the NEAREST place the new tile
+ * draws a reservation -- a second, geometric city matcher beside the plan's -- and the board drew a laid OO home's
+ * reservation only in the tile's artwork "second city". Over every accepted transition on ERIE's E11 and PMQ's E5,
+ * 90 of 156 standard markers (156 of 270 on Plus / LPF) stood in a city the plan carries into the OTHER city -- every
+ * #59 -> green lay at its accepted facings, and #64 / #66 / #67 / #984 -> #167 -- so they cut straight across the hex
+ * (`anchoredRide`'s fallback) toward the other city's coordinate. No fixed per-facing choice of one city can keep
+ * a single marker on its own city and still draw the same board after a reload: #59@0 and #59@1 both upgrade to
+ * #66@0 with opposite correspondences. So the laid OO home now draws a marker in each city, and each marker is
+ * paired here with its own city's successor.
+ *
+ * ONE CORRESPONDENCE. The successor is `plan.cities[*].sources` -- the same identity the frame animates every city
+ * by (#1462) and the same test `rideAt` makes before seating a token. Nothing here matches cities a second way:
+ * the marker's city is read from where the board draws it (`cityMarkerAt`, #1473), and the place chosen is the one
+ * drawn in the city that city becomes. Only where no city can be read on either side, or the city has no successor
+ * among the places, does the old nearest-place pairing stand -- every non-OO home, whose one place is its answer. */
+/** Which of `places` (unit hex, where the board draws the home's reservations on the new tile) the reservation marker
+ *  standing at `from` settles into: the one drawn in the city the plan carries `from`'s city into (VF D-35), and
+ *  otherwise the nearest. -1 only for an empty list. */
+export function reservationPlaceFor(plan: TileTransitionPlan, from: Vec, places: readonly Vec[]): number {
+  const fromMarker = cityMarkerAt(plan.fromArt, from);
+  if (fromMarker !== undefined) {
+    const own = places.findIndex((place) => {
+      const toMarker = cityMarkerAt(plan.toArt, place);
+      return toMarker !== undefined && (plan.cities[toMarker]?.sources.includes(fromMarker) ?? false);
+    });
+    if (own >= 0) return own;
+  }
+  let best = -1;
+  places.forEach((place, index) => {
+    if (best < 0 || dist(place, from) < dist(places[best], from)) best = index;
+  });
+  return best;
 }
 
 /** A piece's ride between its two places, seated in the city `fromMarker` becomes when both are given and the plan

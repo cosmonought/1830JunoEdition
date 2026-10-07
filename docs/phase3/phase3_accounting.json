@@ -3586,7 +3586,7 @@
    "od": "—",
    "p4": "—",
    "notes": "—",
-   "status": "OPEN — REQUIRED PHASE-3 FLOURISH IMPLEMENTATION, pre-Phase-4 lane B (OWNER DIRECTION 2026-10-05: NOT an owner-design question). The visual-flourish design already established that a station / reservation marker moves WITH its city's geometry during a tile transition and resolves to the correct final city position at commit. The remaining OO edge case is a correspondence problem: an OO tile holds two distinct city identities, so the transition must keep which city the reservation marker belongs to. Presentation only -- no gameplay, state or rules change to animate it. W3-H's analysis (`422a361`, no code) is the starting point; nothing in the merged branches solves it. INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05)"
+   "status": "IMPLEMENTED — lane B on `phase3/preplaytest-d35-oo-marker` (from `b8d5246`; NOT integrated). Root cause: the renderer paired each reservation marker with the NEAREST new place (a second, geometric city matcher) and drew a laid OO home's reservation only in the tile's artwork second city, which the plan's correspondence carries into the other city on most OO upgrades (90 of 156 standard markers). OWNER RULING 2026-10-05 (on the finding that no single-city rule can follow identity and draw the same board after a reload): a laid OO home is reserved in BOTH its cities, as #1283 drew both printed circles. Each marker is paired with its own city's successor by `plan.cities[*].sources` (`reservationPlaceFor`) and rides it to the exact place at commit. Presentation only -- no gameplay, state, rules, legality or version change. Real-browser Phase-4 visual confirmation still owed."
   },
   {
    "key": "VF/E-5",

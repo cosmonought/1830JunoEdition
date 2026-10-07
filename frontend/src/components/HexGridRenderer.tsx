@@ -200,6 +200,7 @@ import {
   pieceTargetPresence,
   planTileTransition,
   proposedTileFrame,
+  reservationPlaceFor,
   reservationPositionAt,
   sampleTileTransition,
   tileTransitionCues,
@@ -1052,11 +1053,18 @@ function homeReservationPoints(
   const homeCenter = axialToPixel(home.q, home.r, hexSize);
   const inMargin = YELLOW_OO_HEXES.has(home.label);
   const optional = home.enforced === false;
-  return inMargin && !homeLaidTile
-    ? twoNodePositions(homeCenter, hexSize)
-    : optional
-      ? [homeCenter]
-      : [stationMarkerPoint(home.q, home.r, hexSize, homeLaidTile)];
+  if (inMargin && !homeLaidTile) return twoNodePositions(homeCenter, hexSize);
+  if (optional) return [homeCenter];
+  /* VF D-35 (owner ruling, 2026-10-05): #1283's two circles carry on to the laid tile. ERIE's and PMQ's home is
+     either city whatever is laid there (`homeSlotsAreOpen`), so a laid OO home is reserved in each of its cities,
+     one marker per city -- and each rides its own city through an upgrade (`reservationPlaceFor`) instead of one
+     marker standing in the tile's artwork "second city", which the plan carries into the other city on most OO
+     upgrades. A laid tile with fewer than two cities keeps the one place it always had. */
+  if (inMargin && homeLaidTile) {
+    const cities = tileCityAnchors(homeLaidTile.tile_id, homeLaidTile.orientation, homeCenter, hexSize);
+    if (cities.length > 1) return cities;
+  }
+  return [stationMarkerPoint(home.q, home.r, hexSize, homeLaidTile)];
 }
 
 /** The value a hex printed before a transition, so it can fade under the wash rather than vanish (A-2). */
@@ -2446,8 +2454,9 @@ export function HexGridRenderer({
         const optional = home.enforced === false;
         const settledPoints = homeReservationPoints(home, homeLaidTile, hexSize);
         /* Design note #1473: a marker is a piece in its city, as a token is (#1466). Each place it stood rides to the
-           nearest place it stands now -- two OO reservations still converge on the one city a tile gives them -- seated
-           in its city wherever the description can read one. It has no planned place: it is already drawn as a faded
+           place it stands now -- since VF D-35 the place in the city its own city BECOMES, by the plan's one city
+           correspondence (`reservationPlaceFor`), and the nearest place only where no city can be read -- seated in
+           its city wherever the description can read one. It has no planned place: it is already drawn as a faded
            token. So while a tile is being chosen, a marker the confirm will move is left out of the proposal, and from
            the confirm the real marker rides in from where it stood; a marker the lay does not move stays as it was. */
         const homeUnit = (point: { x: number; y: number }): Vec => ({
@@ -2455,21 +2464,15 @@ export function HexGridRenderer({
           y: (point.y - homeCenter.y) / hexSize,
         });
         const onBoard = (at: Vec) => ({ x: homeCenter.x + at.x * hexSize, y: homeCenter.y + at.y * hexSize });
-        const nearestSettled = (from: Vec) => {
-          const start = onBoard(from);
-          return settledPoints.reduce((best, candidate) =>
-            Math.hypot(candidate.x - start.x, candidate.y - start.y) < Math.hypot(best.x - start.x, best.y - start.y)
-              ? candidate
-              : best,
-          );
-        };
+        const settledUnits = settledPoints.map(homeUnit);
+        const settledFor = (plan: TileTransitionPlan, from: Vec) => settledPoints[reservationPlaceFor(plan, from, settledUnits)];
         const stagedHome = transitionAt(home.q, home.r);
         const reservedFrom = stagedHome?.transition.reservationsFrom.get(home.companyId);
         let points: ReadonlyArray<{ x: number; y: number }> = settledPoints;
         if (stagedHome && reservedFrom && reservedFrom.length > 0 && settledPoints.length > 0) {
           const { plan } = stagedHome.transition;
           points = reservedFrom.map((from) =>
-            onBoard(reservationPositionAt(plan, stagedHome.t, { from, to: homeUnit(nearestSettled(from)) })),
+            onBoard(reservationPositionAt(plan, stagedHome.t, { from, to: homeUnit(settledFor(plan, from)) })),
           );
         } else if (proposalPlan?.plan && proposingAt(home.q, home.r) && settledPoints.length > 0) {
           const { plan, moving } = proposalPlan;
@@ -2477,7 +2480,7 @@ export function HexGridRenderer({
           homeReservationPoints(home, laidUnderPreview, hexSize)
             .map(homeUnit)
             .forEach((from, index) => {
-              const place = nearestSettled(from);
+              const place = settledFor(plan, from);
               const ride = { from, to: homeUnit(place) };
               const moves = movesPiece(moving, `home:${home.companyId}:${index}`, plan, ride.from, ride.to, (t) =>
                 reservationPositionAt(plan, t, ride),

@@ -1257,6 +1257,14 @@ export class FakeJunoChain implements JunoRest {
     return { code_checksum: await this.codeChecksum(info.code_id), config: await this.smart(contract, configQueryJson) };
   }
 
+  /** One node: its answer, counted only when it says it read at `minHeight` or later (`heightsHidden`: it does not say). */
+  async smartQuorumAtLeast(contract: string, queryJson: string, minHeight: string): Promise<unknown> {
+    if (this.quorumDisagrees) throw new JunoRpcError("unavailable", "read at a known height: the endpoints disagree");
+    const answer = await this.smartAt(contract, queryJson);
+    if (answer.height === null || BigInt(answer.height) < BigInt(minHeight)) throw new JunoRpcError("unavailable", `read at height ${minHeight} or later: the node did not say it read there`);
+    return answer.data;
+  }
+
   async smartAt(contract: string, queryJson: string): Promise<{ readonly data: unknown; readonly height: string | null }> {
     const data = await this.smart(contract, queryJson);
     return { data, height: this.heightsHidden ? null : String(this.height) };

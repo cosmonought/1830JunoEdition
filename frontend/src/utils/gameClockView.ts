@@ -257,7 +257,8 @@ export function presentClock(input: ClockPresentationInput): ClockPresentation {
   const annulLine = clock.annul !== null ? `Annul game: ${clock.annul.yes.length} of ${clock.annul.needed.length} players agree.` : null;
   /* Timed Async: a deadline that keeps running behind an offer (never stopped by negotiation). */
   const runningLines = (clock.running ?? []).map(
-    (park) => `${park.seat === me ? "Your" : `${input.nameOf(park.seat)}'s`} deadline keeps running while the offer is answered: ${formatClockDuration(left({ remainingMs: park.remainingMs, running: true }) ?? 0)} left.`,
+    (park) =>
+      `${park.seat === me ? "Your" : `${input.nameOf(park.seat)}'s`} deadline keeps running while the offer is answered: ${formatClockDuration(left({ remainingMs: park.remainingMs, running: true }) ?? 0)} left (the offer is withdrawn when it runs out).`,
   );
   const extra = [requestLine, annulLine, strikeLine, ...runningLines].filter((line): line is string => line !== null);
 

@@ -36,6 +36,7 @@
 
 import { promises as fs } from "fs";
 import * as path from "path";
+import { readFileChunked } from "../fileLogStore";
 
 import type { ServerLogEntry } from "../../../frontend/src/utils/roomSession";
 import {
@@ -222,7 +223,7 @@ async function main(argv: readonly string[]): Promise<number> {
     );
     return 2;
   }
-  const original = await fs.readFile(target); // read-only: the original is never opened for writing
+  const original = await readFileChunked(target); // read-only (chunked: no single-read ceiling): the original is never opened for writing
   const diagnosis = diagnose(target, original);
   if (flag("--json")) console.log(JSON.stringify(diagnosis, null, 2));
   else console.log(report(diagnosis));

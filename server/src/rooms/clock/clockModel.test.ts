@@ -437,13 +437,17 @@ describe("Live train offer: the proposer's clock freezes; the recipient has a di
     t.advance(10 * MIN);
     t.move(A, facts(turn(A, 0)), "reject");
     assert.deepEqual([t.record.obligation?.seat, t.remaining()], [A, 10 * MIN], "the counter chain ran on A's deadline");
-    /* Offers past the deadline: the park reaches zero while B holds it; A resumes nothing and is overdue at once. */
+    /* An offer made with 10 minutes left: B's answer window is A's deadline, not a fresh pace -- at A's deadline the
+       SERVER closes the offer (A's rescission) and A, owing its decision with nothing left, is overdue at that moment. */
+    const offeredAt = t.t;
     t.move(A, offering(offerOf("private", A, B, 9)), "propose");
-    t.advance(20 * HOUR);
-    t.move(B, facts(turn(A, 0)), "accept");
-    assert.equal(t.remaining(), 0);
+    assert.equal(t.advance(10 * MIN - 1), null, "nothing due a millisecond early");
+    const expiry = t.advance(1);
+    assert.deepEqual(expiry, { kind: "trade-expiry", at: offeredAt + 10 * MIN, offerKey: "private:9", proposer: A, recipient: B });
+    t.commit(A, facts(turn(A, 0)), "server-expiry");
     t.advance(0);
-    assert.deepEqual([t.record.phase, t.record.overdue?.seat], ["overdue", A], "the deadline passed during the negotiation: A is overdue when it resumes");
+    assert.deepEqual([t.record.phase, t.record.overdue?.seat, t.record.overdue?.at], ["overdue", A, offeredAt + 10 * MIN], "A is overdue exactly at its own deadline; B is never struck");
+    assert.deepEqual(t.record.declines.counts, {}, "Async keeps no decline count");
     /* A required action (its cure) refreshes; a genuine handoff gives the next seat its fresh pace. */
     t.move(A, facts(turn(A, 1)));
     assert.equal(t.remaining(), 86_400 * SEC);
@@ -1271,6 +1275,62 @@ describe("Undo never manufactures a clock", () => {
     assert.equal(left, 5 * MIN - 40 * SEC);
   });
 
+  test("REVIEW (last correction): undoing a Live RESCISSION charges the proposer exactly its own run since -- never the offer's standing time twice; an accepted answer then resumes that remainder", () => {
+    for (const ending of ["rescind", "accept"] as const) {
+      const t = new Table("live");
+      t.advance(5 * MIN); // A has 15:00
+      t.move(A, offering(offerOf("trade", A, B, 1)), "propose");
+      t.advance(3 * MIN);
+      t.move(A, facts(turn(A, 0)), "rescind");
+      const rescindIndex = t.index;
+      assert.equal(t.remaining(), 12 * MIN, "the rescission is charged the 3:00 the offer stood");
+      t.advance(MIN);
+      t.move(A, offering(offerOf("trade", A, B, 1)), "revert", { revertTarget: rescindIndex });
+      assert.deepEqual(t.record.parked.map((p) => [p.seat, p.remaining_ms]), [[A, 14 * MIN]], "15:00 less only A's own 1:00");
+      t.advance(2 * MIN);
+      if (ending === "rescind") {
+        t.move(A, facts(turn(A, 0)), "rescind");
+        assert.equal(t.remaining(), 9 * MIN, "15:00 - 1:00 run - 5:00 the offer stood in all");
+      } else {
+        t.move(B, facts(turn(A, 0)), "accept");
+        assert.equal(t.remaining(), 14 * MIN, "frozen while the offer stood: 15:00 - A's own 1:00");
+      }
+    }
+  });
+
+  test("REVIEW (last correction): a pending minute 30 is not crossed by a restart -- the break neither vetoes nor pauses it, and it is decided at its own moment once its keys are read", () => {
+    const t = new Table("live", { money: true });
+    t.advance(LIVE_ACTION_MS);
+    const approve = { approve_until: 9_999_999_999, signature: "ab".repeat(64) };
+    t.ok(propose(t.record, B, "foreclose", approve, t.t));
+    const id = t.record.overdue?.proposal?.id as number;
+    t.ok(vote(t.record, C, id, true, approve, t.t));
+    const due = T0 + LIVE_ACTION_MS + LIVE_CURE_MS;
+    t.t = due + 30 * SEC;
+    const pending = advance(t.record, t.t, () => ({ len: t.logLen, hash: HASH }), FINALITY_KEYS_UNREAD);
+    assert.equal(pending.finalityPending, true);
+    t.take(pending);
+    /* The earlier authority kept proving continuity past minute 30 (its heartbeats), then a new one takes over. */
+    t.record = { ...t.record, trusted_at: due + 60 * SEC };
+    t.t = due + 90 * SEC;
+    t.take(continuityBreak(t.record, { now: t.t, preservedAt: due + 60 * SEC, reason: "takeover", authority: "auth-2" }));
+    assert.deepEqual([t.record.system, t.record.overdue?.proposal?.complete_at !== null, t.record.phase], [null, true, "overdue"], "no veto, no system pause");
+    const finalSecs = Math.ceil(due / 1000);
+    t.take(advance(t.record, t.t, () => ({ len: t.logLen, hash: HASH }), { epoch: 1, proposal: id, final_secs: finalSecs, stale: [] }));
+    assert.deepEqual([t.record.ended?.kind, t.record.remedy?.kind, t.record.remedy?.final_ms], ["live-foreclosure", 2, due]);
+  });
+
+  test("REVIEW (last correction): a recovered gap in which the proposer ACTED never attaches its stale park to a new offer; the new offer's answerer is on the response timer", () => {
+    const t = new Table("live");
+    t.advance(18 * MIN); // A has 2:00
+    t.move(A, offering(offerOf("trade", A, B, 1)), "propose");
+    t.advance(MIN);
+    /* The gap: B accepts, A ends its turn, C moves, A (on its next turn) proposes again. */
+    t.take(recoverGap(t.record, { now: t.t, lastIndex: t.index + 4, lastAt: t.t, actors: [B, A, C], facts: offering(offerOf("trade", A, B, 2)) }));
+    assert.deepEqual(t.record.parked.map((p) => [p.seat, p.remaining_ms]), [[A, LIVE_ACTION_MS]], "A acted in the gap: its new obligation, not the stale 2:00");
+    assert.notEqual(t.record.obligation?.trade ?? null, null, "B answers on the 10:00 response timer");
+  });
+
   test("REVIEW: a recovered gap keeps a re-proposing proposer's remainder (never a fresh allowance), and resumes a closed offer's park only for the same decision", () => {
     /* L1: the record folded A's first proposal (A parked at 5:00); the gap holds B's rejection and A's second proposal. */
     const t = new Table("live");
@@ -1511,7 +1571,7 @@ describe("Review fixes: requests, breaks, gaps, offers, approvals", () => {
     assert.deepEqual(valid.record.remedy?.approvals.map((a) => a.approve_until), [finalSecs + 1, finalSecs + 1], "sealed with approvals that end a second after finality: the contract judges them at final_at");
   });
 
-  test("Live money: a key that moved AT or before minute 30 voids that YES before the seal (the neutral outcome); the check binds its overdue, proposal and final second; no check (chain unread) decides on the vote-time checks", () => {
+  test("Live money: a key that moved AT or before minute 30 voids that YES before the seal (the neutral outcome); the check binds its overdue, proposal and final second; an unread or mismatched check decides nothing (pending), no check asked for decides on the vote-time checks", () => {
     const finalSecs = Math.ceil((T0 + LIVE_ACTION_MS + LIVE_CURE_MS) / 1000);
     const complete = () => {
       const t = new Table("live", { money: true });
@@ -1534,11 +1594,14 @@ describe("Review fixes: requests, breaks, gaps, offers, approvals", () => {
     assert.equal(moved.record.ended?.kind, "live-timeout-annul");
     assert.equal(moved.record.remedy?.kind, 1);
     assert.ok(moved.events.includes("vote-stale"));
-    /* A check for another proposal, or another final second, decides nothing (the foreclosure stands). */
+    /* A check made for another proposal, overdue or final second is not a check of THIS minute 30: nothing is decided
+       on it (fail closed -- it waits for its own check). */
     for (const keys of [{ epoch: 1, proposal: id + 1, final_secs: finalSecs, stale: [C] }, { epoch: 1, proposal: id, final_secs: finalSecs + 1, stale: [C] }, { epoch: 2, proposal: id, final_secs: finalSecs, stale: [C] }]) {
       const other = complete();
-      other.take(advance(other.record, at, () => ({ len: other.logLen, hash: HASH }), keys));
-      assert.equal(other.record.ended?.kind, "live-foreclosure", JSON.stringify(keys));
+      const step = advance(other.record, at, () => ({ len: other.logLen, hash: HASH }), keys);
+      assert.equal(step.finalityPending, true, JSON.stringify(keys));
+      other.take(step);
+      assert.deepEqual([other.record.phase, other.record.ended, other.record.remedy], ["overdue", null, null], JSON.stringify(keys));
     }
     /* No seat moved (or no check was asked for -- a server with no chain reader): the foreclosure is sealed. */
     for (const keys of [{ epoch: 1, proposal: id, final_secs: finalSecs, stale: [] }, null]) {

@@ -27,6 +27,7 @@ import * as path from "path";
 
 import { createFileLogStore, nodeStoreFs, STORE_READ_CHUNK_BYTES } from "../fileLogStore";
 import { linesToBytes, scanLog, scanLogLines, serializeBatch } from "../persistence/logFormat";
+import { LOG_PREFIX, logSk } from "../aws/game/gameTable";
 import { CATCH_UP_PAGE_BYTES, type GameServerOptions } from "../gameServer";
 import { createMemoryOpsRecorder } from "../persistence/opsRecorder";
 import type { RoomClockView } from "../../../frontend/src/utils/clockProtocol";
@@ -286,6 +287,13 @@ describe("No gameplay history cap: the storage readers have no size ceiling of t
     same([...clean, JSON.stringify({ format: "a newer build", index: TARGET_ENTRIES })], "a newer build's line");
   });
 
+  test("a DynamoDB log key never runs out: past 10^10 entries the key widens and still sorts after every earlier one", () => {
+    const keys = [0, 1, 9_999_999_998, 9_999_999_999, 10_000_000_000, 10_000_000_001, 99_999_999_999, Number.MAX_SAFE_INTEGER].map(logSk);
+    assert.deepEqual([...keys].sort(), keys, "lexicographic order is index order");
+    assert.ok(keys.every((k) => k.startsWith(LOG_PREFIX)));
+    assert.equal(logSk(42), "LOG#0000000042", "every key ever stored is unchanged");
+  });
+
   test("a file log is read in bounded chunks, each one reported (the load's deadline bounds a chunk), with no single-read ceiling", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "p3-chunks-"));
     try {
@@ -303,7 +311,7 @@ describe("No gameplay history cap: the storage readers have no size ceiling of t
       let progress = 0;
       const loaded = await store.loadLog(game, { onProgress: () => void (progress += 1) });
       assert.equal(loaded.length, 2_000);
-      assert.ok(progress >= 1, "the load reported its read");
+      assert.ok(progress >= 2, "the load reported its read, and its scan (synchronous work is progress, never a timeout)");
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

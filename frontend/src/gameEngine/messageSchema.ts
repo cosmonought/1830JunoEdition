@@ -873,7 +873,9 @@ const isClockPace: FrameCheck = (value) => value === null || [43_200, 86_400, 17
 const isPauseAction: FrameCheck = (value) => value === "request" || value === "yes" || value === "no";
 const isPauseKind: FrameCheck = (value) => value === "pause" || value === "resume";
 const isProposalKind: FrameCheck = (value) => value === "foreclose" || value === "annul";
-const isClockId: FrameCheck = (value) => Number.isSafeInteger(value) && (value as number) >= 1 && (value as number) <= 1_000_000;
+/* A proposal / pause-request id is a lifetime counter of its game: any positive safe integer (no game is too old for a
+   vote -- owner ruling, 2026-10-07). */
+const isClockId: FrameCheck = (value) => Number.isSafeInteger(value) && (value as number) >= 1;
 const isClockSecs: FrameCheck = (value) => Number.isSafeInteger(value) && (value as number) >= 1 && (value as number) <= 99_999_999_999;
 const isSig64: FrameCheck = (value) => typeof value === "string" && /^[0-9a-f]{128}$/.test(value);
 const isClockMs: FrameCheck = (value) => Number.isSafeInteger(value) && (value as number) >= 0;

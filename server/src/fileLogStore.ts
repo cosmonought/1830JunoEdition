@@ -150,23 +150,31 @@ export const STORE_READ_CHUNK_BYTES = 16 * 1024 * 1024;
 
 /** Reads `file` to its end in `STORE_READ_CHUNK_BYTES` chunks into one Buffer (a Buffer has no 2 GiB ceiling, unlike a
  *  single `readFile`); a file that grows while it is read is read to its end. */
-async function readFileChunked(file: string, onChunk: () => void): Promise<Buffer> {
+export async function readFileChunked(file: string, onChunk: () => void = () => undefined): Promise<Buffer> {
   const handle = await fs.open(file, "r");
   try {
-    let buffer = Buffer.allocUnsafe(Math.max((await handle.stat()).size, 1));
+    let buffer = Buffer.allocUnsafe((await handle.stat()).size);
     let at = 0;
     for (;;) {
       if (at === buffer.length) {
-        const grown = Buffer.allocUnsafe(buffer.length + STORE_READ_CHUNK_BYTES);
+        /* The size it had is read: a small probe says whether it grew meanwhile (never a doubling copy to find out). */
+        const probe = Buffer.allocUnsafe(64 * 1024);
+        const { bytesRead } = await handle.read(probe, 0, probe.length, at);
+        if (bytesRead === 0) break;
+        const grown = Buffer.allocUnsafe(buffer.length + Math.max(STORE_READ_CHUNK_BYTES, bytesRead));
         buffer.copy(grown, 0, 0, at);
+        probe.copy(grown, at, 0, bytesRead);
         buffer = grown;
+        at += bytesRead;
+        onChunk();
+        continue;
       }
       const { bytesRead } = await handle.read(buffer, at, Math.min(STORE_READ_CHUNK_BYTES, buffer.length - at), at);
       if (bytesRead === 0) break;
       at += bytesRead;
       onChunk();
     }
-    return buffer.subarray(0, at);
+    return at === buffer.length ? buffer : buffer.subarray(0, at);
   } finally {
     await handle.close().catch(() => undefined);
   }
@@ -370,6 +378,9 @@ export function createFileLogStore(directory: string, options: FileLogStoreOptio
       return [];
     }
     const scan = scanLog(bytes);
+    /* The scan is synchronous work on a history of any length: it is progress too (the caller's deadline bounds the
+       next step, never the history's size). */
+    onProgress?.();
     if (scan.classification === "corrupt") {
       stats.corruptHeld += 1;
       states.delete(room);

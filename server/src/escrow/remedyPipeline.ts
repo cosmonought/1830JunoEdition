@@ -263,7 +263,9 @@ export function createRemedyPipeline(deps: RemedyPipelineDeps): RemedyPort {
       if ("refused" in probe) return null;
       if (BigInt(probe.blockTimeSecs) > atSecs) {
         const read = await context(gameId, false, atSecs);
-        return "refused" in read ? null : read;
+        if ("refused" in read) return null;
+        /* Read from a block past the second, at that block's height or later: conclusive. */
+        if (read.consentKeysAt !== null && read.consentKeysAt.atSecs === atSecs) return read;
       }
       await new Promise((resolve) => setTimeout(resolve, POLL_MS));
     }
@@ -290,7 +292,7 @@ export function createRemedyPipeline(deps: RemedyPipelineDeps): RemedyPort {
       const found = await context(gameId, true, judgedAt);
       if ("refused" in found) return { status: remedy.status === "submitted" ? "submitted" : "refused", detail: found.refused, attested: false };
       const ctx = found;
-      if (judgedAt !== null && BigInt(ctx.blockTimeSecs) <= judgedAt) {
+      if (judgedAt !== null && (BigInt(ctx.blockTimeSecs) <= judgedAt || ctx.consentKeysAt === null)) {
         /* No block past the final second yet: the keys held then are not final on chain. Carried on at the next attempt. */
         return { status: remedy.status === "submitted" ? "submitted" : "sealed", detail: `waiting for a block past the decision's final second ${judgedAt} (the chain is at ${ctx.blockTimeSecs})`, attested: false };
       }

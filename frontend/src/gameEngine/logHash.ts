@@ -133,7 +133,7 @@ export class LogHashCursor {
   hash(entries: readonly IdentifiedEntry[], length = entries.length): string {
     /* Not a server history (an id missing, an index out of order anywhere -- `logHash` sorts the WHOLE array before
        it takes the prefix): hashed from scratch; nothing is kept. */
-    if (!isServerHistory(entries)) {
+    if (!Number.isSafeInteger(length) || !isServerHistory(entries)) {
       this.checkpoints = [];
       return logHash(entries, length);
     }

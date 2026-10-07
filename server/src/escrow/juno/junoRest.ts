@@ -192,6 +192,10 @@ export interface JunoRest {
   /** ESCROW-4: the same smart query from every configured endpoint, agreeing (two or more when two or more are
    *  configured), or `unavailable`. Optional for test doubles (callers fall back to `smart`). */
   smartQuorum?(contract: string, queryJson: string): Promise<unknown>;
+  /** Phase 3 final clocks: `smartQuorum`, counting only answers a node read at height `minHeight` or later (its
+   *  `x-cosmos-block-height`; a node that does not say does not count) -- a read of the state AFTER a known block.
+   *  Optional for test doubles (absent: such a read is never made -- fail closed). */
+  smartQuorumAtLeast?(contract: string, queryJson: string, minHeight: string): Promise<unknown>;
   /** Phase 3 final clocks (FP4): the chain's latest block as a QUORUM read -- one endpoint configured: its answer; two or
    *  more: at least two must answer on the configured chain, within `BLOCK_QUORUM_SPREAD_SECS` of each other, and the
    *  answer is the EARLIEST of their block times (a remedy's `attested_at` is then at or before every answering node's
@@ -486,6 +490,35 @@ export function createJunoRest(policy: JunoEndpointPolicy, http: HttpTransport =
       );
       if (answers.length < 2) throw new JunoRpcError("unavailable", `quorum read: ${answers.length} of ${endpoints.length} endpoints answered (2 needed)`);
       if (answers.some((answer) => answer !== answers[0])) throw new JunoRpcError("unavailable", "quorum read: the endpoints disagree (a lagging or inconsistent node); read again later");
+      return data;
+    },
+    async smartQuorumAtLeast(contract, queryJson, minHeight) {
+      if (!DEC.test(minHeight)) throw new JunoRpcError("refused", "minimum height");
+      const floor = BigInt(minHeight);
+      const answers: string[] = [];
+      let data: unknown = null;
+      let behind = 0;
+      await Promise.all(
+        endpoints.map(async (base) => {
+          try {
+            await verifiedChain(base);
+            const { status, json, height } = await call(base, "GET", `/cosmwasm/wasm/v1/contract/${encodeURIComponent(contract)}/smart/${b64(Buffer.from(queryJson, "utf8"))}`);
+            if (status !== 200 || !isObject(json) || !("data" in json)) return;
+            /* Read before the known block (or at an unknown height): not an answer about the state after it. */
+            if (height === null || BigInt(height) < floor) {
+              behind += 1;
+              return;
+            }
+            answers.push(JSON.stringify(json.data));
+            data = json.data;
+          } catch {
+            /* an endpoint that does not answer does not vote */
+          }
+        }),
+      );
+      const needed = endpoints.length === 1 ? 1 : 2;
+      if (answers.length < needed) throw new JunoRpcError("unavailable", `read at height ${minHeight} or later: ${answers.length} of ${endpoints.length} endpoints answered there (${behind} behind or silent about their height; ${needed} needed)`);
+      if (answers.some((answer) => answer !== answers[0])) throw new JunoRpcError("unavailable", "read at a known height: the endpoints disagree; read again later");
       return data;
     },
     /* LIVE-4 (L4-4): the verification-grade read (see the interface). Every endpoint, in parallel; all must answer. */

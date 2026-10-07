@@ -37,6 +37,7 @@ export function readOnlyStoreFs(base: StoreFs = nodeStoreFs): StoreFs {
       return base.open(file, "r");
     },
     readFile: (file: string) => base.readFile(file),
+    ...(base.readFileChunked !== undefined ? { readFileChunked: (file: string, onChunk: () => void) => (base.readFileChunked as NonNullable<StoreFs["readFileChunked"]>)(file, onChunk) } : {}),
     readdir: (directory: string) => base.readdir(directory),
     mkdir: async () => undefined,
     rename: (from: string, to: string) => Promise.reject(new ReadOnlyInspectionError("rename", `${from} -> ${to}`)),

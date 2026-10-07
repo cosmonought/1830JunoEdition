@@ -377,6 +377,22 @@ describe("§24 RPC: silence, nonsense and the wrong network decide nothing", () 
     assert.throws(() => createJunoRest({ endpoints: ["https://user:pw@rpc.example"], expectedChainId: CHAIN_ID, allowInsecureLocalHttp: false, timeoutMs: 1, maxResponseBytes: 1, maxCodeBytes: 1 }, http), /credentials/);
     assert.doesNotThrow(() => createJunoRest({ endpoints: ["http://127.0.0.1:1317"], expectedChainId: CHAIN_ID, allowInsecureLocalHttp: true, timeoutMs: 1, maxResponseBytes: 1, maxCodeBytes: 1 }, http));
   });
+
+  test("Phase 3 final clocks: a read AT A KNOWN HEIGHT OR LATER counts only nodes that say they read there (a lagging or silent node is no answer)", async () => {
+    const heights: Record<string, string | null> = { "https://a.example": "120", "https://b.example": "119", "https://c.example": null };
+    const http: HttpTransport = async (request) => {
+      const base = Object.keys(heights).find((origin) => request.url.startsWith(origin)) as string;
+      if (request.url.endsWith("/node_info")) return { status: 200, text: JSON.stringify({ default_node_info: { network: CHAIN_ID } }) };
+      if (request.url.includes("/smart/")) return { status: 200, text: JSON.stringify({ data: { pubkey: "02" + "ab".repeat(32), retired_keys: 0 } }), height: heights[base] ?? undefined };
+      throw new JunoRpcError("unavailable", "no route");
+    };
+    const rest = createJunoRest({ endpoints: Object.keys(heights), expectedChainId: CHAIN_ID, allowInsecureLocalHttp: false, timeoutMs: 1000, maxResponseBytes: 10_000, maxCodeBytes: 1000 }, http);
+    const at = rest.smartQuorumAtLeast as NonNullable<typeof rest.smartQuorumAtLeast>;
+    /* Only a.example read at 120 or later: one answer is not a quorum of three endpoints. */
+    await assert.rejects(() => at.call(rest, "juno1contract", "{}", "120"), (error: unknown) => error instanceof JunoRpcError && error.kind === "unavailable");
+    heights["https://b.example"] = "121";
+    assert.deepEqual(await at.call(rest, "juno1contract", "{}", "120"), { pubkey: "02" + "ab".repeat(32), retired_keys: 0 });
+  });
 });
 
 describe("§24 checkpoints: committed positions, once, the newest winning", () => {

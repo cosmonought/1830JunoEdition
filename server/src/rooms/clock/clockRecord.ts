@@ -496,9 +496,20 @@ export function parseClockDocument(raw: string, gameId: string): GameClockRecord
       const { or_key: legacyKey, ...rest } = declines as Record<string, unknown>;
       return { round_key: legacyKey, ...rest };
     };
-    /* A parked clock recorded before the offer-clock correction names no decision (`key`): resumed as before. */
-    const keyed = (parked: unknown): unknown => (Array.isArray(parked) ? parked.map((p) => (isObject(p) && !Object.prototype.hasOwnProperty.call(p, "key") ? { ...p, key: null } : p)) : parked);
     const record = parsed as Record<string, unknown>;
+    /* A parked clock recorded before the offer-clock correction names no decision (`key`): resumed as before. One a
+       TIMED ASYNC table recorded before the last correction (2026-10-07) was frozen: from this read on it RUNS, from the
+       record's last write (an Async deadline is never stopped by an offer; the time since that write is real). */
+    const asyncPolicy = isObject(record.policy) && record.policy.class === "async-pace";
+    const runningFrom = typeof record.updated_at === "number" ? record.updated_at : null;
+    const keyed = (parked: unknown): unknown =>
+      Array.isArray(parked)
+        ? parked.map((p) => {
+            if (!isObject(p)) return p;
+            const withKey = Object.prototype.hasOwnProperty.call(p, "key") ? p : { ...p, key: null };
+            return asyncPolicy && runningFrom !== null && !Object.prototype.hasOwnProperty.call(withKey, "since") ? { ...withKey, since: runningFrom } : withKey;
+          })
+        : parked;
     parsed = {
       ...record,
       ...(Object.prototype.hasOwnProperty.call(record, "declines") ? { declines: renamed(record.declines) } : {}),

@@ -1669,10 +1669,12 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
     const quorumSmart = (query: string): Promise<unknown> => (rest.smartQuorum !== undefined ? rest.smartQuorum(backend.pin.contract_address, query) : rest.smart(backend.pin.contract_address, query));
     let response: JunoGameResponse;
     let blockTimeSecs: number;
+    let blockHeight: string;
     try {
       const [game, block] = await Promise.all([readGameQuorum(bound.binding.chain_game_id), rest.latestBlockQuorum()]);
       response = game;
       blockTimeSecs = Math.floor(Date.parse(block.time) / 1000);
+      blockHeight = block.height;
     } catch (error) {
       return refuseRemedy("chain-unavailable", `the chain could not be read by quorum (${error instanceof Error ? error.message.slice(0, 200) : String(error)})`);
     }
@@ -1698,11 +1700,17 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
     if (g.domain !== bound.roster.expected_domain) return refuseRemedy("binding-mismatch", "the chain game's domain is not the frozen roster's");
     const seatOf: Record<string, number> = {};
     for (const entry of bound.roster.roster) seatOf[entry.player_id] = entry.chain_seat_index;
+    /* The seats' keys AT a past second: answered only once the chain has a block LATER than it (block times only
+       increase, so nothing still to come is stamped at or before it), and only from nodes that read the state at that
+       block's height or later (a lagging node could miss a rotation stamped at or before the second). Earlier: none
+       (`consentKeysAt` null -- not final yet; the caller waits). */
     let consentKeysAt: RemedyChainContext["consentKeysAt"] = null;
-    if (keysAtSecs !== null) {
+    if (keysAtSecs !== null && BigInt(blockTimeSecs) > keysAtSecs) {
+      const atLeast = rest.smartQuorumAtLeast;
+      if (atLeast === undefined) return refuseRemedy("no-quorum", "this chain client cannot read at a known height; no key at a past second is read");
       try {
         const keys: string[] = [];
-        for (let seat = 0; seat < g.seats.length; seat += 1) keys.push(parseConsentKeyAtResponse(await quorumSmart(QUERY.consentKeyAt(bound.binding.chain_game_id, seat, keysAtSecs.toString()))).pubkey);
+        for (let seat = 0; seat < g.seats.length; seat += 1) keys.push(parseConsentKeyAtResponse(await atLeast.call(rest, backend.pin.contract_address, QUERY.consentKeyAt(bound.binding.chain_game_id, seat, keysAtSecs.toString()), blockHeight)).pubkey);
         consentKeysAt = { atSecs: keysAtSecs, keys };
       } catch (error) {
         return refuseRemedy("chain-unavailable", `the seats' consent keys at ${keysAtSecs} could not be read by quorum (${error instanceof Error ? error.message.slice(0, 200) : String(error)})`);

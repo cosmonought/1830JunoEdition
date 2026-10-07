@@ -93,7 +93,7 @@ import * as path from "path";
 import { logHash } from "../../../frontend/src/gameEngine";
 import { RULES_ENGINE_VERSION } from "../../../frontend/src/gameEngine/rulesVersion";
 import type { ServerLogEntry } from "../../../frontend/src/utils/roomSession";
-import { createFileLogStore, nodeStoreFs } from "../fileLogStore";
+import { createFileLogStore, nodeStoreFs, readFileChunked } from "../fileLogStore";
 import { IDENTITY_FILE } from "../identity/fileStore";
 import { IDENTITY_JOURNAL_FILE, parseSnapshotDocument, scanJournal } from "../identity/journalStore";
 import { checkSnapshot, IdentityIndex } from "../identity/store";
@@ -146,7 +146,7 @@ const READ_ONLY = readOnlyStoreFs();
 
 async function readOptional(file: string): Promise<Buffer | null> {
   try {
-    return await fs.readFile(file);
+    return await readFileChunked(file);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw error;
@@ -1167,7 +1167,7 @@ async function moveGame(dataDir: string, gameId: string, archivedAt: number | nu
   const log = moved.find((file) => file.name === `${gameId}.log.jsonl`);
   let logSummary: { entries: number; log_hash: string | null } | null = null;
   if (log !== undefined) {
-    const scan = scanLog(await fs.readFile(path.join(destination, log.name)));
+    const scan = scanLog(await readFileChunked(path.join(destination, log.name)));
     logSummary = { entries: scan.entries.length, log_hash: scan.entries.length === 0 ? null : logHash(scan.entries) };
   }
   const manifest = { format: "gs-game-archive", version: 1, game_id: gameId, archived_at: archivedAt, moved_at: now, files: moved, log: logSummary };

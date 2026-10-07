@@ -826,14 +826,17 @@ export function createClockController(deps: ClockControllerDeps) {
     const od = record.overdue;
     if (due === null || due.votes.length === 0 || od === null) return null;
     const port = deps.remedy?.() ?? null;
-    if (port === null) return null;
+    /* A money table with no chain reader (yet): nothing is decided on unknown keys either. */
+    if (port === null) return record.money ? FINALITY_KEYS_UNREAD : null;
     counters.finalityKeyChecks += 1;
     const approvals = due.votes.map((v) => ({ seat: v.seat, approveUntil: (v.approval as { approve_until: number }).approve_until, signature: (v.approval as { signature: string }).signature }));
     const facts = { remedy: 2 as const, defaultingSeat: od.seat, strike: od.strike, epoch: od.epoch, logLen: od.log_len, logHash: od.log_hash, overdueMs: od.at };
     const found = await port.staleApprovals(gameId, facts, approvals, { atSecs: due.final_secs, timeoutMs }).catch(() => null);
     if (found === null) {
       counters.finalityKeysUnread += 1;
-      deps.warn(`  clock: ${gameId}: the consent keys at minute 30 could not be read conclusively (no quorum, or no block past the final second in time); minute 30 is not decided until they are`);
+      if (counters.finalityKeysUnread === 1 || counters.finalityKeysUnread % 16 === 0) {
+        deps.warn(`  clock: ${gameId}: the consent keys at minute 30 could not be read conclusively (no quorum, or no block past the final second in time); minute 30 is not decided until they are (${counters.finalityKeysUnread} unread reads so far)`);
+      }
       return FINALITY_KEYS_UNREAD;
     }
     if (found.length > 0) deps.ops.audit("clock.finality-key-moved", { game_id: gameId, epoch: due.epoch, seats: found.length });

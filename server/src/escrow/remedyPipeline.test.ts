@@ -377,6 +377,11 @@ describe("FP4 remedy pipeline: approvals are re-checked under the consent key ea
       /* No block past the final second yet: the chain's answer is not final -- no answer (never a guess). */
       assert.equal(await port.staleApprovals(GAME_A, facts, pair, { atSecs: finalSecs, timeoutMs: 1_500 }), null);
       advanceTo(world, finalSecs + 1);
+      /* A node that does not say which height it read at is no answer about the state after the final second (a lagging
+         node could miss a rotation stamped at or before it): unread, never a guess. */
+      world.chain.heightsHidden = true;
+      assert.equal(await port.staleApprovals(GAME_A, facts, pair, { atSecs: finalSecs, timeoutMs: 1_500 }), null);
+      world.chain.heightsHidden = false;
       assert.deepEqual(await port.staleApprovals(GAME_A, facts, pair, { atSecs: finalSecs }), [BOB]);
       advanceTo(world, finalSecs + 10);
       const held = await port.attest(GAME_A, withEvidence({ ...base, approvals: [approval] }));

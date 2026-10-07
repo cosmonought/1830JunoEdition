@@ -678,4 +678,24 @@ describe("Owner-policy correction: Live inter-player offers that suspend the pro
     assert.deepEqual(h.record().declines.counts, {}, "no decline count in Async");
     assert.deepEqual(h.clock.viewOf(GAME)?.declines, []);
   });
+
+  test("ASYNC (last correction review): an offer never extends the proposer's deadline -- at it the SERVER closes the offer (a real engine rescission, stamped at that moment) and the proposer, not the answerer, is overdue", async () => {
+    const h = harness();
+    assert.equal((await h.clock.createPolicy(GAME, { deadline: "async-pace", paceSecs: 43_200, money: false })).ok, true);
+    await h.deal();
+    const deadline = T0 + 43_200_000;
+    await h.time.advance(43_200_000 - 10 * MIN);
+    await h.clock.idle();
+    assert.equal((await h.submit(P1, offerDH("40"))).ok, true);
+    assert.deepEqual(h.record().parked.map((p) => [p.seat, p.remaining_ms]), [[P1, 10 * MIN]], "P1's last 10 minutes, parked RUNNING");
+    assert.deepEqual(h.clock.viewOf(GAME)?.running, [{ seat: P1, remainingMs: 10 * MIN }]);
+    await h.time.advance(10 * MIN);
+    await h.clock.idle();
+    const r = h.record();
+    assert.deepEqual([r.phase, r.overdue?.seat, r.overdue?.at], ["overdue", P1, deadline], "the proposer is overdue exactly at its own deadline");
+    assert.equal(r.strikes[P2] ?? 0, 0);
+    const last = h.room.entries[h.room.entries.length - 1];
+    assert.equal(last.at, deadline, "the server's rescission is stamped at the deadline");
+    assert.equal(JSON.parse(last.payload).RescindPrivatePurchase !== undefined, true, JSON.stringify(last.payload));
+  });
 });

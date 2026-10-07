@@ -226,6 +226,8 @@ export function faultyStoreFs(inner: StoreFs, script: FaultScript): StoreFs {
   return {
     open: async (file, flags) => wrapHandle(file, await around("open", file, () => inner.open(file, flags))),
     readFile: (file) => around("readFile", file, () => inner.readFile(file)),
+    /* The chunked read is the same read for every fault (an injected readFile fault applies to it too). */
+    ...(inner.readFileChunked !== undefined ? { readFileChunked: (file: string, onChunk: () => void) => around("readFile", file, () => (inner.readFileChunked as NonNullable<StoreFs["readFileChunked"]>)(file, onChunk)) } : {}),
     rename: (from, to) => around("rename", to, () => inner.rename(from, to)),
     unlink: (file) => around("unlink", file, () => inner.unlink(file)),
     mkdir: (directory) => around("mkdir", directory, () => inner.mkdir(directory)),

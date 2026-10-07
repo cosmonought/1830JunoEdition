@@ -86,7 +86,10 @@ export const CHAT_PREFIX = "CHAT#";
 export const HOLDREL_PREFIX = "HOLDREL#";
 export const INTENT_PREFIX = "INTENT#";
 
-export const logSk = (index: number): string => `${LOG_PREFIX}${pad(index, 10)}`;
+/** One log entry's sort key: ten digits below 10^10; from 10^10 on (no history length limit -- owner ruling,
+ *  2026-10-07) `~` and sixteen digits, which sorts after every ten-digit key (`~` after every digit) and in index order
+ *  among themselves (every safe integer fits) -- so no stored key changes and a query by `LOG_PREFIX` stays in order. */
+export const logSk = (index: number): string => (index < 10_000_000_000 ? `${LOG_PREFIX}${pad(index, 10)}` : `${LOG_PREFIX}~${pad(index, 16)}`);
 export const chatSk = (at: number, id: string): string => `${CHAT_PREFIX}${pad(at, 13)}#${id}`;
 export const holdRelSk = (heldAt: number, releasedAt: number): string => `${HOLDREL_PREFIX}${pad(heldAt, 13)}#${pad(releasedAt, 13)}`;
 export const intentSk = (intentId: string): string => `${INTENT_PREFIX}${intentId}`;

@@ -20,12 +20,12 @@
 //
 // LIVE-5 moves the log to other storage; this reader moves with it.
 
-import { promises as fsp } from "fs";
 import * as path from "path";
 
 import { gameIdentityOfEntries, type GameIdentityFacts } from "../../../frontend/src/gameEngine/compat/continuationIdentity";
 import type { FormatFact } from "../../../frontend/src/gameEngine/compat/continuationVerdict";
 import { logFormatOf } from "../../../frontend/src/gameEngine/compat/sessionContinuation";
+import { readFileChunked } from "../fileLogStore";
 import { scanLog } from "../persistence/logFormat";
 import { GAME_ID_PATTERN } from "../rooms/gameRecord";
 
@@ -71,7 +71,7 @@ export async function logFormatOnDisk(dataDir: string, gameId: string): Promise<
   if (!GAME_ID_PATTERN.test(gameId)) throw new Error(`${gameId} is not a game id`);
   let bytes: Buffer;
   try {
-    bytes = await fsp.readFile(path.join(dataDir, `${gameId}.log.jsonl`));
+    bytes = await readFileChunked(path.join(dataDir, `${gameId}.log.jsonl`)); // chunked: no single-read ceiling
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return "current";
     throw error;
@@ -85,7 +85,7 @@ export async function dealIdentityOnDisk(dataDir: string, gameId: string): Promi
   if (!GAME_ID_PATTERN.test(gameId)) throw new Error(`${gameId} is not a game id`);
   let bytes: Buffer;
   try {
-    bytes = await fsp.readFile(path.join(dataDir, `${gameId}.log.jsonl`));
+    bytes = await readFileChunked(path.join(dataDir, `${gameId}.log.jsonl`)); // chunked: no single-read ceiling
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return { kind: "undealt" };
     throw error;

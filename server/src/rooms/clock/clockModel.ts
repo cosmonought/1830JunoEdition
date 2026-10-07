@@ -658,9 +658,11 @@ function restoreUndo(x: Draft, batch: ClockBatch): void {
        offer is what is undone) is never given back more than that run has left: an undo never gives time. A running
        (Timed Async) park is restored as it stands now. */
     d.parked = snap.parked.map((p) => {
-      const left = parkedRemainingAt(p, at);
-      const capped = current !== null && current.seat === p.seat && current.began_index === target && current.timer !== null ? Math.min(left, remainingAt(current.timer, at)) : left;
-      return p.since === undefined && capped === p.remaining_ms ? p : parkOf(p.since === undefined, p.seat, p.offer_key, capped, p.key, at);
+      /* A running (Timed Async) park already counted every moment since it was parked. A frozen (Live) park is charged
+         exactly what its seat's own run since the undone batch used -- never the offer's standing time again. */
+      if (p.since !== undefined) return parkOf(false, p.seat, p.offer_key, parkedRemainingAt(p, at), p.key, at);
+      const ran = current !== null && current.seat === p.seat && current.began_index === target && current.timer !== null && current.initial_ms !== null ? clamp(current.initial_ms - remainingAt(current.timer, at)) : 0;
+      return ran === 0 ? p : parkOf(true, p.seat, p.offer_key, clamp(p.remaining_ms - ran), p.key, at);
     });
     how = charge > 0 ? "undo-restored-charged" : "undo-restored";
   } else if (D === null) {
@@ -755,6 +757,14 @@ export function advance(record: GameClockRecord, now: number, position: LogPosit
     if (d.phase !== "active" && d.phase !== "overdue") break;
     if (d.system !== null || d.pause.paused_at !== null) break;
     const ob = d.obligation;
+    /* TIMED ASYNC: an offer's proposer whose RUNNING park reaches zero while the offer is answered has reached its own
+       deadline -- the offer is closed by the server at that moment (the proposer's rescission, as a Live response
+       timer's expiry is), and the proposer, owing its decision with nothing left, is overdue at it. The answer window
+       never outlives the proposer's deadline (owner, 2026-10-07: negotiation never extends an Async deadline). */
+    const drained = d.phase === "active" ? drainedParkOf(d) : null;
+    if (drained !== null && drained.due <= now && (ob === null || ob.timer === null || dueOf(ob.timer) === null || drained.due <= (dueOf(ob.timer) as number))) {
+      return { ...x.done(), tradeExpiry: { kind: "trade-expiry", at: drained.due, offerKey: drained.park.offer_key, proposer: drained.park.seat, recipient: ob?.seat ?? drained.park.seat }, finalityPending: false };
+    }
     if (d.phase === "active" && ob !== null && ob.timer !== null) {
       const due = dueOf(ob.timer);
       if (due !== null && due <= now) {
@@ -770,7 +780,10 @@ export function advance(record: GameClockRecord, now: number, position: LogPosit
     if (d.phase === "overdue" && od !== null && od.cure !== null) {
       const due = dueOf(od.cure);
       if (due !== null && due <= now) {
-        if (keys === FINALITY_KEYS_UNREAD && finalityKeyCheckDue(d, due) !== null) return { ...x.done(), tradeExpiry: null, finalityPending: true };
+        const check = finalityKeyCheckDue(d, due);
+        /* Unread -- or a check made for another overdue, proposal or final second -- decides nothing. */
+        const unknown = check !== null && (keys === FINALITY_KEYS_UNREAD || (keys !== null && (keys.epoch !== check.epoch || keys.proposal !== check.proposal || keys.final_secs !== check.final_secs)));
+        if (unknown) return { ...x.done(), tradeExpiry: null, finalityPending: true };
         finality(x, due, keys === FINALITY_KEYS_UNREAD ? null : keys);
         continue;
       }
@@ -784,8 +797,23 @@ export function advance(record: GameClockRecord, now: number, position: LogPosit
 export function nextDue(record: GameClockRecord): number | null {
   if (record.phase !== "active" && record.phase !== "overdue") return null;
   if (record.system !== null || record.pause.paused_at !== null) return null;
-  if (record.phase === "active") return dueOf(record.obligation?.timer ?? null);
+  if (record.phase === "active") {
+    const action = dueOf(record.obligation?.timer ?? null);
+    const drained = drainedParkOf(record)?.due ?? null;
+    return action === null ? drained : drained === null ? action : Math.min(action, drained);
+  }
   return dueOf(record.overdue?.cure ?? null);
+}
+
+/** Timed Async: the earliest RUNNING park (of a seat other than the one answering) and the moment it reaches zero. */
+function drainedParkOf(record: Pick<GameClockRecord, "parked" | "obligation">): { readonly park: ClockParked; readonly due: number } | null {
+  let best: { readonly park: ClockParked; readonly due: number } | null = null;
+  for (const park of record.parked) {
+    if (park.since === undefined || park.seat === record.obligation?.seat) continue;
+    const due = park.since + park.remaining_ms;
+    if (best === null || due < best.due) best = { park, due };
+  }
+  return best;
 }
 
 function becomeOverdue(x: Draft, at: number, position: LogPosition): void {
@@ -1163,6 +1191,14 @@ export function continuityBreak(record: GameClockRecord, input: { readonly now: 
     return x.done();
   }
   const timed = d.policy.class === "live" && d.phase !== "ended";
+  /* LIVE: a minute 30 that fell due WITHIN the proven continuity (at or before `preserved`) -- not yet processed (its
+     approvers' keys unread, or its timer lost) -- is not crossed by this break: it is decided at its own moment, by the
+     next catch-up, on the votes standing then; no veto, no pause. */
+  const cure = d.phase === "overdue" && d.overdue !== null ? d.overdue.cure : null;
+  if (timed && d.system === null && d.pause.paused_at === null && cure !== null && cure.since !== null && (dueOf(cure) as number) <= preserved) {
+    x.touch();
+    return x.done();
+  }
   if (timed) {
     if (d.system !== null) {
       /* Already system-paused (a second break before anyone resumed): keep the first preserved state; votes restart, and
@@ -1269,10 +1305,12 @@ export function recoverGap(record: GameClockRecord, input: { readonly now: numbe
     d.obligation = null;
   } else {
     const standing = offer !== null && offer.proposer !== null && offer.answerer === D.seat && offer.proposer !== D.seat ? offer : null;
+    let keptPark: ClockParked | null = null;
     if (standing !== null && standing.proposer !== null) {
       /* The proposer's own park: of THIS offer, or -- the gap closed its earlier offer and it proposed again -- of an
          earlier one (never a fresh allowance from a gap). */
-      const kept = keptParked.find((p) => p.offer_key === standing.key && p.seat === standing.proposer) ?? keptParked.find((p) => p.seat === standing.proposer) ?? null;
+      const kept = keptParked.find((p) => p.offer_key === standing.key && p.seat === standing.proposer) ?? (!input.actors.includes(standing.proposer) ? (keptParked.find((p) => p.seat === standing.proposer) ?? null) : null);
+      keptPark = kept;
       const parkedMs = kept !== null ? parkedRemainingAt(kept, at) : prior !== null && prior.seat === standing.proposer && prior.timer !== null ? remainingAt(prior.timer, at) : (allowance ?? 0);
       if (allowance !== null) d.parked = [parkOf(d.policy.class === "live", standing.proposer, standing.key, parkedMs, kept !== null ? kept.key : prior !== null && prior.seat === standing.proposer ? prior.key : null, at)];
     }
@@ -1281,7 +1319,9 @@ export function recoverGap(record: GameClockRecord, input: { readonly now: numbe
     const suspended =
       standing !== null &&
       ((prior !== null && prior.seat === standing.proposer && prior.timer !== null && prior.trade === null) ||
-        keptParked.some((p) => p.offer_key === standing.key && p.seat === standing.proposer) ||
+        keptPark !== null ||
+        /* The proposer acted in the gap and proposed after (only the responsible seat proposes): it suspended itself. */
+        (allowance !== null && standing.proposer !== null && input.actors.includes(standing.proposer)) ||
         (prior !== null && prior.trade !== null && prior.trade.offer_key === standing.key));
     const trade = d.policy.class === "live" && standing !== null && standing.proposer !== null && (standing.slot === "train" || suspended) ? { proposer: standing.proposer, offer_key: standing.key } : null;
     const continues = prior !== null && prior.seat === D.seat && !input.actors.includes(D.seat) && cured !== D.seat && (prior.trade?.offer_key ?? null) === (trade?.offer_key ?? null);

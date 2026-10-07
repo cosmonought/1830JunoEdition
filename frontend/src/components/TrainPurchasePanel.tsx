@@ -1735,6 +1735,12 @@ export interface TrainTradePromptProps {
   actionInFlight?: boolean;
   /** Phase 3 W2-F (OD-1, U-6): the hold's own sentence (`dockHold.turnHoldReason`) for the one waiting line. */
   waitingSentence?: string | null;
+  /** Phase 3 P3-N027 (W3-J's AUD-25.13 #2 gate, applied to the emergency `train-offer` stage): `true` while an
+   *  emergency surface already presents this offer -- the waiting card (W2-G, through W2-H's `WaitingStatusBanner`)
+   *  for every seat with nothing to decide, or the obligated president's presented forced modal with its own Withdraw.
+   *  The prompt then stands aside for every viewer but the answering seller president, whose controls these are.
+   *  Absent is `false`: exactly as before. */
+  standAside?: boolean;
 }
 
 /** The counterparty's Accept / Reject. Deliberately the same shape and the same corner as
@@ -1749,8 +1755,9 @@ export function TrainTradePrompt({
   onRescind,
   actionInFlight = false,
   waitingSentence = null,
+  standAside = false,
 }: TrainTradePromptProps) {
-  if (!proposal) return null;
+  if (!proposal || (standAside && !viewerIsSeller)) return null;
   const bloodPrice = proposal.bloodPrice === true;
   const canAnswer = viewerIsSeller && !actionInFlight;
   const canRescind = viewerIsProposer && onRescind !== undefined;

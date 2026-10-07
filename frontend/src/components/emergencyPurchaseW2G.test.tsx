@@ -32,7 +32,7 @@ import {
   type EmergencyTrainPurchaseModalProps,
 } from "./EmergencyTrainPurchaseModal";
 import { EmergencyPurchaseWaitingCard } from "./EmergencyPurchaseWaitingCard";
-import { FundingPrivateOfferPrompt } from "./TrainPurchasePanel"; // Phase 3 W3-J (AUD-25.13 #2)
+import { FundingPrivateOfferPrompt, TrainTradePrompt, type TrainTradeProposal } from "./TrainPurchasePanel"; // Phase 3 W3-J (AUD-25.13 #2), P3-N027
 import { WAITING_STATUS_ATTRIBUTE } from "./WaitingStatusBanner";
 import { applySandboxAction } from "../gameEngine/sandboxSession";
 import {
@@ -65,6 +65,7 @@ import {
   withPortfolioChoice,
 } from "../utils/emergencyPurchaseView";
 import { dockHoldView } from "../utils/dockHoldView";
+import { trainOfferConsentRoles } from "../utils/offerConsentView"; // Phase 3 P3-N027
 import { noServerDerivedToSend } from "../utils/noServerDerivedForwarding";
 import { readShell, readStripped, sliceBetween } from "../utils/sourceScan";
 import type { GameStateResponse } from "../gameEngine/gameState";
@@ -1172,5 +1173,286 @@ describe("W3-J AUD-25.13 #2: a funding private offer is presented once to a seat
     const mount = sliceBetween(app, "<FundingPrivateOfferPrompt", "/>");
     expect(mount).toContain("standAside={emergencyWaiting !== null}");
     expect(app).toContain("<EmergencyPurchaseWaitingCard sentence={emergencyWaiting} />");
+  });
+});
+
+/* ================================================================== */
+/*  Phase 3 P3-N027: one presentation per seat for an emergency TRAIN offer (the `train-offer` stage)            */
+/* ================================================================== */
+
+describe("P3-N027: an emergency train offer is presented once per seat -- proposer, answerer, third seat, watcher", () => {
+  /* tradeOnly(): C&O (Alice) owes a train; it offers $60 for PRR's 2-train. PRR's president, Cara, answers; Bob sits
+     at the table with nothing to decide; "" is a seatless watcher. */
+  const PROPOSE = { ProposeTrainPurchase: { game_id: 1, seller_protocol_id: PRR, seller_ticker: "PRR", seller_president: P3, buyer_protocol_id: CO, buyer_ticker: "C&O", model_type: "2", price: "60" } };
+  const ANSWER = (accept: boolean) => ({ AnswerTrainPurchase: { seller_protocol_id: PRR, accept } });
+  const RESCIND = { RescindTrainPurchase: { game_id: 1, seller_protocol_id: PRR } };
+  const offered = () => apply(tradeOnly(), PROPOSE, P1);
+
+  interface Sent { accept: number; reject: number; rescind: number; withdraw: number[] }
+  let sent: Sent;
+
+  /** The shell's three mounts for one viewer, with App's own expressions: the forced modal (`plan={presentedNotice ===
+   *  "emergency" ? emergencyModalPlan : null}`), the waiting card (`emergencyWaiting`, its train-offer arm) and the
+   *  train consent prompt (`sandboxTrainProposal`, `trainOfferConsentRoles`, `dockHold.standingOffer`, the stand-aside). */
+  function Slot({ board: current, who, spectator, presented }: { board: GameStateResponse; who: string; spectator: boolean; presented: boolean }) {
+    const funding = emergencyFundingFor(current, CORRIDOR);
+    const plan = funding ? planOf(current) : null;
+    const surface = emergencySurfaceFor({ sandbox: true, spectator, scrubbing: false, viewerAddress: who, plan });
+    const emergencyModalPlan = surface === "workflow" ? plan : null;
+    const presentedNotice = presented ? "emergency" : "fleetLoss";
+    const named = (address: string | null | undefined) => (!address ? "its president" : address === who ? "you" : label(address));
+    const trade = current.train_purchase_offer ?? null;
+    const ours = plan && trade && trade.buyer_protocol_id === plan.corporationId ? trade : null;
+    const emergencyWaiting =
+      plan && surface === "waiting"
+        ? emergencyWaitingSentence({
+            ticker: plan.corporationTicker,
+            presidentLabel: named(plan.presidentAddress),
+            privateOffer: null,
+            trainOffer: ours
+              ? {
+                  sellerTicker: ours.seller_ticker,
+                  model: ours.model_type,
+                  price: String(ours.price),
+                  sellerPresidentLabel: named(current.public_companies.find((entry) => entry.company_id === ours.seller_protocol_id)?.president),
+                  accepted: ours.accepted === true,
+                }
+              : null,
+            automaticPurchase: plan.stage === "automatic-purchase",
+          })
+        : null;
+    const answerer = trainOfferConsentRoles(current, null).answerer;
+    const proposal: TrainTradeProposal | null =
+      trade && !trade.accepted
+        ? {
+            sellerProtocolId: trade.seller_protocol_id,
+            sellerTicker: trade.seller_ticker,
+            sellerPresident: answerer,
+            sellerPresidentLabel: label(answerer ?? trade.seller_president ?? ""),
+            buyerProtocolId: trade.buyer_protocol_id,
+            buyerTicker: trade.buyer_ticker,
+            modelType: trade.model_type,
+            price: trade.price,
+          }
+        : null;
+    const roles = trainOfferConsentRoles(current, who);
+    return (
+      <>
+        <EmergencyTrainPurchaseModal
+          {...propsFor(current, {
+            plan: presentedNotice === "emergency" ? emergencyModalPlan : null,
+            onRescindTrade: (sellerId) => sent.withdraw.push(sellerId),
+          })}
+        />
+        <EmergencyPurchaseWaitingCard sentence={emergencyWaiting} />
+        <TrainTradePrompt
+          proposal={proposal}
+          viewerIsSeller={roles.viewerIsAnswerer}
+          viewerIsProposer={roles.viewerIsProposer}
+          onAccept={() => (sent.accept += 1)}
+          onReject={() => (sent.reject += 1)}
+          onRescind={() => (sent.rescind += 1)}
+          actionInFlight={inFlight}
+          waitingSentence={dockHoldView({ state: current, mapGrid: CORRIDOR, labelFor: label }).standingOffer}
+          standAside={emergencyWaiting !== null || (presentedNotice === "emergency" && emergencyModalPlan !== null)}
+        />
+      </>
+    );
+  }
+
+  function draw(current: GameStateResponse, who: string, input: { spectator?: boolean; presented?: boolean; busy?: boolean } = {}) {
+    unmountAll();
+    mounted = true;
+    state = current;
+    calls = freshCalls();
+    sent = { accept: 0, reject: 0, rescind: 0, withdraw: [] };
+    inFlight = input.busy ?? false;
+    viewer = who;
+    layerHost = document.createElement("div");
+    document.body.appendChild(layerHost);
+    layerRoot = createRoot(layerHost);
+    act(() => layerRoot.render(<ModalLayerHost />));
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+    act(() => root.render(<Slot board={current} who={who} spectator={input.spectator ?? false} presented={input.presented ?? true} />));
+  }
+
+  /** Every presentation of the standing offer on screen: the consent prompt and the forced modal's standing-offer section. */
+  const prompts = () => Array.from(document.querySelectorAll('[aria-label="Train offer"]'));
+  const modalOffers = () => Array.from(document.querySelectorAll('dialog [aria-label="Offer to another corporation"]'));
+  const offerSurfaces = () => [...prompts(), ...modalOffers()];
+  const cards = () => Array.from(document.querySelectorAll(`[${WAITING_STATUS_ATTRIBUTE}]`));
+  const allButtons = () => Array.from(document.querySelectorAll("button"));
+  const named = (name: string) => allButtons().filter((node) => node.textContent === name);
+  const liveNamed = (name: string) => named(name).filter((node) => !node.disabled);
+  const press = (node: HTMLButtonElement) => act(() => node.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+  /** What a viewer is shown, as text, for the reload comparison. */
+  const picture = () => ({
+    prompts: prompts().map((node) => node.textContent),
+    modal: modalOffers().map((node) => node.textContent),
+    cards: cards().map((node) => node.textContent),
+    buttons: allButtons().map((node) => `${node.textContent}:${node.disabled ? "off" : "on"}`),
+  });
+
+  it("the board is in the authority's train-offer stage: Cara (PRR) answers, Alice (C&O) may withdraw, Bob is neither", () => {
+    const board = offered();
+    expect(emergencyStageFor(board, fundingOf(board))).toBe("train-offer");
+    expect(trainOfferConsentRoles(board, P3)).toMatchObject({ answerer: P3, proposer: P1, viewerIsAnswerer: true, viewerIsProposer: false });
+    expect(trainOfferConsentRoles(board, P2)).toMatchObject({ viewerIsAnswerer: false, viewerIsProposer: false });
+    expect(trainOfferConsentRoles(board, P1)).toMatchObject({ viewerIsAnswerer: false, viewerIsProposer: true });
+  });
+
+  it.each([
+    ["the unrelated third seat (Bob)", P2, false],
+    ["a seatless watcher", "", false],
+    ["the proposer in spectate mode", P1, true],
+  ])("%s reads ONE presentation -- the waiting card -- and has no answer or withdraw control", (_name, who, spectator) => {
+    draw(offered(), who, { spectator });
+    expect(offerSurfaces()).toHaveLength(0);
+    expect(cards()).toHaveLength(1);
+    expect(cards()[0].textContent).toContain("it has offered $60 for PRR's 2-train; waiting on Cara.");
+    expect(allButtons()).toHaveLength(0);
+    expect(document.querySelectorAll('[data-testid="waiting-on-line"]')).toHaveLength(0);
+  });
+
+  it("the answering seller president (Cara) keeps ONE prompt with live Accept / Reject; the card beside it is the status", () => {
+    draw(offered(), P3);
+    expect(offerSurfaces()).toHaveLength(1);
+    expect(prompts()).toHaveLength(1);
+    expect(cards()).toHaveLength(1);
+    expect(cards()[0].textContent).toContain("waiting on you.");
+    expect(liveNamed("Accept")).toHaveLength(1);
+    expect(liveNamed("Reject")).toHaveLength(1);
+    expect(named("Rescind")).toHaveLength(0);
+    expect(named("Withdraw offer")).toHaveLength(0);
+  });
+
+  it("the proposer (Alice) with the forced modal presented reads ONE presentation -- the modal's -- with one Withdraw", () => {
+    draw(offered(), P1);
+    expect(offerSurfaces()).toHaveLength(1);
+    expect(modalOffers()).toHaveLength(1);
+    expect(prompts()).toHaveLength(0);
+    expect(cards()).toHaveLength(0);
+    expect(modalOffers()[0].textContent).toContain("Waiting on Cara to answer.");
+    expect(liveNamed("Withdraw offer")).toHaveLength(1);
+    expect(named("Rescind")).toHaveLength(0);
+    expect(liveNamed("Accept")).toHaveLength(0);
+    expect(liveNamed("Reject")).toHaveLength(0);
+  });
+
+  it("the proposer whose modal is still waiting its turn in the notice chain keeps the prompt -- never left with nothing", () => {
+    draw(offered(), P1, { presented: false });
+    expect(modalOffers()).toHaveLength(0);
+    expect(offerSurfaces()).toHaveLength(1);
+    expect(prompts()).toHaveLength(1);
+    expect(liveNamed("Rescind")).toHaveLength(1);
+    expect(liveNamed("Accept")).toHaveLength(0);
+    expect(liveNamed("Reject")).toHaveLength(0);
+  });
+
+  it("accept: Cara's Accept sends once; the accepted offer leaves every prompt, and only the status remains", () => {
+    draw(offered(), P3);
+    press(liveNamed("Accept")[0]);
+    expect(sent).toMatchObject({ accept: 1, reject: 0, rescind: 0 });
+    const accepted = apply(offered(), ANSWER(true), P3);
+    expect(accepted.train_purchase_offer).toMatchObject({ accepted: true }); // #1247: the sale is the game's to settle
+    for (const who of [P2, P3, ""]) {
+      draw(accepted, who);
+      expect([who, offerSurfaces().length, cards().length]).toEqual([who, 0, 1]);
+      expect(cards()[0].textContent).toContain("PRR accepted its offer for the 2-train, and the sale is being settled.");
+      expect(allButtons()).toHaveLength(0);
+    }
+    draw(accepted, P1);
+    expect(prompts()).toHaveLength(0);
+    expect(modalOffers()).toHaveLength(1);
+    expect(modalOffers()[0].textContent).toContain("The offer was accepted and is being settled.");
+    expect(named("Withdraw offer")).toHaveLength(0);
+    expect(named("Accept")).toHaveLength(0);
+  });
+
+  it("reject: Cara's Reject sends once; the offer clears and only the proposer's own workflow carries on", () => {
+    draw(offered(), P3);
+    press(liveNamed("Reject")[0]);
+    expect(sent).toMatchObject({ accept: 0, reject: 1, rescind: 0 });
+    const declined = apply(offered(), ANSWER(false), P3);
+    expect(declined.train_purchase_offer ?? null).toBeNull();
+    for (const who of [P2, P3, ""]) {
+      draw(declined, who);
+      expect([who, offerSurfaces().length, cards().length]).toEqual([who, 0, 1]);
+      expect(allButtons()).toHaveLength(0);
+    }
+    draw(declined, P1);
+    expect(prompts()).toHaveLength(0);
+    expect(modalOffers()).toHaveLength(0);
+  });
+
+  it("rescind: the modal's Withdraw (and the deferred prompt's Rescind) send once; the offer clears everywhere", () => {
+    draw(offered(), P1);
+    press(liveNamed("Withdraw offer")[0]);
+    expect(sent.withdraw).toEqual([PRR]);
+    expect(sent.rescind).toBe(0);
+    draw(offered(), P1, { presented: false });
+    press(liveNamed("Rescind")[0]);
+    expect(sent.rescind).toBe(1);
+    const withdrawn = apply(offered(), RESCIND, P1);
+    expect(withdrawn.train_purchase_offer ?? null).toBeNull();
+    for (const who of [P1, P2, P3, ""]) {
+      draw(withdrawn, who);
+      expect([who, offerSurfaces().length]).toEqual([who, 0]);
+      expect(named("Rescind")).toHaveLength(0);
+    }
+  });
+
+  it("reconnect / reload: a fresh mount from the same board (through JSON, as the room re-sends it) re-derives the same single presentation", () => {
+    for (const [who, spectator] of [[P1, false], [P2, false], [P3, false], ["", false], [P1, true]] as const) {
+      draw(offered(), who, { spectator });
+      const before = picture();
+      draw(JSON.parse(JSON.stringify(offered())) as GameStateResponse, who, { spectator });
+      expect([who, spectator, picture()]).toEqual([who, spectator, before]);
+      expect(offerSurfaces().length).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it("a queued / in-flight submission: still one presentation; the answerer's and proposer's controls grey, the third seat gains nothing", () => {
+    draw(offered(), P3, { busy: true });
+    expect(prompts()).toHaveLength(1);
+    expect(named("Accept").map((node) => node.disabled)).toEqual([true]);
+    expect(named("Reject").map((node) => node.disabled)).toEqual([true]);
+    draw(offered(), P1, { busy: true });
+    expect(offerSurfaces()).toHaveLength(1);
+    expect(named("Withdraw offer").map((node) => node.disabled)).toEqual([true]);
+    draw(offered(), P1, { busy: true, presented: false });
+    expect(named("Rescind").map((node) => node.disabled)).toEqual([true]);
+    draw(offered(), P2, { busy: true });
+    expect(offerSurfaces()).toHaveLength(0);
+    expect(allButtons()).toHaveLength(0);
+  });
+
+  it("no emergency standing: an ordinary train offer's prompt is exactly as before on every seat", () => {
+    const ordinary = board({
+      corps: [
+        { id: CO, ticker: "C&O", president: P1, trains: ["2"], treasury: "300", holdings: [[P1, 60]], price: 90 },
+        { id: PRR, ticker: "PRR", president: P3, trains: ["2"], treasury: "500", holdings: [[P3, 40]], price: 50 },
+      ],
+      cash: { [P1]: 100, [P2]: 300, [P3]: 300 },
+    });
+    expect(emergencyFundingFor(ordinary, CORRIDOR)).toBeNull();
+    const pending = apply(ordinary, PROPOSE, P1);
+    expect(pending.train_purchase_offer).toMatchObject({ seller_protocol_id: PRR, buyer_protocol_id: CO });
+    for (const who of [P1, P2, P3, ""]) {
+      draw(pending, who);
+      expect([who, prompts().length, cards().length]).toEqual([who, 1, 0]);
+    }
+    draw(pending, P2);
+    expect(document.querySelectorAll('[data-testid="waiting-on-line"]')).toHaveLength(1);
+    expect(liveNamed("Accept")).toHaveLength(0);
+  });
+
+  it("the shell hands the train prompt the card's mount condition and the presented modal's", () => {
+    const app = readShell();
+    const mount = sliceBetween(app, "<TrainTradePrompt", "/>");
+    expect(mount).toContain('standAside={emergencyWaiting !== null || (presentedNotice === "emergency" && emergencyModalPlan !== null)}');
+    expect(app).toContain('plan={presentedNotice === "emergency" ? emergencyModalPlan : null}');
   });
 });

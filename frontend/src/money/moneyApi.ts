@@ -131,8 +131,8 @@ export async function walletChallenge(gameId: string, wallet: string, port: Sess
   const { text, nonce, expiresAt, replaces, authorizationWallet } = got.value;
   if (!str(text, 2048) || !str(nonce, 64) || !num(expiresAt)) return badAnswer();
   /* Owner ruling 2026-10-07: the server's word that this wallet is the account's own Authorization Wallet (said only
-     then; absent otherwise and from an older server). */
-  if (authorizationWallet !== undefined && authorizationWallet !== true) return badAnswer();
+     then; absent otherwise and from an older server; `false` is read as absent). */
+  if (authorizationWallet !== undefined && typeof authorizationWallet !== "boolean") return badAnswer();
   const same = authorizationWallet === true ? { authorizationWallet: true as const } : {};
   if (replaces === undefined) return { ok: true, value: { text, nonce, expiresAt, ...same } };
   if (replaces !== null && !str(replaces, 96)) return badAnswer();

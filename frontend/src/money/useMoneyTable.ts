@@ -535,11 +535,22 @@ export function useMoneyTable(input: MoneyTableInput): MoneyTable {
      selects no wallet: the run re-reads Keplr's account, and another account there is simply linked instead. */
   const acknowledgeSameWallet = useCallback(async () => {
     if (needs === null || needs.kind !== "same-wallet") return;
-    const acks = services.sameWalletAcks ?? browserSameWalletAcks();
-    acks.acknowledge(sameWalletAccountKey((latest.current.port ?? sessionPort()).account?.username), needs.wallet);
+    const named = needs.wallet;
     const then = needs.then;
     setNeeds(null);
     setError(null);
+    /* "Continue with THIS wallet": if Keplr has moved to another account since the card was shown, nothing is
+       acknowledged and nothing runs -- the player presses again for the wallet Keplr is on now (asked as usual). */
+    const pinned = services.pin();
+    if (pinned.ok) {
+      const now = await services.wallet.account(pinned.pin);
+      if (now.ok && now.value.address !== named) {
+        setError(`Keplr is on ${now.value.address} now, not ${named}. Nothing was signed or linked; press the button again to use the wallet Keplr is on.`);
+        return;
+      }
+    }
+    const acks = services.sameWalletAcks ?? browserSameWalletAcks();
+    acks.acknowledge(sameWalletAccountKey((latest.current.port ?? sessionPort()).account?.username), named);
     await run(then);
   }, [needs, run, services]);
 

@@ -318,7 +318,7 @@ export function MoneyPanel({ room, onStart, busy = false, port, services }: Mone
           {/* Owner ruling 2026-10-07: allowed, warned once per account and Authorization Wallet -- before that same
               address is first bound to a seat. Nothing was signed or linked; continuing runs the pressed action again
               with whatever wallet Keplr is on. */}
-          <p style={styles.detail} data-testid="money-same-wallet-text">
+          <p style={styles.detail} role="status" aria-live="polite" data-testid="money-same-wallet-text">
             <strong>{SAME_WALLET_TITLE}.</strong> {SAME_WALLET_SENTENCE}
           </p>
           <p style={styles.faint} data-testid="money-same-wallet-wallets">

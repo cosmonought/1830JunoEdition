@@ -168,15 +168,18 @@ describe("owner ruling 2026-10-07: the Authorization Wallet as a game's financia
 });
 
 describe("owner ruling 2026-10-07: the server's word on the wire", () => {
-  it("the challenge answer's `authorizationWallet` is read only as `true`; absent (another wallet, an older server) is none; anything else is a bad answer", async () => {
+  it("the challenge answer's `authorizationWallet`: `true` is the word; absent or `false` (another wallet, an older server) is none; a non-boolean is a bad answer", async () => {
     const port = accountPort();
     port.answer("money/wallet-challenge", 200, challenge(TEST_WALLET, true));
     port.answer("money/wallet-challenge", 200, challenge(WALLET_A, false));
+    port.answer("money/wallet-challenge", 200, { ...challenge(WALLET_A, false), authorizationWallet: false });
     port.answer("money/wallet-challenge", 200, { ...challenge(TEST_WALLET, false), authorizationWallet: "yes" });
     const same = await walletChallenge("g_table", TEST_WALLET, port);
     expect(same.ok && same.value.authorizationWallet).toBe(true);
     const other = await walletChallenge("g_table", WALLET_A, port);
     expect(other.ok && "authorizationWallet" in other.value).toBe(false);
+    const saidFalse = await walletChallenge("g_table", WALLET_A, port);
+    expect(saidFalse.ok && "authorizationWallet" in saidFalse.value).toBe(false);
     expect((await walletChallenge("g_table", TEST_WALLET, port)).ok).toBe(false);
   });
 });
@@ -212,6 +215,11 @@ describe("owner ruling 2026-10-07: the acknowledgement's scope -- this account x
     const none = createSameWalletAcks(() => null);
     none.acknowledge(ACCOUNT, TEST_WALLET);
     expect(none.has(ACCOUNT, TEST_WALLET)).toBe(true);
+    /* A damaged record is replaced by the next acknowledgement (never a reason to ask on every page load). */
+    const damaged = memoryStorage();
+    damaged.setItem(SAME_WALLET_ACK_STORAGE_KEY, "{not json");
+    createSameWalletAcks(() => damaged).acknowledge(ACCOUNT, TEST_WALLET);
+    expect(createSameWalletAcks(() => damaged).has(ACCOUNT, TEST_WALLET)).toBe(true);
   });
 });
 
@@ -300,6 +308,26 @@ describe("owner ruling 2026-10-07: the panel's warning at the binding boundary",
     expect(byTestId("money-same-wallet")).toBeNull();
     /* No account or profile route was touched: the account is not changed by the choice. */
     expect(paths(port).some((path) => path.startsWith("account/") || path.startsWith("profile/"))).toBe(false);
+  });
+
+  it("'Continue with this wallet' after Keplr moved to ANOTHER wallet: nothing acknowledged, nothing signed or linked -- the player presses again for the wallet Keplr is on", async () => {
+    const storage = memoryStorage();
+    const services = { ...testServices({ storage }), sameWalletAcks: createSameWalletAcks(() => storage) };
+    installMoneyServicesForTests(services);
+    act(() => updateMoneySession({ wallet: "connected", address: TEST_WALLET, confirmedUntil: null }));
+    const port = accountPort();
+    port.answer("money/wallet-challenge", 200, challenge(TEST_WALLET, true));
+    act(() => root.render(<MoneyPanel room={room(fundingTable())} onStart={() => undefined} services={services} port={port} />));
+    await settle();
+    await click(byTestId("money-action-ante"));
+    expect(byTestId("money-same-wallet")).not.toBeNull();
+    services.wallet.address = WALLET_A;
+    await click(byTestId("money-same-wallet-continue"));
+    expect(byTestId("money-same-wallet")).toBeNull();
+    expect(byTestId("money-error")?.textContent).toBe(`Keplr is on ${WALLET_A} now, not ${TEST_WALLET}. Nothing was signed or linked; press the button again to use the wallet Keplr is on.`);
+    expect(storage.getItem(SAME_WALLET_ACK_STORAGE_KEY)).toBeNull();
+    expect(prompts(services.wallet)).toEqual([]);
+    expect(paths(port)).toEqual(["money/wallet-challenge"]);
   });
 
   it("'Not now' closes it: nothing signed, nothing kept -- the next press asks again (no acknowledgement was given)", async () => {

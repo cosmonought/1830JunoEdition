@@ -17,7 +17,8 @@
    WHAT IS REMEMBERED, AND WHERE: one acknowledgement per ACCOUNT x AUTHORIZATION-WALLET ADDRESS, in this browser's
    `localStorage` (the app's `1830juno.` namespace, as the tutorial and notice acknowledgements). The record holds only a
    SHA-256 digest of the account key (`account:<username>`) and the address -- never the username, the address, an id
-   or a secret in the clear -- so it survives a reload and a new sign-in (a new session) on this browser, applies to
+   or a secret in the clear (a digest only: a guessed pair could be confirmed by whoever reads this browser's storage)
+   -- so it survives a reload and a new sign-in (a new session) on this browser, applies to
    every table of that account, and does not carry to another account on the same browser or to a replacement
    Authorization Wallet (a new combination is warned once again). Another device asks once more. Bounded (the newest
    `SAME_WALLET_ACK_MAX` records); an unusable storage degrades to this page's memory, so the warning is never shown in
@@ -43,7 +44,9 @@ export interface SameWalletAcks {
   acknowledge(accountKey: string, wallet: string): void;
 }
 
-/** The digest a record is kept under: neither the account nor the address can be read back from it. */
+/** The digest a record is kept under: neither the account nor the address is stored in the clear (a digest, so someone
+ *  who can read this browser's storage could still confirm a pair they already guessed -- no more than the account key
+ *  and wallet addresses this app already keeps here in the clear reveal). */
 export function sameWalletAckDigest(accountKey: string, wallet: string): string {
   return sha256Hex(`18COSMOS/SAME-WALLET-ACK/v1\n${accountKey}\n${wallet}`);
 }
@@ -75,8 +78,9 @@ export function createSameWalletAcks(storage: () => KeyValueStorage | null): Sam
       const digest = sameWalletAckDigest(accountKey, wallet);
       memory.add(digest);
       const store = storage();
-      const list = readList(store);
-      if (store === null || list === null) return;
+      if (store === null) return;
+      /* An unreadable or damaged record is replaced (never kept as a reason to ask again on every page load). */
+      const list = readList(store) ?? [];
       const next = [...list.filter((entry) => entry !== digest), digest].slice(-SAME_WALLET_ACK_MAX);
       try {
         store.setItem(SAME_WALLET_ACK_STORAGE_KEY, JSON.stringify(next));

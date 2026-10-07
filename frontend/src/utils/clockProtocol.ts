@@ -15,9 +15,11 @@
 //                the next one. A valid inter-player offer that puts its proposer in a waiting state (a train offer,
 //                and -- owner, 2026-10-06 -- every other offer that suspends the proposer's own required action)
 //                freezes the proposer's clock and gives the recipient a distinct 10:00 to respond (never an overdue
-//                timer); unanswered, the offer expires, the proposer resumes exactly what was left. Two declines
-//                (rejections or expiries) per direction per Operating Round, Live only. No count of offers and no
-//                history length ever limits them. At 20:00 the seat is OVERDUE: the first and second may cure until
+//                timer); accepted, rejected, expired or countered, a proposer still owing the same decision resumes
+//                exactly what was left (owner, 2026-10-07: optional offers never refresh the allowance). Two declines
+//                (rejections or expiries) per direction per ROUND INSTANCE (each operating sub-round -- OR 2.1 and
+//                OR 2.2 are separate -- or Stock Round instance), Live only. No count of offers and no history
+//                length ever limits them. Timed Async: an offer's proposer's deadline keeps running (`running`). At 20:00 the seat is OVERDUE: the first and second may cure until
 //                30:00; the N-1 foreclosure vote only decides the minute-30 outcome (neutral timeout annulment
 //                otherwise); the third expiry forecloses at once (challengeable money). Voluntary pause and resume:
 //                unanimous. A server continuity break while the game is still playable: SYSTEM PAUSE, unanimous

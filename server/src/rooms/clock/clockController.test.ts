@@ -5,7 +5,7 @@
 // controlled time. What only real offers prove: the Live train-offer response timer freezes the proposer's clock
 // exactly; an unanswered offer is CLOSED BY THE SERVER at 10:00 (the proposer's rescission, stamped at the exact
 // moment) and the proposer resumes exactly what was left; a rejection or an expiry counts toward the two-decline
-// limit per direction per Operating Round; the third proposal in one direction is refused with the owner's sentence
+// limit per direction per round instance (operating sub-round); the third proposal in one direction is refused with the owner's sentence
 // while another direction stays open; an answer that arrives after the response time ended is refused (the offer
 // is gone) rather than accepted late.
 
@@ -188,7 +188,7 @@ describe("Live train offers through the controller (real engine offers)", () => 
     assert.deepEqual(h.record().obligation?.seat, P1);
   });
 
-  test("two declines (a rejection, an expiry) per direction per Operating Round; the third proposal is refused with the owner's sentence; another direction stays open", async () => {
+  test("two declines (a rejection, an expiry) per direction per round instance (this operating sub-round); the third proposal is refused with the owner's sentence; another direction stays open", async () => {
     const h = harness();
     await h.deal();
     await h.submit(P1, proposeTrain(NYC, "2", "50"));

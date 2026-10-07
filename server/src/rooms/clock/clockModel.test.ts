@@ -434,6 +434,7 @@ describe("Live train offer: the proposer's clock freezes; the recipient has a di
     t.advance(10 * MIN);
     t.move(B, offering(offerOf("private", B, A, 8)), "propose");
     assert.equal(t.record.obligation?.seat, A, "A owes the answer to the counter");
+    assert.equal(t.remaining(), 20 * MIN, "A answers within what its own deadline has left -- never a fresh pace");
     t.advance(10 * MIN);
     t.move(A, facts(turn(A, 0)), "reject");
     assert.deepEqual([t.record.obligation?.seat, t.remaining()], [A, 10 * MIN], "the counter chain ran on A's deadline");
@@ -1273,6 +1274,22 @@ describe("Undo never manufactures a clock", () => {
       assert.equal(t.remaining(), left);
     }
     assert.equal(left, 5 * MIN - 40 * SEC);
+  });
+
+  test("REVIEW (last correction): the answerer undoing its own rejection is charged its undo, and a later rescission charges the proposer only the time the offer really stood -- never that undo again", () => {
+    const t = new Table("live");
+    t.advance(5 * MIN); // A has 15:00
+    t.move(A, offering(offerOf("trade", A, B, 1)), "propose");
+    t.advance(2 * MIN);
+    t.move(B, facts(turn(A, 0)), "reject");
+    const rejectIndex = t.index;
+    assert.equal(t.remaining(), 15 * MIN);
+    t.advance(MIN); // A runs 1:00 of its own
+    t.move(B, offering(offerOf("trade", A, B, 1)), "revert", { revertTarget: rejectIndex });
+    assert.deepEqual(t.record.parked.map((p) => [p.seat, p.remaining_ms]), [[A, 14 * MIN]], "A is charged its own 1:00");
+    t.advance(MIN);
+    t.move(A, facts(turn(A, 0)), "rescind");
+    assert.equal(t.remaining(), 11 * MIN, "15:00 - A's own 1:00 - the 3:00 the offer stood");
   });
 
   test("REVIEW (last correction): undoing a Live RESCISSION charges the proposer exactly its own run since -- never the offer's standing time twice; an accepted answer then resumes that remainder", () => {

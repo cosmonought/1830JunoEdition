@@ -3,7 +3,7 @@
 **Read this file first.** It is the small, current map of the project. It states where things stand, which documents
 are the current truth, what must not change, and how work is done here.
 
-**Last updated:** 2026-10-06, by PHASE 3 FINAL CLOCKS / REMEDIES (lane A) on `phase3/preplaytest-final-clocks-remedies` (from `3fecd54`; NOT merged, NOT integrated; source / tests / docs -- nothing deployed; no AWS, Juno or JUNOX mutation; no production KMS key; the escrow contract unchanged): the server-authoritative Live / Async / No-deadline table clock, the voluntary and system pauses, the overdue / strike / N-1 model and the FP4 server and UI wiring of escrow 2.1.0's remedies. See the "Final clocks / remedies" paragraph below and `docs/phase3/PHASE3_FINAL_CLOCKS_REMEDIES.md`; record: Project `claude/PHASE3_FINAL_CLOCKS_REMEDIES_<head>_2026-10-06.md`.
+**Last updated:** 2026-10-07, by PHASE 3 FINAL CLOCKS / REMEDIES -- LAST OWNER CORRECTION (lane A) on `phase3/preplaytest-final-clocks-remedies` (from `3fecd54`; NOT merged, NOT integrated; source / tests / docs -- nothing deployed; no AWS, Juno or JUNOX mutation; no production KMS key; the escrow 2.1.0 contract SOURCE changed: approvals judged at the sealed `final_at` -- any earlier noncanonical 2.1 Wasm hash is superseded): the server-authoritative Live / Async / No-deadline table clock, the voluntary and system pauses, the overdue / strike / N-1 model and the FP4 server and UI wiring of escrow 2.1.0's remedies. See the "Final clocks / remedies" paragraph below and `docs/phase3/PHASE3_FINAL_CLOCKS_REMEDIES.md`; record: Project `claude/PHASE3_FINAL_CLOCKS_REMEDIES_<head>_2026-10-06.md`.
 
 **Before that:** 2026-10-03, by PHASE 1 FRESH-HOST HARDENING on `recon/phase1-fresh-host-hardening` (from `61f6c82`; NOT merged; host scripts / operator tooling / tests / docs -- no runtime, image, Dockerfile, Terraform `.tf`, authority, fencing, KMS, table, CloudFront, ALB, NAT or Juno change; nothing run against AWS): **step 13 refused on the fresh host** (`i-01fe56536bf591382`, `sh1-5b4756d-arm64-r1` / `sha256:df981e83...`): the pull and `release.env` (`GS_MEASURE=1`) succeeded, `gs-preflight` refused all five systemd starts, the unit hit its start limit; nothing ran, no authority moved, no HOLD. **Root cause, reproduced with the real CLI** (Amazon Linux 2023's own docker 25.0.14 and 29.8.2, real daemon): `docker container inspect -f` of a MISSING container prints an empty line and exits 1 -- exactly as when the daemon cannot answer -- so `inspect || printf absent` read "\nabsent", fell through to `docker rm` and refused every first start; the offline stub (exit 1, no output) let every gate pass. **Fix:** `gs-preflight` asks a LISTING (`docker container ls --all --filter name=^/?gs-server$`): empty = none; running / restarting / paused / removing refuse; exited / created / dead are removed (`rm` without `-f`); a docker failure or any other answer refuses. **Same-class audit, fixed:** `stop_server` (a docker failure no longer proves "stopped"), `running_digest` ("unknown", never "none", when docker cannot answer), `http_code` / `gs-health`'s origin probe (no more `000000`). **Tests:** `tests/host-scripts.test.sh` stubs answer as the real CLIs (the unit's start runs the real preflight with systemd's start limit; the incident replayed; 83/0), the new `tests/preflight-real-docker.test.sh` (real daemon; 25/0, also with AL2023's CLI) -- a new owner-gate gate. **Live remediation (DESIGN, not executed): runbook 13r** -- the host is NOT replaced: disarm (`stop -UntilDeploy`), then the reviewed `gs-host install-script` (`infra/aws/single-host/host-script-install.sh`: one atomic, SHA-256-bound rename per file, server down, deploy lock) for exactly the three changed scripts, then step 13 again unchanged. Terraform's user data still embeds the host-create scripts: **plan `stacks/single-host` (step 22b) only from the host-create commit `5b4756d`** (a later commit replaces the instance). **Comprehensive validation: PENDING OWNER GATE** (plus the three Windows PowerShell 5.1 regressions `infra/aws/single-host/tests/gs-host-*.test.ps1`). **Step 13: STOPPED -- do not resume until the owner gate passes and 13r is authorised.** Record: Project `claude/PHASE1_FRESH_HOST_HARDENING_2026-10-03.md`.
 
@@ -397,8 +397,14 @@ proven by the server clock / FP4 suites (node:test, DynamoDB Local clock conform
 **Live** = a 20-minute clock per REQUIRED action (one responsibility derivation for timer, UI and evidence); the **trade
 response** = 10 minutes, Live only, for every inter-player offer that puts its proposer in a waiting state (the owner's train
 rule, generalised by the owner's ruling of 2026-10-06), the proposer frozen exactly, an unanswered expiry closed by the server
-with no strike and an exact resume; **two directional declines per Operating Round, Live only** (Async has no decline limit);
-**no offer count and no history-length rule** (offer churn is bounded only by a transport frequency limit);
+with no strike; **optional offers never refresh the action allowance** (owner, 2026-10-07: accepted, rejected, expired or
+countered, a proposer still owing the same decision resumes the SAME remainder; a genuine handoff is fresh; Timed Async parks
+keep RUNNING and the server closes an offer at its proposer's deadline -- colluding offers cannot keep an Async deadline
+alive); **two directional declines per ROUND INSTANCE, Live only** (each operating sub-round -- OR 2.1 and OR 2.2 are
+separate -- and each Stock Round instance for SR-legal offers; from the board's own round identity; Async has no decline
+limit); **no offer count and NO GAMEPLAY-HISTORY CAP of any size** (owner, 2026-10-07: the 10,000-entry refusal and freeze
+are removed, nothing replaces them; one DynamoDB item per entry, paged loads, a streamed cumulative log hash with segment
+checkpoints, paged catch-up; offer churn is bounded only by a transport frequency limit);
 the **first / second overdue** -> a 10-minute cure / resolution window inside the **30-minute** active-action horizon; the
 **N-1 vote only decides the minute-30 foreclosure outcome**, and a **cure defeats it until finality** (otherwise the neutral
 timeout annulment); the **third overdue** -> automatic gameplay foreclosure with the money challengeable on chain; the
@@ -411,11 +417,17 @@ owner's disclosure acknowledged and persisted before every ante); the **universa
 (sealed evidence with its strike ledger -> the dedicated REMEDY signature, fail closed: a timed money table is neither opened
 nor funded without it -> one durable intent -> the chain, on the clock lane's word). Gameplay and settlement versions unchanged (rules 13, settlement `[10, 11, 12, 13]`). **Not marked:**
 2.1 deployed; the canonical 2.1 checksum certified; a KMS remedy signer deployed; mainnet ready. The owner's policy
-correction of 2026-10-06 is applied (design record §2, §3, §8). **Owner decision required:** a sealed N-1 remedy whose seat
-approvals can no longer land on escrow 2.1.0 (a horizon passed, or a key rotated) is held unchanged -- the protocol has no
-recovery for it without a new vote or another outcome (design record §3, §8). Also for the owner (design record §8): what a
-timed money table frozen at the general 10,000-entry log cap should become, and whether an accepted offer should still
-refresh its proposer (colluding trades can otherwise extend a turn, at the transport rate).
+correction of 2026-10-06 is applied (design record §2, §3, §8). **Last owner correction (2026-10-07), authoritative:** remedy
+approvals are valid through the REMEDY SEAL, not the later landing -- escrow 2.1.0 judges each REMEDY-APPROVE at the sealed
+decision's `final_at` (horizon after it, the key the seat held then, from an uncapped retired-key history; signed bytes and
+protocol versions unchanged), and the server seals only approvals conclusively valid at finality (keys read from a block past
+the final second, at its height; unread -> minute 30 waits, deciding nothing, then decides at its own moment); a sealed remedy
+is immutable (re-attested only as the same decision); no arbitrary gameplay-history hard cap; optional offers do not refresh
+the required-action allowance; Live declines reset per operating sub-round / round instance, SR-legal offers per Stock Round
+instance. Exact incompatibility for a bounded in-memory hot window (not implemented): a certified engine-state checkpoint
+format bound to the cumulative hash (design record §5a). Deploy the server before the bundle (paged catch-up hello). **Owner
+decision (design record §8):** Live ACCEPTED same-decision offers are unbounded under the exact-freeze ruling (colluding
+trades at ~10 minutes each). Record: Project `claude/PHASE3_FINAL_CLOCKS_REMEDIES_LAST_CORRECTION_<head>_2026-10-07.md`.
 
 **LIVE-4 status (2026-09-29): CLOSED.** Integrated at `6da8a1f` (corpus-gate certified), tooled / documented by L4-6
 (`89a4b5b`) and certified by L4-7 (`f1736bf` on it, plus a documentation-only evidence commit). **LIVE-5 is in progress: L5-1 … L5-6 are done and integrated (`e1f1280`); L5-7 (the AWS runtime convergence: the substrate wired into `GS_STORAGE=aws`) is done on its feature branch `live5/l5-7-aws-runtime`, and L5-8 (the AWS infrastructure and deployment: `infra/aws/`, the bootstrap and verifier; nothing deployed) on `live5/l5-8-aws-infrastructure` on top of it, owner gates pending. LIVE-6 L6-1 (non-primary serving and routing) is done on its feature branch `live6/l6-1-nonprimary-routing` (from the L5-7 head), its owner gate pending; LIVE-6 L6-3 (the AWS operator tooling) is done on its own feature branch `live6/l6-3-dynamodb-operator-tooling` from L5-7, its owner gate pending; L6-2 next.**

@@ -488,8 +488,11 @@ export function foldBatch(record: GameClockRecord, batch: ClockBatch, now: numbe
         x.emit("trade-begin", at, { proposer, recipient: answerer, offer: after.key, index: batch.first, parked_ms: d.parked.find((p) => p.seat === proposer)?.remaining_ms ?? null });
       } else {
         /* ASYNC (any offer), or a Live offer that suspends nothing of its proposer's: the answerer owes the next required
-           decision under the ordinary responsibility model (the Async pace; the Live action clock). */
-        fresh(D, "offer");
+           decision under the ordinary responsibility model (the Async pace; the Live action clock). An Async answerer
+           whose OWN deadline stands parked behind this negotiation (a counter made to the original proposer) answers
+           within what that deadline has left -- never a fresh pace on top of it. */
+        const ownPark = !isLive ? d.parked.find((p) => p.seat === D.seat && p.since !== undefined) : undefined;
+        fresh(D, "offer", null, ownPark !== undefined && allowance !== null ? Math.min(allowance, parkedRemainingAt(ownPark, at)) : allowance);
       }
     } else {
       fresh(D, "offer");
@@ -653,6 +656,9 @@ function restoreUndo(x: Draft, batch: ClockBatch): void {
       began_at: at,
       began_index: prior.began_index,
       timer: prior.timer === null ? null : { remaining_ms: clamp(prior.timer.remaining_ms - charge), since: at },
+      /* The charge is not part of this run's own use: a later measure of the run (a rescission's `ran`) excludes it, so
+         nothing is charged twice. */
+      initial_ms: prior.initial_ms === null ? null : clamp(prior.initial_ms - charge),
     };
     /* A park restored for the seat whose CURRENT run began at the undone batch (it resumed there -- the answer to its
        offer is what is undone) is never given back more than that run has left: an undo never gives time. A running
@@ -1304,7 +1310,8 @@ export function recoverGap(record: GameClockRecord, input: { readonly now: numbe
   if (D === null) {
     d.obligation = null;
   } else {
-    const standing = offer !== null && offer.proposer !== null && offer.answerer === D.seat && offer.proposer !== D.seat ? offer : null;
+    /* (A funding offer is made TO the seat that owes the decision: it suspends nobody -- as `foldBatch` folds it.) */
+    const standing = offer !== null && offer.proposer !== null && offer.answerer === D.seat && offer.proposer !== D.seat && offer.slot !== "funding" ? offer : null;
     let keptPark: ClockParked | null = null;
     if (standing !== null && standing.proposer !== null) {
       /* The proposer's own park: of THIS offer, or -- the gap closed its earlier offer and it proposed again -- of an

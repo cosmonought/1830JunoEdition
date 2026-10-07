@@ -29,7 +29,7 @@ import * as path from "path";
 import { GetItemCommand, ListTablesCommand, PutItemCommand, ScanCommand, type AttributeValue, type DynamoDBClient } from "@aws-sdk/client-dynamodb";
 
 import { createDynamoDbClient, deadline, dynamoLocalTargetFromEnv, DYNAMODB_LOCAL_ENV } from "../../aws/awsClients";
-import { attributeValueSize, DIRKEYS_KEY, FINKEYS_KEY, gamePk, headKey, queryAll, readHead, SIZE_POLICY, type Item } from "../../aws/game/gameTable";
+import { attributeValueSize, DIRKEYS_KEY, FINKEYS_KEY, gamePk, headKey, LOG_PREFIX, logSk, queryAll, readHead, SIZE_POLICY, type Item } from "../../aws/game/gameTable";
 import { RoomSession, type ServerLogEntry } from "../../../../frontend/src/utils/roomSession";
 import { sandboxReplayProviders } from "../../../../frontend/src/gameEngine/replayProviders";
 import { DH, operatingBoard, P1, P2, PRR } from "../../../../frontend/src/utils/offerFixtures74";
@@ -660,6 +660,13 @@ describe("L5-2 DynamoDB game table: the write engine, the size guards and the in
     assert.ok(largest < 4 * 1024, `the largest item is ${largest} bytes, far under the ${SIZE_POLICY.itemBytes}-byte item bound`);
     const head = items.find((item) => item.sk?.S === "HEAD");
     assert.ok(head !== undefined && sizeOf(head) < 1024, "the HEAD holds counters, never history");
+  });
+
+  test("NO HISTORY CAP: a log key never runs out -- past 10^10 entries the key widens and still sorts after every earlier one; every key ever stored is unchanged", () => {
+    const keys = [0, 1, 9_999_999_998, 9_999_999_999, 10_000_000_000, 10_000_000_001, 99_999_999_999, Number.MAX_SAFE_INTEGER].map(logSk);
+    assert.deepEqual([...keys].sort(), keys, "lexicographic order is index order");
+    assert.ok(keys.every((k) => k.startsWith(LOG_PREFIX)));
+    assert.equal(logSk(42), "LOG#0000000042");
   });
 
   test("a batch AT the DynamoDB bound commits in one transaction (the HEAD and every entry together)", async () => {

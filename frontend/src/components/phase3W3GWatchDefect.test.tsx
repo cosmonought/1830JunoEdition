@@ -143,18 +143,20 @@ describe("AUD-25.16 (A): Watch identity", () => {
     expect(shell).toContain("const viewerAddress = sandbox ? localId : wallet.address;");
   });
 
-  it("BY DESIGN (W3-J): the log hello is unchanged -- read-only Watch is enforced where the tab sends, not by a new hello field", () => {
+  it("BY DESIGN (W3-J): the log hello carries no Watch field -- read-only Watch is enforced where the tab sends, not by a new hello field", () => {
     /* The control frames are CLOSED (LIVE-2 §11.2: an unknown field is `bad-frame`), so a `watch` field on the hello
        would be refused by every server that predates it. A Watch tab never sends a gameplay move: its send gate refuses
        (`boardSendRefusal`) and its link stamps no position (`appliedPosition` -> notCurrent) -- see
-       `phase3W3JWatchStaleBoard.test.tsx`. */
+       `phase3W3JWatchStaleBoard.test.tsx`. The one field added since is the TRANSPORT capability `pages: 1` (Phase 3
+       final clocks, owner ruling 2026-10-07: a history of any length is caught up in pages; the server ships first). */
     const wire: string[] = [];
     const socket = { send: (data: string) => wire.push(data), close: () => {}, onopen: null, onmessage: null, onclose: null, onerror: null } as import("../utils/serverLink").SocketLike;
     const link = connectServerLink({ url: "ws://test", gameId: GAME, build: "build-1", onEntries: () => {}, socketFactory: () => socket });
     socket.onopen?.({});
     const hello = JSON.parse(wire[0]) as Record<string, unknown>;
     expect(hello.kind).toBe("hello");
-    expect(Object.keys(hello).sort()).toEqual(["baseIndex", "build", "gameId", "kind"]);
+    expect(Object.keys(hello).sort()).toEqual(["baseIndex", "build", "gameId", "kind", "pages"]);
+    expect(hello.pages).toBe(1);
     link.close();
   });
 

@@ -878,6 +878,9 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
     /* Escrow 2.1.0: any seated wallet may ask the resolver for the EXCEPTIONAL review of an in-progress 2.1.0 game (once;
        Juno records the first request). Juno's own route: offered even while this server holds the table. */
     if (g !== null && g.state === "IN_PROGRESS" && claim.chainSeatIndex !== null && (g.policy === "timed_remedy_v1" || g.policy === "no_deadline") && (g.review_request ?? null) === null) out.push("request-review");
+    /* Escrow 2.1.0: the universal unanimous neutral annulment also reaches a DISPUTED game (a challenged third-strike
+       foreclosure, say): the challenger's bond is returned. */
+    if (g !== null && g.state === "DISPUTED" && (g.policy ?? null) !== null && claim.chainSeatIndex !== null && !held) out.push("annul");
     return [...new Set(out)];
   }
 
@@ -1446,9 +1449,10 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
       /* Phase 3 final clocks: a No-deadline table's seat antes only after acknowledging that its funds may stay locked. */
       if (deps.noDeadlineAck !== undefined) {
         const acked = await deps.noDeadlineAck(record.game_id, seat.player_id).catch(() => "unknown" as const);
-        const asyncTable = (record.variants as { mode?: string }).mode === "async";
         if (acked === "missing") return refusal(409, "acknowledge-no-deadline", `${NO_DEADLINE_DISCLOSURE} Acknowledge this before your deposit.`);
-        if (acked === "unknown" && asyncTable) return refusal(503, "money-unavailable", "This table's deadline can't be read right now, so no deposit is approved. Try again later.");
+        /* A clock that cannot be read refuses every money table's deposit (its deadline, and whether this server can
+           enforce it, are unknown). */
+        if (acked === "unknown") return refusal(503, "money-unavailable", "This table's deadline can't be read right now, so no deposit is approved. Try again later.");
         if (acked === "unenforceable") return refusal(503, "money-unavailable", "This server can't enforce this table's deadline right now, so no deposit is approved. Try again later.");
       }
       const snapshot = await deps.tickets.snapshot(record.game_id);

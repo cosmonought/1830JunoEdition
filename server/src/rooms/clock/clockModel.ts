@@ -50,11 +50,15 @@
 import type { RequiredDecision, RequiredDecisionKind, StandingOffer } from "../../../../frontend/src/gameEngine/clockResponsibility";
 import type { ClockDeadlineClass, ClockEndKind, ClockProposalKind, RoomClockView } from "../../../../frontend/src/utils/clockProtocol";
 import { CLOCK_REFUSAL, declinesReachedSentence, STRIKE_TWO_WARNING, SYSTEM_PAUSE_RESUME_SENTENCE, SYSTEM_PAUSE_SENTENCE } from "../../../../frontend/src/utils/clockProtocol";
-import { genesisHead, nextHead, signatureDigest, CLOCK_EVIDENCE_FORMAT, type ClockEvidenceEvent, type ClockEvidenceKind } from "./clockEvidence";
+import { genesisHead, ledgerGenesisHead, nextHead, signatureDigest, CLOCK_EVIDENCE_FORMAT, type ClockEvidenceEvent, type ClockEvidenceKind } from "./clockEvidence";
 import {
   ASYNC_PACES_SECS,
   CLOCK_EVIDENCE_WINDOW,
   CLOCK_FORMAT,
+  CLOCK_LEDGER_LIMIT,
+  CLOCK_OFFERS_PER_OBLIGATION,
+  CLOCK_RESUME_BURST,
+  CLOCK_RESUME_SPACING_MS,
   CLOCK_PAUSE_REQUESTS_PER_OBLIGATION,
   CLOCK_PROPOSALS_PER_OVERDUE,
   CLOCK_SNAPSHOT_LIMIT,
@@ -219,7 +223,20 @@ class Draft {
         truncated = true;
       }
     }
-    this.d.evidence = { seq: event.seq, head, window_from: from, window, truncated };
+    /* Every overdue and cure also joins the STRIKE LEDGER (never reset by a new obligation): a sealed remedy proves the
+       strike it attests from it. */
+    let ledgerFrom = ev.ledger_from;
+    let ledgerHead = ev.ledger_head;
+    let ledger = ev.ledger;
+    if (kind === "overdue" || kind === "cure") {
+      ledgerHead = nextHead(ledgerHead, event);
+      ledger = [...ledger, event];
+      while (ledger.length > CLOCK_LEDGER_LIMIT) {
+        ledgerFrom = nextHead(ledgerFrom, ledger[0]);
+        ledger = ledger.slice(1);
+      }
+    }
+    this.d.evidence = { seq: event.seq, head, window_from: from, window, truncated, ledger_from: ledgerFrom, ledger_head: ledgerHead, ledger };
     this.events.push(event);
     return event;
   }
@@ -282,7 +299,7 @@ export function newClockRecord(input: { readonly gameId: string; readonly deadli
     epochs: 0,
     proposals_total: 0,
     declines: emptyDeclines(null),
-    pause: { paused_at: null, request: null, requests: 0, window: { key: null, count: 0 } },
+    pause: { paused_at: null, request: null, requests: 0, window: { key: null, count: 0 }, resumes: { count: 0, last_at: null } },
     system: null,
     annul: null,
     undo_floor: -1,
@@ -290,7 +307,8 @@ export function newClockRecord(input: { readonly gameId: string; readonly deadli
     ended: null,
     remedy: null,
     acks: {},
-    evidence: { seq: 0, head: genesis, window_from: genesis, window: [], truncated: false },
+    evidence: { seq: 0, head: genesis, window_from: genesis, window: [], truncated: false, ledger_from: ledgerGenesisHead(input.gameId), ledger_head: ledgerGenesisHead(input.gameId), ledger: [] },
+    offers: { key: null, counts: {} },
     created_at: input.now,
     updated_at: input.now,
   };
@@ -424,6 +442,13 @@ export function foldBatch(record: GameClockRecord, batch: ClockBatch, now: numbe
     /* A NEW STANDING OFFER. */
     const proposer = after.proposer;
     const answerer = after.answerer;
+    /* The offer budget: proposals per seat under the obligation in force when it was made. */
+    if (proposer !== null) {
+      const key = batch.before.decision?.key ?? null;
+      const counts = d.offers.key === key ? { ...d.offers.counts } : {};
+      counts[proposer] = (counts[proposer] ?? 0) + 1;
+      d.offers = { key, counts: Object.fromEntries(Object.entries(counts).slice(-8)) };
+    }
     if (proposer !== null && answerer !== null && proposer !== answerer && D !== null && D.seat === answerer) {
       if (current !== null && current.seat === proposer && current.timer !== null) {
         d.parked = [...d.parked.filter((p) => p.seat !== proposer), { seat: proposer, offer_key: after.key, remaining_ms: remainingAt(current.timer, at) }];
@@ -466,18 +491,23 @@ export function foldBatch(record: GameClockRecord, batch: ClockBatch, now: numbe
       if (batch.msg === "accept") fresh(D, "accepted");
       else if (D !== null && current !== null && D.seat === current.seat) d.obligation = { ...current, kind: D.kind, key: D.key };
       else fresh(D, "offer-closed");
-    } else if (answered) {
-      /* The answerer completed its decision: the next one (the proposer's, normally) starts fresh. */
-      fresh(D, batch.msg === "accept" ? "offer-accepted" : "offer-rejected");
+    } else if (answered && batch.msg === "accept") {
+      /* An ACCEPTED offer is progress (the trade happened): the next decision starts fresh. */
+      fresh(D, "offer-accepted");
+    } else if (answered && !(D !== null && parked !== null && D.seat === parked.seat)) {
+      /* A rejection that hands the next decision to someone other than the parked proposer: theirs starts fresh. */
+      fresh(D, "offer-rejected");
     } else if (D !== null && parked !== null && D.seat === parked.seat) {
-      /* An unanswered expiry, or anything else that closed it: the proposer resumes EXACTLY. A RESCISSION by the proposer
-         is charged the time its offer stood (the proposer withdrew rather than wait for the answer): an offer can never
-         be used to stop the proposer's own clock. */
-      const stood = batch.msg === "rescind" && batch.actor === parked.seat && current !== null && current.key === `offer:${before.key}` ? clamp(at - current.began_at) : 0;
+      /* A REJECTION, an unanswered expiry, or anything else that closed it: the proposer resumes EXACTLY what it had (an
+         offer never refreshes its proposer's clock -- an offer-and-reject loop can never stall the table). A RESCISSION
+         by the proposer is charged the time the answerer's clock actually RAN while the offer stood (never a pause or
+         an outage): an offer can never be used to stop the proposer's own clock. */
+      const ran = current !== null && current.key === `offer:${before.key}` && current.initial_ms !== null && current.timer !== null ? clamp(current.initial_ms - remainingAt(current.timer, at)) : 0;
+      const stood = batch.msg === "rescind" && batch.actor === parked.seat ? ran : 0;
       const resumed = clamp(parked.remaining_ms - stood);
       d.obligation = obligationFor(d, D, at, batch.first, resumed, null);
       d.obligation = { ...d.obligation, initial_ms: resumed };
-      emitResponsibility(x, d.obligation, at, { actor: batch.actor, index: batch.first, reason: batch.msg === "server-expiry" ? "offer-expired" : "offer-withdrawn" });
+      emitResponsibility(x, d.obligation, at, { actor: batch.actor, index: batch.first, reason: batch.msg === "server-expiry" ? "offer-expired" : batch.msg === "reject" ? "offer-rejected" : "offer-withdrawn" });
     } else {
       fresh(D, "offer-closed");
     }
@@ -770,6 +800,8 @@ function seal(x: Draft, kind: RemedyKind, od: ClockOverdue, finalMs: number, vot
     final_ms: finalMs,
     approvals: approvals.map((a) => `${a.seat}:${a.approve_until}:${signatureDigest(a.signature)}`),
     replaces,
+    /* The strike ledger as of the seal: its events travel with the document, its head is signed through this event. */
+    ledger_head: d.evidence.ledger_head,
   });
   const ev = d.evidence;
   d.remedy = {
@@ -783,7 +815,7 @@ function seal(x: Draft, kind: RemedyKind, od: ClockOverdue, finalMs: number, vot
     overdue_ms: od.at,
     final_ms: finalMs,
     approvals,
-    evidence: { format: CLOCK_EVIDENCE_FORMAT, game_id: d.game_id, prev_head: ev.window_from, events: [...ev.window], truncated: ev.truncated },
+    evidence: { format: CLOCK_EVIDENCE_FORMAT, game_id: d.game_id, prev_head: ev.window_from, events: [...ev.window], truncated: ev.truncated, ledger: { from: ev.ledger_from, events: [...ev.ledger] } },
     evidence_hash: ev.head,
     sealed_at: finalMs,
     status: "sealed",
@@ -806,6 +838,8 @@ export function sealNeutralFallback(record: GameClockRecord, now: number, why: s
   const od: ClockOverdue = { epoch: r.epoch, seat: r.seat, strike: r.strike, at: r.overdue_ms, log_len: r.log_len, log_hash: r.log_hash, decision_kind: "turn", cure: null, proposal: null, proposals: 0 };
   x.emit("remedy-status", now, { remedy: 2, status: "superseded", detail: why.slice(0, 200) });
   seal(x, 1, od, r.final_ms, [], 2);
+  /* The game's end is told as what the money outcome now is: the neutral timeout annulment. */
+  if (x.d.ended !== null && x.d.ended.kind === "live-foreclosure") x.d.ended = { ...x.d.ended, kind: "live-timeout-annul" };
   return x.done();
 }
 
@@ -914,6 +948,8 @@ export function vote(
   if (yes && record.money && approval === null) return { code: "bad-frame", reason: "On a money table, a YES needs your signed approval." };
   const prior = proposal.votes.find((v) => v.seat === by) ?? null;
   if (prior !== null && prior.yes === yes && (!yes || (prior.approval?.approve_until === approval?.approve_until && prior.approval?.signature === approval?.signature))) return { record, events: [], effects: [] };
+  /* A standing YES is renewed only to reach meaningfully further (a minute or more): a re-vote never floods the record. */
+  if (prior !== null && prior.yes && yes && prior.approval !== null && approval !== null && approval.approve_until < prior.approval.approve_until + 60) return { record, events: [], effects: [] };
   const x = new Draft(record, now);
   if (!yes) {
     x.emit("vote", now, voteFields(od.epoch, proposal.id, by, false, null));
@@ -984,14 +1020,18 @@ export function pauseOp(record: GameClockRecord, by: string, op: { readonly acti
     /* PAUSE requests are bounded per obligation (a new obligation opens a new window); a RESUME request never is -- a
        paused table must always be able to ask to resume. */
     let window = record.pause.window;
+    let resumes = record.pause.resumes;
     if (op.kind === "pause") {
       const key = record.obligation?.key ?? null;
       const used = window.key === key ? window.count : 0;
       if (used >= CLOCK_PAUSE_REQUESTS_PER_OBLIGATION) return { code: "rate-limited", reason: "Too many pause requests for this action. Ask again after the next move." };
       window = { key, count: used + 1 };
+    } else {
+      if (resumes.count >= CLOCK_RESUME_BURST && resumes.last_at !== null && now - resumes.last_at < CLOCK_RESUME_SPACING_MS) return { code: "rate-limited", reason: "Ask to resume again in a minute." };
+      resumes = { count: resumes.count + 1, last_at: now };
     }
     const id = record.pause.requests + 1;
-    d.pause = { ...d.pause, requests: id, window, request: { id, kind: op.kind, by, at: now, yes: [by] } };
+    d.pause = { ...d.pause, requests: id, window, resumes, request: { id, kind: op.kind, by, at: now, yes: [by] } };
     x.emit("pause-request", now, { id, kind: op.kind, by });
     applyIfUnanimous(x, now);
     return x.done();
@@ -1023,7 +1063,7 @@ function applyIfUnanimous(x: Draft, now: number): void {
   d.undo_floor = Math.max(d.undo_floor, d.watermark);
   if (request.kind === "pause") {
     normalize(x, now); // charge what ran up to now, exactly
-    d.pause = { ...d.pause, paused_at: now, request: null };
+    d.pause = { ...d.pause, paused_at: now, request: null, resumes: { count: 0, last_at: null } };
     normalize(x, now); // and freeze it
     x.emit("paused", now, { id: request.id });
   } else {
@@ -1082,6 +1122,8 @@ export function continuityBreak(record: GameClockRecord, input: { readonly now: 
     /* The outage is never charged: every timer as of `preserved`, running on from now. */
     const ob = d.obligation;
     if (ob !== null && ob.timer !== null && ob.timer.since !== null) d.obligation = { ...ob, timer: { remaining_ms: remainingAt(ob.timer, preserved), since: input.now } };
+    /* A credited outage is a fence: no undo reaches back across it (it would charge the outage). */
+    d.undo_floor = Math.max(d.undo_floor, d.watermark);
     x.emit("outage-credited", input.now, { preserved_at: preserved, credited_ms: input.now - preserved });
     return x.done();
   }
@@ -1199,6 +1241,13 @@ export function annulVote(record: GameClockRecord, by: string, yes: boolean, now
   }
   const current = d.annul?.yes ?? [];
   if (current.includes(by)) return { record, events: [], effects: [] };
+  if (d.annul === null) {
+    /* Starting an annulment is bounded per obligation like a pause request (a YES / NO toggle never floods the record). */
+    const key = d.obligation?.key ?? null;
+    const used = d.pause.window.key === key ? d.pause.window.count : 0;
+    if (used >= CLOCK_PAUSE_REQUESTS_PER_OBLIGATION) return { code: "rate-limited", reason: "Too many annulment requests for this action. Ask again after the next move." };
+    d.pause = { ...d.pause, window: { key, count: used + 1 } };
+  }
   const yesSet = [...current, by].sort();
   d.annul = { yes: yesSet, at: d.annul?.at ?? now };
   x.emit("annul-vote", now, { by, yes: true });
@@ -1255,6 +1304,10 @@ export function gate(record: GameClockRecord, input: GateInput): ClockRefusal | 
      else while the overdue stands. */
   if (record.phase === "overdue" && od !== null && input.actor === od.seat && input.msg === "propose") {
     return { code: CLOCK_REFUSAL.interrupted, reason: "You're overdue: make your owed move first. An offer can't cure an overdue." };
+  }
+  if (input.msg === "propose") {
+    const used = record.offers.key === (record.obligation?.key ?? null) ? (record.offers.counts[input.actor] ?? 0) : 0;
+    if (used >= CLOCK_OFFERS_PER_OBLIGATION) return { code: "rate-limited", reason: `You have made ${CLOCK_OFFERS_PER_OBLIGATION} offers during this action. Make your move, or wait for the next action.` };
   }
   if (record.policy.class === "live" && input.msg === "propose" && input.trainRecipient !== null && input.trainRecipient !== input.actor) {
     const count = record.declines.counts[`${input.actor}>${input.trainRecipient}`] ?? 0;

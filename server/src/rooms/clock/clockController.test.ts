@@ -139,7 +139,7 @@ function harness(options: { money?: boolean; remedy?: RemedyPort; loadFails?: { 
     assert.ok(ob?.timer);
     return ob.timer.since === null ? ob.timer.remaining_ms : ob.timer.remaining_ms - (time.now() - ob.timer.since);
   };
-  return { time, room, clock, ops, store, submit, deal, record, remaining, serial, conduct };
+  return { time, room, clock, ops, store, submit, deal, record, remaining, serial, conduct, game, tx };
 }
 
 describe("Live train offers through the controller (real engine offers)", () => {
@@ -389,5 +389,33 @@ describe("Controller review fixes (second pass): outages and authority changes",
     assert.equal(offer, null);
     const closed = rescindExpiredOffer(h.room, { proposer: P1, at: T0, offerKey: "train:other", build: "b", host: P1, hostUndo: "last-action" });
     assert.equal(closed.ok, false);
+  });
+});
+
+describe("Controller review fixes (third pass)", () => {
+  test("an Async table reloaded by this same process is proven continuous from the reload: no outage credit later", async () => {
+    const h = harness();
+    assert.equal((await h.clock.createPolicy(GAME, { deadline: "async-pace", paceSecs: 43_200, money: false })).ok, true);
+    await h.deal();
+    assert.equal(h.record().policy.class, "async-pace");
+    await h.time.advance(MIN);
+    await h.clock.idle();
+    h.clock.drop(GAME); // evicted: no heartbeat runs while it is unloaded
+    h.time.jump(6 * 60 * MIN);
+    /* A refused op reloads it (an Async table cannot pause). */
+    const refused = await h.serial(() => h.clock.op(h.game, h.tx, { type: "clock-pause", seat: P1, action: "request", kind: "pause", id: null }));
+    assert.equal(refused.ok, false, "an Async table does not pause");
+    /* Then the load task the host runs for every (re)loaded actor: its stall check measures from the reload. */
+    h.time.jump(30 * SEC);
+    h.clock.loaded(GAME);
+    await h.clock.idle();
+    await h.time.advance(40 * MIN);
+    await h.clock.idle();
+    const r = h.record();
+    assert.ok(!r.evidence.window.some((e) => e.kind === "outage-credited"), "the unloaded time was real: never credited");
+    const timer = r.obligation?.timer;
+    assert.ok(timer !== null && timer !== undefined);
+    const left = timer.since === null ? timer.remaining_ms : timer.remaining_ms - (h.time.now() - timer.since);
+    assert.ok(left <= 43_200_000 - 6 * 60 * MIN, `the 6 hours unloaded were charged (${left} ms left)`);
   });
 });

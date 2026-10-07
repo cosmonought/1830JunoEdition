@@ -87,6 +87,14 @@ export function genesisHead(gameId: string): string {
   return createHash("sha256").update(CLOCK_EVIDENCE_GENESIS_TAG, "utf8").update(gameId, "utf8").digest("hex");
 }
 
+/** The STRIKE LEDGER's genesis: a second, never-reset chain of every overdue and cure in the game (copies of the main
+ *  chain's events), so a sealed remedy can prove the strike it attests (a third expiry's two earlier overdues). The
+ *  `remedy-sealed` event carries the ledger's head; the remedy document carries the ledger. */
+export const CLOCK_LEDGER_GENESIS_TAG = "18COSMOS/CLOCK-EVIDENCE/v1/strike-ledger/genesis";
+export function ledgerGenesisHead(gameId: string): string {
+  return createHash("sha256").update(CLOCK_LEDGER_GENESIS_TAG, "utf8").update(gameId, "utf8").digest("hex");
+}
+
 /** head_n from head_{n-1} and event_n. */
 export function nextHead(previous: string, event: ClockEvidenceEvent): string {
   if (!/^[0-9a-f]{64}$/.test(previous)) throw new Error("an evidence head is 32 bytes of lowercase hex");
@@ -112,10 +120,18 @@ export interface RemedyEvidenceDocument {
   readonly events: readonly ClockEvidenceEvent[];
   /** The window had to be bounded (more events than `CLOCK_EVIDENCE_WINDOW`): the head still covers everything. */
   readonly truncated: boolean;
+  /** The strike ledger (every overdue and cure, oldest first, from `from`): its fold is the `ledger_head` the window's
+   *  `remedy-sealed` event names. */
+  readonly ledger: { readonly from: string; readonly events: readonly ClockEvidenceEvent[] };
 }
 
 export function evidenceHashOf(document: RemedyEvidenceDocument): string {
   return foldEvidence(document.prev_head, document.events);
+}
+
+/** The strike ledger's head as the document carries it (it must equal the seal event's `ledger_head`). */
+export function ledgerHeadOf(document: RemedyEvidenceDocument): string {
+  return foldEvidence(document.ledger.from, document.ledger.events);
 }
 
 /** The safe, authoritative conduct facts the player-reporting lane will consume (`phase3/preplaytest-player-reporting`):

@@ -512,6 +512,8 @@ export function createClockController(deps: ClockControllerDeps) {
         return;
       }
       entry.record = heartbeat(record, deps.authority, now());
+      /* Proven NOW by this process's own continuity (the stall rule measures from here, not from the unload). */
+      entry.provenAt = entry.record.trusted_at;
       return;
     }
     const view = game.view;
@@ -630,14 +632,16 @@ export function createClockController(deps: ClockControllerDeps) {
     if (timed && isHeld(entry.gameId)) {
       /* HELD: nobody can move, so nothing advances and no continuity is proven; looked at again later. A Live table
          stays resident meanwhile (its held time is judged by the stall rule when the hold lifts). */
-      pinFor(entry, record?.policy.class === "live");
+      pinFor(entry, true);
       entry.timer = timers.set(() => {
         entry.timer = null;
         if (!closed && !entry.lost && deps.serving(entry.gameId)) arm(entry);
       }, CLOCK_HELD_RECHECK_MS);
       return;
     }
-    pinFor(entry, timed && record?.policy.class === "live");
+    /* A running clock keeps its table resident (Live and Timed Async): its heartbeat keeps the continuity proof fresh,
+       so a later restart credits only the real outage, and its due transitions fire on time. */
+    pinFor(entry, timed);
     if (record === null || !timed) return;
     const due = nextDue(record);
     if (due !== null) {
@@ -749,10 +753,12 @@ export function createClockController(deps: ClockControllerDeps) {
       const step = advance(record, at, positionOf(game));
       applyStep(entry, step, game.gameId);
       if (step.tradeExpiry === null) break;
+      /* A close that failed is retried only after its backoff (a submit meanwhile is judged on the record as it is). */
+      if (entry.retryAt !== null && at < entry.retryAt) break;
       const due = step.tradeExpiry;
       counters.tradeExpiries += 1;
       const closed = await deps.closeOffer(game, tx, { proposer: due.proposer, at: due.at, offerKey: due.offerKey });
-      expired = true;
+      if (closed.ok || closed.kind === "store") expired = true;
       if (!closed.ok && closed.kind === "store") {
         /* The expiry could not be committed: nothing changed in the log; the clock stays as it was and the expiry is
            retried (no move is taken meanwhile: the submit that found it is refused). */
@@ -1024,7 +1030,7 @@ export function createClockController(deps: ClockControllerDeps) {
         /* A standing refusal, or an attestation the FP4 fence holds back, is asked again only after a backoff; a fallback
            to the neutral annulment or approvals to renew are acted on at once. */
         const turned = attempt.fallback === true || (attempt.stale !== undefined && attempt.stale.length > 0);
-        const stuck = !turned && (attempt.status === "refused" || (!attempt.attested && attempt.status === "sealed" && attempt.detail !== null));
+        const stuck = !turned && (attempt.status === "refused" || (!attempt.attested && (attempt.status === "sealed" || attempt.status === "submitted") && attempt.detail !== null));
         if (attempt.status === "refused") counters.remedyRefused += 1;
         if (stuck) {
           /* Asked again no sooner than the backoff (doubling): a refusal is a standing condition, not a blip. */
@@ -1064,6 +1070,15 @@ export function createClockController(deps: ClockControllerDeps) {
     return run;
   }
 
+  const kicked = new Map<string, number>();
+  function kickLoad(gameId: string): void {
+    const last = kicked.get(gameId) ?? -Infinity;
+    if (closed || now() - last < CLOCK_REMEDY_SWEEP_MS) return;
+    kicked.set(gameId, now());
+    if (kicked.size > 4_096) kicked.delete(kicked.keys().next().value as string);
+    loadedTask(gameId);
+  }
+
   /** The relayer's question before a new attempt of a remedy intent (`EscrowServiceDeps.remedyGate`). */
   async function remedyGate(gameId: string, intent: ChainIntentRecord): Promise<{ readonly kind: "ok" } | { readonly kind: "wait"; readonly why: string }> {
     if (intent.op.kind !== "remedy") return { kind: "wait", why: "not a remedy intent" };
@@ -1080,7 +1095,12 @@ export function createClockController(deps: ClockControllerDeps) {
     const r = record.remedy;
     if (r.kind !== intent.op.remedy || String(r.epoch) !== intent.op.overdue_epoch || String(r.log_len) !== intent.op.log_len || r.strike !== intent.op.strike) return { kind: "wait", why: "the intent is not the table's sealed remedy decision" };
     if (record.system !== null) return { kind: "wait", why: "the table is in SYSTEM PAUSE: nothing not yet final is relayed until every player resumes" };
-    if (record.authority !== deps.authority) return { kind: "wait", why: "this server is not the table clock's current authority" };
+    if (record.authority !== deps.authority) {
+      /* After a restart the table may not be open here yet: open it, so its continuity is judged (and the remedy carried
+         on, or system-paused) without waiting for a player. */
+      if (entry === undefined || entry.record === null) kickLoad(gameId);
+      return { kind: "wait", why: "this server is not the table clock's current authority" };
+    }
     if (entry?.lost === true) return { kind: "wait", why: "this server no longer decides the table's clock" };
     if (isHeld(gameId)) return { kind: "wait", why: "the table is held" };
     const port = deps.remedy?.() ?? null;
@@ -1159,6 +1179,20 @@ export function createClockController(deps: ClockControllerDeps) {
     return clockViewOf(entry.record, now());
   }
 
+  /** An actor loaded (a first open, a restart, a reload): the clock is read and its continuity judged NOW, so a
+   *  system pause is in force (and shown) before anyone moves. */
+  function loadedTask(gameId: string): void {
+      void track(deps.runOn(gameId, "clock-load", async (game, tx) => {
+        const entry = entryOf(gameId);
+        /* A (re)loaded actor is a new object: a timed table's residency pin is taken again on it. */
+        entry.pinned = false;
+        const record = await ensure(game, tx, true);
+        if (record === null) return;
+        if (!isHeld(gameId)) await catchUp(entry, game, tx, now());
+        await settle(entry, gameId);
+      })).catch((error) => deps.warn(`  clock: ${gameId}: the clock load failed -- ${describe(error)}`));
+  }
+
   return {
     counters,
     gateSubmit,
@@ -1229,15 +1263,7 @@ export function createClockController(deps: ClockControllerDeps) {
     /** An actor loaded (a first open, a restart, a reload): the clock is read and its continuity judged NOW, so a
      *  system pause is in force (and shown) before anyone moves. */
     loaded(gameId: string): void {
-      void track(deps.runOn(gameId, "clock-load", async (game, tx) => {
-        const entry = entryOf(gameId);
-        /* A (re)loaded actor is a new object: a timed table's residency pin is taken again on it. */
-        entry.pinned = false;
-        const record = await ensure(game, tx, true);
-        if (record === null) return;
-        if (!isHeld(gameId)) await catchUp(entry, game, tx, now());
-        await settle(entry, gameId);
-      })).catch((error) => deps.warn(`  clock: ${gameId}: the clock load failed -- ${describe(error)}`));
+      loadedTask(gameId);
     },
     /** A money table's financial record changed: re-check its escrow's end in the table's task. */
     moneyChanged(gameId: string): void {

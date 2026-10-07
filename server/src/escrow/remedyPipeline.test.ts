@@ -75,7 +75,7 @@ function sealed(world: World, chainGameId: string, kind: 1 | 2 | 3, over: Partia
     overdue_ms: overdueMs,
     final_ms: kind === 3 ? overdueMs : overdueMs + LIVE_CURE_MS,
     approvals: [],
-    evidence: { format: "18COSMOS/CLOCK-EVIDENCE/v1", game_id: GAME_A, prev_head: "00".repeat(32), events: [], truncated: false },
+    evidence: { format: "18COSMOS/CLOCK-EVIDENCE/v1", game_id: GAME_A, prev_head: "00".repeat(32), events: [], truncated: false, ledger: { from: "00".repeat(32), events: [] } },
     evidence_hash: "ef".repeat(32),
     sealed_at: overdueMs + LIVE_CURE_MS,
     status: "sealed",

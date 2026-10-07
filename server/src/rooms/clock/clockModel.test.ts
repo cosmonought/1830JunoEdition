@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 
 import type { RequiredDecision, StandingOffer } from "../../../../frontend/src/gameEngine/clockResponsibility";
 import { CLOCK_REFUSAL } from "../../../../frontend/src/utils/clockProtocol";
-import { canonicalJson, evidenceHashOf, foldEvidence, genesisHead } from "./clockEvidence";
+import { canonicalJson, evidenceHashOf, foldEvidence, genesisHead, ledgerGenesisHead, ledgerHeadOf } from "./clockEvidence";
 import {
   acknowledge,
   advance,
@@ -267,13 +267,43 @@ describe("Live train offer: the proposer's clock freezes; the recipient has a di
     assert.deepEqual(t.record.parked, []);
   });
 
-  test("explicit rejection counts one decline (and the answer is B's completed decision: A's next starts fresh)", () => {
+  test("explicit rejection counts one decline, and A resumes EXACTLY what it had (an offer never refreshes its proposer: no offer-and-reject stall)", () => {
     const t = new Table("live");
     t.advance(15 * MIN);
     t.move(A, offering(offer), "propose", { trainRecipient: B });
+    t.advance(3 * MIN);
     t.move(B, facts(turn(A, 0)), "reject");
     assert.equal(t.record.declines.counts[`${A}>${B}`], 1);
+    assert.equal(t.remaining(), 5 * MIN, "the 5:00 A had when it proposed");
+    /* An ACCEPTED offer is progress: A's next decision starts fresh. */
+    t.move(A, offering(offerOf("train", A, C, 2)), "propose", { trainRecipient: C });
+    t.move(C, facts(turn(A, 0)), "accept");
     assert.equal(t.remaining(), LIVE_ACTION_MS);
+  });
+
+  test("non-train offers (Live) and every Async offer: a rejection resumes the proposer exactly; the offer budget bounds proposals per action", () => {
+    const t = new Table("live");
+    t.advance(19 * MIN + 50 * SEC);
+    const priv = offerOf("private", A, B, 9);
+    t.move(A, offering(priv), "propose");
+    assert.equal(t.record.obligation?.seat, B, "B owes the answer (an ordinary action clock)");
+    t.move(B, facts(turn(A, 0)), "reject");
+    assert.equal(t.remaining(), 10 * SEC, "no fresh 20:00 for A: the lowball-offer stall is gone");
+    const paced = new Table("async-pace", { pace: 86_400 });
+    paced.advance(23 * HOUR);
+    paced.move(A, offering(offerOf("train", A, B, 3)), "propose");
+    paced.advance(20 * HOUR);
+    paced.move(B, facts(turn(A, 0)), "reject");
+    assert.equal(paced.remaining(), HOUR, "Async: A resumes its last hour");
+    /* The budget: 12 proposals under one obligation, then a move first. */
+    const budget = new Table("live");
+    for (let n = 1; n <= 12; n += 1) {
+      budget.move(A, offering(offerOf("private", A, B, 100 + n)), "propose");
+      budget.move(A, facts(turn(A, 0)), "rescind");
+    }
+    assert.equal(budget.refusal(A, "propose")?.code, "rate-limited");
+    budget.move(A, facts(turn(B, 1)));
+    assert.equal(budget.refusal(B, "propose"), null, "a new obligation, a new budget");
   });
 
   test("the proposer's own rescission is no decline, and is charged the time its offer stood (a propose-and-rescind never gives time)", () => {
@@ -982,7 +1012,7 @@ describe("Canonical clock evidence", () => {
 describe("Review fixes: requests, breaks, gaps, offers, approvals", () => {
   const sig = (until: number, byte = "44") => ({ approve_until: until, signature: byte.repeat(64) });
 
-  test("PAUSE requests are bounded per obligation (a new obligation opens a new window); a RESUME request never is", () => {
+  test("PAUSE requests are bounded per obligation (a new obligation opens a new window); RESUME requests are never refused outright (past a burst, one a minute)", () => {
     const t = new Table("live");
     for (let i = 0; i < 16; i += 1) {
       t.ok(pauseOp(t.record, A, { action: "request", kind: "pause", id: null }, t.t));
@@ -994,12 +1024,15 @@ describe("Review fixes: requests, breaks, gaps, offers, approvals", () => {
     t.ok(pauseOp(t.record, B, { action: "request", kind: "pause", id: null }, t.t));
     for (const seat of [A, C]) t.ok(pauseOp(t.record, seat, { action: "yes", kind: "pause", id: t.record.pause.request?.id ?? null }, t.t));
     assert.notEqual(t.record.pause.paused_at, null);
-    for (let i = 0; i < 40; i += 1) {
+    for (let i = 0; i < 16; i += 1) {
       t.ok(pauseOp(t.record, A, { action: "request", kind: "resume", id: null }, t.t));
       t.ok(pauseOp(t.record, C, { action: "no", kind: "resume", id: t.record.pause.request?.id ?? null }, t.t));
     }
+    const burst = pauseOp(t.record, A, { action: "request", kind: "resume", id: null }, t.t);
+    assert.equal("code" in burst ? burst.code : null, "rate-limited", "past the burst, one a minute");
+    t.t += MIN;
     t.ok(pauseOp(t.record, A, { action: "request", kind: "resume", id: null }, t.t));
-    assert.equal(t.record.pause.request?.kind, "resume", "a paused table can always ask to resume");
+    assert.equal(t.record.pause.request?.kind, "resume", "a paused table can always ask to resume (never refused outright)");
   });
 
   test("a system-pause YES names the break it saw; a later break needs a fresh look", () => {
@@ -1141,5 +1174,25 @@ describe("Review fixes (second pass): unanimous annulment everywhere, ended paus
     for (const seat of [A, B, C]) t.ok(annulVote(t.record, seat, true, t.t));
     assert.deepEqual([t.record.phase, t.record.system, t.record.pause.paused_at], ["ended", null, null]);
     assert.equal(clockViewOf(t.record, t.t).system, null);
+  });
+});
+
+describe("Review fixes (third pass): the strike ledger proves the strike a remedy attests", () => {
+  test("a third-strike foreclosure's evidence carries every overdue and cure of the game; its fold is the head the seal event names", () => {
+    const t = new Table("live", { money: true });
+    for (let strike = 1; strike <= 2; strike += 1) {
+      t.advance(LIVE_ACTION_MS);
+      t.move(A, facts(turn(A, 0)));
+    }
+    t.advance(LIVE_ACTION_MS);
+    const remedy = t.record.remedy as NonNullable<GameClockRecord["remedy"]>;
+    assert.equal(remedy.kind, 3);
+    const doc = remedy.evidence;
+    assert.deepEqual(doc.ledger.events.map((e) => [e.kind, e.f.strike]), [["overdue", 1], ["cure", 1], ["overdue", 2], ["cure", 2], ["overdue", 3]]);
+    assert.equal(doc.ledger.from, ledgerGenesisHead(GAME));
+    const seal = doc.events[doc.events.length - 1];
+    assert.equal(seal.kind, "remedy-sealed");
+    assert.equal(seal.f.ledger_head, ledgerHeadOf(doc), "the signed chain commits to the ledger through the seal event");
+    assert.equal(evidenceHashOf(doc), remedy.evidence_hash, "and the attested hash is still the main chain's head");
   });
 });

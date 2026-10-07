@@ -47,6 +47,13 @@ export const LIVE_CURABLE_OVERDUES = 2;
 
 /** Bounds that keep the record small (a DynamoDB item is 400 KB). */
 export const CLOCK_SNAPSHOT_LIMIT = 48;
+/** The strike ledger keeps the newest this many overdue / cure events (a Live game has at most 5 per seat). */
+export const CLOCK_LEDGER_LIMIT = 64;
+/** Proposals one seat may make under one obligation (an offer budget). */
+export const CLOCK_OFFERS_PER_OBLIGATION = 12;
+/** Resume requests in one pause before they are limited to one a minute. */
+export const CLOCK_RESUME_BURST = 16;
+export const CLOCK_RESUME_SPACING_MS = 60_000;
 export const CLOCK_EVIDENCE_WINDOW = 512;
 export const CLOCK_PROPOSALS_PER_OVERDUE = 16;
 export const CLOCK_PAUSE_REQUESTS_PER_OBLIGATION = 16;
@@ -124,9 +131,12 @@ export interface ClockPause {
   readonly request: { readonly id: number; readonly kind: "pause" | "resume"; readonly by: string; readonly at: number; readonly yes: readonly string[] } | null;
   /** The request id counter (never capped: it only names requests). */
   readonly requests: number;
-  /** PAUSE requests made during the current obligation (`key`): bounded per obligation, reset when it changes. A
-   *  RESUME request is never bounded (a paused game can always be asked to resume). */
+  /** PAUSE requests (and a free table's annulment starts) made during the current obligation (`key`): bounded per
+   *  obligation, reset when it changes. */
   readonly window: { readonly key: string | null; readonly count: number };
+  /** RESUME requests in the current pause: never refused outright (a paused game can always be asked to resume), but
+   *  past a burst only one a minute. */
+  readonly resumes: { readonly count: number; readonly last_at: number | null };
 }
 
 export interface ClockSystemPause {
@@ -230,7 +240,14 @@ export interface GameClockRecord {
     readonly window_from: string;
     readonly window: readonly ClockEvidenceEvent[];
     readonly truncated: boolean;
+    /** The strike ledger: every overdue and cure (copies of the chain's own events), never reset by a new obligation;
+     *  the newest `CLOCK_LEDGER_LIMIT` kept, `ledger_from` the head before them. */
+    readonly ledger_from: string;
+    readonly ledger_head: string;
+    readonly ledger: readonly ClockEvidenceEvent[];
   };
+  /** The proposals each seat made under the current obligation key (an offer budget: offers never stall a table). */
+  readonly offers: { readonly key: string | null; readonly counts: Readonly<Record<string, number>> };
   readonly created_at: number;
   readonly updated_at: number;
 }
@@ -331,7 +348,13 @@ function isRemedy(value: unknown): value is ClockRemedy {
   const evidence = value.evidence;
   return (
     isObject(evidence) &&
-    exact(evidence, ["format", "game_id", "prev_head", "events", "truncated"]) &&
+    exact(evidence, ["format", "game_id", "prev_head", "events", "truncated", "ledger"]) &&
+    isObject(evidence.ledger) &&
+    exact(evidence.ledger, ["from", "events"]) &&
+    hex64(evidence.ledger.from) &&
+    Array.isArray(evidence.ledger.events) &&
+    evidence.ledger.events.length <= CLOCK_LEDGER_LIMIT &&
+    evidence.ledger.events.every(isEvidenceEvent) &&
     evidence.format === "18COSMOS/CLOCK-EVIDENCE/v1" &&
     typeof evidence.game_id === "string" &&
     hex64(evidence.prev_head) &&
@@ -370,6 +393,7 @@ const RECORD_KEYS = [
   "remedy",
   "acks",
   "evidence",
+  "offers",
   "created_at",
   "updated_at",
 ];
@@ -393,7 +417,9 @@ export function isGameClockRecord(value: unknown): value is GameClockRecord {
   if (!time(value.epochs) || !time(value.proposals_total)) return false;
   if (!isDeclines(value.declines)) return false;
   const pause = value.pause;
-  if (!isObject(pause) || !exact(pause, ["paused_at", "request", "requests", "window"]) || !(pause.paused_at === null || time(pause.paused_at)) || !time(pause.requests)) return false;
+  if (!isObject(pause) || !exact(pause, ["paused_at", "request", "requests", "window", "resumes"]) || !(pause.paused_at === null || time(pause.paused_at)) || !time(pause.requests)) return false;
+  const resumes = pause.resumes;
+  if (!isObject(resumes) || !exact(resumes, ["count", "last_at"]) || !time(resumes.count) || !(resumes.last_at === null || time(resumes.last_at))) return false;
   const window = pause.window;
   if (!isObject(window) || !exact(window, ["key", "count"]) || !(window.key === null || text(window.key, 200)) || !time(window.count)) return false;
   const request = pause.request;
@@ -413,8 +439,11 @@ export function isGameClockRecord(value: unknown): value is GameClockRecord {
   if (!(value.remedy === null || isRemedy(value.remedy))) return false;
   if (!isObject(value.acks) || Object.keys(value.acks).length > 8 || !Object.entries(value.acks).every(([k, v]) => seat(k) && time(v))) return false;
   const evidence = value.evidence;
-  if (!isObject(evidence) || !exact(evidence, ["seq", "head", "window_from", "window", "truncated"]) || !time(evidence.seq) || !hex64(evidence.head) || !hex64(evidence.window_from)) return false;
+  if (!isObject(evidence) || !exact(evidence, ["seq", "head", "window_from", "window", "truncated", "ledger_from", "ledger_head", "ledger"]) || !time(evidence.seq) || !hex64(evidence.head) || !hex64(evidence.window_from)) return false;
   if (!Array.isArray(evidence.window) || evidence.window.length > CLOCK_EVIDENCE_WINDOW || !evidence.window.every(isEvidenceEvent) || typeof evidence.truncated !== "boolean") return false;
+  if (!hex64(evidence.ledger_from) || !hex64(evidence.ledger_head) || !Array.isArray(evidence.ledger) || evidence.ledger.length > CLOCK_LEDGER_LIMIT || !evidence.ledger.every(isEvidenceEvent)) return false;
+  const offers = value.offers;
+  if (!isObject(offers) || !exact(offers, ["key", "counts"]) || !(offers.key === null || text(offers.key, 200)) || !isObject(offers.counts) || Object.keys(offers.counts).length > 8 || !Object.entries(offers.counts).every(([k, v]) => seat(k) && time(v))) return false;
   return time(value.created_at) && time(value.updated_at);
 }
 

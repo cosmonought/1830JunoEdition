@@ -1532,9 +1532,14 @@ export function createRoomHost(deps: RoomHostDeps) {
           if (typeof op.approveUntil !== "number" || typeof op.signature !== "string") return { ok: false, code: "bad-frame", reason: "On a money table, a YES needs your signed approval." };
           const standing = clock.recordOf(game.gameId);
           const od = standing?.overdue ?? null;
-          if (standing === null || od === null) return { ok: false, code: "wrong-state", reason: "Nobody is overdue." };
+          if (standing === null || od === null || standing.phase !== "overdue") return { ok: false, code: "wrong-state", reason: "Nobody is overdue." };
+          /* Every check the record alone can answer comes BEFORE any chain read (a junk request costs the server nothing). */
+          if (od.seat === seat || !standing.seats.includes(seat)) return { ok: false, code: "forbidden", reason: "Only the other seated players can do this." };
+          if (standing.system !== null) return { ok: false, code: CLOCK_REFUSAL.systemPaused, reason: "The game is paused by the server; nothing is voted until every player resumes." };
           const proposal = type === "clock-vote" ? od.proposal : null;
           if (type === "clock-vote" && (proposal === null || proposal.id !== op.proposalId)) return { ok: false, code: CLOCK_REFUSAL.stale, reason: "That proposal is no longer open." };
+          if (type === "clock-propose" && od.proposal !== null) return { ok: false, code: "wrong-state", reason: "A proposal is already open: vote on it first." };
+          if (type === "clock-propose" && standing.policy.class === "live" && op.kind !== "foreclose") return { ok: false, code: "bad-frame", reason: "On a Live table the vote is only about foreclosure." };
           const kind = type === "clock-propose" ? (op.kind as "foreclose" | "annul") : (proposal as NonNullable<typeof proposal>).kind;
           const remedyKind = standing.policy.class === "live" ? 2 : kind === "foreclose" ? 5 : 4;
           const port = deps.clock?.remedy?.() ?? null;
@@ -1544,7 +1549,11 @@ export function createRoomHost(deps: RoomHostDeps) {
           const finalNotBeforeMs = projectedFinalityMs(standing, at) ?? od.at + clock.cureMs;
           const facts = { remedy: remedyKind as 2 | 4 | 5, defaultingSeat: od.seat, strike: od.strike, epoch: od.epoch, logLen: od.log_len, logHash: od.log_hash, overdueMs: od.at };
           const why = await port.verifyApproval(game.gameId, { ...facts, approvingSeat: seat, approveUntil: op.approveUntil, signature: op.signature, finalNotBeforeMs, nowMs: at });
-          if (why !== null) return { ok: false, code: "bad-approval", reason: why };
+          if (why !== null) {
+            /* The player is told what to do; the chain's own wording stays in the server's lines. */
+            ops.audit("clock.approval-refused", { game_id: game.gameId, why: why.slice(0, 200) });
+            return { ok: false, code: "bad-approval", reason: why.startsWith("the escrow cannot be read") ? "Juno could not be read to check your approval. Try again in a moment." : why };
+          }
           /* The other standing YES approvals, re-checked under their seats' CURRENT keys: one that no longer verifies is
              set aside (that seat is asked again) rather than completing a consensus that could not land. */
           const others = (proposal?.votes ?? []).filter((v) => v.yes && v.seat !== seat && v.approval !== null).map((v) => ({ seat: v.seat, approveUntil: (v.approval as { approve_until: number }).approve_until, signature: (v.approval as { signature: string }).signature }));

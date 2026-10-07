@@ -655,7 +655,9 @@ export async function agreeToAnnul(ctx: TableContext): Promise<ActionOutcome> {
   if (ctx.view.escrow.chainGameId === null) return refuse("This table isn't open on Juno.");
   const facts = await services.wallet.chainGame(pinned.pin, ctx.view.escrow.chainGameId);
   if (!facts.ok) return refuse(facts.reason);
-  if ((facts.value.state !== "IN_PROGRESS" && facts.value.state !== "SETTLEABLE") || facts.value.domain === null || facts.value.trustedSeq === null) {
+  /* Escrow 2.1.0 also takes the unanimous annulment of a DISPUTED game (a challenged remedy; the bond is returned). */
+  const annullable = facts.value.state === "IN_PROGRESS" || facts.value.state === "SETTLEABLE" || (facts.value.state === "DISPUTED" && facts.value.policy !== null);
+  if (!annullable || facts.value.domain === null || facts.value.trustedSeq === null) {
     return refuse("Juno's escrow isn't in a state where the game can be cancelled by agreement.");
   }
   const own = await ownSeatOn(facts.value, ctx.gameId, you.playerId, pinned.pin, services);

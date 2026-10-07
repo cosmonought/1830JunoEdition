@@ -9,30 +9,38 @@ Everything below the "Historical" line is the earlier ROADMAP 3.2 record, kept f
 |---|---|---|
 | **1** | Server / infrastructure migration (the single-host migration and its hardening; the LIVE-4/5/6 and COST programs feed it) | As recorded by its own passes (`PROJECT_CANONICAL_CONTEXT.md` header; Project `claude/PHASE1_*`); AUD-00.02 records no closure |
 | **2** | JUNO testnet live proof (Junox / uni-7 end-to-end on the canonical escrow artifact) | As recorded by its own passes; AUD-00.02 records no closure |
-| **3** | Player-facing UI / UX and pre-playtest closure | **In progress.** Baseline `phase3/consolidated-pre-playtest-integration` @ `b8d5246c579d32ad4f9a2fccd7c293d1655ff81a` (provisional; not merged to main; no broad owner gate). Plan and status: `docs/phase3/` (start at its `README.md`) |
+| **3** | Player-facing UI / UX and pre-playtest closure | **In progress (NOT closed).** Baseline `phase3/consolidated-final-preplaytest-integration` (2026-10-07, the consolidated FINAL pre-playtest integration from `5fc690e`; provisional; not merged to main; no broad owner gate; its head is recorded in `docs/phase3/README.md` and Project `claude/PHASE3_CONSOLIDATED_FINAL_INTEGRATION_*`). Before it: `phase3/consolidated-pre-playtest-integration` @ `b8d5246`. Plan and status: `docs/phase3/` (start at its `README.md`) |
 | **4** | Human playtesting and stabilization | Not started; begins on the Phase-4 baseline that W3-F records |
 | **5** | Major frontend / App.tsx refactor | Not started; Phase 3 does not begin it (plan §1) |
 | **6** | Final polish / release testing | Not started |
 | **7** | Mainnet readiness / launch | Not started; carries the substantive owner-authored Terms copy (OD-16) and the final deployment gates |
 
-**Before Phase 4** (Phase 3's remaining work; none implemented yet -- a lane whose branch is starting is not implemented):
-- the **Account / Profile / Wallet** lane: the onboarding redesign, the homepage overlap fix, trust indicators; W1-K cross-tab Keplr single flight
-  (AUD-19.02) and AUD-20.08's Terms route / page shell and Terms / deposit link infrastructure folded in (no invented Terms prose);
-- Live / Async clocks (AUD-11.04; no automatic forfeit, trade decline or host succession);
-- the D-35 OO reservation marker;
-- P3-N027, the emergency third-seat duplicate prompt;
-- the W3-B latch residue (AUD-14.06, P3-N021);
-- the AUD-04.04 + AUD-08.01 derivation residue lane;
-- **the final gameplay tutorial pass, LAST**;
-- then **W3-F**, the final Phase-3 closure (the Phase-4 checklist and baseline, the broad owner gate).
+**Before Phase 4** (Phase 3's remaining work). *As listed at AUD-00.02 (2026-10-05) every lane was still to be built; status at the
+consolidated FINAL pre-playtest integration (2026-10-07, `phase3/consolidated-final-preplaytest-integration`):*
+- the **Account / Profile / Wallet** lane -- **INTEGRATED** as the owner's FINAL account model (2026-10-06; it superseded the W3-L
+  direction below): the profile / account is the player; username + password + one Authorization Wallet; the homepage overlap fixed
+  structurally (P3-N028); trust facts; W1-K (AUD-19.02) and AUD-20.08's Terms shell folded in; every production player game anted;
+- Live / Async clocks (AUD-11.04) -- **INTEGRATED** (the final clocks / remedies lane, with escrow 2.1.0 / FP4 SOURCE; no host succession,
+  no Forfeit / Clemency payload);
+- the D-35 OO reservation marker -- **INTEGRATED** (both-city steady state tentatively accepted for Phase-4 visual review);
+- P3-N027, the emergency third-seat duplicate prompt -- **INTEGRATED**;
+- the W3-B latch residue (AUD-14.06, P3-N021) -- **INTEGRATED** (W3-B COMPLETE);
+- the AUD-04.04 + AUD-08.01 derivation residue lane -- **INTEGRATED**;
+- player reporting (P3-N035, added by the owner after AUD-00.02) -- **INTEGRATED**;
+- **the final gameplay tutorial pass, LAST** -- NOT STARTED;
+- then **W3-F**, the final Phase-3 closure (the Phase-4 checklist and baseline, the broad owner gate) -- NOT STARTED.
 
 **Not before Phase 4:** the official Keplr logo (ASSET PENDING); the substantive Terms copy (owner-authored; a Phase-7 / mainnet gate);
 D-17 (a Phase-4 observation); phone-width gameplay / map accessibility (Phase 5).
 
-**Profile policy (owner direction for the account lane; not implemented):** a public homepage before login; Create Account / Log In
-visible; username / password as the normal account UX; no mandatory recovery-key ritual for new accounts; signed-in players do not
-re-enter credentials per game; a verified wallet persists to the profile; one application-level Ante X JUNO initiation; factual trust
-indicators rather than a numeric composite score. No "established profile" threshold is defined.
+**Profile policy (owner direction for the account lane, as recorded at AUD-00.02 -- SUPERSEDED IN PART by the owner's FINAL account
+model of 2026-10-06, integrated):** a public homepage before login; Create Account / Log In visible; username / password as the normal
+account UX; no recovery-key ritual; signed-in players do not re-enter credentials per game; one application-level Ante X JUNO initiation;
+factual trust indicators rather than a numeric composite score. ~~A verified wallet persists to the profile~~ -- **superseded:** THE
+PROFILE / ACCOUNT IS THE PLAYER and no wallet is an identity; the profile stores no game wallet; each account has exactly ONE Authorization
+Wallet (account creation, password recovery with a fresh ADR-036 signature, replacement by password + old-wallet APPROVE + new-wallet
+ACCEPT); a seat's financial wallet is fixed while money is bound and frozen for the game's lifetime after Start; production player games
+are ante-only. "Established" = one completed real-money game.
 
 **Mapping from the ROADMAP 3.2 numbering below** (for reading older records): its 4 (LIVE-4/5/6) and the COST / single-host work → Phase 1;
 its 5 (Junox E2E, "ESCROW-5") → Phase 2; its 9–10 (UI/UX consolidation and polish) → Phase 3; its 11 (near-production playtest) → Phase 4;

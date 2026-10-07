@@ -7,7 +7,8 @@
 > NOT contain is the server's action clock: which seat is overdue, the 20/30
 > race, voluntary and system pauses, the N−1 vote and outage continuity are
 > the **server clock / system-pause lane**, implemented on
-> `phase3/preplaytest-final-clocks-remedies` (2026-10-06, not integrated;
+> `phase3/preplaytest-final-clocks-remedies` (2026-10-06; INTEGRATED 2026-10-07 as the base of
+> `phase3/consolidated-final-preplaytest-integration`, not merged to main;
 > `docs/phase3/PHASE3_FINAL_CLOCKS_REMEDIES.md`): the sealed decision, the
 > dedicated REMEDY signer port (fail closed when absent), the durable intent
 > and the clock lane's remedy gate. No KMS remedy signer is deployed, 2.1.0 is
@@ -439,7 +440,9 @@ an approximation of the optimizer route (`cargo +1.81.0 build --release --lib
 --target wasm32-unknown-unknown --locked` with `-C link-arg=-s`, then binaryen
 `wasm-opt -Os --signext-lowering`, version 116) gives, for the timed-remedy
 source, max **80** locals (limit 90) and 634,892 B (SHA-256 of that
-approximation `5990f2a1…6b0`, not a canonical checksum); the same route gives
+approximation `5990f2a1…6b0`, not a canonical checksum -- and OBSOLETE: it predates the
+last owner correction of 2026-10-07, which changed the contract source; no 2.1.0 hash recorded anywhere is
+canonical); the same route gives
 68 locals for the 2.0.0 source, matching the canonical record, and
 `cosmwasm-check` 2.2.9 passes. `gasbench` now benchmarks `SubmitRemedy` (all
 five kinds, with 6 approvals where needed, and scaling to 64 checkpoints),

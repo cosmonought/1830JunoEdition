@@ -8,6 +8,16 @@ history and a `ConsentKeyAt` query. No signed byte, gameplay rules version or se
 noncanonical 2.1 Wasm hash is SUPERSEDED: the owner-machine canonical Wasm certification must build the final contract
 HEAD of this branch.
 
+**INTEGRATED (2026-10-07):** this branch's head `5fc690e` is the base of the consolidated final pre-playtest integration,
+`phase3/consolidated-final-preplaytest-integration` (not merged to main; nothing deployed; escrow 2.1.0 still NOT deployed, NOT
+certified, NOT canonical). There the reporting hook (`ClockConductHook`, below) is CONSUMED by player reporting (P3-N035):
+`server/src/conduct/conductClockFacts.ts` keeps a bounded per-game feed of the hook's events, and a report attaches the
+server's clock facts (responsibility, offers, rejects, expiries, freeze exhaustion, overdue, cure, strike, foreclosure
+proposal, votes, pauses, system pause, remedy finality; the sealed remedy's own evidence after a seal) with no signature,
+approval, wallet proof, key or secret -- it reads the clock record and the feed and duplicates no clock state machine. The
+integration also holds the fail-closed rule at the host's own ante and the Start (no REMEDY signer: a timed money table is
+neither funded nor started) and treats the clock as held while a restored money table's restore check is pending.
+
 This is the design record of what the branch implements. Server code: `server/src/rooms/clock/` (`clockModel.ts` the
 pure state machine, `clockController.ts` its runner inside each game's serialization, `clockRecord.ts` the durable
 record, `clockEvidence.ts` the evidence chain, `clockStore.ts` / `aws/game/dynamoClockStore.ts` the stores,

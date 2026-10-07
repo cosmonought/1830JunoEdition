@@ -722,7 +722,7 @@ gates.
   for P3-N021.
 - **Status (2026-10-04):** PARTIAL — INTEGRATED THROUGH AUD-25.01. AUD-25.01 (U-46, MEDIUM, from the W3-G audit) IMPLEMENTED on the slice branch `phase3/w3-b-action-latch-linkqueue` (`26f5982` + review fix `5fd3a7b` + tracking `7efda71`, from `d29bb2f`) and **INTEGRATED on `phase3/wave3-i-w2i-w2j-w3c-w3g-w3b-v13cert-integration`** (merge `00b2b3c`, parents `d29bb2f` / `7efda71`; then the provisional baseline, superseded 2026-10-05 by `phase3/consolidated-pre-playtest-integration`). No RED region edited (OD-12 not used). Accepted LOW residue (RED R5): a held press can briefly re-arm once its own move lands if another seat's move landed meanwhile. OPEN: AUD-14.06 and P3-N021 NOT STARTED (W3-H; OD-12).
 - **Consolidated integration (2026-10-05):** still PARTIAL, re-evaluated on the combined tree: AUD-14.06 (`BuyLicenseModal`, `PrivatePowerFlowModal`, the token confirm, route edits -- none reads a latch) and P3-N021 (the automatic presses' latch / serialisation order, OD-12 RED R1) are NOT STARTED; no later slice closed either. They are pre-Phase-4 lane E.
-- **Latch residue (2026-10-05): COMPLETE** on `phase3/preplaytest-w3b-latch-residue` (from `b8d5246`; NOT integrated): P3-N021 by the
+- **Latch residue (2026-10-05): COMPLETE** on `phase3/preplaytest-w3b-latch-residue` (from `b8d5246`; INTEGRATED 2026-10-07 on `phase3/consolidated-final-preplaytest-integration`, merge `3b2edcc`): P3-N021 by the
   OD-12 RED R1 commit `0b2f360` (every press but a `derived` one takes the latch; the server-path `derived` return releases nothing) and
   the non-RED `2cea8c4` (Auto-Pass / Auto-Buy wait for the press in flight); AUD-14.06 by `2cea8c4` (BuyLicenseModal, PrivatePowerFlowModal,
   the auction prompt, the token confirm, Undo, the map's route edits) with the dispatch-site coverage registry
@@ -876,9 +876,16 @@ gates.
 
 #### Pre-Phase-4 work after the AUD-00.02 brief (owner, 2026-10-05) — current
 
-The owner's AUD-00.02 brief settles the two decisions left open above and adds the account lane. **None of this is implemented;** a lane whose branch
+The owner's AUD-00.02 brief settles the two decisions left open above and adds the account lane. **(As recorded 2026-10-05: none of this was implemented then.)** a lane whose branch
 is starting is NOT implemented, and each row moves only with its own accepted slice evidence. Lane D is folded into ACCOUNT; letters A, B, C and E
 are unchanged.
+
+**Status (2026-10-07, the consolidated final pre-playtest integration, `phase3/consolidated-final-preplaytest-integration` from
+`5fc690e`; not merged to main; no broad owner gate):** ACCOUNT, A, B, C, E and DERIV are IMPLEMENTED and INTEGRATED there (ACCOUNT
+as the owner's FINAL account / Authorization Wallet model, which supersedes the profile policy below; A as the final clocks /
+remedies line with the Escrow 2.1 / FP4 wiring, no host succession, no Forfeit / Clemency settlement payload), together with
+player reporting (P3-N035). **F (LAST) and W3-F are NOT STARTED. Phase 3 is not closed.** Status table: `README.md` ("Status
+after the consolidated FINAL pre-playtest integration").
 
 | Lane | What | Rows | Hard limits |
 |---|---|---|---|
@@ -891,7 +898,7 @@ are unchanged.
 | **F (LAST)** | **The final gameplay tutorial pass** -- AUD-13.04 and the tutorial system (OD-5(A)); timing RULED: the last implementation lane, before W3-F, not after Phase 4 | AUD-13.04 | contextual whitebox / spotlight; built after the other lanes land |
 | **W3-F** | Final Phase-3 closure after the implementation lanes: AUD-25.14 bookkeeping, `PHASE4_PLAYTEST_CHECKLIST.md`, the Phase-4 baseline, the broad owner gate | AUD-25.14 | closure contract §11 |
 
-**Profile policy (owner direction for the ACCOUNT lane, recorded 2026-10-05; TARGET UX, NOT IMPLEMENTED).** A public homepage before login;
+**Profile policy (owner direction for the ACCOUNT lane, recorded 2026-10-05; history -- SUPERSEDED by the final account / Authorization Wallet model, P3-N032 … P3-N034, integrated 2026-10-07).** A public homepage before login;
 Create Account / Log In visible; username / password as the normal account UX; no mandatory recovery-key ritual for new accounts;
 signed-in players do not re-enter credentials per game; a verified wallet persists to the profile; one application-level Ante X JUNO
 initiation; factual trust indicators rather than a numeric composite score. No "established profile" threshold is defined, and none is
@@ -1274,8 +1281,8 @@ launch. The Phase-3 baseline is `phase3/consolidated-pre-playtest-integration` @
 (AUD-19.02) and AUD-20.08 (the Terms shell / link infrastructure) are folded into it. The official Keplr logo stays ASSET PENDING; the
 substantive Terms copy stays owner-authored and a Phase-7 / mainnet gate.
 
-**PROFILE POLICY (direction, not implementation).** As recorded in §6 ("Pre-Phase-4 work after the AUD-00.02 brief"). No "established
-profile" threshold is ruled.
+**PROFILE POLICY (direction, not implementation; SUPERSEDED 2026-10-06 by the final account / Authorization Wallet model).** As
+recorded in §6 ("Pre-Phase-4 work after the AUD-00.02 brief").
 
 **RESTATED.** D-17 stays a Phase-4 observation; phone-width gameplay / map accessibility stays Phase 5; the clocks are pre-Phase-4 work
 (lane A), not deferred until after Phase 4.

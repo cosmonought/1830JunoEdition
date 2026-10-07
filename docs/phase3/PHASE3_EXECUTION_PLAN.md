@@ -2,10 +2,10 @@
 
 | | |
 |---|---|
-| **Status** | PLANNING RECORD. **Wave 1 is integrated provisionally on `phase3/wave1-integration` (2026-10-03)** — each slice carries its status line below; the matrix's "Wave-1 integration status" section and `phase3_accounting.json` (`slice_status`, row `status`) are the machine copy. Waves 2 and 3 are not started. |
+| **Status** | PLANNING RECORD. **Wave 1 is integrated provisionally on `phase3/wave1-integration` (2026-10-03)** — each slice carries its status line below; the matrix's "Wave-1 integration status" section and `phase3_accounting.json` (`slice_status`, row `status`) are the machine copy. Waves 2 and 3 are not started. **Current (2026-10-05, AUD-00.02):** the Wave 1–3 slices are integrated, except the PARTIAL / NOT STARTED slices listed in `docs/phase3/README.md`, on the current provisional Phase-3 baseline `phase3/consolidated-pre-playtest-integration` @ `b8d5246c579d32ad4f9a2fccd7c293d1655ff81a` (not merged to main; no broad owner gate); the remaining pre-Phase-4 work is the lane list in §6, "Pre-Phase-4 work after the AUD-00.02 brief"; `docs/phase3/README.md` is the status list. |
 | **Authoritative inputs** | [`PHASE3_UIUX_AUDIT_2026-10-03.md`](PHASE3_UIUX_AUDIT_2026-10-03.md) (the backlog) → [`PHASE3_AUDIT_RECONCILIATION.md`](PHASE3_AUDIT_RECONCILIATION.md) (one disposition per item) → this plan (how to execute). |
 | **Planning snapshot** | `recon/phase1-remainder-hardening` @ `8e897f9c5196f825a69c492dfb7c29088123cf67`. Source facts and line numbers below were read there. **It is not the implementation base.** |
-| **Implementation base** | **TBD — the final canonical integrated head after Phase 2 closes.** Pinned by the integrator at kickoff (OD-0, P0). Never `main`, `083d066`, `8e897f9` or a migration branch by default. **Wave 1 was built on `8f33f0fb72d462c381a572015de7860a93fbd198` by the owner's brief;** whether that is the OD-0 pin, or Wave 1 is carried onto the final post-Phase-2 head, is the owner's call, and OD-0's drift check against the final pin is still owed. |
+| **Implementation base** | **RULED (OD-0, 2026-10-05): the current integration lineage — today `phase3/consolidated-pre-playtest-integration` @ `b8d5246c579d32ad4f9a2fccd7c293d1655ff81a`.** *Was:* **TBD — the final canonical integrated head after Phase 2 closes.** Pinned by the integrator at kickoff (OD-0, P0). Never `main`, `083d066`, `8e897f9` or a migration branch by default. **Wave 1 was built on `8f33f0fb72d462c381a572015de7860a93fbd198` by the owner's brief;** whether that is the OD-0 pin, or Wave 1 is carried onto the final post-Phase-2 head, is the owner's call, and OD-0's drift check against the final pin is still owed. |
 | **Superseded draft** | [`archive/PHASE3_EXECUTION_MAP_DRAFT_2026-10-03.md`](archive/PHASE3_EXECUTION_MAP_DRAFT_2026-10-03.md). Its W-IDs are kept unchanged. Its OD-0 is replaced. |
 | **Self-contained** | A future session needs only this directory and the repository. Everything needed to execute is written here (Appendix A carries the reference procedures). Project documents named in the text are provenance only: no step depends on reading them. |
 
@@ -16,7 +16,7 @@
 ```text
 PHASE 1  server / infrastructure migration
 PHASE 2  JUNO testnet live proof
-PHASE 3  player-facing UI / UX            ← this plan
+PHASE 3  player-facing UI / UX and pre-playtest closure   ← this plan
 PHASE 4  human playtesting and stabilization
 PHASE 5  major frontend / App.tsx refactor
 PHASE 6  final polish / release testing
@@ -34,8 +34,9 @@ PHASE 7  mainnet readiness / launch
   certification, and it happens only through W3-K if OD-10(a) allows it.
 - **Money is unchanged.** No contract, codec, payload, settlement byte, `FINANCIAL_PROTOCOL_VERSION` or escrow semantics move
   in Phase 3. Money slices (W1-K, W2-K, W2-M) are browser UX only.
-- **The roadmap documents still show the old order** (`ROADMAP_3_2_REMAINING_WORK.md`, `PROJECT_CANONICAL_CONTEXT.md` §B,
-  backlog Part F place UI/UX after the frontend refactor). P0 updates them (AUD-00.02).
+- **The roadmap documents carry this order** (AUD-00.02, IMPLEMENTED 2026-10-05): `ROADMAP_3_2_REMAINING_WORK.md`,
+  `PROJECT_CANONICAL_CONTEXT.md` §B and backlog Part F. Their older ROADMAP 3.2 numbering (UI/UX after the frontend refactor)
+  is kept there as history only.
 
 ---
 
@@ -57,6 +58,7 @@ confirms all of the following. **No implementation starts before this pin.**
 #### P0
 **Kickoff: pin, drift reconciliation, the one seam, conventions, roadmap order** · integrator · serial · **2.5–3.5 h**
 - **Status (Wave-1 integration, 2026-10-03):** PARTIAL — only the S1 seam landed (L1 `42c67ee`); the OD-0 drift check, the conventions publication and the roadmap-order update (AUD-00.02) were not run.
+- **Status (AUD-00.02 reconciliation, 2026-10-05):** COMPLETE on the docs branch `phase3/preplaytest-aud00-roadmap-docs` (pending owner review / integration, like any slice) — OD-0 is ruled by the current integration lineage, so the pin, the drift check and the `phase3/integration` branch named in the Outcome are NOT APPLICABLE; the conventions are published in this entry (not re-audited across slices by this pass); the roadmap-order update (AUD-00.02) is IMPLEMENTED (the roadmap file's Phase 1–7 order, canonical context §B, backlog Part F).
 - **Outcome:** a pinned base, a reconciled matrix, branch `phase3/integration` created from the pin, S1 applied, the lane
   table published, and the roadmap documents in the fixed Phase 1–7 order.
 - **Audit items:** implements AUD-00.02
@@ -462,6 +464,7 @@ gates.
 - **Status (2026-10-05):** COMPLETE — FOLDED INTO W3-L (owner: "Fold W1-K into this lane rather than creating a competing wallet
   branch"). AUD-19.02 IMPLEMENTED in `9afc74a` on `phase3/preplaytest-profile-account-wallet` (NOT integrated): Web Locks with the storage-lease fallback, re-evaluated
   and kept, hardened (a settle re-read, a 10-minute max hold, a fallback when the lock manager refuses). See W3-L.
+- **Status (AUD-00.02, owner 2026-10-05):** NOT STARTED — FOLDED INTO the pre-Phase-4 Account / Profile / Wallet lane (§6, "Pre-Phase-4 work after the AUD-00.02 brief").
 - **Rows:** implements AUD-19.02 (U-45)
 - **Change:** take a cross-tab lock (`navigator.locks` with a storage-lease fallback) **before** Keplr opens, in
   `money/moneyActions.ts` / `money/pendingTx.ts`; the second tab is told another tab is opening the table.
@@ -689,6 +692,7 @@ gates.
   is the desired final design. **That redesign is W3-L (P3-ACCT, 2026-10-05); W2-M's rows keep their behaviour under it.**
 - **OD-16 RULED (transcribed 2026-10-04, §7.3):** W2-M builds the Terms route / page shell and the Terms / deposit link infrastructure; the substantive copy is owner-authored and never invented, and the final Terms are a Phase-7 / mainnet gate.
 - **Consolidated integration (2026-10-05):** PARTIAL — INTEGRATED on `phase3/consolidated-pre-playtest-integration` (merge `dc6020a`): AUD-20.02 … 20.07, 20.13, 20.14 IMPLEMENTED. **AUD-20.08 is NOT owner-gated:** OD-16 is ruled; it is READY / OPEN IMPLEMENTATION (pre-Phase-4 lane D) -- the Terms route/page shell and the Terms/deposit link infrastructure, no invented prose; nothing is built yet. The "stays OWNER-GATED on OD-16" status above is superseded. Residuals (LOW, recorded, not expanded here): another device may replace the linked wallet while a Keplr prompt is open; device clock skew can cost one free re-proof.
+- **AUD-00.02 (owner, 2026-10-05):** AUD-20.08 (the Terms shell / links) is FOLDED INTO the pre-Phase-4 Account / Profile / Wallet lane (it was lane D); still not built; no invented prose; the substantive copy stays a Phase-7 / mainnet gate.
 
 ### Wave 3
 
@@ -743,7 +747,7 @@ gates.
 - **Depends on:** W2-H, W3-A. **Gates:** OD-15.
 - **OD-15 RULED (transcribed 2026-10-04, §7.3):** the intro and end-game videos are full-viewport cinematic takeovers (not NativeModal / `<dialog>`, not modal-looking), sized by true viewport geometry with the counter-scale removed (`GameIntroOverlay.tsx`, AUD-13.05; `GameOutroOverlay.tsx` likewise); genuine modals stay on the native dialog / top layer, with no second manual modal / inert architecture (AUD-13.06). AUD-13.04 (tutorials as native dialogs) is tutorial work: OD-5's ruled ordering sequences it to the final tutorial/UI pass.
 - **OD-15 RULED (2026-10-04, §7.3).** Status: **PARTIAL** on its slice branch `phase3/w3-d` (from `phase3/wave3-i-w2i-w2j-w3c-w3g-v13cert-integration` @ `d29bb2f`; NOT integrated): AUD-13.05 (OD-15(a): the intro and the end-game film are full-viewport takeovers outside every scaled root, no counter-zoom, no dialog semantics, the shell root `inert` beneath them) and AUD-13.06 (OD-15(b): `ModalPortal`'s last consumer outside `NativeModal` removed, no manual inert; `PrivateTradePanel`'s unreachable false-modal shape deleted) IMPLEMENTED, each C → B under the ruling. **AUD-13.04 (tutorials as native dialogs) is BLOCKED ONLY ON W3-A INTEGRATION** (the owner reports OD-5 ruled in W3-A's lane; W3-A records it, and R-TUT is W3-A's while it is active). Dock-control keyboard reach stays OD-10(b). Record: Project `claude/PHASE3_W3D_PARTIAL_OD15_2026-10-04.md`.
-- **Consolidated integration (2026-10-05):** PARTIAL — INTEGRATED on `phase3/consolidated-pre-playtest-integration` (merge `a57b01a`): AUD-13.05 and AUD-13.06 IMPLEMENTED under the canonical OD-15. `ModalPortal` is kept (on the combined tree its one consumer is `NativeModal`, as its scaled destination). **AUD-13.04 is DEFERRED to the final tutorial pass (OD-5)** -- not "blocked on W3-A integration" (superseded); by the closure contract (§11 item 2) the LAST Phase-3 lane (F) before the Phase-4 baseline, unless the owner places it after Phase 4 (an owner decision open). Dock-control keyboard reach is OD-10(b) = Phase 5.
+- **Consolidated integration (2026-10-05):** PARTIAL — INTEGRATED on `phase3/consolidated-pre-playtest-integration` (merge `a57b01a`): AUD-13.05 and AUD-13.06 IMPLEMENTED under the canonical OD-15. `ModalPortal` is kept (on the combined tree its one consumer is `NativeModal`, as its scaled destination). **AUD-13.04 is DEFERRED to the final tutorial pass (OD-5)** -- not "blocked on W3-A integration" (superseded); by the closure contract (§11 item 2) the LAST Phase-3 lane (F) before the Phase-4 baseline, unless the owner places it after Phase 4 (an owner decision open then; RULED 2026-10-05 by the AUD-00.02 brief: the LAST pre-Phase-4 implementation lane, not after Phase 4). Dock-control keyboard reach is OD-10(b) = Phase 5.
 
 #### W3-E
 **City bypass control (conditional)** · L4 · **5–8 h, only if OD-11 = build**
@@ -858,7 +862,7 @@ gates.
 
 ### Pre-Phase-4 implementation lanes (after the consolidated integration, 2026-10-05)
 
-The remaining Phase-3 work that MUST land before Phase-4 human playtesting, each from `phase3/consolidated-pre-playtest-integration` as its own lane (isolated branch, focused tests, independent review, integrated like any slice). None of it was built inside the integration.
+*As recorded at the consolidated integration; SUPERSEDED by "Pre-Phase-4 work after the AUD-00.02 brief" below (lane D folded into ACCOUNT; the DERIV lane added; F ruled LAST).* The remaining Phase-3 work that MUST land before Phase-4 human playtesting, each from `phase3/consolidated-pre-playtest-integration` as its own lane (isolated branch, focused tests, independent review, integrated like any slice). None of it was built inside the integration.
 
 | Lane | What | Rows | Hard limits |
 |---|---|---|---|
@@ -868,7 +872,35 @@ The remaining Phase-3 work that MUST land before Phase-4 human playtesting, each
 | **D** | **Terms route / page shell and Terms / deposit link infrastructure** (OD-16) -- **built inside W3-L (2026-10-05, `9afc74a`, not integrated)** | AUD-20.08 | NO invented Terms prose -- an owner-copy slot only; final Terms are a Phase-7 / mainnet gate |
 | **E** | **W3-B latch residue** | AUD-14.06, P3-N021 | P3-N021 only via an OD-12 RED R1 commit -- **DONE on its branch (2026-10-05):** `phase3/preplaytest-w3b-latch-residue`, RED R1 `0b2f360`; W3-B COMPLETE; pending integration |
 
-**Also before the Phase-4 baseline under the closure contract (§11), though not among the owner's lanes A–E:** **F (last)** the FINAL tutorial pass -- AUD-13.04 and the tutorial system (OD-5(A): contextual whitebox / spotlight, built LAST, after the shell/UI is stable); the closure contract (§11 item 2) puts every A row before Phase-3 closure and the Phase-4 baseline, so by default it follows lanes A–E, but its TIMING IS AN OWNER DECISION OPEN -- if the owner means after Phase 4, AUD-13.04 moves to E with that ruling. W1-K (AUD-19.02, cross-tab Keplr single flight -- folded into W3-L 2026-10-05, IMPLEMENTED there, not integrated), AUD-00.02 (P0 docs), W3-F (AUD-25.14, the Phase-4 checklist, the broad owner gate). **Not pre-Phase-4:** D-17 (a Phase-4 observation); phone-width layout and keyboard map access (Phase 5, OD-10(b)). **Asset dependency:** the official Keplr logo (AUD-18.05, ASSET PENDING).
+*As recorded at the consolidated integration (superseded by the AUD-00.02 list below):* **Also before the Phase-4 baseline under the closure contract (§11), though not among the owner's lanes A–E:** **F (last)** the FINAL tutorial pass -- AUD-13.04 and the tutorial system (OD-5(A): contextual whitebox / spotlight, built LAST, after the shell/UI is stable); the closure contract (§11 item 2) puts every A row before Phase-3 closure and the Phase-4 baseline, so by default it follows lanes A–E, but its TIMING IS AN OWNER DECISION OPEN -- if the owner means after Phase 4, AUD-13.04 moves to E with that ruling. W1-K (AUD-19.02, cross-tab Keplr single flight -- folded into W3-L 2026-10-05, IMPLEMENTED there, not integrated), AUD-00.02 (P0 docs), W3-F (AUD-25.14, the Phase-4 checklist, the broad owner gate). **Not pre-Phase-4:** D-17 (a Phase-4 observation); phone-width layout and keyboard map access (Phase 5, OD-10(b)). **Asset dependency:** the official Keplr logo (AUD-18.05, ASSET PENDING).
+
+#### Pre-Phase-4 work after the AUD-00.02 brief (owner, 2026-10-05) — current
+
+The owner's AUD-00.02 brief settles the two decisions left open above and adds the account lane. **None of this is implemented;** a lane whose branch
+is starting is NOT implemented, and each row moves only with its own accepted slice evidence. Lane D is folded into ACCOUNT; letters A, B, C and E
+are unchanged.
+
+| Lane | What | Rows | Hard limits |
+|---|---|---|---|
+| **ACCOUNT** | **Account / Profile / Wallet onboarding redesign**, the **homepage overlap fix**, **trust indicators**; **W1-K** cross-tab Keplr single flight folded in; **AUD-20.08** Terms shell / link infrastructure folded in (was lane D). Target UX: the profile policy below | AUD-19.02, AUD-20.08 (the redesign, overlap fix and trust indicators carry no audit row; the lane files its own rows) | no invented Terms prose (owner-copy slot only); no invented "established profile" threshold; no numeric composite trust score; the official Keplr logo stays ASSET PENDING; frozen invariants and financial protocol unchanged unless the owner separately rules |
+| **A** | Live / Async clocks (as above) | AUD-11.04 | as above |
+| **B** | D-35 OO reservation marker (as above) | VF/D-35 | as above |
+| **C** | P3-N027 emergency third-seat duplicate prompt (as above) | P3-N027 | as above |
+| **E** | W3-B latch residue (as above) | AUD-14.06, P3-N021 | as above |
+| **DERIV** | **Derivation residue:** AUD-04.04 (DH-1) and AUD-08.01 (GR-1 / S10-27) together (owner placement; tracking disposition C → B) | AUD-04.04, AUD-08.01 | derivation-only per the v13 scope verification; outside the v13 batch (OD-10(a)); any rules-version consequence must be proven by the lane, not assumed |
+| **F (LAST)** | **The final gameplay tutorial pass** -- AUD-13.04 and the tutorial system (OD-5(A)); timing RULED: the last implementation lane, before W3-F, not after Phase 4 | AUD-13.04 | contextual whitebox / spotlight; built after the other lanes land |
+| **W3-F** | Final Phase-3 closure after the implementation lanes: AUD-25.14 bookkeeping, `PHASE4_PLAYTEST_CHECKLIST.md`, the Phase-4 baseline, the broad owner gate | AUD-25.14 | closure contract §11 |
+
+**Profile policy (owner direction for the ACCOUNT lane, recorded 2026-10-05; TARGET UX, NOT IMPLEMENTED).** A public homepage before login;
+Create Account / Log In visible; username / password as the normal account UX; no mandatory recovery-key ritual for new accounts;
+signed-in players do not re-enter credentials per game; a verified wallet persists to the profile; one application-level Ante X JUNO
+initiation; factual trust indicators rather than a numeric composite score. No "established profile" threshold is defined, and none is
+to be invented. Today's `ProfileGate` / recovery-key flow and per-seat wallet linking are the current code, not the desired final UX;
+recording this direction changes no frozen invariant and no financial protocol -- the lane designs within them or brings any conflict to the owner.
+
+**Not pre-Phase-4:** the official Keplr logo (ASSET PENDING, AUD-18.05); the substantive Terms copy (owner-authored; a Phase-7 / mainnet
+gate, OD-16); D-17 (a Phase-4 observation); phone-width gameplay / map accessibility (Phase 5, OD-10(b)); automatic forfeit / trade decline /
+host succession (deferred pending Phase-4 validation, AUD-19.04).
 
 ## 7. Owner decisions
 
@@ -879,7 +911,7 @@ answered here. Where a draft question was already decided, it is removed (§7.2)
 planning defaults, inferred choices and implementation decisions are NOT owner rulings. A ruling is recorded only from the
 owner's own words (a brief, a decision, or an explicit approval); a ruling the owner gives in conversation is transcribed
 into `owner_rulings`, this table and §7.3 in the same pass, so a later lane never has to re-ask it. The genuinely open
-list is kept current in `docs/phase3/README.md` ("Status after the consolidated integration").
+list is kept current in `docs/phase3/README.md` ("Status after the consolidated integration and AUD-00.02").
 
 | ID | Type | The decision | What exists now | Gates | Needs Phase 4 first? |
 |---|---|---|---|---|---|
@@ -1121,9 +1153,9 @@ transcribed above, from the W3-G owner-review brief (2026-10-04; AUD-25.15). W2-
 **OD-18 — LIVE / ASYNC LIMITS (U-10) AND RECORDED LIMITS.** *SUPERSEDED IN PART 2026-10-05 -- see "OD-18 — CLOCKS" below: the clock is built in Phase 3; its automatic consequences stay deferred.*
 - Do NOT add at this stage: move clock; automatic forfeit; automatic trade decline; host succession.
 - Reconsider these only after Phase-4 human playtesting.
-- *Effect on this plan:* AUD-11.04 (U-10) and AUD-19.04 RULED — placed after Phase-4 human playtesting, not Phase-3 work. U-10 as worded here also names a "pause cap"; the ruling does not name it and it is not inferred; the owner may confirm whether it falls under this later placement (README, "Still open"). The C → E disposition move is left to W3-F's closure reconciliation.
+- *Effect on this plan (2026-10-04; SUPERSEDED for AUD-11.04 on 2026-10-05 -- the clock is pre-Phase-4 lane A; only AUD-19.04 stays deferred pending Phase-4 validation):* AUD-11.04 (U-10) and AUD-19.04 RULED — placed after Phase-4 human playtesting, not Phase-3 work. U-10 as worded here also names a "pause cap"; the ruling does not name it and it is not inferred; the owner may confirm whether it falls under this later placement (README, "Still open" -- that section has since been replaced by the status table). The C → E disposition move is left to W3-F's closure reconciliation.
 
-Status: see `docs/phase3/README.md` ("Status after the consolidated integration"), the single maintained list -- two owner decisions remain open (the placement of AUD-04.04 / AUD-08.01; the final tutorial pass's timing). Part D of `RULES_HARDENING_BACKLOG.md` should record OD-2 and OD-7 when the backlog is next updated (closure contract item 3).
+Status: see `docs/phase3/README.md` ("Status after the consolidated integration and AUD-00.02"), the single maintained list -- no owner decision remains open (the two still open at the consolidated integration, the placement of AUD-04.04 / AUD-08.01 and the final tutorial pass's timing, were ruled by the owner's AUD-00.02 brief, 2026-10-05, below). Part D of `RULES_HARDENING_BACKLOG.md` should record OD-2 and OD-7 when the backlog is next updated (closure contract item 3).
 
 ---
 
@@ -1225,7 +1257,30 @@ flow is PROVISIONAL and expected to be redesigned: no deeper coupling, no broad 
 endorsed final architecture. Bounded residuals carried, not solved: another device may replace the linked wallet while a
 Keplr prompt is open; local clock skew can trigger one unnecessary free re-proof.
 
-Still open as an OWNER DECISION (neither created by this integration; see `docs/phase3/README.md`, "Status after the consolidated integration"): (1) placement of AUD-04.04 (DH-1) and AUD-08.01 (GR-1 / S10-27): approved, derivation-only defects (no version bump) that OD-10(a) kept out of the v13 batch; no owner ruling places them in a slice (Phase 3 or later) -- open since the v13 scope verification, not created by this integration; (2) timing of the FINAL tutorial pass (AUD-13.04 and the tutorial system, OD-5(A) "built last, after the gameplay shell/UI is stable"): the plan's closure contract (§11 item 2) requires every A/B row fixed before Phase-3 closure, where the Phase-4 baseline is recorded -- so by default the final tutorial pass is the LAST Phase-3 lane (F), after lanes A-E; if the owner means after Phase 4, AUD-13.04 moves to E with that ruling.
+*At the consolidated integration these two were still open; BOTH ARE RULED by the AUD-00.02 brief below:* Still open as an OWNER DECISION (neither created by this integration; see `docs/phase3/README.md`, "Status after the consolidated integration"): (1) placement of AUD-04.04 (DH-1) and AUD-08.01 (GR-1 / S10-27): approved, derivation-only defects (no version bump) that OD-10(a) kept out of the v13 batch; no owner ruling places them in a slice (Phase 3 or later) -- open since the v13 scope verification, not created by this integration; (2) timing of the FINAL tutorial pass (AUD-13.04 and the tutorial system, OD-5(A) "built last, after the gameplay shell/UI is stable"): the plan's closure contract (§11 item 2) requires every A/B row fixed before Phase-3 closure, where the Phase-4 baseline is recorded -- so by default the final tutorial pass is the LAST Phase-3 lane (F), after lanes A-E; if the owner means after Phase 4, AUD-13.04 moves to E with that ruling.
+
+*The rulings below are from the owner's AUD-00.02 roadmap / canonical-doc reconciliation brief (2026-10-05). Where an older entry above
+conflicts, these win. They are recorded by `phase3/preplaytest-aud00-roadmap-docs` (docs / tracking only).*
+
+**ROADMAP ORDER.** Phase 1 server / infrastructure migration → 2 JUNO testnet live proof → 3 player-facing UI / UX and pre-playtest closure →
+4 human playtesting and stabilization → 5 major frontend / App.tsx refactor → 6 final polish / release testing → 7 mainnet readiness /
+launch. The Phase-3 baseline is `phase3/consolidated-pre-playtest-integration` @ `b8d5246c579d32ad4f9a2fccd7c293d1655ff81a`.
+
+**AUD-04.04 + AUD-08.01 — PLACED.** A pre-Phase-4 derivation residue lane (DERIV, §6). (Tracking disposition, not the owner's words: C → B.)
+
+**FINAL GAMEPLAY TUTORIAL PASS — LAST.** The last pre-Phase-4 implementation lane (F), before W3-F's closure; not after Phase 4.
+
+**ACCOUNT / PROFILE / WALLET LANE.** The onboarding redesign, the homepage overlap fix and trust indicators are pre-Phase-4 work; W1-K
+(AUD-19.02) and AUD-20.08 (the Terms shell / link infrastructure) are folded into it. The official Keplr logo stays ASSET PENDING; the
+substantive Terms copy stays owner-authored and a Phase-7 / mainnet gate.
+
+**PROFILE POLICY (direction, not implementation).** As recorded in §6 ("Pre-Phase-4 work after the AUD-00.02 brief"). No "established
+profile" threshold is ruled.
+
+**RESTATED.** D-17 stays a Phase-4 observation; phone-width gameplay / map accessibility stays Phase 5; the clocks are pre-Phase-4 work
+(lane A), not deferred until after Phase 4.
+
+**No owner decision is open in the Phase-3 tracking after this brief.**
 
 ## 8. Phase-4 deferrals
 

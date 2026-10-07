@@ -353,7 +353,8 @@ function isParked(p: unknown): p is ClockParked {
   if (!isObject(p)) return false;
   const running = Object.prototype.hasOwnProperty.call(p, "since");
   const budgeted = Object.prototype.hasOwnProperty.call(p, "freeze_ms");
-  if (running && budgeted) return false;
+  /* Exactly one: a Timed Async park runs (`since`); a Live park carries its freeze budget (`freeze_ms`). */
+  if (running === budgeted) return false;
   const keys = ["seat", "offer_key", "remaining_ms", "key", ...(running ? ["since"] : []), ...(budgeted ? ["freeze_ms"] : [])];
   return exact(p, keys) && seat(p.seat) && text(p.offer_key, 120) && time(p.remaining_ms) && (p.key === null || text(p.key, 200)) && (!running || time(p.since)) && (!budgeted || time(p.freeze_ms));
 }

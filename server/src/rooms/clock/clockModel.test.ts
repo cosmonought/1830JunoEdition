@@ -476,8 +476,11 @@ describe("Live optional-offer FREEZE BUDGET: at most 10:00 in total per required
     }
     const read = parseClockDocument(JSON.stringify(legacy), GAME);
     assert.deepEqual([read.version, read.parked[0]?.freeze_ms, read.obligation?.freeze_ms, read.snapshots[read.snapshots.length - 1]?.obligation?.freeze_ms], [3, LIVE_FREEZE_BUDGET_MS, null, LIVE_FREEZE_BUDGET_MS]);
-    /* The same fields missing from a VERSION-3 record: unreadable, never guessed at. */
+    /* The same fields missing from a VERSION-3 record: unreadable, never guessed at -- an obligation's, or a park's alone. */
     assert.throws(() => parseClockDocument(JSON.stringify({ ...legacy, version: 3 }), GAME), ClockUnreadableError);
+    const parkOnly = JSON.parse(JSON.stringify(t.record)) as { parked: Array<Record<string, unknown>> };
+    for (const p of parkOnly.parked) delete p.freeze_ms;
+    assert.throws(() => parseClockDocument(JSON.stringify(parkOnly), GAME), ClockUnreadableError);
   });
 });
 

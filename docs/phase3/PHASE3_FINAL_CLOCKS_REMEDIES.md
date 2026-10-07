@@ -26,6 +26,11 @@ the deadline choice, the No-deadline notice and the REMEDY-APPROVE signing in `m
 4. Optional offers never refresh the required-action allowance (Live and Timed Async).
 5. The Live two-decline limit resets per ROUND INSTANCE: each operating sub-round (OR 2.1 and OR 2.2 are two) and,
    for offers legal in a Stock Round, each Stock Round instance -- derived from the board's own round identity.
+6. **Live optional-offer freeze budget (2026-10-07):** "Each fresh Live required-action episode includes at most 10
+   minutes TOTAL of optional inter-player offer freeze protection. Once that budget is exhausted, further legal offers
+   remain permitted but the proposer's ordinary action clock continues running." The 20-minute per-action clock, the
+   10-minute individual response timer, the per-round-instance two-decline rule and the Async continuous deadline are
+   kept; the freeze budget is independent of the declines.
 
 ## 1. Responsibility model (one derivation)
 
@@ -43,21 +48,36 @@ sub_round_index` of the committed (or speculated) board -- never client timing.
 - **20:00 per required action.** An accepted REQUIRED action that leaves the same human owing the next decision gives
   them a fresh 20:00; one that hands responsibility on gives the new human a fresh 20:00. Another seat's accepted move
   that leaves the obligation where it was changes nothing.
-- **Live qualifying offers: the proposer's clock FREEZES, the answerer has 10:00 (owner rulings, 2026-10-06 and
-  2026-10-07).** A valid offer that puts its proposer in a WAITING state -- the proposer was the responsible player, its
-  clock running, and the board now owes the answer to another seat (a train offer; equally a private purchase or a
-  private trade made on the proposer's own clock) -- freezes the proposer's clock at its EXACT remainder (a frozen
-  park, no `since`) and gives the answerer a distinct **10:00 response timer**: never an action clock, an overdue or a
-  strike. A Live train offer always runs it. An offer that suspends nothing of its proposer's (an off-turn proposer, a
-  funding offer made TO the responsible player, an offer to oneself) is not this mechanism and is never a decline.
-  **Optional negotiation never manufactures clock time:** whatever closes the offer -- an ACCEPTANCE, a REJECTION, an
-  unanswered EXPIRY, a legal counter / continuation -- a proposer that still owes the SAME required decision resumes
-  the SAME preserved remainder (never 20:00 because the offer was accepted); the proposer's own RESCISSION is charged
-  the time the answerer's response timer actually ran (never a pause or an outage). Only a genuine handoff (the board
-  now owes another seat, or a different decision) gives the newly responsible seat a fresh 20:00. At 10:00 the SERVER
-  closes the offer as the proposer's rescission of THAT offer (`RescindTrainPurchase`, `RescindPrivatePurchase`,
-  `RescindFundingPrivateOffer`, `RescindPrivateTrade`), stamped at the exact moment, in the game's own task; an expiry
-  is an undo fence.
+- **Live qualifying offers: the answerer has 10:00; the proposer is frozen only within its FREEZE BUDGET (owner
+  rulings, 2026-10-06 and 2026-10-07).** A valid offer that puts its proposer in a WAITING state -- the proposer was the
+  responsible player, its clock running, and the board now owes the answer to another seat (a train offer; equally a
+  private purchase or a private trade made on the proposer's own clock) -- PARKS the proposer's remainder and gives the
+  answerer a distinct **10:00 response timer**: never an action clock, an overdue or a strike. A Live train offer always
+  runs it. An offer that suspends nothing of its proposer's (an off-turn proposer, a funding offer made TO the
+  responsible player, an offer to oneself) is not this mechanism and is never a decline.
+  **The freeze budget.** Every fresh Live required-action episode -- a fresh 20:00 -- carries **10:00 TOTAL** of
+  optional-offer freeze protection (`freeze_ms` on the action obligation; `LIVE_FREEZE_BUDGET_MS`), cumulative across
+  EVERY qualifying offer made while that same required action remains owed: never 10:00 per offer, never replenished
+  by an acceptance, a rejection, an expiry, a counter or a withdrawal. A park carries the budget left when it parked;
+  the answer's wait W is measured by the answerer's RESPONSE timer (so a voluntary pause, a system pause or an outage
+  consumes nothing) and, with F the budget left, the first min(F, W) is FROZEN (the proposer's clock does not move) and
+  everything beyond F is CHARGED to the proposer's clock. Owner example: A has 14:20; offer 1 waits 4:00 -> 14:20, budget
+  6:00; offer 2 waits 6:00 -> 14:20, budget 0:00; a further offer is LEGAL (never refused for an exhausted budget) and
+  A's clock runs while it waits. With 8:00 and 2:30 left, a 7:00 wait is frozen for 2:30 and charged 4:30. If the
+  proposer's OWN clock runs out strictly before the answerer's response time does, the SERVER closes the offer at that
+  moment (the proposer's rescission, message class `server-close`: an undo fence, NO decline) and the proposer is
+  OVERDUE under the ordinary Live rules (a strike, the cure window); the answerer is never struck and its response timer
+  never becomes an overdue clock (at an exact tie the unanswered expiry decides: a decline). **Resolution:** whatever
+  closes the offer -- an ACCEPTANCE, a REJECTION, an unanswered EXPIRY (10:00, a decline), a counter / continuation, the
+  proposer's own WITHDRAWAL -- a proposer that still owes the SAME required decision resumes the same episode: its
+  remainder less the charged part of the wait, with the budget left (a withdrawal now draws on the budget like every
+  other resolution, replacing the interim rule that charged it the whole wait). **Reset:** the budget is renewed ONLY by
+  a genuinely new episode -- the required action completed and a further one owed (a legitimate fresh 20:00 for the
+  same player), or responsibility genuinely passed (the new seat's own fresh episode); never by optional negotiation, an
+  offer's outcome, a reconnect or reload, UI activity, a round-instance (OR / SR) boundary on its own, or an undo (§2
+  Undo). At 10:00 unanswered the SERVER closes the offer as the proposer's rescission of THAT offer
+  (`RescindTrainPurchase`, `RescindPrivatePurchase`, `RescindFundingPrivateOffer`, `RescindPrivateTrade`), stamped at the
+  exact moment, in the game's own task; an expiry is an undo fence.
 - **Two directional declines per ROUND INSTANCE (Live only).** A rejection or an unanswered expiry of a qualifying Live
   offer is one DECLINE for its direction A -> B in the CURRENT ROUND INSTANCE -- one counter per direction (`from>to`),
   whatever the offer's kind, once per PROPOSAL (identified by its position in the log, never by a board key that can
@@ -98,13 +118,17 @@ sub_round_index` of the committed (or speculated) board -- never client timing.
   `due <= at`).
 - **Third expiry.** The third ordinary expiry ends gameplay at once by foreclosure (remedy 3: challengeable on chain;
   gameplay is never reopened). No cure window, no vote, no neutral default.
-- **Undo.** An undo restores the obligation from the snapshot taken before the undone batch -- never a fresh allowance.
-  A seat undoing its OWN action is charged everything since it took it, whoever held the clock meanwhile (an
-  act-handoff-undo-redo cycle can never stall the next seat); that charge is not part of the restored run's own use (a
-  later rescission never charges it again). A restored Live park is charged exactly its seat's own run since the undone
-  batch (undoing an answer or a rescission never gives the proposer back that run, nor charges it twice); a restored
-  Async park is restored as it stands (it kept running). No undo while a seat is overdue, none across a fence (a cure,
-  an expiry, a pause, a system pause, a credited outage, a recovered gap); declines and strikes never go back.
+- **Undo -- never time, never freeze budget.** An undo restores the obligation from the snapshot taken before the undone
+  batch -- never a fresh allowance and never a fresh budget. A seat undoing its OWN action is charged everything since it
+  took it, whoever held the clock meanwhile (an act-handoff-undo-redo cycle can never stall the next seat); undoing its
+  own qualifying OFFER settles that offer's wait exactly as its withdrawal would (frozen within the budget left, charged
+  beyond it). A restored Live park is SETTLED at the snapshot (the wait its response timer had measured, split into
+  frozen and charged), charged its seat's own run since the undone batch, and never restored above what that seat holds
+  NOW (its current clock and budget, or its current park as it stands); a restored response timer measures its wait
+  afresh. So no undo -- the proposer's own, the answerer's undo of its own answer, a host's -- refunds clock or budget
+  (fuzzed: a seat's clock + budget never rises while its clock runs). A restored Async park is restored as it stands (it
+  kept running). No undo while a seat is overdue, none across a fence (a cure, an expiry or server close, a pause, a
+  system pause, a credited outage, a recovered gap); declines and strikes never go back.
 
 ## 3. Pauses, continuity and the sealed remedy
 
@@ -204,6 +228,15 @@ position (`log_len`, `log_hash`) is the full history's cumulative hash (§5a), a
 verifies the same way (`clockController.test.ts`: 10,200 entries; `clockModel.test.ts`: 5,200 entries and a window
 past 512 events).
 
+**Freeze-budget audit trail (Live).** `responsibility` carries `freeze_ms` -- a fresh episode's initial 10:00 (its
+`reason` names the start: the deal, an accepted action, a handoff, a cure) or the budget a resumption carries on;
+`trade-begin` carries the proposer's park (`parked_ms`) and the budget it parked with (`freeze_ms`); `trade-end` splits
+the wait into `waited_ms`, `frozen_ms`, `charged_ms` and `freeze_left_ms` and names the result (`accept`, `reject`,
+`expire`, `rescind`, `proposer-deadline`); `undo` names a restored park (`park_seat`, `park_ms`, `park_freeze_ms`). The
+moment frozen time turned into charged time is the offer's start plus `freeze_ms` of response-timer run (pause and
+system-pause events bound it). The remedy attestation's bytes are unchanged (only the evidence content, hashed into
+`evidence_hash`, carries the new fields).
+
 ## 5a. History without a length limit (owner ruling, 2026-10-07)
 
 - **No cap of any size.** The 10,000-entry refusal, the clock freeze at it and the 10,000,000 `baseIndex` transport
@@ -255,7 +288,9 @@ only on the clock lane's word (`remedyGate`). **Timed money fails closed without
 
 One clock chip in the room strip: the mode ("Live", "Async · 24 hours", "No deadline"), who acts, one countdown counted
 by monotonic time since the view arrived (none on a tab that is not current); "Train offer — m:ss to respond" (or
-"Offer — m:ss to respond" for another qualifying Live offer) with the proposer's paused clock shown inline; on a Timed
+"Offer — m:ss to respond" for another qualifying Live offer) with the proposer's own clock shown inline -- paused, with the offer pause left this action, while its freeze budget
+lasts, then counting down beside the response timer ("... running while the offer waits: m:ss left (this action's
+10:00 of offer pause is used up)"); a Live responsible seat's "offer pause left this action"; on a Timed
 Async table the proposer's still-running deadline behind its offer (`running`); OVERDUE with the time to 30:00, the
 cure, the vote's status and the automatic outcome (one countdown); "1 of 2 overdue cures used" after a first cure and
 the second-strike warning inline; a voluntary pause told apart from a SYSTEM pause; Async OVERDUE with no countdown;
@@ -265,18 +300,15 @@ defaulting player and the outcome.
 
 ## 8. Residuals and owner decisions
 
-- **Owner rulings applied:** the five above (2026-10-07) and the policy correction's (2026-10-06): Live qualifying offers use
+- **Owner rulings applied:** the six above (2026-10-07) and the policy correction's (2026-10-06): Live qualifying offers use
   the 10:00 response timer; Async has no response timer and no decline limit; no 16-offer cap; no 5,000-entry
   prohibition; system pause / unanimous resume only while playable state remains; an already-sealed terminal FP4 remedy
   continues automatically after infrastructure recovery; timed money fails closed without the remedy signer; transport
   offer-frequency limits stay as abuse protection only.
-- **OWNER DECISION -- Live ACCEPTED offers are unbounded.** The ruling's exact freeze means an accepted same-decision
-  offer costs its proposer nothing: two colluding Live players can trade a private back and forth (A sells to B for $0,
-  B accepts, A buys it back, ...), each cycle freezing A for up to 10:00; acceptances are not declines, and the
-  transport bucket (30 offers an hour sustained) never bites at ~10 minutes per offer. Options for the owner: charge the
-  response time to the proposer when an accepted offer leaves it owing the same decision; count accepted same-decision
-  offers against the per-round-instance limit; or cap the frozen time accepted offers can add per round instance. (Timed
-  Async has no such gap: its parks run.)
+- **Resolved (owner ruling, 2026-10-07): Live accepted offers.** The exact freeze is bounded by the episode's 10:00
+  freeze budget (§2): colluding offers -- accepted, rejected, withdrawn, expired, countered, undone -- extend one Live
+  required-action episode by at most 10:00 of frozen time in all; then the proposer's own clock runs and, if it runs
+  out while an offer waits, the proposer is overdue.
 - **Minute 30 waits for the chain.** A Live money minute 30 whose keys cannot be read conclusively (Juno halted, no
   quorum, a lagging or height-silent node, the chain reader not yet opened) holds the table -- no move, no vote -- until
   they can; ops should alert on `finalityKeysUnread` (the warning is rate-limited).
@@ -287,32 +319,39 @@ defaulting player and the outcome.
 - **Async remedies need every non-defaulting seat**, so a colluding answerer can block an N-1 against its partner (the
   owner's N-1 rule; unchanged).
 - **Edges (LOW, never giving time):** a host undo of another seat's action restores an answerer's response timer
-  charged a run it did not make; a rescission inside a single-batch recovered gap is not charged its standing time
-  (needs a crash between commit and clock write); a counter / continuation cannot arise today (one standing offer at a
-  time), so the model's counter paths are tested only synthetically.
+  charged a run it did not make; an offer resolved inside a recovered gap (a crash between commit and clock write) is
+  settled at the gap's last stamp (its wait counted to then -- never less); a counter / continuation cannot arise today
+  (one standing offer at a time), so the model's counter paths (each replaced offer's wait settled first) are tested
+  only synthetically.
 - **History costs (no cap):** see §5a's exact incompatibility; also a legacy (non-paging) client's single catch-up frame
   cannot exceed V8's string length (about 1.4 M entries) -- current bundles page; a client too slow to receive a huge
   catch-up before its socket drops starts it again; the first hash after a restart re-reads the whole history once
   (pure-JS SHA-256: about 10 s at 2 M entries); the dev `replayCli` still reads a whole file.
-- **Rollback note.** A record written by this build with a running (Async) park is unreadable to an older build (fail
-  closed: money tables refuse moves; free tables play untimed). Records from earlier builds are read; a pre-correction
-  Async park runs from its record's last write.
+- **Rollback note.** `CLOCK_VERSION` is 3 (Async running parks, Live freeze budgets): an older build refuses a version-3
+  record as NEWER (fail closed: money tables refuse moves; free tables play untimed). A version-2 record is carried
+  forward once (a pre-correction Async park runs from its record's last write; a pre-budget Live obligation or park gets
+  a full budget once); a version-3 record missing a field is unreadable, never guessed at.
 - A truncated evidence document (more than 512 facts in one obligation) folds to its attested hash but its earliest
   facts are only in the best-effort archive; a lost clock record of a dealt money table starts a new clock (system
-  paused); `CLOCK_VERSION` 2 is unchanged (the new park field is optional).
+  paused).
 - **Not done here (by the brief):** 2.1 is not deployed; the canonical 2.1 checksum is not certified (and any earlier
   noncanonical Wasm hash is superseded by this branch's final contract HEAD); no KMS remedy signer is deployed; nothing
   is mainnet ready.
 
 ## 9. Tests
 
-Server (node:test): `rooms/clock/clockModel.test.ts` (the owner's matrix on controlled time: Live offers resume the same
-remainder on accept / reject / expiry / counter, handoffs fresh; Async running parks, collusion with time passing, the
+Server (node:test): `rooms/clock/clockModel.test.ts` (the owner's matrix on controlled time: the Live FREEZE BUDGET --
+basic (the owner's 14:20 example), partial (2:30 then a 7:00 wait), collusion (at most 10:00 per episode, nothing
+replenishes it), reset (completed action, handoff; never an offer's outcome, a reload or a round-instance change),
+overdue at the proposer's own deadline with the offer closed and no decline, pause / system pause / outage /
+mid-offer reload exact, undo refunds nothing (self, answerer, host), gaps and counters settled, version-2 records;
+Live offers resume the same remainder on accept / reject / expiry / counter, handoffs fresh; Async running parks, collusion with time passing, the
 server's close at the proposer's deadline, outage credit; round-instance declines OR 2.1 vs 2.2 and SR instances; undo
 of answers and rescissions; recovered gaps; minute 30 pending and not crossed by a restart), `clockController.test.ts`
-(a real engine session: offers, expiry, declines before commit, Async close at the deadline through the engine, money
+(a real engine session: offers, expiry, the freeze budget used by an unanswered offer and a later offer closed at the
+proposer's deadline through the engine, a reload renewing nothing, declines before commit, Async close at the deadline through the engine, money
 minute 30 with keys moved / unread, the Async completion check, 10,200 entries), `clockServer.test.ts` (the real
-server), `rooms/longHistory.test.ts` (10,400+ entries through the real server: playable, durable, hashed, reloaded,
+server; a restart midway through an offer keeping the action, response and budget remainders exactly), `rooms/longHistory.test.ts` (10,400+ entries through the real server: playable, durable, hashed, reloaded,
 replayed, paged catch-up; line-wise scan equivalence; chunked reads), `rooms/gameActor.test.ts` (paged load deadline,
 no phantom timeout), `escrow/remedyPipeline.test.ts` and `fp4RemedyIntents.test.ts` (FP4 on the fake chain: approvals
 at `final_at`, rotation before / at / after it, conclusive and height-pinned reads), `escrow/clockMoney.test.ts`,

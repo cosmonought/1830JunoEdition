@@ -692,9 +692,14 @@ async function resumeSystemPause(mover: Seat, seats: readonly Seat[], viewer: Wi
   const pausedView = await viewer.view((view) => view.gameId === gameId && systemOf(view) !== null, "the system-paused view");
   const since = systemOf(pausedView)?.since;
   check("the RoomView names the system pause", typeof since === "number", (pausedView as { clock?: unknown }).clock);
-  for (const seat of seats) {
+  for (const [at, seat] of seats.entries()) {
     const resumed = await seat.client.op({ type: "clock-sysresume", since }, gameId);
     check(`${seat.who}'s resume vote is accepted`, resumed.ok === true, resumed);
+    if (at < seats.length - 1) {
+      /* Not yet every seat: still paused. */
+      const stillPaused = await mover.client.act(BUY, `${tag}-${at + 1}`);
+      check(`  one vote short of every seat, the table is still paused (clock-system-paused)`, stillPaused.kind === "refused" && stillPaused.code === "clock-system-paused" && entriesOf(stillPaused).length === 0, stillPaused);
+    }
   }
   await viewer.view((view) => view.gameId === gameId && systemOf(view) === null, "the resumed view");
   check("with every seat's vote the table resumes", true);
@@ -1362,10 +1367,12 @@ async function productionHalf(): Promise<void> {
   check(`and the same seat: role ${seatingD.you.role}, playerId ${String(seatingD.you.playerId)} (${alicePid})`, same(seatingD, storedA) && seatingD.you.playerId === alicePid, { before: storedA, after: seatingD });
   const bobSeat: Seat = { who: "Bob", connect: connectB, client: bob, playerId: bobPid };
   const aliceSeatD: Seat = { who: "Alice (browser D)", connect: connectD2, client: aliceD, playerId: alicePid };
+  /* The host's take-back of the pre-crash last action (whoever made it: the room's host_undo is "last-action") would
+     cross the crash's fence: refused. */
+  const lastStored = [...effectiveActions(storedLog)].reverse().find((entry) => entry.derived !== true) as Entry;
+  await refusedMove(aliceSeatD, revertTo(lastStored.index, aliceSeatD), "undo-across-crash", /cannot be undone/, `Alice's RevertTo of the pre-crash action (#${lastStored.index}) from browser D -- behind the crash's fence`, "undo-fenced");
   if (onTurn === bobPid) {
-    /* The host's take-back of the pre-crash action would cross the crash's fence: refused. So B moves first. */
-    const lastStored = [...effectiveActions(storedLog)].reverse().find((entry) => entry.derived !== true) as Entry;
-    await refusedMove(aliceSeatD, revertTo(lastStored.index, aliceSeatD), "undo-across-crash", /cannot be undone/, `Alice's RevertTo of the pre-crash action (#${lastStored.index}) from browser D -- behind the crash's fence`, "undo-fenced");
+    /* So B, on turn, moves first; then browser D extends the log as before. */
     await legalMove(bobSeat, aliceSeatD, BUY, "bob-first-after-restart", "B, on turn, moves first on the restarted server");
     onTurn = alicePid;
   }

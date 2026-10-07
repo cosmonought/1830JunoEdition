@@ -18,6 +18,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
+import { CONDUCT_REVIEWERS_FILES, conductReviewersWiringProblems } from "../conductReviewersWiring";
 
 const REPO = path.resolve(__dirname, "../../../../../../.."); // dist/server/src/aws/deploy/migration -> the repository
 const read = (rel: string) => fs.readFileSync(path.join(REPO, rel), "utf8").replace(/\r\n/g, "\n");
@@ -135,7 +136,7 @@ describe("PHASE 1 REMAINDER: the migration runbook's corrections", () => {
     for (const item of [/interrupted drill/i, /Step 13's READY/, /-TeardownAppliedAt/, /F10 \(replacement\)/, /Alarm notifications/]) assert.match(known, item);
   });
 
-  test("no Terraform module or stack changed since the certified base (the host's resource shape is untouched)", () => {
+  test("no Terraform module or stack changed since the certified base but the pinned, additive GS_CONDUCT_REVIEWERS wiring (the host's resource shape is untouched)", () => {
     const r = spawnSync("git", ["-C", REPO, "diff", "--name-only", BASE, "--", "infra/aws/modules", "infra/aws/stacks"], { encoding: "utf8" });
     if (r.status !== 0) return; // not a checkout holding the base commit: the owner gate's clean-clone diff covers it
     /* PHASE 1 FRESH-HOST HARDENING changed three HOST SCRIPTS (and the module's bash tests and README) -- no .tf,
@@ -143,18 +144,13 @@ describe("PHASE 1 REMAINDER: the migration runbook's corrections", () => {
        the instance: the live host takes them by the reviewed one-file install (runbook 13r), and step 22b is planned from
        the host-create commit's module (the runbook says so). */
     const freshHost = new Set(["files/bin/gs-preflight", "files/bin/gs-lib.sh", "files/bin/gs-health", "tests/host-scripts.test.sh", "tests/preflight-real-docker.test.sh", "README.md"].map((f) => `infra/aws/modules/single-host/${f}`));
-    /* CONSOLIDATED FINAL PRE-PLAYTEST INTEGRATION (player reporting, P3-N035): GS_CONDUCT_REVIEWERS is wired through
-       exactly these module / stack files -- SOURCE ONLY, ADDITIONS ONLY, absent by default. With the default (no
-       reviewer) the rendered server.env (so the user data) and the ECS task definition are byte-identical to the
-       certified base's (pinned by the modules' own `conduct_reviewers_absent_by_default` tftest runs), so the host's
-       resource shape is untouched. No line of the certified base's text is removed or changed in them. */
-    const conductReviewers = new Set(["infra/aws/modules/single-host/locals.tf", "infra/aws/modules/single-host/variables.tf", "infra/aws/modules/single-host/templates/server.env.tftpl", "infra/aws/modules/single-host/tests/single-host.tftest.hcl", "infra/aws/modules/app/locals.tf", "infra/aws/modules/app/variables.tf", "infra/aws/modules/app/tests/app.tftest.hcl", "infra/aws/stacks/app/main.tf", "infra/aws/stacks/app/variables.tf", "infra/aws/stacks/single-host/main.tf", "infra/aws/stacks/single-host/variables.tf"]);
-    for (const file of r.stdout.trim().split("\n").filter((f) => conductReviewers.has(f))) {
-      const d = spawnSync("git", ["-C", REPO, "diff", "--unified=0", BASE, "--", file], { encoding: "utf8" });
-      const removed = d.stdout.split("\n").filter((l) => l.startsWith("-") && !l.startsWith("---"));
-      assert.deepEqual(removed, [], `${file}: additions only`);
-      assert.match(d.stdout, /conduct_reviewers/, `${file}: the reviewer input`);
-    }
+    /* CONSOLIDATED FINAL PRE-PLAYTEST INTEGRATION (player reporting, P3-N035): the one reviewed exception -- the
+       GS_CONDUCT_REVIEWERS input, SOURCE ONLY, absent by default (the default rendering is byte-identical, so the host's
+       resource shape is untouched). Exactly the wired files, exactly their pinned added lines, nothing of the base
+       removed (`conductReviewersWiring.ts`); any other change to those files fails here. */
+    const changed = r.stdout.trim().split("\n").filter((f) => f !== "");
+    assert.deepEqual(conductReviewersWiringProblems(REPO, BASE, changed), [], r.stdout);
+    const conductReviewers = CONDUCT_REVIEWERS_FILES;
     assert.deepEqual(r.stdout.trim().split("\n").filter((f) => f !== "" && !freshHost.has(f) && !conductReviewers.has(f)), [], r.stdout);
   });
 });

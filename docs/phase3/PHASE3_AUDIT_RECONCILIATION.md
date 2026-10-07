@@ -1433,8 +1433,8 @@ STARTED: W3-F. **Not started (lane F, LAST): the final gameplay tutorial pass.**
 **Owner question (reported, NOT decided):** a seat's payout (ante) wallet may today be the account's Authorization Wallet,
 with no warning; the brief says the Authorization Wallet "must not become the routine financial wallet".
 
-**AUD-19.04 (host succession):** deferred (disposition E): OD-18 superseded in part (build the clock, not its automatic
-consequences); the final clocks brief: no host succession. **Forfeit / Clemency:** no required feature depends on it.
+**AUD-19.04 (host succession):** deferred (disposition E): OD-18 deferred it with the clock's automatic consequences; the
+owner's final clocks brief built the clock's escrow-2.1 REMEDY outcomes but kept "no host succession". **Forfeit / Clemency:** no required feature depends on it.
 
 ## Highest-risk systems (characterization carried as an item)
 

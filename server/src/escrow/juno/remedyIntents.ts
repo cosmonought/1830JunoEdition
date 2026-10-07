@@ -48,7 +48,7 @@ import {
   type RemedyKindByte,
 } from "../../../../frontend/src/gameEngine/escrow/junoRemedyV1";
 import { ChainIntentUnreadableError, newChainIntent, remedyFence, supersededIntent, type ChainIntentRecord, type ChainIntentStore } from "../chainIntents";
-import { consentKeyAt, RELAYER_EXECUTE } from "./junoContract";
+import { RELAYER_EXECUTE } from "./junoContract";
 import { verifyDigest } from "./secp256k1";
 
 /** The escrow's roster bounds (`contracts/escrow/src/helpers.rs` MIN_PLAYERS..=MAX_PLAYERS: 2..=7 seats). */
@@ -70,10 +70,11 @@ export interface RemedyIntentInput {
   readonly remedy_pubkey: string;
   /** Every seat's CURRENT consent key, in chain seat order, as the chain holds it now (the roster size is its length). */
   readonly consent_pubkeys: readonly string[];
-  /** Every seat's consent keys retired during play (chain seat order; escrow 2.1.0 `Seat::retired_consent_keys`):
-   *  with `consent_pubkeys`, the key each seat held at `final_at`, which the contract verifies each approval against
-   *  (an approval under a key replaced at or before `final_at` is refused here first). Absent: no seat rotated. */
-  readonly retired_consent_keys?: readonly (readonly { readonly pubkey: string; readonly retired_at_secs: string }[])[];
+  /** The key each seat HELD at the attestation's `final_at` (chain seat order), as the contract's `consent_key_at`
+   *  query answered it once a block past `final_at` existed: what the contract verifies each approval against (an
+   *  approval under a key replaced at or before `final_at` is refused here first). Absent: `consent_pubkeys` (no seat
+   *  rotated since). */
+  readonly approval_keys?: readonly string[];
   /** The chain game's `started_at` (Unix seconds) as the chain holds it: no seat is overdue before one whole allowance
    *  has run since it (the contract's floor). */
   readonly started_at: bigint;
@@ -129,9 +130,8 @@ export function remedyIntentProblem(input: RemedyIntentInput): string | null {
        after final_at. A horizon already past at the attestation or block time changes nothing. */
     if (approval.approve_until <= a.final_at) return `seat ${approval.seat_index}'s approval ended (${approval.approve_until}) at or before the remedy became final (${a.final_at})`;
     if (!SIGNATURE.test(approval.signature)) return `seat ${approval.seat_index}'s approval is not 64 bytes of lowercase hex`;
-    const retired = input.retired_consent_keys?.[approval.seat_index] ?? [];
-    if (!retired.every((entry) => PUBKEY.test(entry.pubkey) && /^(0|[1-9][0-9]{0,19})$/.test(entry.retired_at_secs))) return `seat ${approval.seat_index}'s retired consent keys are malformed`;
-    const held = consentKeyAt({ consent_pubkey: input.consent_pubkeys[approval.seat_index], retired_consent_keys: retired }, a.final_at);
+    const held = input.approval_keys === undefined ? input.consent_pubkeys[approval.seat_index] : input.approval_keys[approval.seat_index];
+    if (typeof held !== "string" || !PUBKEY.test(held)) return `seat ${approval.seat_index}'s consent key at final_at is not a 33-byte compressed key (lowercase hex)`;
     if (!verifies(held, remedyApproveDigestV1(a, approval.approve_until, approval.seat_index), approval.signature)) {
       return `seat ${approval.seat_index}'s approval does not verify under the consent key it held at final_at (for this overdue instance and horizon)`;
     }

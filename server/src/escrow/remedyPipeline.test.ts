@@ -373,7 +373,11 @@ describe("FP4 remedy pipeline: approvals are re-checked under the consent key ea
       advanceTo(world, finalSecs);
       rotate(world, chainGameId, "bob-at-final");
       const facts = { remedy: 2 as const, defaultingSeat: ALICE, strike: base.strike, epoch: 1, logLen: 1, logHash: base.log_hash, overdueMs: base.overdue_ms };
-      assert.deepEqual(await port.staleApprovals(GAME_A, facts, [{ seat: BOB, approveUntil: until, signature: approval.signature }], { atSecs: finalSecs }), [BOB]);
+      const pair = [{ seat: BOB, approveUntil: until, signature: approval.signature }];
+      /* No block past the final second yet: the chain's answer is not final -- no answer (never a guess). */
+      assert.equal(await port.staleApprovals(GAME_A, facts, pair, { atSecs: finalSecs, timeoutMs: 1_500 }), null);
+      advanceTo(world, finalSecs + 1);
+      assert.deepEqual(await port.staleApprovals(GAME_A, facts, pair, { atSecs: finalSecs }), [BOB]);
       advanceTo(world, finalSecs + 10);
       const held = await port.attest(GAME_A, withEvidence({ ...base, approvals: [approval] }));
       assert.deepEqual([held.status, held.unlandable], ["refused", [BOB]], JSON.stringify(held));

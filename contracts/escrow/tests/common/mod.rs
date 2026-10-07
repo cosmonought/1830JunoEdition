@@ -378,6 +378,24 @@ impl Suite {
         self.game(id).game.state
     }
 
+    /// Escrow 2.1.0: the consent key seat `seat` held at block second `at`, and
+    /// how many keys it replaced in play (`QueryMsg::ConsentKeyAt`).
+    pub fn key_at(&self, id: u64, seat: u8, at: u64) -> (HexBinary, u32) {
+        let r: eighteen_cosmos_escrow::msg::ConsentKeyAtResponse = self
+            .app
+            .wrap()
+            .query_wasm_smart(
+                self.contract.clone(),
+                &QueryMsg::ConsentKeyAt {
+                    chain_game_id: id,
+                    seat_index: seat,
+                    at: Uint64::new(at),
+                },
+            )
+            .unwrap();
+        (r.pubkey, r.retired_keys)
+    }
+
     pub fn config(&self) -> ConfigResponse {
         self.app
             .wrap()

@@ -598,9 +598,15 @@ export class GameActor {
     const limit = this.deps.storeTimeoutMs ?? STORE_TIMEOUT_MS;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let fail: ((error: Error) => void) | null = null;
+    /* Once the race is settled (answered, or timed out) a page the abandoned read still reports arms nothing: no
+       phantom timeout is counted after the fact. */
+    let settled = false;
     const arm = () => {
+      if (settled) return;
       if (timer !== undefined) clearTimeout(timer);
       timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
         this.deps.counters.storeTimeouts += 1;
         fail?.(new Error(`the store did not answer the ${label} of ${this.gameId} within ${limit} ms`));
       }, limit);
@@ -612,6 +618,7 @@ export class GameActor {
     try {
       return await Promise.race([call(arm), late]);
     } finally {
+      settled = true;
       clearTimeout(timer);
       fail = null;
     }

@@ -8,7 +8,7 @@ use common::*;
 use cosmwasm_std::{coins, HexBinary};
 use eighteen_cosmos_escrow::crypto::{self, DomainInputs};
 use eighteen_cosmos_escrow::msg::{ExecuteMsg, SeatSignature};
-use eighteen_cosmos_escrow::state::{GamePolicy, GameState, Mode, MAX_RETIRED_CONSENT_KEYS};
+use eighteen_cosmos_escrow::state::{GamePolicy, GameState, Mode};
 use eighteen_cosmos_escrow::ContractError;
 
 fn rotate(id: u64, key: &HexBinary) -> ExecuteMsg {
@@ -48,81 +48,82 @@ fn rotation_records_the_new_key_and_repeating_it_is_a_no_op() {
 
 /// Escrow 2.1.0 (owner ruling, 2026-10-07): a rotation while a
 /// `TimedRemedyV1` game is IN_PROGRESS keeps the replaced key with the
-/// rotation's block time, so a remedy final before it still verifies its
-/// approvals under the key held then; nowhere else is a key kept (before Start,
-/// SETTLEABLE, a no-deadline game). At most `MAX_RETIRED_CONSENT_KEYS` per
-/// seat: the next rotation in play is refused and changes nothing, while
-/// re-setting the current key stays a no-op and other seats are unaffected.
+/// rotation's block time (outside the game record), so a remedy final before
+/// it still verifies its approvals under the key held then; nowhere else is a
+/// key kept (before Start, SETTLEABLE, a no-deadline game). There is no limit:
+/// a seat that moves devices any number of times keeps its seat's history,
+/// and the game record does not grow with it.
 #[test]
-fn only_a_rotation_in_play_keeps_the_replaced_key_and_the_history_is_bounded() {
+fn only_a_rotation_in_play_keeps_the_replaced_key_with_no_limit() {
     let mut s = Suite::new();
     // Before Start: nothing kept.
     let id = s.create(0, 3, Mode::Live, ANTE);
     s.join(id, 1, ANTE);
+    let before_rotation = s.now().seconds();
     let alice = s.players[1].clone();
+    s.advance(60);
     s.exec(
         &alice,
         &rotate(id, &Key::from_label("18JUNO/TEST/pre-start").pubkey),
         &[],
     )
     .unwrap();
-    assert!(s.game(id).game.seats[1].retired_consent_keys.is_empty());
+    assert_eq!(s.key_at(id, 1, before_rotation).1, 0);
 
-    // In play: every rotation keeps the replaced key, up to the bound.
+    // In play: every rotation keeps the replaced key -- well past any small bound.
     let id = s.started(3);
     assert_eq!(
         s.game(id).game.terms.policy,
         Some(GamePolicy::TimedRemedyV1)
     );
     let alice = s.players[1].clone();
+    let record_size = |s: &Suite| serde_json::to_vec(&s.game(id).game).unwrap().len();
+    let size_before = record_size(&s);
     let mut current = Key::seat(1);
-    let mut expected = Vec::new();
-    for i in 0..MAX_RETIRED_CONSENT_KEYS {
+    let mut spans: Vec<(u64, HexBinary)> = Vec::new();
+    for i in 0..20 {
         s.advance(60);
+        spans.push((s.now().seconds() - 1, current.pubkey.clone()));
         let k = Key::from_label(&format!("18JUNO/TEST/seat/1/in-play/{i}"));
         s.exec(&alice, &rotate(id, &k.pubkey), &[]).unwrap();
-        expected.push((current.pubkey.clone(), s.now()));
         current = k;
     }
-    let kept: Vec<_> = s.game(id).game.seats[1]
-        .retired_consent_keys
-        .iter()
-        .map(|r| (r.pubkey.clone(), r.retired_at))
-        .collect();
-    assert_eq!(kept, expected);
-    let before = s.game(id).game;
-    s.advance(60);
+    for (at, key) in &spans {
+        assert_eq!(&s.key_at(id, 1, *at).0, key, "the key held at {at}");
+    }
     assert_eq!(
-        s.exec(&alice, &rotate(id, &rotated(1).pubkey), &[])
-            .unwrap_err(),
-        ContractError::ConsentKeyHistoryFull {
-            seat_index: 1,
-            max: MAX_RETIRED_CONSENT_KEYS as u8
-        }
+        s.key_at(id, 1, s.now().seconds()),
+        (current.pubkey.clone(), 20)
     );
-    assert_eq!(s.game(id).game, before);
+    assert!(
+        record_size(&s) <= size_before + 64,
+        "the game record does not grow with the history"
+    );
     let res = s.exec(&alice, &rotate(id, &current.pubkey), &[]).unwrap();
     assert_eq!(attr(&res, "changed"), "false");
-    let bob = s.players[2].clone();
-    s.exec(&bob, &rotate(id, &rotated(2).pubkey), &[]).unwrap();
-    let g = s.game(id).game;
-    assert_eq!(g.seats[2].retired_consent_keys.len(), 1);
     assert_eq!(
-        g.seats[2].retired_consent_keys[0].pubkey,
-        Key::seat(2).pubkey
+        s.key_at(id, 1, s.now().seconds()).1,
+        20,
+        "re-setting the same key keeps nothing"
     );
-    assert!(g.seats[0].retired_consent_keys.is_empty());
+    let bob = s.players[2].clone();
+    s.advance(60);
+    let bob_at = s.now().seconds();
+    s.exec(&bob, &rotate(id, &rotated(2).pubkey), &[]).unwrap();
+    assert_eq!(s.key_at(id, 2, bob_at - 1), (Key::seat(2).pubkey, 1));
+    assert_eq!(s.key_at(id, 0, bob_at), (Key::seat(0).pubkey, 0));
 
     // SETTLEABLE (no remedy can land any more): nothing kept.
     let (id, _) = s.settleable(3);
     let alice = s.players[1].clone();
+    s.advance(60);
     s.exec(
         &alice,
         &rotate(id, &Key::from_label("18JUNO/TEST/settleable").pubkey),
         &[],
     )
     .unwrap();
-    assert!(s.game(id).game.seats[1].retired_consent_keys.is_empty());
+    assert_eq!(s.key_at(id, 1, 0).1, 0);
 
     // A no-deadline game has no remedies: nothing kept.
     s.no_deadline = true;
@@ -136,7 +137,7 @@ fn only_a_rotation_in_play_keeps_the_replaced_key_and_the_history_is_bounded() {
         &[],
     )
     .unwrap();
-    assert!(s.game(id).game.seats[1].retired_consent_keys.is_empty());
+    assert_eq!(s.key_at(id, 1, 0).1, 0);
 }
 
 #[test]

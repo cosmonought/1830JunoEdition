@@ -764,6 +764,26 @@ describe("Phase 3 final clocks (owner ruling, 2026-10-07): a long history is cau
     expect(entries).toEqual([[entry(0), entry(1), entry(2)]]);
   });
 
+  it("REVIEW: pages that answer a submission while a resync is pending are dropped WHOLE with their answer -- never put in front of the resync's own catch-up", () => {
+    const { client, wire, entries } = link();
+    wire.open();
+    wire.deliver({ kind: "catch-up", entries: [entry(0), entry(1), entry(2)], digest: "d0", build: "build-1", inFlight: [] });
+    const PASS = { PassTurn: { game_id: 0 } } as never;
+    void client.submit(PASS);
+    void client.submit(PASS);
+    wire.deliver({ kind: "refused", build: "build-1", code: "ahead", watermark: 0, reason: "ahead", inReplyTo: "n1" });
+    /* n2's answer: a long stale-submit catch-up, in pages, its answer on the last page. */
+    wire.deliver({ kind: "catch-up", entries: [entry(3), entry(4)], digest: "", build: "build-1", more: true });
+    wire.deliver({ kind: "catch-up", entries: [entry(5)], digest: "d5", build: "build-1", inReplyTo: "n2", inFlight: [] });
+    const before = entries.length;
+    /* The resync's own catch-up, in pages too: delivered in order, exactly once. */
+    wire.deliver({ kind: "catch-up", entries: [entry(0), entry(1), entry(2)], digest: "", build: "build-1", more: true });
+    wire.deliver({ kind: "catch-up", entries: [entry(3), entry(4), entry(5)], digest: "d5", build: "build-1", inFlight: [] });
+    expect(entries.length).toBe(before + 1);
+    expect((entries[entries.length - 1] as Array<{ index: number }>).map((e) => e.index)).toEqual([0, 1, 2, 3, 4, 5]);
+    expect(client.appliedIndex).toBe(5);
+  });
+
   it("a short history is still one frame (no page)", () => {
     const { wire, entries } = link();
     wire.open();

@@ -39,7 +39,7 @@ import type { TransactWriteItem } from "@aws-sdk/client-dynamodb";
 import type { ServerLogEntry } from "../../../../frontend/src/utils/roomSession";
 import type { RoomChatEntry } from "../../../../frontend/src/utils/roomProtocol";
 import type { LogHeadRead, LogStore } from "../../fileLogStore";
-import { parseEntryLine, scanLog, serializeBatch } from "../../persistence/logFormat";
+import { linesToBytes, parseEntryLine, scanLogLines, serializeBatch } from "../../persistence/logFormat";
 import { COMMITTED, StoreCorruptError, StoreIncompatibleError, throwUnlessCommitted, type StoreWriteOutcome } from "../../persistence/storeResult";
 import {
   chatSk,
@@ -110,7 +110,8 @@ export function createDynamoLogStore(options: GameTableStoreOptions): DynamoLogS
       if (line === undefined || line.includes("\n")) throw new StoreCorruptError(`${where}: the item ${item.sk?.S ?? "?"} holds no entry line`, where, lines.length);
       lines.push(line);
     }
-    const scan = scanLog(Buffer.from(lines.map((line) => `${line}\n`).join(""), "utf8"));
+    /* Scanned line by line, never joined into one string (a string has a length ceiling; a history has none). */
+    const scan = scanLogLines(lines);
     if (scan.classification === "newer-format") {
       validated.delete(room);
       throw new StoreIncompatibleError(`${where}: ${scan.detail}`, where);
@@ -268,7 +269,7 @@ export function createDynamoLogStore(options: GameTableStoreOptions): DynamoLogS
        StoreIncompatibleError), never exported as if it were history. */
     async exportLog(room) {
       const { lines } = await validatedRead(room);
-      return Buffer.from(lines.map((line) => `${line}\n`).join(""), "utf8");
+      return linesToBytes(lines);
     },
   };
 }

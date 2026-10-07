@@ -377,20 +377,9 @@ pub struct Seat {
     /// 33-byte compressed secp256k1 key for CONSENT and ANNUL signatures. The
     /// key current at verification time is the one checked. (A REMEDY-APPROVE
     /// is checked against the key the seat held at the remedy's `final_at`:
-    /// see `retired_consent_keys`.)
+    /// see [`RETIRED_CONSENT_KEYS`].)
     pub consent_pubkey: HexBinary,
     pub consent_key_rotated_at: Option<Timestamp>,
-    /// Escrow 2.1.0 (owner ruling, 2026-10-07): the consent keys this seat
-    /// replaced while its `TimedRemedyV1` game was IN_PROGRESS, oldest first,
-    /// each with the block time of the rotation that retired it. A sealed
-    /// remedy's approvals are verified against the key each seat held at the
-    /// attested `final_at` (`helpers::consent_key_at`), so a rotation AFTER
-    /// the remedy became final cannot revoke it, while one at or before
-    /// `final_at` still voids the old key's approval. At most
-    /// [`MAX_RETIRED_CONSENT_KEYS`]. Empty (and absent from the stored JSON)
-    /// for every 2.0.0 game and every seat that never rotated during play.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub retired_consent_keys: Vec<RetiredConsentKey>,
     /// The server-issued opaque join ticket (32 bytes), stored verbatim.
     pub join_ticket: HexBinary,
     pub gross_deposit: Uint128,
@@ -400,7 +389,7 @@ pub struct Seat {
     pub joined_at: Timestamp,
 }
 
-/// A consent key a seat replaced during play (see `Seat::retired_consent_keys`).
+/// A consent key a seat replaced during play (see [`RETIRED_CONSENT_KEYS`]).
 /// It was the seat's key from the previous rotation (or the seat's join) until
 /// strictly before `retired_at`.
 #[cw_serde]
@@ -409,11 +398,6 @@ pub struct RetiredConsentKey {
     /// Block time of the `SetConsentKey` that replaced it.
     pub retired_at: Timestamp,
 }
-
-/// The most consent keys one seat may retire while its 2.1.0 game is
-/// IN_PROGRESS; a further rotation is refused (`ConsentKeyHistoryFull`) until
-/// the game leaves IN_PROGRESS. Bounds the seat record the key history adds.
-pub const MAX_RETIRED_CONSENT_KEYS: usize = 8;
 
 /// The fields of an accepted `SettlementPayloadV1`, plus its SETTLE digest.
 #[cw_serde]
@@ -673,3 +657,20 @@ pub const REMEDY_PUBKEY_INDEX: Map<&[u8], u16> = Map::new("remedy_pubkey_index")
 
 /// (chain_game_id, signer key_id) → the latest checkpoint signed by that key.
 pub const CHECKPOINTS: Map<(u64, u16), CheckpointRecord> = Map::new("checkpoints");
+/// Escrow 2.1.0 (owner ruling, 2026-10-07): the consent keys each seat
+/// replaced while its `TimedRemedyV1` game was IN_PROGRESS, by
+/// `(chain_game_id, chain_seat_index, ordinal)` -- ordinal 0 is the first key
+/// the seat replaced -- each with the block time of the rotation. A sealed
+/// remedy's approvals are verified against the key each seat held at the
+/// attested `final_at` (`helpers::consent_key_at`), so a rotation AFTER the
+/// remedy became final revokes nothing, while one at or before `final_at`
+/// still voids the old key's approval. Kept OUTSIDE the game record (never
+/// loaded with it) and searched by bisection (`retired_at` never decreases
+/// with the ordinal), so a seat may rotate as often as it needs, at a cost
+/// to `SubmitRemedy` logarithmic in its own rotations. Nothing is recorded for
+/// a 2.0.0 or a No-deadline game, or outside IN_PROGRESS (no remedy's
+/// `final_at` can fall there).
+pub const RETIRED_CONSENT_KEYS: Map<(u64, u8, u32), RetiredConsentKey> =
+    Map::new("retired_consent_keys");
+/// How many keys each `(chain_game_id, chain_seat_index)` has retired in play.
+pub const RETIRED_CONSENT_KEY_COUNTS: Map<(u64, u8), u32> = Map::new("retired_consent_key_counts");

@@ -248,13 +248,13 @@ describe("FP4: the remedy intent is exactly one attestation, never one the contr
     assert.equal(remedyIntentProblem({ ...pureInput(reattested), approvals: approvalsOf(reattested, [0, 1], a2.final_at + n(60)) }), null, "attested again after the horizon passed");
     const late = Number(a2.attested_at + n(86_400 * 30)) * 1000;
     assert.equal(remedyIntentProblem(pureInput(a2, [0, 1], { now: late })), null, "the wall clock plays no part");
-    /* The key each seat held AT final_at (the chain's retired-key history): seat 0 rotated after final_at -> its old
-       key still counts; rotated at final_at -> the old key is void (and the new one did not sign). */
+    /* The key each seat held AT final_at (the chain's `consent_key_at`): seat 0 rotated after final_at -> its old key
+       (held then) still counts though the current key moved; rotated at or before final_at -> the key held then is the
+       new one, which never signed: void. */
     const rotated0 = [publicKeyOf(sha("rotated-0")).toString("hex"), PURE_SEATS[1], PURE_SEATS[2]];
-    const after = [[{ pubkey: PURE_SEATS[0], retired_at_secs: (a2.final_at + n(1)).toString() }], [], []];
-    assert.equal(remedyIntentProblem(pureInput(a2, [0, 1], { consent_pubkeys: rotated0, retired_consent_keys: after })), null);
-    const atFinal = [[{ pubkey: PURE_SEATS[0], retired_at_secs: a2.final_at.toString() }], [], []];
-    assert.match(String(remedyIntentProblem(pureInput(a2, [0, 1], { consent_pubkeys: rotated0, retired_consent_keys: atFinal }))), /seat 0's approval does not verify under the consent key it held at final_at/);
+    assert.equal(remedyIntentProblem(pureInput(a2, [0, 1], { consent_pubkeys: rotated0, approval_keys: PURE_SEATS })), null);
+    assert.match(String(remedyIntentProblem(pureInput(a2, [0, 1], { consent_pubkeys: PURE_SEATS, approval_keys: rotated0 }))), /seat 0's approval does not verify under the consent key it held at final_at/);
+    assert.match(String(remedyIntentProblem(pureInput(a2, [0, 1], { approval_keys: ["zz", PURE_SEATS[1], PURE_SEATS[2]] }))), /consent key at final_at is not a 33-byte compressed key/);
   });
 
   test("its slot is (decision, expiry); its subject the exact REMEDY digest; its message the contract's submit_remedy, no address, no amount", () => {

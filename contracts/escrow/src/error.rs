@@ -261,9 +261,6 @@ pub enum ContractError {
         final_at: u64,
     },
 
-    #[error("seat {seat_index} already retired {max} consent keys during play; no further rotation until the game leaves IN_PROGRESS")]
-    ConsentKeyHistoryFull { seat_index: u8, max: u8 },
-
     #[error("a third-strike foreclosure can only be upheld or annulled, never replaced")]
     RemedySettlementNotReplaceable {},
 

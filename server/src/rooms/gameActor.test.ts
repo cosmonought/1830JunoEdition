@@ -893,6 +893,38 @@ describe("the point of no return (E-9, E-13)", () => {
 });
 
 describe("E-11: a store call that does not answer in time (LIVE-3B)", () => {
+  test("a PAGED load is bounded per page, never as a whole (no history length limit); an abandoned read's later pages count no phantom timeout", async () => {
+    const control = controlledStore();
+    const { records, gameId } = await dealtGame(control);
+    /* Four pages of 40 ms against a 60 ms bound: 160 ms in all, every page in time -- loaded. */
+    control.control.loadPagesMs = [40, 40, 40, 40];
+    let booted = await startServer({ store: control.store, records, storeTimeoutMs: 60 });
+    try {
+      const alice = await Client.open(booted.port, ALICE);
+      alice.hello(gameId);
+      const caught = await alice.next((f) => f.kind === "catch-up" || f.kind === "refused" || f.kind === "status");
+      assert.equal(caught.kind, "catch-up", JSON.stringify(caught));
+      assert.equal(booted.server.counters.storeTimeouts, 0);
+      await alice.close();
+    } finally {
+      await stopServer(booted.server);
+    }
+    /* A first page that takes 120 ms: the load times out once; the pages the abandoned read reports afterwards arm
+       nothing -- the count stays exactly one. */
+    control.control.loadPagesMs = [120, 10, 10, 10];
+    booted = await startServer({ store: control.store, records, storeTimeoutMs: 60 });
+    try {
+      const alice = await Client.open(booted.port, ALICE);
+      alice.hello(gameId);
+      await until(() => booted.server.counters.storeTimeouts >= 1, "the timeout");
+      await sleep(300);
+      assert.equal(booted.server.counters.storeTimeouts, 1, "no phantom timeout after the race settled");
+      await alice.close();
+    } finally {
+      await stopServer(booted.server);
+    }
+  });
+
   test("29, 30: a late append holds the game; the next task of that game does not run; when it lands it is adopted exactly once", async () => {
     const control = controlledStore();
     const { records, gameId } = await dealtGame(control);

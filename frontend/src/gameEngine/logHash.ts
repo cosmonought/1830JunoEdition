@@ -96,63 +96,73 @@ export function logHash(entries: readonly HashableLogEntry[], length = entries.l
    THE SAME COMMITMENT, NEVER RE-READ. `logHash(entries, n)` is SHA-256 over the lines of the first `n` entries, so the
    digest state after `k` lines is a checkpoint from which any longer prefix is finished by feeding only the rest. A
    `LogHashCursor` keeps such checkpoints at every `LOG_HASH_SEGMENT` entries (the completed segments, never touched
-   again) and at the last prefix it hashed (the hot tip), each bound to the IDENTITY of the entry it ends at (index and
-   id). A prefix whose anchor no longer matches -- a log rolled back and appended again -- drops that checkpoint and
-   everything after it; a prefix that is not strictly increasing is hashed from scratch by `logHash`, which keeps its
-   ordering and duplicate rules. The answer is always exactly `logHash(entries, length)`: only the work changes, from
-   the whole history to the entries since the nearest checkpoint. */
+   again) and at the last prefix it hashed (the hot tip), each ANCHORED ON THE ENTRY OBJECT it ends at (and its index
+   and id). A prefix whose anchor is no longer that object -- a log rolled back and appended again, a log read back from
+   a store -- drops that checkpoint and everything after it. The cursor answers only for a SERVER history: every entry
+   carries its id and the whole array is strictly increasing by index; anything else is hashed from scratch by
+   `logHash`, which keeps its ordering and duplicate rules. For a server history -- whose entries are frozen objects that
+   only grow, or are rolled back and grow again (an entry object never reappears behind a different prefix) -- the
+   answer is exactly `logHash(entries, length)`: only the work changes, from the whole history to the entries since the
+   nearest checkpoint. */
 export const LOG_HASH_SEGMENT = 4096;
 
 interface HashCheckpoint {
   /** Entries hashed. */
   readonly length: number;
-  /** The identity of entry `length - 1`. */
-  readonly index: number;
-  readonly id: string | undefined;
+  /** Entry `length - 1` itself (the anchor). */
+  readonly entry: object;
   readonly state: Sha256;
 }
 
 type IdentifiedEntry = HashableLogEntry & { readonly id?: string };
+
+/** A server history: every entry has its id, and the whole array is strictly increasing by index. */
+function isServerHistory(entries: readonly IdentifiedEntry[]): boolean {
+  for (let at = 0; at < entries.length; at += 1) {
+    const entry = entries[at];
+    if (typeof entry.id !== "string" || entry.id === "") return false;
+    if (at > 0 && entry.index <= entries[at - 1].index) return false;
+  }
+  return true;
+}
 
 export class LogHashCursor {
   private checkpoints: HashCheckpoint[] = [];
 
   /** `logHash(entries, length)`, finished from the nearest checkpoint that `entries` still begins with. */
   hash(entries: readonly IdentifiedEntry[], length = entries.length): string {
+    /* Not a server history (an id missing, an index out of order anywhere -- `logHash` sorts the WHOLE array before
+       it takes the prefix): hashed from scratch; nothing is kept. */
+    if (!isServerHistory(entries)) {
+      this.checkpoints = [];
+      return logHash(entries, length);
+    }
     const n = Math.max(0, Math.min(length, entries.length));
     let start: HashCheckpoint | null = null;
     for (let k = 0; k < this.checkpoints.length; k += 1) {
       const mark = this.checkpoints[k];
       /* Beyond what this call was given (a shorter prefix of the same history): neither confirmed nor refuted. */
       if (mark.length > entries.length) continue;
-      const at = entries[mark.length - 1];
-      if (at.index !== mark.index || at.id !== mark.id) {
-        /* Not this history any more (rolled back and appended again): this checkpoint and every later one are gone. */
+      if (entries[mark.length - 1] !== mark.entry) {
+        /* Not this history any more (rolled back and appended again, or read back as new objects): this checkpoint
+           and every later one are gone. */
         this.checkpoints = this.checkpoints.slice(0, k);
         break;
       }
       if (mark.length <= n) start = mark;
     }
     const state = start === null ? new Sha256() : start.state.clone();
-    let previous = start === null ? null : start.index;
     for (let at = start === null ? 0 : start.length; at < n; at += 1) {
       const entry = entries[at];
-      /* Not strictly increasing: not a server history -- `logHash` sorts and refuses duplicates; nothing is kept. */
-      if (previous !== null && entry.index <= previous) {
-        this.checkpoints = [];
-        return logHash(entries, length);
-      }
-      previous = entry.index;
       state.update(utf8Bytes(logEntryLine(entry)));
       if ((at + 1) % LOG_HASH_SEGMENT === 0 && !this.checkpoints.some((mark) => mark.length === at + 1)) {
-        this.remember({ length: at + 1, index: entry.index, id: entry.id, state: state.clone() });
+        this.remember({ length: at + 1, entry, state: state.clone() });
       }
     }
     if (n > 0 && n % LOG_HASH_SEGMENT !== 0) {
-      const last = entries[n - 1];
       /* The hot tip: only the latest one is kept beside the segment checkpoints. */
       this.checkpoints = this.checkpoints.filter((mark) => mark.length % LOG_HASH_SEGMENT === 0);
-      this.remember({ length: n, index: last.index, id: last.id, state: state.clone() });
+      this.remember({ length: n, entry: entries[n - 1], state: state.clone() });
     }
     return state.digestHex();
   }

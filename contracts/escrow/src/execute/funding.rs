@@ -16,8 +16,8 @@ use crate::payload::fixed_bytes;
 use crate::payout::{bond_amount, subsidy_cut};
 use crate::state::{
     Game, GamePolicy, GameState, GameTerms, Mode, RetiredConsentKey, Route, Seat, ASYNC_PACES_SECS,
-    CONFIG, LIVE_ACTION_SECS, LIVE_CURE_WINDOW_SECS, MAX_RETIRED_CONSENT_KEYS, NEXT_GAME_ID,
-    REVIEW_DELAY_SECS,
+    CONFIG, LIVE_ACTION_SECS, LIVE_CURE_WINDOW_SECS, NEXT_GAME_ID, RETIRED_CONSENT_KEYS,
+    RETIRED_CONSENT_KEY_COUNTS, REVIEW_DELAY_SECS,
 };
 
 #[allow(clippy::too_many_arguments)]
@@ -128,7 +128,6 @@ pub fn create_game(
             wallet: info.sender.clone(),
             consent_pubkey,
             consent_key_rotated_at: None,
-            retired_consent_keys: Vec::new(),
             join_ticket,
             gross_deposit: gross,
             subsidy_paid: subsidy,
@@ -265,7 +264,6 @@ pub fn join(
         wallet: info.sender.clone(),
         consent_pubkey,
         consent_key_rotated_at: None,
-        retired_consent_keys: Vec::new(),
         join_ticket,
         gross_deposit: gross,
         subsidy_paid: subsidy,
@@ -363,10 +361,10 @@ pub fn cancel(
 ///
 /// Escrow 2.1.0 (owner ruling, 2026-10-07): a rotation while a `TimedRemedyV1`
 /// game is IN_PROGRESS records the replaced key with the block time
-/// (`Seat::retired_consent_keys`), so a remedy that became FINAL before this
+/// (`RETIRED_CONSENT_KEYS`), so a remedy that became FINAL before this
 /// rotation still verifies its approvals against the key held at its
-/// `final_at`; one final at or after it needs the new key. At most
-/// `MAX_RETIRED_CONSENT_KEYS` per seat: a further rotation in play is refused.
+/// `final_at`; one final at or after it needs the new key. No limit: the
+/// history lives outside the game record.
 pub fn set_consent_key(
     deps: DepsMut,
     env: Env,
@@ -404,17 +402,23 @@ pub fn set_consent_key(
     let mut consent_withdrawn = false;
     if changed {
         if keeps_key_history {
-            if seat.retired_consent_keys.len() >= MAX_RETIRED_CONSENT_KEYS {
-                return Err(ContractError::ConsentKeyHistoryFull {
-                    seat_index: u8::try_from(index).map_err(|_| ContractError::Overflow {})?,
-                    max: u8::try_from(MAX_RETIRED_CONSENT_KEYS)
-                        .map_err(|_| ContractError::Overflow {})?,
-                });
-            }
-            seat.retired_consent_keys.push(RetiredConsentKey {
-                pubkey: seat.consent_pubkey.clone(),
-                retired_at: env.block.time,
-            });
+            let seat_index = u8::try_from(index).map_err(|_| ContractError::Overflow {})?;
+            let ordinal = RETIRED_CONSENT_KEY_COUNTS
+                .may_load(deps.storage, (chain_game_id, seat_index))?
+                .unwrap_or(0);
+            RETIRED_CONSENT_KEYS.save(
+                deps.storage,
+                (chain_game_id, seat_index, ordinal),
+                &RetiredConsentKey {
+                    pubkey: seat.consent_pubkey.clone(),
+                    retired_at: env.block.time,
+                },
+            )?;
+            RETIRED_CONSENT_KEY_COUNTS.save(
+                deps.storage,
+                (chain_game_id, seat_index),
+                &ordinal.checked_add(1).ok_or(ContractError::Overflow {})?,
+            )?;
         }
         seat.consent_pubkey = new_pubkey;
         seat.consent_key_rotated_at = Some(env.block.time);

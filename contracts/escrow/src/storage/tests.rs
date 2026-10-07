@@ -15,8 +15,8 @@ use crate::helpers::{load_game, save_game};
 use crate::msg::{GameResponse, GamesResponse, QueryMsg, SeatsResponse};
 use crate::state::{
     Config, DisputeRecord, DisputeResolution, Game, GameParams, GamePolicy, GameState, GameTerms,
-    Mode, Outcome, PayloadRecord, RemedyKind, RemedyRecord, RetiredConsentKey, ReviewRequest,
-    Route, Seat, SettlementRecord, SettlementSource, CONFIG,
+    Mode, Outcome, PayloadRecord, RemedyKind, RemedyRecord, ReviewRequest, Route, Seat,
+    SettlementRecord, SettlementSource, CONFIG,
 };
 
 // ------------------------------------------------------------------ variants
@@ -246,12 +246,6 @@ fn seat(rng: &mut Rng) -> Seat {
         wallet: rng.addr(),
         consent_pubkey: rng.hex(),
         consent_key_rotated_at: rng.opt(Rng::time),
-        retired_consent_keys: (0..rng.below(3))
-            .map(|_| RetiredConsentKey {
-                pubkey: rng.hex(),
-                retired_at: rng.time(),
-            })
-            .collect(),
         join_ticket: rng.hex(),
         gross_deposit: rng.uint128(),
         subsidy_paid: rng.uint128(),
@@ -424,16 +418,6 @@ fn shaped_game(state: GameState, n: usize, addr_len: usize, variant: usize) -> G
             wallet: wallet(i),
             consent_pubkey: rng.bytes(33),
             consent_key_rotated_at: (i % 3 == 1).then(|| Timestamp::from_seconds(1_790_000_100)),
-            // A seat that rotated during play (variant-dependent) keeps the key it
-            // replaced; the others store no history (and no JSON field).
-            retired_consent_keys: if i % 3 == 1 && started && variant % 4 == 1 {
-                vec![RetiredConsentKey {
-                    pubkey: rng.bytes(33),
-                    retired_at: Timestamp::from_seconds(1_790_000_100),
-                }]
-            } else {
-                Vec::new()
-            },
             join_ticket: rng.bytes(32),
             gross_deposit: Uint128::new(2_000_000),
             subsidy_paid: Uint128::new(50_000),
@@ -686,12 +670,6 @@ fn fixtures_cover_every_variant_and_every_option() {
         .seats
         .iter()
         .any(|s| s.consent_key_rotated_at.is_some())));
-    assert!(games
-        .iter()
-        .any(|g| g.seats.iter().any(|s| !s.retired_consent_keys.is_empty())));
-    assert!(games
-        .iter()
-        .any(|g| g.seats.iter().any(|s| s.retired_consent_keys.len() >= 2)));
     for n in [0usize, 2, 7] {
         assert!(games.iter().any(|g| g.seats.len() == n));
     }
@@ -704,9 +682,8 @@ fn fixtures_cover_every_variant_and_every_option() {
 
 /// Escrow 2.1.0 reads a game stored by 2.0.0 code: exactly the stored JSON
 /// without `created.terms.{policy, review_delay_secs, allowance_secs,
-/// cure_window_secs}`, `progress.{review_request, remedy}` and
-/// `roster.seats[].retired_consent_keys` (the only fields 2.1.0 added; the
-/// last is never written while empty, as it always is in a 2.0.0 game). It decodes with `policy == None`, which keeps the 2.0.0 exits,
+/// cure_window_secs}` and `progress.{review_request, remedy}` (the only fields
+/// 2.1.0 added). It decodes with `policy == None`, which keeps the 2.0.0 exits,
 /// and no review request or remedy; every other field is unchanged. A migrated
 /// 2.0.0 game can therefore never acquire 2.1.0 terms.
 #[test]
@@ -718,9 +695,6 @@ fn a_game_stored_by_escrow_2_0_0_reads_with_no_policy() {
         game.terms.cure_window_secs = 0;
         game.review_request = None;
         game.remedy = None;
-        for seat in game.seats.iter_mut() {
-            seat.retired_consent_keys.clear();
-        }
         let mut json: serde_json::Value =
             serde_json::from_slice(&to_json_vec(&StoredGame::from(game.clone())).unwrap()).unwrap();
         let terms = json["created"]["terms"].as_object_mut().unwrap();
@@ -740,7 +714,6 @@ fn a_game_stored_by_escrow_2_0_0_reads_with_no_policy() {
             "allowance_secs",
             "cure_window_secs",
             "remedy",
-            "retired_consent_keys",
         ] {
             assert!(
                 !text.contains(&format!("\"{key}\":")),

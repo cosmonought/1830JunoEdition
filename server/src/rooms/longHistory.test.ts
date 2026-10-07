@@ -25,7 +25,8 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 
-import { createFileLogStore } from "../fileLogStore";
+import { createFileLogStore, nodeStoreFs, STORE_READ_CHUNK_BYTES } from "../fileLogStore";
+import { linesToBytes, scanLog, scanLogLines, serializeBatch } from "../persistence/logFormat";
 import { CATCH_UP_PAGE_BYTES, type GameServerOptions } from "../gameServer";
 import { createMemoryOpsRecorder } from "../persistence/opsRecorder";
 import type { RoomClockView } from "../../../frontend/src/utils/clockProtocol";
@@ -248,6 +249,62 @@ describe("No gameplay history cap: a game past 10,000 entries through the real s
       await Promise.all([legacy.close(), paged.close()]);
     } finally {
       await stopServer(booted.server);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("No gameplay history cap: the storage readers have no size ceiling of their own", () => {
+  const entry = (index: number): ServerLogEntry => ({ index, id: `e${index}`, actor: ALICE, payload: JSON.stringify({ n: index, pad: "x".repeat(index % 50) }), at: T0 + index }) as unknown as ServerLogEntry;
+  /** 10,400 entries in batches of 1-3, as stored lines (one per DynamoDB item). */
+  const linesOf = (count: number): string[] => {
+    const lines: string[] = [];
+    for (let first = 0; first < count; ) {
+      const size = Math.min(1 + (first % 3), count - first);
+      lines.push(...serializeBatch(Array.from({ length: size }, (_, k) => entry(first + k))).split("\n").slice(0, -1));
+      first += size;
+    }
+    return lines;
+  };
+
+  test("a log held as lines (DynamoDB) is scanned line by line -- never joined into one string -- with exactly the file reader's answer, clean or damaged", () => {
+    const clean = linesOf(TARGET_ENTRIES);
+    const same = (lines: string[], label: string) => {
+      const byLines = scanLogLines(lines);
+      const byBytes = scanLog(linesToBytes(lines));
+      assert.deepEqual({ ...byLines, entries: byLines.entries.length }, { ...byBytes, entries: byBytes.entries.length }, label);
+      assert.deepEqual(byLines.entries.map((e) => e.id), byBytes.entries.map((e) => e.id), label);
+      return byLines;
+    };
+    const ok = same(clean, "clean");
+    assert.deepEqual([ok.classification, ok.entries.length], ["clean", TARGET_ENTRIES]);
+    assert.equal(linesToBytes(clean).length, ok.size, "the byte length the reader reports is the file's");
+    same([...clean.slice(0, 5_000), "{not an entry", ...clean.slice(5_001)], "a damaged line in the middle");
+    same([...clean.slice(0, 5_000), ...clean.slice(5_001)], "a missing line");
+    const torn = linesOf(TARGET_ENTRIES + 3);
+    same(torn.slice(0, -1), "an incomplete final batch");
+    same([...clean, JSON.stringify({ format: "a newer build", index: TARGET_ENTRIES })], "a newer build's line");
+  });
+
+  test("a file log is read in bounded chunks, each one reported (the load's deadline bounds a chunk), with no single-read ceiling", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "p3-chunks-"));
+    try {
+      const file = path.join(dir, "blob");
+      const blob = Buffer.alloc(2 * STORE_READ_CHUNK_BYTES + 12_345, 7);
+      fs.writeFileSync(file, blob);
+      let chunks = 0;
+      const read = await (nodeStoreFs.readFileChunked as NonNullable<typeof nodeStoreFs.readFileChunked>)(file, () => void (chunks += 1));
+      assert.equal(chunks, 3);
+      assert.ok(read.equals(blob));
+      /* The store's load reports each chunk to its caller. */
+      const store = createFileLogStore(dir, quiet);
+      const game = "g_00000000000000000000000077";
+      for (let first = 0; first < 2_000; first += 2) await store.appendLog(game, [entry(first), entry(first + 1)]);
+      let progress = 0;
+      const loaded = await store.loadLog(game, { onProgress: () => void (progress += 1) });
+      assert.equal(loaded.length, 2_000);
+      assert.ok(progress >= 1, "the load reported its read");
+    } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });

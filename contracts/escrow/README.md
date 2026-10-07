@@ -87,7 +87,8 @@ a signed attestation.
   approve = SHA-256("18JUNO/REMEDY-APPROVE/v1" ‖ domain(32) ‖ u64(chain_game_id) ‖ u8(remedy)
            ‖ u8(defaulting_seat) ‖ u8(strike) ‖ u64(overdue_epoch) ‖ u64(log_len) ‖ log_hash(32)
            ‖ u64(overdue_at) ‖ u64(approve_until) ‖ u8(approving_seat))
-                                                                    signed by a seat's CURRENT consent key
+                                                                    signed by the consent key the seat
+                                                                    held at the attested final_at
   ```
 
   The settlement domain binds chain, contract, game, roster, rules version,
@@ -97,12 +98,24 @@ a signed attestation.
   strike and overdue epoch, the funded allowance, the overdue / final /
   attestation / expiry times and the hash of the server's clock evidence
   (never interpreted). An approval binds one overdue instance and the approving
-  seat's own horizon `approve_until`: from that block second on it is refused
-  (`ApprovalExpired`) whatever the remedy key attests, and it cannot be
-  extended (the horizon is signed). Every tag differs from every other, so no
+  seat's own horizon `approve_until`, and it is JUDGED AT THE ATTESTED
+  `final_at` -- never at the block time it lands in (owner ruling, 2026-10-07:
+  approvals valid when the decision became final decide it): the attested
+  `final_at` must be strictly before `approve_until` (else `ApprovalExpired`),
+  and the signature must verify under the consent key the seat held AT
+  `final_at` (a `SetConsentKey` whose block time is at or before `final_at`
+  voids it; one after it changes nothing). So a sealed decision lands however
+  late -- through the approvals' later expiry, a later key rotation, an outage,
+  a re-attestation (which keeps `final_at`) -- and only that decision. The
+  replaced keys of a `TimedRemedyV1` game rotated while IN_PROGRESS are kept,
+  with their retirement block time, in a separate uncapped history
+  (`retired_consent_keys`, read only by `SubmitRemedy`; never part of the game
+  record), queryable as `ConsentKeyAt { chain_game_id, seat_index, at }`. The
+  signed bytes are those of REMEDY-APPROVE/v1, unchanged; no version moved.
+  Every tag differs from every other, so no
   signature made for one purpose verifies for another. Cross-language vectors:
   `testdata/remedy_vectors_v1.json` (independent Python generator
-  `gen_remedy_vectors.py`; 41 vectors, 40 executed on chain by
+  `gen_remedy_vectors.py`; 42 vectors, 41 executed on chain by
   `tests/remedy_vectors.rs`; TypeScript `frontend/src/utils/escrowRemedyVectors.test.ts`).
 * **Bearer life:** `final_at ≤ attested_at ≤ block time < expires_at ≤
   attested_at + 3600` (`MAX_REMEDY_TTL_SECS`). A final remedy that did not land
@@ -119,7 +132,8 @@ Check order: no funds → game → IN_PROGRESS → `TimedRemedyV1` → remedy ki
 pause (foreclosing kinds) → shape against the game and its terms → finality,
 attestation time and expiry against block time → sequence → remedy key →
 signature → approvals (each: seat range, not the defaulter, no duplicate,
-`approve_until`, signature; then all N−1). A refusal changes nothing.
+`final_at < approve_until`, signature under the seat's key at `final_at`; then
+all N−1). A refusal changes nothing.
 
 | remedy | mode | strike | final_at | approvals | outcome |
 |---|---|---|---|---|---|
@@ -202,13 +216,12 @@ signature → approvals (each: seat range, not the defaulter, no duplicate,
   So an admin pause never traps funds (a neutral exit always exists), never
   manufactures a foreclosure (no foreclosing remedy enters while paused) and
   never revives the standings exit. A foreclosure that became final during a
-  pause is attested again after it, within its approvals' horizons. Past
-  them it cannot land (the contract checks each horizon against the block
-  time): under the owner's policy correction of 2026-10-06 the server neither
-  asks the seats to approve again nor falls back to the neutral remedy -- it
-  holds the sealed decision unchanged for an owner decision
-  (`docs/phase3/PHASE3_FINAL_CLOCKS_REMEDIES.md` §3, §8; documentation only,
-  the contract is unchanged).
+  pause is attested again after it -- the same decision, the same `final_at` --
+  and lands whenever the pause ends: its approvals are judged at `final_at`,
+  never at the block time (owner ruling, 2026-10-07), so neither their later
+  expiry nor a later key rotation stops it. The server never asks the seats to
+  approve again and never falls back to the neutral remedy
+  (`docs/phase3/PHASE3_FINAL_CLOCKS_REMEDIES.md` §3, §8).
 * **OD-ESC2-1 narrowed, OD-ESC-4 narrowed.** An indefinite admin pause blocks
   `Settle` and every foreclosure; IN_PROGRESS 2.1.0 games then leave only
   neutrally (remedy 1 / 4, unanimity, review). OD-ESC-4 ("never force-refund")
@@ -516,19 +529,23 @@ VM gas plus modelled KV/event gas for every path.
     a refund); store a challengeable third-strike foreclosure (remedy 3: the
     defaulter challenges, the resolver annuls; `RetireRemedyKey{compromised}`
     removes its payout authority before payment). With N−1 approvals it can
-    use them only for the exact overdue instance they name and only until
-    their `approve_until`.
+    use them only for the exact overdue instance they name, with a `final_at`
+    before their `approve_until`.
   * Before a checkpoint past the stall reaches the chain, the contract cannot
     tell a cured overdue from an uncured one: the remedy key is trusted for
     that, and the **server lane must post a fencing checkpoint on cure** (an
-    obligation of the clock lane). The approval horizon bounds the approvals'
-    part of that window; the client lane must pick it (Live: about the overdue
-    moment + the 10-minute cure window + a relay / pause allowance; Async: the
-    proposal's life). The contract does not cap it. (Lane A's branch posts the
-    fencing checkpoint on cure and signs Live approvals to the overdue moment
-    + 6 h − 60 s, Async approvals to 29 days from the server's time; the
-    server accepts a Live approval only strictly beyond the projected finality
-    + 300 s.)
+    obligation of the clock lane). Since approvals are judged at the attested
+    `final_at` (owner ruling, 2026-10-07), `approve_until` no longer bounds WHEN
+    the approvals of a cured instance could be used: a compromised REMEDY key
+    holding them could attest a back-dated `final_at < approve_until` at any
+    later time until that fencing checkpoint lands. The binding -- the exact
+    instance, plus a `final_at` signed by the REMEDY key -- is the most the chain
+    can check; the remaining bound is the fence, so the fencing checkpoint must
+    land (the server posts it on cure; tracking it to landing is a residual of
+    the clock lane). The contract does not cap the horizon. (The client signs
+    Live approvals to the overdue moment + 6 h − 60 s and Async approvals to
+    29 days from the server's time; the server accepts an approval only if it
+    outlives the decision's final second.)
   * An admin `SetResolver` to a seated wallet delays the `Start` of FUNDED
     2.1.0 games (deposits stay withdrawable and cancellable): denial of service
     only.

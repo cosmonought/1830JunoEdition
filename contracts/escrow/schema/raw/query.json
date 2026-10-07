@@ -248,6 +248,46 @@
         }
       },
       "additionalProperties": false
+    },
+    {
+      "description": "Escrow 2.1.0 (owner ruling, 2026-10-07): the consent key seat `seat_index` held at block second `at` -- exactly the key `SubmitRemedy` verifies that seat's REMEDY-APPROVE against for a remedy whose `final_at` is `at` (`helpers::consent_key_at`) -- and how many keys the seat has replaced in play.",
+      "type": "object",
+      "required": [
+        "consent_key_at"
+      ],
+      "properties": {
+        "consent_key_at": {
+          "type": "object",
+          "required": [
+            "at",
+            "chain_game_id",
+            "seat_index"
+          ],
+          "properties": {
+            "at": {
+              "$ref": "#/definitions/Uint64"
+            },
+            "chain_game_id": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "seat_index": {
+              "type": "integer",
+              "format": "uint8",
+              "minimum": 0.0
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
     }
-  ]
+  ],
+  "definitions": {
+    "Uint64": {
+      "description": "A thin wrapper around u64 that is using strings for JSON encoding/decoding, such that the full u64 range can be used for clients that convert JSON numbers to floats, like JavaScript and jq.\n\n# Examples\n\nUse `from` to create instances of this and `u64` to get the value out:\n\n``` # use cosmwasm_std::Uint64; let a = Uint64::from(42u64); assert_eq!(a.u64(), 42);\n\nlet b = Uint64::from(70u32); assert_eq!(b.u64(), 70); ```",
+      "type": "string"
+    }
+  }
 }

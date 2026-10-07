@@ -162,6 +162,10 @@ export interface RoomClockView {
     /** The offer's kind (absent: a train offer). */
     readonly kind?: "train" | "private" | "trade" | "funding";
   } | null;
+  /** TIMED ASYNC: a seat whose required action an offer suspended -- its own deadline keeps RUNNING while the offer is
+   *  answered (owner, 2026-10-07: optional negotiation never refreshes, nor stops, an Async deadline). Absent or empty
+   *  otherwise (a Live proposer's clock is frozen: `trade.proposerRemainingMs`). */
+  readonly running?: readonly { readonly seat: string; readonly remainingMs: number }[];
   readonly overdue: ClockOverdueView | null;
   /** Live: each seat's ordinary overdue count in this game. */
   readonly strikes: Readonly<Record<string, number>>;
@@ -170,7 +174,8 @@ export interface RoomClockView {
   readonly ended: { readonly kind: ClockEndKind; readonly at: number; readonly seat: string | null } | null;
   /** Money tables: the financial remedy's progress (the chain decides the money). */
   readonly remedy: ClockRemedyView | null;
-  /** Live: the current Operating Round's offer declines, per direction (Async keeps none). */
+  /** Live: the offer declines of the current ROUND INSTANCE (this operating sub-round -- OR 2.1 and OR 2.2 are two --
+   *  or this Stock Round), per direction (Async keeps none). */
   readonly declines: readonly { readonly from: string; readonly to: string; readonly count: number }[];
   /** A free table's unanimous annulment in progress (a money table's runs through its escrow). */
   readonly annul: { readonly yes: readonly string[]; readonly needed: readonly string[] } | null;

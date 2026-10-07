@@ -99,15 +99,21 @@ export function controlledStore() {
     failAppends: [] as Array<{ landed: boolean }>,
     failLoads: 0,
     loadDelayMs: 0,
+    /** A paged read: the delay before each page, each page reported to the caller (`onProgress`). */
+    loadPagesMs: [] as number[],
   };
   const heldAppends: HeldAppend[] = [];
   const land = (room: string, entries: readonly ServerLogEntry[]) =>
     logs.set(room, [...(logs.get(room) ?? []), ...copy(entries)]);
 
   const store: LogStore = {
-    async loadLog(room) {
+    async loadLog(room, options) {
       calls.loadLog += 1;
       if (control.loadDelayMs > 0) await sleep(control.loadDelayMs);
+      for (const ms of control.loadPagesMs) {
+        await sleep(ms);
+        options?.onProgress?.();
+      }
       if (control.failLoads > 0) {
         control.failLoads -= 1;
         throw new Error("injected read failure");

@@ -179,6 +179,27 @@ describe("Phase 3 final clocks (owner ruling, 2026-10-07): the streamed and cumu
     expect(() => cursor.hash(dup)).toThrow(/two entries claim index 2/);
   });
 
+  it("REVIEW: an index out of order BEYOND the prefix, or entries without ids sharing a first object, are answered exactly as logHash answers them", () => {
+    const base = history(6);
+    /* [0,1,2,5,3,4], prefix 4: logHash sorts the whole array first, so its prefix is [0,1,2,3]. */
+    const shuffled = [base[0], base[1], base[2], base[5], base[3], base[4]];
+    const cursor = new LogHashCursor();
+    expect(cursor.hash(base, 4)).toBe(logHash(base, 4));
+    expect(cursor.hash(shuffled, 4)).toBe(logHash(shuffled, 4));
+    /* Two id-less histories that share their first entry object but differ after it. */
+    const first = { index: 0, actor: "p1", payload: "{}" };
+    const one = [first, { index: 1, actor: "p1", payload: '{"a":1}' }, { index: 2, actor: "p1", payload: '{"a":2}' }];
+    const two = [first, { index: 1, actor: "p2", payload: '{"b":1}' }, { index: 2, actor: "p2", payload: '{"b":2}' }];
+    expect(cumulativeLogHash(one)).toBe(logHash(one));
+    expect(cumulativeLogHash(two)).toBe(logHash(two));
+    /* With ids, a different object at the anchor position is a different history. */
+    const kept = history(LOG_HASH_SEGMENT + 5);
+    const c2 = new LogHashCursor();
+    expect(c2.hash(kept)).toBe(logHash(kept));
+    const copy = kept.map((entry) => ({ ...entry, actor: entry.index >= 100 ? "p9" : entry.actor }));
+    expect(c2.hash(copy)).toBe(logHash(copy));
+  });
+
   it("cumulativeLogHash keeps one cursor per history (its first entry object)", () => {
     const log = history(LOG_HASH_SEGMENT + 3);
     expect(cumulativeLogHash(log)).toBe(logHash(log));

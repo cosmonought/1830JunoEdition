@@ -59,6 +59,7 @@ import {
   continuityBreak,
   declineKey,
   escrowEnded,
+  FINALITY_KEYS_UNREAD,
   finalityKeyCheckDue,
   foldBatch,
   gate,
@@ -129,9 +130,17 @@ export const CLOCK_RETRY_MAX_MS = 30_000;
  *  looked at again. Its timers do not advance and no continuity is proven meanwhile, so when the hold lifts the stall
  *  check treats the held time as a continuity break (Live: SYSTEM PAUSE; Async: credited) -- never charged. */
 export const CLOCK_HELD_RECHECK_MS = 60_000;
-/** Live (money): the longest minute 30 waits on the chain read of the approvers' consent keys at the final second. */
+/** Live (money): how long the read of the approvers' consent keys at the final second may wait for the chain to have a
+ *  block past that second (CometBFT's block time trails real time) -- before the finality task, outside the table's
+ *  task (`FINALITY_KEY_PRECHECK_MS`), or inside it when a move reaches minute 30 first (`FINALITY_KEY_CHECK_MS`). */
+export const FINALITY_KEY_PRECHECK_MS = 20_000;
 export const FINALITY_KEY_CHECK_MS = 5_000;
+/** An inconclusive key read is reused for this long (one catch-up's rounds, the task right after its precheck); then
+ *  the chain is read again. Minute 30 stays undecided -- every move and vote refused -- until a read is conclusive. */
+export const FINALITY_KEY_REREAD_MS = 5_000;
 const MAX_TIMER_MS = 2 ** 31 - 1;
+/** Said to a player whose move or vote reaches a minute 30 not yet decided (its approvers' keys unread on chain). */
+export const FINALITY_PENDING_SENTENCE = "The 30-minute decision is waiting for Juno to confirm the approvals; nothing can change until it does. Try again in a moment.";
 
 /** The server's own closing of an expired train offer (a `RescindTrainPurchase` as its proposer, in the game's task).
  *  A failure says whether the ENGINE found no offer to close (`engine`: the board disagrees with the clock) or the
@@ -227,6 +236,13 @@ interface Entry {
   /** The trust instant of the last record this process STORED (or read): continuity is proven only by what is durable,
    *  never by an in-memory heartbeat whose write did not land. */
   provenAt: number | null;
+  /** Live (money): the approvers' keys at minute 30, read BEFORE the finality task runs (outside the table's task) --
+   *  bound to its overdue, proposal and final second (`check` "unread": read, but not conclusively -- read again after
+   *  `FINALITY_KEY_REREAD_MS`; null: nothing to check). */
+  finalityKeys: { readonly epoch: number; readonly proposal: number; readonly final_secs: number; readonly check: FinalityKeyCheck | null | typeof FINALITY_KEYS_UNREAD; readonly readAt: number } | null;
+  /** Live (money): the last catch-up stopped at a minute 30 whose approvers' keys could not be read conclusively: it is
+   *  not decided yet, so no move and no vote is taken until it is. */
+  finalityPending: boolean;
 }
 
 const describe = (error: unknown): string => (error instanceof Error ? error.message : String(error));
@@ -349,6 +365,8 @@ export function createClockController(deps: ClockControllerDeps) {
         remedyRetryAt: 0,
         remedyBackoffMs: 0,
         provenAt: null,
+        finalityKeys: null,
+        finalityPending: false,
       };
       entries.set(gameId, entry);
     }
@@ -690,7 +708,15 @@ export function createClockController(deps: ClockControllerDeps) {
       entry.timerDue = at;
       entry.timer = timers.set(() => {
         entry.timer = null;
-        void track(deps.runOn(entry.gameId, "clock", (game, tx) => tick(game, tx)))
+        /* Live money finality: the approvers' keys at the final second are read FIRST, outside the table's task (it may
+           wait for the chain to have a block past that second), then the task decides with them. */
+        const record = entry.record;
+        const due = record === null ? null : finalityKeyCheckDue(record, now());
+        const precheck =
+          record !== null && due !== null
+            ? finalityKeys(entry.gameId, record, now(), FINALITY_KEY_PRECHECK_MS).then((check) => void (entry.finalityKeys = { epoch: due.epoch, proposal: due.proposal, final_secs: due.final_secs, check, readAt: now() }))
+            : Promise.resolve();
+        void track(precheck.then(() => deps.runOn(entry.gameId, "clock", (game, tx) => tick(game, tx))))
           .then((ran) => {
             if (!ran) retryLater(entry, "the table's task could not run");
           })
@@ -792,9 +818,10 @@ export function createClockController(deps: ClockControllerDeps) {
   /** Live (money), BEFORE minute 30 is processed: the standing YES approvals of a complete foreclosure judged under the
    *  consent key each seat held AT the final second (one bounded quorum read). Owner ruling (2026-10-07): before the
    *  seal a key rotation still voids the old approval (the consensus is then incomplete: the neutral outcome); after it,
-   *  nothing does. A chain that cannot be read in time decides nothing here: the foreclosure is decided on its
-   *  vote-time checks, and escrow 2.1.0 judges each approval at `final_at` again. */
-  async function finalityKeys(gameId: string, record: GameClockRecord, at: number): Promise<FinalityKeyCheck | null> {
+   *  nothing does. A chain that cannot be read conclusively in time answers "unread": minute 30 is then NOT decided
+   *  (fail closed -- never a seal on approvals whose keys at finality are unknown); it is decided, at its own moment,
+   *  once a read is conclusive, and every move and vote is refused meanwhile. Null: nothing to check. */
+  async function finalityKeys(gameId: string, record: GameClockRecord, at: number, timeoutMs = FINALITY_KEY_CHECK_MS): Promise<FinalityKeyCheck | null | typeof FINALITY_KEYS_UNREAD> {
     const due = finalityKeyCheckDue(record, at);
     const od = record.overdue;
     if (due === null || due.votes.length === 0 || od === null) return null;
@@ -803,29 +830,43 @@ export function createClockController(deps: ClockControllerDeps) {
     counters.finalityKeyChecks += 1;
     const approvals = due.votes.map((v) => ({ seat: v.seat, approveUntil: (v.approval as { approve_until: number }).approve_until, signature: (v.approval as { signature: string }).signature }));
     const facts = { remedy: 2 as const, defaultingSeat: od.seat, strike: od.strike, epoch: od.epoch, logLen: od.log_len, logHash: od.log_hash, overdueMs: od.at };
-    const found = await port.staleApprovals(gameId, facts, approvals, { atSecs: due.final_secs, timeoutMs: FINALITY_KEY_CHECK_MS }).catch(() => null);
+    const found = await port.staleApprovals(gameId, facts, approvals, { atSecs: due.final_secs, timeoutMs }).catch(() => null);
     if (found === null) {
       counters.finalityKeysUnread += 1;
-      deps.warn(`  clock: ${gameId}: the consent keys could not be read at minute 30; the foreclosure is decided on its vote-time checks (escrow 2.1.0 judges each approval at final_at)`);
-      return null;
+      deps.warn(`  clock: ${gameId}: the consent keys at minute 30 could not be read conclusively (no quorum, or no block past the final second in time); minute 30 is not decided until they are`);
+      return FINALITY_KEYS_UNREAD;
     }
     if (found.length > 0) deps.ops.audit("clock.finality-key-moved", { game_id: gameId, epoch: due.epoch, seats: found.length });
     return { epoch: due.epoch, proposal: due.proposal, final_secs: due.final_secs, stale: found };
+  }
+
+  /** The key check for the finality `advance` would reach at `at`: the one read before the task (if it is for this very
+   *  overdue, proposal and final second), else read now -- once per catch-up, whatever its rounds. */
+  async function keysForFinality(entry: Entry, gameId: string, record: GameClockRecord, at: number): Promise<FinalityKeyCheck | null | typeof FINALITY_KEYS_UNREAD> {
+    const due = finalityKeyCheckDue(record, at);
+    if (due === null) return null;
+    const ready = entry.finalityKeys;
+    if (ready !== null && ready.epoch === due.epoch && ready.proposal === due.proposal && ready.final_secs === due.final_secs && (ready.check !== FINALITY_KEYS_UNREAD || now() - ready.readAt < FINALITY_KEY_REREAD_MS)) return ready.check;
+    const read = await finalityKeys(gameId, record, at);
+    entry.finalityKeys = { epoch: due.epoch, proposal: due.proposal, final_secs: due.final_secs, check: read, readAt: now() };
+    return read;
   }
 
   /** Every transition due by now, at its own moment; a train offer's expiry closes the offer in the log first. Returns
    *  whether an expiry was committed in this task (the caller then does not use `tx.session` again). */
   async function catchUp(entry: Entry, game: GameActor, tx: Tx, at: number): Promise<boolean> {
     let expired = false;
+    entry.finalityPending = false;
     for (let round = 0; round < 4; round += 1) {
       if (entry.record === null) return expired;
-      const keys = await finalityKeys(game.gameId, entry.record, at);
+      const keys = await keysForFinality(entry, game.gameId, entry.record, at);
       /* Re-read after the chain read: the check binds its overdue, proposal and final second, so it never applies to
          anything else. */
       const record = entry.record;
       if (record === null) return expired;
       const step = advance(record, at, positionOf(game), keys);
       applyStep(entry, step, game.gameId);
+      entry.finalityPending = step.finalityPending;
       if (step.tradeExpiry === null) break;
       /* A close that failed is retried only after its backoff (a submit meanwhile is judged on the record as it is). */
       if (entry.retryAt !== null && at < entry.retryAt) break;
@@ -876,6 +917,7 @@ export function createClockController(deps: ClockControllerDeps) {
     await catchUp(entry, game, tx, now());
     const written = await settle(entry, game.gameId);
     if (!written) retryLater(entry, "the clock write did not land");
+    else if (entry.finalityPending) retryLater(entry, "minute 30 waits for a conclusive read of the approvers' consent keys at its final second");
     else if (entry.retryAt === retryBefore && entry.retryAt !== null) {
       /* This attempt went through (no new retry was asked for): the backoff starts over. */
       entry.retries = 0;
@@ -918,6 +960,11 @@ export function createClockController(deps: ClockControllerDeps) {
       await settle(entry, game.gameId);
       counters.refusals += 1;
       return { ok: false, code: CLOCK_REFUSAL.stale, reason: "The offer expired unanswered. Check the board and try again." };
+    }
+    if (entry.finalityPending) {
+      await settle(entry, game.gameId);
+      counters.refusals += 1;
+      return { ok: false, code: CLOCK_REFUSAL.unavailable, reason: FINALITY_PENDING_SENTENCE };
     }
     const current = entry.record as GameClockRecord;
     const state = tx.session.state;
@@ -1046,6 +1093,10 @@ export function createClockController(deps: ClockControllerDeps) {
     if (input.type !== "clock-ack") {
       const expired = await catchUp(entry, game, tx, at);
       if (expired) await settle(entry, game.gameId);
+      if (entry.finalityPending) {
+        await settle(entry, game.gameId);
+        return { ok: false, code: CLOCK_REFUSAL.unavailable, reason: FINALITY_PENDING_SENTENCE };
+      }
     }
     const current = entry.record as GameClockRecord;
     switch (input.type) {
@@ -1066,10 +1117,20 @@ export function createClockController(deps: ClockControllerDeps) {
         if (v !== null && (od === null || od.epoch !== v.epoch || od.log_len !== v.logLen || (input.type === "clock-vote" && (od.proposal === null || od.proposal.id !== v.proposalId || od.proposal.kind !== v.kind)))) {
           return { ok: false, code: CLOCK_REFUSAL.stale, reason: "The overdue changed while your approval was checked. Look again." };
         }
+        /* TIMED ASYNC (money): a YES that completes the N-1 set is final at once, so it is decided AT the instant its
+           approvals were confirmed under the keys held then (`checked`), and only if nothing was recorded since (no
+           evidence event: no vote, no veto, no expiry) -- the checked set is then exactly the set that completes. A YES
+           found complete here without that check (a race with another vote) is refused: nothing is sealed unchecked. */
+        const checked = input.checked ?? null;
+        if (checked !== null && current.evidence.seq !== checked.seq) return { ok: false, code: CLOCK_REFUSAL.stale, reason: "The table changed while your approval was checked. Look again." };
+        const stepAt = checked !== null ? checked.at : at;
         const step =
           input.type === "clock-propose"
-            ? propose(current, seat, input.kind, input.approval, at, input.stale)
-            : vote(current, seat, input.proposalId, input.yes, input.approval, at, { kind: v?.kind ?? null, stale: input.stale, renew: input.renew === true });
+            ? propose(current, seat, input.kind, input.approval, stepAt, input.stale)
+            : vote(current, seat, input.proposalId, input.yes, input.approval, stepAt, { kind: v?.kind ?? null, stale: input.stale, renew: input.renew === true });
+        if (checked === null && !("code" in step) && current.money && current.policy.class === "async-pace" && step.events.some((e) => e.kind === "consensus")) {
+          return { ok: false, code: CLOCK_REFUSAL.stale, reason: "The table changed while your approval was checked. Look again." };
+        }
         return finish(entry, game.gameId, step);
       }
       default:
@@ -1431,6 +1492,9 @@ export type ClockOpInput =
       readonly verifiedFor: ClockVerifiedFor | null;
       /** Money: the seats whose standing YES approvals no longer verify under their CURRENT consent key. */
       readonly stale: readonly string[];
+      /** Timed Async (money), a completing YES: the instant every approval of the set was confirmed under the key its
+       *  seat held then, and the evidence sequence the set was read at. */
+      readonly checked?: ClockCompletionCheck;
     }
   | {
       readonly type: "clock-vote";
@@ -1442,7 +1506,15 @@ export type ClockOpInput =
       readonly stale: readonly string[];
       /** Money: this seat's own standing YES no longer verifies (its consent key moved): the new approval replaces it. */
       readonly renew?: boolean;
+      readonly checked?: ClockCompletionCheck;
     };
+
+/** Timed Async (money): a completing YES's key check -- the instant (ms) the decision is final at, whose second every
+ *  approval of the set was verified at on chain, and the record's evidence sequence when the set was read. */
+export interface ClockCompletionCheck {
+  readonly at: number;
+  readonly seq: number;
+}
 
 /** The overdue (and, for a vote, the proposal) a money approval was verified against, outside the task. */
 export interface ClockVerifiedFor {

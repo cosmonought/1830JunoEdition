@@ -32,8 +32,8 @@
 // expired before it landed is attested AGAIN for the same decision (`attestations` counts them) -- the protocol's own
 // recovery (a fresh `attested_at`, the same decision digest, the same `final_at`). Owner ruling (2026-10-07): the N-1
 // vote decided the outcome at finality, so escrow 2.1.0 judges every seat approval AT THE ATTESTED `final_at` -- its
-// horizon after `final_at`, its signature under the key the seat held then (`consentKeyAt`, from the chain's retired-key
-// history) -- never at the block time it lands: a later horizon, a later key rotation, an outage or a late relay revoke
+// horizon after `final_at`, its signature under the key the seat held then (the contract's own `consent_key_at`
+// query, read by quorum once the chain has a block past `final_at`) -- never at the block time it lands: a later horizon, a later key rotation, an outage or a late relay revoke
 // nothing. Before the seal, a lapsed approval or a moved key still voids a YES (the vote-time checks; Live: once more at
 // finality, `staleApprovals` at the final moment). A sealed N-1 decision whose approvals were NOT valid at its own
 // `final_at` (a race the pre-seal checks could not see) is NEVER converted into another outcome and never put to a new
@@ -51,7 +51,6 @@ import type { ClockRemedy, RemedyKind, RemedyStatus } from "../rooms/clock/clock
 import { evidenceHashOf, ledgerHeadOf, signatureDigest } from "../rooms/clock/clockEvidence";
 import { isLiveAttempt, type ChainIntentRecord } from "./chainIntents";
 import type { EscrowService, RemedyChainContext } from "./escrowService";
-import { consentKeyAt } from "./juno/junoContract";
 import { remedyChainIntent, RemedyIntentError } from "./juno/remedyIntents";
 import type { RemedySigner } from "./juno/remedySigner";
 import { verifyDigest } from "./juno/secp256k1";
@@ -206,13 +205,17 @@ function progressOf(intents: readonly ChainIntentRecord[]): "none" | "open" | "c
   return intents.length === 0 ? "none" : "dead";
 }
 
-/** The consent key chain seat `approving` holds now (`atSecs` null) or held at `atSecs` (escrow 2.1.0
- *  `consent_key_at`: the first key retired strictly after it, else the current one). */
+/** The consent key chain seat `approving` holds now (`atSecs` null) or held at `atSecs` -- the chain's own answer
+ *  (`consent_key_at`), read into the context for exactly that second; anything else names no key (fail closed). */
 function seatKeyAt(ctx: RemedyChainContext, approving: number, atSecs: bigint | null): string | undefined {
-  const current = ctx.consentPubkeys[approving];
-  if (current === undefined || atSecs === null) return current;
-  return consentKeyAt({ consent_pubkey: current, retired_consent_keys: ctx.retiredConsentKeys[approving] ?? [] }, atSecs);
+  if (atSecs === null) return ctx.consentPubkeys[approving];
+  if (ctx.consentKeysAt === null || ctx.consentKeysAt.atSecs !== atSecs) return undefined;
+  return ctx.consentKeysAt.keys[approving];
 }
+
+/** The chain's answer for a past second is final only once a block LATER than that second exists: block times only
+ *  increase, so no rotation still to come can be stamped at or before it (CometBFT's block time trails real time). */
+const POLL_MS = 1_000;
 
 /** Whether a seat's REMEDY-APPROVE verifies under the key its chain seat holds now (`atSecs` null) or held at `atSecs`. */
 function approvalVerifies(ctx: RemedyChainContext, remedy: Pick<ClockRemedy, "kind" | "strike" | "epoch" | "log_len" | "log_hash" | "overdue_ms">, defaulting: number, approving: number, approveUntil: number, signature: string, atSecs: bigint | null): boolean {
@@ -245,10 +248,26 @@ export function createRemedyPipeline(deps: RemedyPipelineDeps): RemedyPort {
 
   /** The bound game read by quorum; `withKey`: also this server's REMEDY key registry entry (an attestation needs it;
    *  an approval check does not -- it is skipped to keep a vote's chain reads few). */
-  async function context(gameId: string, withKey = true): Promise<RemedyChainContext | { readonly refused: string }> {
-    const ctx = await deps.service.remedyContext(gameId, withKey ? (deps.signer?.remedyKeyId ?? null) : null);
+  async function context(gameId: string, withKey = true, keysAtSecs: bigint | null = null): Promise<RemedyChainContext | { readonly refused: string }> {
+    const ctx = await deps.service.remedyContext(gameId, withKey ? (deps.signer?.remedyKeyId ?? null) : null, keysAtSecs);
     if ("ok" in ctx && ctx.ok === false) return { refused: `${ctx.code}: ${ctx.detail}` };
     return ctx as RemedyChainContext;
+  }
+
+  /** The seats' keys AT `atSecs`, read only once the chain has a block later than that second (at most `attempts`
+   *  probes, `POLL_MS` apart, while `live()`): a read whose game state starts after such a block was seen. `null`:
+   *  unreadable, or not yet final when the attempts ran out. */
+  async function conclusiveContext(gameId: string, atSecs: bigint, attempts: number, live: () => boolean): Promise<RemedyChainContext | null> {
+    for (let attempt = 0; attempt < attempts && live(); attempt += 1) {
+      const probe = await context(gameId, false);
+      if ("refused" in probe) return null;
+      if (BigInt(probe.blockTimeSecs) > atSecs) {
+        const read = await context(gameId, false, atSecs);
+        return "refused" in read ? null : read;
+      }
+      await new Promise((resolve) => setTimeout(resolve, POLL_MS));
+    }
+    return null;
   }
 
   return {
@@ -266,9 +285,15 @@ export function createRemedyPipeline(deps: RemedyPipelineDeps): RemedyPort {
       const progress = progressOf(intents);
       if (progress === "confirmed") return { status: "confirmed", detail: null, attested: false };
       if (progress === "open") return { status: "submitted", detail: null, attested: false };
-      const found = await context(gameId);
+      /* An N-1 decision's approvals are judged under the keys the seats held at its final second (the chain's answer). */
+      const judgedAt = remedy.approvals.length > 0 ? remedyTimes(remedy).finalAt : null;
+      const found = await context(gameId, true, judgedAt);
       if ("refused" in found) return { status: remedy.status === "submitted" ? "submitted" : "refused", detail: found.refused, attested: false };
       const ctx = found;
+      if (judgedAt !== null && BigInt(ctx.blockTimeSecs) <= judgedAt) {
+        /* No block past the final second yet: the keys held then are not final on chain. Carried on at the next attempt. */
+        return { status: remedy.status === "submitted" ? "submitted" : "sealed", detail: `waiting for a block past the decision's final second ${judgedAt} (the chain is at ${ctx.blockTimeSecs})`, attested: false };
+      }
       if (ctx.remedyKey === null || !ctx.remedyKey.active || ctx.remedyKey.pubkey !== signer.publicKeyHex) {
         return { status: "refused", detail: `the chain's REMEDY key ${signer.remedyKeyId} is not this server's active key: nothing is attested`, attested: false };
       }
@@ -340,7 +365,7 @@ export function createRemedyPipeline(deps: RemedyPipelineDeps): RemedyPort {
           signature: signed.signature_hex,
           remedy_pubkey: signer.publicKeyHex,
           consent_pubkeys: ctx.consentPubkeys,
-          retired_consent_keys: ctx.retiredConsentKeys,
+          ...(ctx.consentKeysAt !== null ? { approval_keys: ctx.consentKeysAt.keys } : {}),
           started_at: ctx.startedAtSecs,
           approvals,
           now: deps.now(),
@@ -407,20 +432,25 @@ export function createRemedyPipeline(deps: RemedyPipelineDeps): RemedyPort {
     async staleApprovals(gameId, facts, approvals, options = {}) {
       if (approvals.length === 0) return [];
       const atSecs = options.atSecs === undefined ? null : BigInt(options.atSecs);
+      const timeoutMs = options.timeoutMs ?? 10_000;
       let timer: ReturnType<typeof setTimeout> | null = null;
-      let found: RemedyChainContext | { readonly refused: string } | null;
+      let running = true;
+      let found: RemedyChainContext | null;
       try {
         const timeout = new Promise<null>((resolve) => {
-          timer = setTimeout(() => resolve(null), options.timeoutMs ?? 10_000);
+          timer = setTimeout(() => resolve(null), timeoutMs);
           (timer as { unref?: () => void }).unref?.();
         });
-        found = await Promise.race([context(gameId, false), timeout]);
+        /* At a past second: only a conclusive answer (a block later than it exists) is an answer. Now: current keys. */
+        const read = atSecs === null ? context(gameId, false).then((ctx) => ("refused" in ctx ? null : ctx)) : conclusiveContext(gameId, atSecs, Math.max(1, Math.ceil(timeoutMs / POLL_MS)), () => running);
+        found = await Promise.race([read, timeout]);
       } catch {
         found = null;
       } finally {
+        running = false;
         if (timer !== null) clearTimeout(timer);
       }
-      if (found === null || "refused" in found) return null;
+      if (found === null) return null;
       const ctx = found;
       const defaulting = ctx.seatOf[facts.defaultingSeat];
       const decision = { kind: facts.remedy, strike: facts.strike, epoch: facts.epoch, log_len: facts.logLen, log_hash: facts.logHash, overdue_ms: facts.overdueMs };

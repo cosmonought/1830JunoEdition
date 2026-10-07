@@ -254,7 +254,7 @@ pub fn submit_remedy(
         key.pubkey.as_slice(),
     )?;
     let approvals_bitmap = if kind.needs_approvals() {
-        verify_remedy_approvals(deps.api, &game, &attestation, &approvals)?
+        verify_remedy_approvals(deps.api, deps.storage, &game, &attestation, &approvals)?
     } else if approvals.is_empty() {
         0
     } else {

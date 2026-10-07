@@ -1387,15 +1387,18 @@ fn a_sealed_decision_survives_later_expiry_and_later_rotation() {
         .unwrap();
     }
     let g = s.game(id).game;
-    for seat in 0..3 {
-        assert_eq!(g.seats[seat].retired_consent_keys.len(), 1);
+    for seat in 0..3u8 {
+        // Before the rotation second: the key it signed with; from it: the new.
         assert_eq!(
-            g.seats[seat].retired_consent_keys[0].pubkey,
-            Key::seat(seat).pubkey
+            s.key_at(id, seat, rotated_at.seconds() - 1),
+            (Key::seat(usize::from(seat)).pubkey, 1)
         );
-        assert_eq!(g.seats[seat].retired_consent_keys[0].retired_at, rotated_at);
+        assert_eq!(
+            s.key_at(id, seat, rotated_at.seconds()).0,
+            g.seats[usize::from(seat)].consent_pubkey
+        );
     }
-    assert!(g.seats[3].retired_consent_keys.is_empty());
+    assert_eq!(s.key_at(id, 3, final_at), (Key::seat(3).pubkey, 0));
     // The first attestation dies unlanded (an outage), every horizon passes.
     s.advance(2 * HOUR);
     assert!(s.now().seconds() > a.expires_at && s.now().seconds() > until);
@@ -1509,16 +1512,13 @@ fn a_rotation_at_or_before_final_at_voids_the_old_approval() {
             ContractError::InvalidConsent { seat_index: 1 }
         );
     }
-    let g = s.game(id).game;
-    let history: Vec<(HexBinary, u64)> = g.seats[1]
-        .retired_consent_keys
-        .iter()
-        .map(|r| (r.pubkey.clone(), r.retired_at.seconds()))
-        .collect();
-    assert_eq!(
-        history,
-        vec![(original.pubkey.clone(), t1), (k1.pubkey.clone(), t2)]
-    );
+    // The chain's own answer for each span (the query `SubmitRemedy` agrees with).
+    assert_eq!(s.key_at(id, 1, t0), (original.pubkey.clone(), 2));
+    assert_eq!(s.key_at(id, 1, t1 - 1).0, original.pubkey);
+    assert_eq!(s.key_at(id, 1, t1).0, k1.pubkey);
+    assert_eq!(s.key_at(id, 1, t2 - 1).0, k1.pubkey);
+    assert_eq!(s.key_at(id, 1, t2).0, k2.pubkey);
+    assert_eq!(s.key_at(id, 1, t2 + DAY).0, k2.pubkey);
     // The key held at t1 lands the decision final at t1.
     let m = msg_with(
         &s,

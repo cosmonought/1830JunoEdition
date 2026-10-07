@@ -309,7 +309,7 @@ describe("Live train offers through the controller (real engine offers)", () => 
     assert.equal(pins[pins.length - 1], false, "released once final on chain");
   });
 
-  test("SEALED APPROVAL FINALITY (Live money): minute 30 reads the approvers' keys AT the final second -- a seat whose key moved at or before it voids its YES (the neutral outcome); none moved, or the chain unread in time, seals the foreclosure", async () => {
+  test("SEALED APPROVAL FINALITY (Live money): minute 30 reads the approvers' keys AT the final second -- a seat whose key moved at or before it voids its YES (the neutral outcome); none moved seals the foreclosure", async () => {
     const approval = (byte: string) => ({ approve_until: 9_999_999_999, signature: byte.repeat(64) });
     const run = async (answer: readonly string[] | null) => {
       const calls: Array<{ seats: string[]; atSecs: number | undefined }> = [];
@@ -346,8 +346,46 @@ describe("Live train offers through the controller (real engine offers)", () => 
     const kept = await run([]);
     assert.deepEqual([kept.ended?.kind, kept.remedy?.kind], ["live-foreclosure", 2]);
     assert.deepEqual(kept.remedy?.approvals.map((a) => a.seat), [P2, P3]);
-    const unread = await run(null);
-    assert.deepEqual([unread.ended?.kind, unread.remedy?.kind], ["live-foreclosure", 2], "the chain unread in time: decided on the vote-time checks (the contract judges at final_at again)");
+  });
+
+  test("SEALED APPROVAL FINALITY (Live money), chain unread: minute 30 is NOT decided on unknown keys -- every move and vote is refused meanwhile (no cure after its moment) -- and once a read is conclusive it is decided AT its own moment", async () => {
+    const approval = (byte: string) => ({ approve_until: 9_999_999_999, signature: byte.repeat(64) });
+    let answer: readonly string[] | null = null;
+    let reads = 0;
+    const port = {
+      configured: true,
+      annulOpen: async () => false,
+      attest: async () => ({ status: "sealed", detail: null, attested: false }),
+      progress: async () => "none",
+      fence: () => undefined,
+      staleApprovals: async () => {
+        reads += 1;
+        return answer;
+      },
+    } as unknown as RemedyPort;
+    const h = harness({ money: true, remedy: port });
+    await h.deal();
+    await h.time.advance(LIVE_ACTION_MS);
+    await h.clock.idle();
+    assert.equal((await h.serial(() => h.clock.op(h.game, h.tx, { type: "clock-propose", seat: P2, kind: "foreclose", approval: approval("22"), verifiedFor: null, stale: [] }))).ok, true);
+    const id = h.record().overdue?.proposal?.id as number;
+    assert.equal((await h.serial(() => h.clock.op(h.game, h.tx, { type: "clock-vote", seat: P3, proposalId: id, yes: true, approval: approval("33"), verifiedFor: null, stale: [], renew: false }))).ok, true);
+    const minute30 = T0 + LIVE_ACTION_MS + LIVE_CURE_MS;
+    await h.time.advance(LIVE_CURE_MS);
+    await h.clock.idle();
+    assert.ok(reads >= 1);
+    assert.deepEqual([h.record().phase, h.record().remedy, h.record().ended], ["overdue", null, null], "nothing decided on unknown keys");
+    /* The defaulter's move after minute 30 is no cure: refused while the decision waits. So is a vote. */
+    const late = await h.submit(P1, { PassTurn: { game_id: 1 } });
+    assert.deepEqual([late.ok, (late as { code?: string }).code], [false, CLOCK_REFUSAL.unavailable]);
+    const veto = await h.serial(() => h.clock.op(h.game, h.tx, { type: "clock-vote", seat: P2, proposalId: id, yes: false, approval: null, verifiedFor: null, stale: [], renew: false }));
+    assert.deepEqual([veto.ok, (veto as { code?: string }).code], [false, CLOCK_REFUSAL.unavailable]);
+    /* The chain answers: the retry decides minute 30 at its own moment. */
+    answer = [];
+    await h.time.advance(40 * SEC);
+    await h.clock.idle();
+    const r = h.record();
+    assert.deepEqual([r.ended?.kind, r.remedy?.kind, r.remedy?.final_ms], ["live-foreclosure", 2, minute30]);
   });
 
   test("the recipient's response timer is never an overdue: no strike, no interruption, no remedy", async () => {
@@ -542,6 +580,46 @@ describe("Controller review fixes (fourth pass)", () => {
     await h.time.advance(60 * MIN);
     await h.clock.idle();
     assert.equal(h.store.saves.length, writes, "no heartbeat writes while overdue");
+  });
+
+  test("SEALED APPROVAL FINALITY (Timed Async money): the completing YES is decided AT the instant its approvals were checked under the keys held then -- never without that check, never on a set that changed meanwhile", async () => {
+    const approval = (byte: string) => ({ approve_until: 9_999_999_999, signature: byte.repeat(64) });
+    const port = {
+      configured: true,
+      annulOpen: async () => false,
+      attest: async () => ({ status: "sealed", detail: null, attested: false }),
+      progress: async () => "none",
+      fence: () => undefined,
+      staleApprovals: async () => [],
+    } as unknown as RemedyPort;
+    const h = harness({ remedy: port });
+    assert.equal((await h.clock.createPolicy(GAME, { deadline: "async-pace", paceSecs: 43_200, money: true })).ok, true);
+    await h.deal();
+    await h.time.advance(43_200_000);
+    await h.clock.idle();
+    assert.equal(h.record().overdue?.seat, P1);
+    const proposed = await h.serial(() => h.clock.op(h.game, h.tx, { type: "clock-propose", seat: P2, kind: "annul", approval: approval("22"), verifiedFor: null, stale: [] }));
+    assert.equal(proposed.ok, true, JSON.stringify(proposed));
+    const id = h.record().overdue?.proposal?.id as number;
+    /* A YES that turns out to complete the set, with no completion check (the host read the table before another
+       vote): refused, nothing sealed. */
+    const unchecked = await h.serial(() => h.clock.op(h.game, h.tx, { type: "clock-vote", seat: P3, proposalId: id, yes: true, approval: approval("33"), verifiedFor: null, stale: [], renew: false }));
+    assert.deepEqual([unchecked.ok, (unchecked as { code?: string }).code], [false, CLOCK_REFUSAL.stale]);
+    assert.equal(h.record().remedy, null);
+    /* A check read at an older evidence sequence (a vote or veto landed meanwhile): refused. */
+    const checkedAt = h.time.now();
+    const seq = h.record().evidence.seq;
+    const behind = await h.serial(() => h.clock.op(h.game, h.tx, { type: "clock-vote", seat: P3, proposalId: id, yes: true, approval: approval("33"), verifiedFor: null, stale: [], renew: false, checked: { at: checkedAt, seq: seq - 1 } }));
+    assert.deepEqual([behind.ok, (behind as { code?: string }).code], [false, CLOCK_REFUSAL.stale]);
+    /* The chain wait passes (the key read waits for a block past the second); the decision is stamped AT the checked
+       instant, not at the moment the op ran. */
+    await h.time.advance(12 * SEC);
+    const voted = await h.serial(() => h.clock.op(h.game, h.tx, { type: "clock-vote", seat: P3, proposalId: id, yes: true, approval: approval("33"), verifiedFor: null, stale: [], renew: false, checked: { at: checkedAt, seq } }));
+    assert.equal(voted.ok, true, JSON.stringify(voted));
+    const r = h.record();
+    assert.deepEqual([r.ended?.kind, r.remedy?.kind, r.remedy?.final_ms], ["async-annul", 4, checkedAt]);
+    assert.deepEqual(r.remedy?.approvals.map((a) => a.seat), [P2, P3]);
+    assert.equal(sealedRemedyProblem(GAME, r.remedy as NonNullable<typeof r.remedy>), null);
   });
 });
 

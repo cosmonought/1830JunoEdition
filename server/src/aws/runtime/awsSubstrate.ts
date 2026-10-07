@@ -26,6 +26,7 @@
 import type { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 
 import { dealIdentityOfLog, logFormatOfLog } from "../../escrow/dealIdentity";
+import { linesToBytes } from "../../persistence/logFormat";
 import { GAME_ID_PATTERN } from "../../rooms/gameRecord";
 import { createDynamoDbClient, createKmsClient } from "../awsClients";
 import { createDynamoFinancialStore } from "../game/dynamoFinancialStore";
@@ -86,7 +87,8 @@ async function storedLogBytes(client: DynamoDBClient, table: string, gameId: str
   const items = await queryAll(client, table, gamePk(gameId), { prefix: LOG_PREFIX });
   if (items.length === 0) return null;
   /* An item without a line (damage) becomes an empty line: the file reader classifies it exactly as a damaged line. */
-  return Buffer.from(items.map((item) => `${(item.line?.S ?? "").replace(/\n/g, "")}\n`).join(""), "utf8");
+  /* Assembled as one Buffer line by line, never one joined string (a history has no length ceiling). */
+  return linesToBytes(items.map((item) => (item.line?.S ?? "").replace(/\n/g, "")));
 }
 
 export function realAwsSubstrate(options: AwsSubstrateOptions): AwsSubstrate<PoolWriter, DynamoSigningLedger> {

@@ -164,6 +164,44 @@ function claimsIndex(text: string, index: number): boolean {
   }
 }
 
+/** A log held as LINES (each without its newline -- DynamoDB keeps one item per entry) as the file's bytes: one Buffer
+ *  assembled line by line, never one joined string (a JS string has a length ceiling; a history has none). */
+export function linesToBytes(lines: readonly string[]): Buffer {
+  return Buffer.concat(lines.map((line) => Buffer.from(`${line}\n`, "utf8")));
+}
+
+/** `scanLog` over a log held as LINES, without ever joining them: a clean history -- every line an entry, each batch
+ *  whole -- is read line by line; anything else is judged by `scanLog` itself over the same bytes (`linesToBytes`), so
+ *  the answer is exactly the file reader's. */
+export function scanLogLines(lines: readonly string[]): LogScan {
+  const entries: ServerLogEntry[] = [];
+  let pending: ServerLogEntry[] = [];
+  let current: BatchRange | null = null;
+  let expected = 0;
+  let bytes = 0;
+  let stampedLines = 0;
+  let legacyLines = 0;
+  for (const line of lines) {
+    const parsed = line.includes("\n") ? null : parseEntryLine(line);
+    if (parsed === null) return scanLog(linesToBytes(lines));
+    const { entry, range } = parsed;
+    if (!(entry.index === expected && (current === null ? range[0] === entry.index : sameRange(range, current)))) return scanLog(linesToBytes(lines));
+    if (parsed.stamped) stampedLines += 1;
+    else legacyLines += 1;
+    pending.push(entry);
+    expected += 1;
+    current = range;
+    bytes += Buffer.byteLength(line, "utf8") + 1;
+    if (entry.index === range[1]) {
+      for (const done of pending) entries.push(done);
+      pending = [];
+      current = null;
+    }
+  }
+  if (pending.length > 0) return scanLog(linesToBytes(lines));
+  return { entries, end: bytes, size: bytes, classification: "clean", damageAt: null, evidenceAt: null, detail: `${entries.length} entries, no damage`, stampedLines, legacyLines };
+}
+
 /** LIVE-3 §8.3, exactly: which bytes are history, which are a torn in-flight batch, and whether anything else is. */
 export function scanLog(bytes: Uint8Array): LogScan {
   const buffer = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);

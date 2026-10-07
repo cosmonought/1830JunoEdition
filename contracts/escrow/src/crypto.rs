@@ -32,14 +32,18 @@
 //! REMEDY-APPROVE: one non-defaulting seat's approval of one remedy kind
 //! against one defaulting seat for ONE overdue instance -- its strike, epoch,
 //! the exact log position it stalled at and the moment it became overdue, each
-//! of which must equal the attestation's -- and until when the approval may
-//! be used (`approve_until`, the approving seat's own choice, compared with
-//! block time). It names neither the attestation's finality nor its expiry,
-//! so a seat approves while the overdue is pending, the remedy key decides
-//! finality, and a re-attestation of the same final decision keeps the
-//! approvals until their own horizon; an approval of an overdue that was
-//! later cured is dead from that horizon on even before a checkpoint past the
-//! stall reaches the chain. Neither digest is ever signed by
+//! of which must equal the attestation's -- and the approving seat's own
+//! horizon (`approve_until`). It names neither the attestation's finality nor
+//! its expiry, so a seat approves while the overdue is pending and the remedy
+//! key decides finality. The approval is judged AT the attested `final_at`
+//! (owner ruling, 2026-10-07): it counts only if `final_at` is strictly before
+//! its horizon and it verifies under the consent key the seat held at
+//! `final_at`; the block time it lands in is never consulted, so a sealed
+//! decision (and its re-attestation, which keeps `final_at`) lands through any
+//! later expiry or rotation. The signed bytes are those of REMEDY-APPROVE/v1,
+//! unchanged. An approval of an overdue that was later cured is stopped on
+//! chain by the checkpoint past the stall (the fence), and off chain by the
+//! REMEDY key, which attests only a decision the clock sealed. Neither digest is ever signed by
 //! a settlement signer key or the admission key; every tag differs, so no
 //! signature made for one purpose verifies for another.
 //!
@@ -218,11 +222,13 @@ pub fn remedy_digest(encoded_attestation: &[u8]) -> [u8; 32] {
 /// a seat is overdue; a cure is what ends the instance) and the moment it
 /// became overdue (`overdue_at`). Each of them must equal the attestation's,
 /// so an approval given for one overdue never counts for another, whatever
-/// the REMEDY key later attests (a cured overdue's approvals are dead once play
-/// moves on), and `approve_until`: the seat's own bound on the approval's
-/// use (the contract refuses it from that block second on). The attestation's
-/// finality and expiry are not bound: approvals survive the re-attestation of
-/// the same final decision, until their own `approve_until`.
+/// the REMEDY key later attests (a cured overdue's approvals are dead once a
+/// checkpoint past the stall lands), and `approve_until`: the seat's own bound
+/// on the decision it approves -- the attested `final_at` must be strictly
+/// before it. The attestation's finality and expiry are not bound: the
+/// approval is judged at `final_at` under the key the seat held then, so it
+/// survives later expiry, later key rotation and the re-attestation of the
+/// same final decision.
 #[allow(clippy::too_many_arguments)]
 pub fn remedy_approve_digest(
     domain: &[u8; 32],

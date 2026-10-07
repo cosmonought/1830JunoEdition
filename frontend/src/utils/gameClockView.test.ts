@@ -146,6 +146,15 @@ describe("Phase 3 final clocks: Async and No-deadline", () => {
     expect(p.controls.propose).toEqual(["foreclose", "annul"]);
   });
 
+  it("Async: an offer never stops the proposer's deadline -- every tab is told it keeps running, counted on", () => {
+    const p = present(
+      view({ deadline: "async-pace", paceSecs: 86_400, responsible: { seat: BOB, kind: "offer-answer" }, action: { remainingMs: 24 * 3_600_000, running: true }, running: [{ seat: ME, remainingMs: 4 * 3_600_000 }] }),
+      { since: 30 * MIN },
+    );
+    expect(p.lines.join(" ")).toMatch(/Your deadline keeps running while the offer is answered: 3h 30m left\./);
+    expect(present(view({ deadline: "async-pace", paceSecs: 86_400, running: [{ seat: CAROL, remainingMs: 2 * MIN }] }), { me: BOB }).lines.join(" ")).toMatch(/Carol's deadline keeps running/);
+  });
+
   it("No-deadline: 'No deadline', never a countdown", () => {
     const p = present(view({ deadline: "no-deadline", action: null }));
     expect(p).toMatchObject({ modeLabel: "No deadline", value: null, ticking: false });

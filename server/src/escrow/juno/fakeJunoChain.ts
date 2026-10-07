@@ -170,12 +170,10 @@ export interface FakeSeat {
   joined_at?: number;
   consent_key_rotated_at?: number | null;
   /** Escrow 2.1.0 (owner ruling, 2026-10-07): keys this seat replaced while its `timed_remedy_v1` game was IN_PROGRESS,
-   *  oldest first, with the rotation's chain seconds (`Seat::retired_consent_keys`). */
+   *  oldest first, with the rotation's chain seconds (`state.rs::RETIRED_CONSENT_KEYS` -- kept OUTSIDE the game record:
+   *  never part of a game answer; read by `SubmitRemedy` and the `consent_key_at` query). */
   retired_consent_keys?: { pubkey: string; retired_at: number }[];
 }
-
-/** `state.rs::MAX_RETIRED_CONSENT_KEYS`. */
-export const FAKE_MAX_RETIRED_CONSENT_KEYS = 8;
 
 /** `helpers.rs::consent_key_at`: the key `seat` held at `atSecs` (the first retired strictly after it, else current). */
 export function fakeConsentKeyAt(seat: FakeSeat, atSecs: bigint): string {
@@ -482,11 +480,9 @@ export class FakeJunoChain implements JunoRest {
     const other = game.seats.findIndex((seat, at) => at !== index && seat.consent_pubkey === pubkey);
     if (other >= 0) return { ok: false, error: `this consent key is already used by seat ${other} of this game` };
     if (game.seats[index].consent_pubkey !== pubkey) {
-      /* Escrow 2.1.0: a rotation in a remedy game's play keeps the replaced key (bounded). */
+      /* Escrow 2.1.0: a rotation in a remedy game's play keeps the replaced key (no limit; outside the game record). */
       if (game.state === "in_progress" && game.policy === "timed_remedy_v1") {
-        const kept = game.seats[index].retired_consent_keys ?? [];
-        if (kept.length >= FAKE_MAX_RETIRED_CONSENT_KEYS) return { ok: false, error: `seat ${index} already retired ${FAKE_MAX_RETIRED_CONSENT_KEYS} consent keys during play; no further rotation until the game leaves IN_PROGRESS` };
-        game.seats[index].retired_consent_keys = [...kept, { pubkey: game.seats[index].consent_pubkey, retired_at: this.time }];
+        game.seats[index].retired_consent_keys = [...(game.seats[index].retired_consent_keys ?? []), { pubkey: game.seats[index].consent_pubkey, retired_at: this.time }];
       }
       game.seats[index].consent_pubkey = pubkey;
       game.seats[index].consent_key_rotated_at = this.time;
@@ -658,8 +654,6 @@ export class FakeJunoChain implements JunoRest {
           wallet: seat.wallet,
           consent_pubkey: seat.consent_pubkey,
           consent_key_rotated_at: seat.consent_key_rotated_at === undefined || seat.consent_key_rotated_at === null ? null : nanos(seat.consent_key_rotated_at),
-          /* `skip_serializing_if = "Vec::is_empty"`: absent unless the seat rotated in play. */
-          ...(seat.retired_consent_keys !== undefined && seat.retired_consent_keys.length > 0 ? { retired_consent_keys: seat.retired_consent_keys.map((r) => ({ pubkey: r.pubkey, retired_at: nanos(r.retired_at) })) } : {}),
           join_ticket: seat.join_ticket,
           gross_deposit: game.ante_gross,
           subsidy_paid: game.subsidy_per_seat,
@@ -1230,6 +1224,12 @@ export class FakeJunoChain implements JunoRest {
     const game = this.games.get(Number(body.chain_game_id));
     if (game === undefined) throw new JunoRpcError("refused", `smart query refused: game ${String(body.chain_game_id)} not found`);
     if (variant === "game") return this.gameResponse(game);
+    if (variant === "consent_key_at") {
+      /* Escrow 2.1.0 (`query.rs` ConsentKeyAt): the key a seat held at block second `at`. */
+      const seat = game.seats[Number(body.seat_index)];
+      if (seat === undefined) throw new JunoRpcError("refused", `smart query refused: seat index ${String(body.seat_index)} is out of range`);
+      return { pubkey: fakeConsentKeyAt(seat, BigInt(String(body.at))), retired_keys: (seat.retired_consent_keys ?? []).length };
+    }
     if (variant === "checkpoints") {
       return {
         checkpoints: [...game.checkpoints.values()].map((record) => ({ checkpoint: { payload: record.payload, accepted_at: nanos(record.accepted_at) }, signer_key_retired: false, signer_key_compromised: false })),

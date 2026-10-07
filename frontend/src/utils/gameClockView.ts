@@ -255,7 +255,11 @@ export function presentClock(input: ClockPresentationInput): ClockPresentation {
 
   const requestLine = clock.pause.request !== null ? `${name(clock.pause.request.by)} asked to pause — ${clock.pause.request.yes.length} of ${clock.pause.request.needed.length} agree. The clock runs until everyone agrees.` : null;
   const annulLine = clock.annul !== null ? `Annul game: ${clock.annul.yes.length} of ${clock.annul.needed.length} players agree.` : null;
-  const extra = [requestLine, annulLine, strikeLine].filter((line): line is string => line !== null);
+  /* Timed Async: a deadline that keeps running behind an offer (never stopped by negotiation). */
+  const runningLines = (clock.running ?? []).map(
+    (park) => `${park.seat === me ? "Your" : `${input.nameOf(park.seat)}'s`} deadline keeps running while the offer is answered: ${formatClockDuration(left({ remainingMs: park.remainingMs, running: true }) ?? 0)} left.`,
+  );
+  const extra = [requestLine, annulLine, strikeLine, ...runningLines].filter((line): line is string => line !== null);
 
   if (clock.state === "overdue" && clock.overdue !== null) {
     const od = clock.overdue;

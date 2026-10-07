@@ -68,7 +68,7 @@ import {
 } from "./gameRecord";
 import { createMemoryHoldStore, type HoldStore } from "./holdStore";
 import { createClockController, rescindExpiredOffer, type ClockAnswer, type ClockController, type ClockOpInput, type ClockTimers, type ClockVerifiedFor, type CloseOffer } from "./clock/clockController";
-import { projectedFinalityMs } from "./clock/clockModel";
+import { projectedFinalityMs, secsUpOf } from "./clock/clockModel";
 import type { ClockStore } from "./clock/clockStore";
 import type { ClockConductHook } from "./clock/clockEvidence";
 import type { RemedyPort } from "../escrow/remedyPipeline";
@@ -116,6 +116,9 @@ import {
 } from "./roomService";
 
 const CHAT_HISTORY_LIMIT = 200;
+/** Timed Async (money): how long a completing YES waits for the chain to pass its second and answer every approver's
+ *  key at it (CometBFT block time trails real time by about a block). Unanswered: nothing is decided (try again). */
+const ASYNC_COMPLETION_KEY_CHECK_MS = 20_000;
 const MAX_CHAT_LENGTH = 500;
 
 /** ESCROW-3B: what the room host tells the escrow service, and asks it. Money games are disabled, so in production the
@@ -1547,6 +1550,8 @@ export function createRoomHost(deps: RoomHostDeps) {
         let verifiedFor: ClockVerifiedFor | null = null;
         let stale: readonly string[] = [];
         let renew = false;
+        /* Timed Async, the completing YES: the instant its approvals were confirmed at (the decision is stamped there). */
+        let checked: { at: number; seq: number } | null = null;
         if (yes && record.money !== null) {
           if (typeof op.approveUntil !== "number" || typeof op.signature !== "string") return { ok: false, code: "bad-frame", reason: "On a money table, a YES needs your signed approval." };
           const standing = clock.recordOf(game.gameId);
@@ -1583,11 +1588,26 @@ export function createRoomHost(deps: RoomHostDeps) {
           stale = found.filter((s) => s !== seat);
           approval = { approve_until: op.approveUntil, signature: op.signature };
           verifiedFor = { epoch: od.epoch, logLen: od.log_len, proposalId: proposal?.id ?? null, kind };
+          /* TIMED ASYNC: a YES that COMPLETES the N-1 set makes the decision final at once, and the seal is judged on
+             chain at that very second (owner ruling, 2026-10-07: approvals valid at finality decide it). So the decision
+             is stamped at `checked.at`, and every approval of the set -- this one included -- is first checked under the
+             key its seat held at that second, read only once the chain has a block past it (a rotation stamped at or
+             before it is then seen; one after it is irrelevant). Unread in time: nothing is decided (try again). */
+          const needed = standing.seats.filter((s) => s !== od.seat);
+          const yesAfter = new Set([...standingYes.map((v) => v.seat).filter((s) => !stale.includes(s)), seat]);
+          if (standing.policy.class === "async-pace" && needed.length > 0 && needed.every((s) => yesAfter.has(s))) {
+            checked = { at, seq: standing.evidence.seq };
+            const set = [...standingYes.filter((v) => v.seat !== seat), { seat, approveUntil: op.approveUntil, signature: op.signature }];
+            const atFinal = await port.staleApprovals(game.gameId, facts, set, { atSecs: secsUpOf(at), timeoutMs: ASYNC_COMPLETION_KEY_CHECK_MS });
+            if (atFinal === null) return { ok: false, code: CLOCK_REFUSAL.unavailable, reason: "Juno could not confirm every approver's key for this decision just now, so nothing was decided. Try again in a moment." };
+            if (atFinal.includes(seat)) return { ok: false, code: "bad-approval", reason: "Your seat's consent key changed: sign your approval again from this device." };
+            stale = [...new Set([...stale, ...atFinal])].sort();
+          }
         }
         input =
           type === "clock-propose"
-            ? { type: "clock-propose", seat, kind: op.kind as "foreclose" | "annul", approval, verifiedFor, stale }
-            : { type: "clock-vote", seat, proposalId: typeof op.proposalId === "number" ? op.proposalId : 0, yes, approval, verifiedFor, stale, renew };
+            ? { type: "clock-propose", seat, kind: op.kind as "foreclose" | "annul", approval, verifiedFor, stale, ...(checked !== null ? { checked } : {}) }
+            : { type: "clock-vote", seat, proposalId: typeof op.proposalId === "number" ? op.proposalId : 0, yes, approval, verifiedFor, stale, renew, ...(checked !== null ? { checked } : {}) };
         break;
       }
       default:

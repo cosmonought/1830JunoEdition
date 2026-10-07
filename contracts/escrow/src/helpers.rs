@@ -35,8 +35,9 @@ use crate::payload::{fixed_bytes, Payload, PayloadUse};
 use crate::payout::{foreclosure_split, proportional_split, weights_have_positive_sum};
 use crate::remedy::RemedyAttestation;
 use crate::state::{
-    CheckpointRecord, Config, Game, GameState, Outcome, PayloadRecord, RemedyKey, Route, Seat,
-    SettlementRecord, SettlementSource, SignerKey, CHECKPOINTS, REMEDY_KEYS, SIGNER_KEYS,
+    CheckpointRecord, Config, Game, GameState, Outcome, PayloadRecord, RemedyKey, Route,
+    SettlementRecord, SettlementSource, SignerKey, CHECKPOINTS, REMEDY_KEYS, RETIRED_CONSENT_KEYS,
+    RETIRED_CONSENT_KEY_COUNTS, SIGNER_KEYS,
 };
 
 /// Roster bounds (A3: Level Playing Field money rooms may seat 7).
@@ -404,17 +405,64 @@ pub fn verify_seat_signatures(
     Ok(mask)
 }
 
-/// The consent key `seat` held at `at_secs`: the first key it retired at a
-/// block time strictly after `at_secs` (it was still current then), else its
-/// current key. A rotation AT `at_secs` already counts (the new key is the
-/// one). Retired keys are only recorded during a 2.1.0 game's play, which is
-/// the only span a remedy's `final_at` can fall in.
-pub fn consent_key_at(seat: &Seat, at_secs: u64) -> &HexBinary {
-    seat.retired_consent_keys
-        .iter()
-        .find(|retired| retired.retired_at.seconds() > at_secs)
-        .map(|retired| &retired.pubkey)
-        .unwrap_or(&seat.consent_pubkey)
+/// The consent key seat `seat_index` of `game` held at `at_secs`: the first
+/// key it replaced in play at a block time strictly AFTER that second (it was
+/// still the seat's key then), else its current key. A rotation at or before
+/// `at_secs` (to the nanosecond: the second itself included) already counts --
+/// the new key is the one. Found by bisection over `RETIRED_CONSENT_KEYS`
+/// (`retired_at` never decreases with the ordinal): logarithmic in the seat's
+/// own rotations, whatever their number.
+pub fn consent_key_at(
+    storage: &dyn Storage,
+    game: &Game,
+    seat_index: u8,
+    at_secs: u64,
+) -> Result<HexBinary, ContractError> {
+    let seat = game
+        .seats
+        .get(usize::from(seat_index))
+        .ok_or(ContractError::SeatIndexOutOfRange { seat_index })?;
+    let id = game.chain_game_id;
+    let count = RETIRED_CONSENT_KEY_COUNTS
+        .may_load(storage, (id, seat_index))?
+        .unwrap_or(0);
+    let at = Timestamp::from_seconds(at_secs);
+    let (mut lo, mut hi) = (0u32, count);
+    while lo < hi {
+        // lo < hi, so neither step can overflow (checked anyway: arithmetic lint).
+        let mid = hi
+            .checked_sub(lo)
+            .and_then(|span| lo.checked_add(span / 2))
+            .ok_or(ContractError::Overflow {})?;
+        if RETIRED_CONSENT_KEYS
+            .load(storage, (id, seat_index, mid))?
+            .retired_at
+            > at
+        {
+            hi = mid;
+        } else {
+            lo = mid.checked_add(1).ok_or(ContractError::Overflow {})?;
+        }
+    }
+    if lo < count {
+        Ok(RETIRED_CONSENT_KEYS
+            .load(storage, (id, seat_index, lo))?
+            .pubkey)
+    } else {
+        Ok(seat.consent_pubkey.clone())
+    }
+}
+
+/// How many consent keys seat `seat_index` of game `chain_game_id` replaced
+/// in play.
+pub fn retired_consent_key_count(
+    storage: &dyn Storage,
+    chain_game_id: u64,
+    seat_index: u8,
+) -> Result<u32, ContractError> {
+    Ok(RETIRED_CONSENT_KEY_COUNTS
+        .may_load(storage, (chain_game_id, seat_index))?
+        .unwrap_or(0))
 }
 
 /// Escrow 2.1.0: verifies the REMEDY-APPROVE signatures carried by a
@@ -436,6 +484,7 @@ pub fn consent_key_at(seat: &Seat, at_secs: u64) -> &HexBinary {
 /// lands at most once per game. Returns the bit mask of the approving seats.
 pub fn verify_remedy_approvals(
     api: &dyn Api,
+    storage: &dyn Storage,
     game: &Game,
     attestation: &RemedyAttestation,
     approvals: &[RemedyApproval],
@@ -445,12 +494,11 @@ pub fn verify_remedy_approvals(
     let mut mask = 0u8;
     for entry in approvals {
         let index = usize::from(entry.seat_index);
-        let seat = game
-            .seats
-            .get(index)
-            .ok_or(ContractError::SeatIndexOutOfRange {
+        if index >= game.seats.len() {
+            return Err(ContractError::SeatIndexOutOfRange {
                 seat_index: entry.seat_index,
-            })?;
+            });
+        }
         if index == defaulting {
             return Err(ContractError::DefaulterCannotApprove {
                 seat_index: entry.seat_index,
@@ -487,7 +535,7 @@ pub fn verify_remedy_approvals(
             api,
             &digest,
             entry.signature.as_slice(),
-            consent_key_at(seat, attestation.final_at).as_slice(),
+            consent_key_at(storage, game, entry.seat_index, attestation.final_at)?.as_slice(),
         )
         .map_err(|_| ContractError::InvalidConsent {
             seat_index: entry.seat_index,

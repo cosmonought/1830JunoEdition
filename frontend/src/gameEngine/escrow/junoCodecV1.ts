@@ -298,8 +298,6 @@ export const JUNO_CONTRACT_ERROR_MAP: Readonly<Record<string, EscrowErrorCode>> 
   // A seat's approval whose approve_until is at or before the remedy's attested final_at (owner ruling, 2026-10-07:
   // judged at finality, never at the block time): it never counts for that decision (never retried).
   ApprovalExpired: "WINDOW_CLOSED",
-  // A seat already retired MAX_RETIRED_CONSENT_KEYS consent keys during play: no further rotation while IN_PROGRESS.
-  ConsentKeyHistoryFull: "INVALID_LIFECYCLE",
   RemedySettlementNotReplaceable: "UNSUPPORTED_CAPABILITY",
   RemedyKeyIdsExhausted: "ADMIN_REFUSED",
 });

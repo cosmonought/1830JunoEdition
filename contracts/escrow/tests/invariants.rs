@@ -57,10 +57,10 @@
 //!     passed and seats rotated, still lands, and a key replaced at or before
 //!     `final_at` never counts
 //! 21. consent-key history: a rotation keeps the replaced key (stamped with
-//!     the block time) exactly when its game is a 2.1.0 `TimedRemedyV1` game
-//!     IN_PROGRESS, at most `MAX_RETIRED_CONSENT_KEYS` per seat (a further
-//!     rotation in play is refused `ConsentKeyHistoryFull`); the history is
-//!     time-ordered and is exactly the rotations made in play
+//!     the block time, outside the game record, with no limit) exactly when
+//!     its game is a 2.1.0 `TimedRemedyV1` game IN_PROGRESS; the chain's
+//!     `ConsentKeyAt` answers exactly the model's key-at-time for every
+//!     rotation made in play
 //!
 //! The checker mixes three kinds of game: escrow 2.1.0 `TimedRemedyV1` (Live
 //! and paced Async) and `NoDeadline` games, and games rewritten into the shape
@@ -82,7 +82,7 @@ use eighteen_cosmos_escrow::payload::{Payload, KIND_CHECKPOINT, KIND_TERMINAL};
 use eighteen_cosmos_escrow::remedy::RemedyAttestation;
 use eighteen_cosmos_escrow::state::{
     Game, GamePolicy, GameState, Mode, RemedyKind, Route, SettlementRecord, SettlementSource,
-    ASYNC_PACES_SECS, MAX_REMEDY_TTL_SECS, MAX_RETIRED_CONSENT_KEYS,
+    ASYNC_PACES_SECS, MAX_REMEDY_TTL_SECS,
 };
 use eighteen_cosmos_escrow::ContractError;
 
@@ -857,23 +857,13 @@ impl Fuzz {
                     new_pubkey: key.pubkey.clone(),
                 };
                 // A rotation in a 2.1.0 game's play keeps the replaced key
-                // (bounded); anywhere else nothing is kept.
+                // (no limit); anywhere else nothing is kept.
                 let in_play =
                     g.state == InProgress && g.terms.policy == Some(GamePolicy::TimedRemedyV1);
-                let p_own = own.map(|_| self.player_index(&who).unwrap());
-                let kept = p_own
-                    .and_then(|p| self.key_history.get(&(id, p)))
-                    .map_or(0, Vec::len);
                 let old = own.map(|o| self.current_key(id, &g, o));
                 let now = self.s.now().seconds();
                 let res = self.exec(&who, &msg, &[]);
                 assert!(!(reuse && res.is_ok()), "rotated onto another seat's key");
-                let full = matches!(res, Err(ContractError::ConsentKeyHistoryFull { .. }));
-                assert_eq!(
-                    full,
-                    own.is_some() && !reuse && in_play && kept >= MAX_RETIRED_CONSENT_KEYS,
-                    "consent key history cap: {res:?}"
-                );
                 if res.is_ok() {
                     let p = self.player_index(&who).unwrap();
                     if in_play && old.as_ref().is_some_and(|o| o.pubkey != key.pubkey) {
@@ -1642,7 +1632,6 @@ impl Fuzz {
                     let seat = self.rng.pick(&candidates);
                     let who = g.seats[seat].wallet.clone();
                     let p = self.player_index(&who).expect("seats are players");
-                    if self.key_history.get(&(id, p)).map_or(0, Vec::len) < MAX_RETIRED_CONSENT_KEYS
                     {
                         let before = self.begin();
                         let key = self.fresh_key();
@@ -2054,17 +2043,10 @@ impl Fuzz {
                     } else {
                         assert_eq!(a.consent_bitmap, b.consent_bitmap & !bit);
                         // (21) only a rotation in a 2.1.0 game's play keeps
-                        // the replaced key, stamped with the rotation time.
-                        let mut kept = b.seats[i].retired_consent_keys.clone();
-                        if b.state == GameState::InProgress
-                            && b.terms.policy == Some(GamePolicy::TimedRemedyV1)
-                        {
-                            kept.push(eighteen_cosmos_escrow::state::RetiredConsentKey {
-                                pubkey: b.seats[i].consent_pubkey.clone(),
-                                retired_at: a.seats[i].consent_key_rotated_at.unwrap(),
-                            });
-                        }
-                        assert_eq!(a.seats[i].retired_consent_keys, kept);
+                        // the replaced key: the chain's count is the model's.
+                        let p = self.player_index(&d.sender).unwrap();
+                        let model = self.key_history.get(&(id, p)).map_or(0, Vec::len);
+                        assert_eq!(self.s.key_at(id, i as u8, 0).1 as usize, model);
                     }
                 }
                 // (15) only the game's own resolver adjudicates.
@@ -2208,28 +2190,26 @@ impl Fuzz {
             keys.dedup();
             assert_eq!(keys.len(), g.seats.len(), "shared consent key in game {id}");
             for (i, seat) in g.seats.iter().enumerate() {
-                // (21) a bounded, time-ordered key history, only in a 2.1.0
-                // game, exactly the rotations this fuzzer made in its play.
-                assert!(seat.retired_consent_keys.len() <= MAX_RETIRED_CONSENT_KEYS);
-                assert!(seat
-                    .retired_consent_keys
-                    .windows(2)
-                    .all(|w| w[0].retired_at <= w[1].retired_at));
-                if g.terms.policy != Some(GamePolicy::TimedRemedyV1) {
-                    assert!(seat.retired_consent_keys.is_empty());
-                }
-                if let Some(p) = self.player_index(&seat.wallet) {
-                    let model: Vec<(Vec<u8>, u64)> = self
-                        .key_history
-                        .get(&(*id, p))
-                        .map(|h| h.iter().map(|(k, t)| (k.pubkey.to_vec(), *t)).collect())
-                        .unwrap_or_default();
-                    let chain: Vec<(Vec<u8>, u64)> = seat
-                        .retired_consent_keys
-                        .iter()
-                        .map(|r| (r.pubkey.to_vec(), r.retired_at.seconds()))
-                        .collect();
-                    assert_eq!(chain, model, "seat {i}'s key history in game {id}");
+                // (21) for the game this step touched: the chain's key history
+                // is exactly the rotations this fuzzer made in its play -- its
+                // count, and the key it names around every rotation.
+                if d.game == Some(*id) {
+                    if let Some(p) = self.player_index(&seat.wallet) {
+                        let history = self.key_history.get(&(*id, p)).cloned().unwrap_or_default();
+                        assert_eq!(self.s.key_at(*id, i as u8, 0).1 as usize, history.len());
+                        if g.terms.policy != Some(GamePolicy::TimedRemedyV1) {
+                            assert!(history.is_empty());
+                        }
+                        for (_, t) in &history {
+                            for at in [t.saturating_sub(1), *t] {
+                                assert_eq!(
+                                    self.s.key_at(*id, i as u8, at).0,
+                                    self.key_at(*id, g, i, at).pubkey,
+                                    "seat {i}'s key at {at} in game {id}"
+                                );
+                            }
+                        }
+                    }
                 }
                 // (6) one subsidy per deposit, recorded on the seat.
                 assert_eq!(seat.gross_deposit, g.ante_gross);

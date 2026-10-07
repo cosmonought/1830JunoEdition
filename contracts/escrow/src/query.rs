@@ -9,11 +9,13 @@ use cw_storage_plus::Bound;
 
 use crate::contract::{CONTRACT_NAME, CONTRACT_VERSION};
 use crate::error::ContractError;
-use crate::helpers::{add_secs, best_checkpoint, load_game, trusted_seq};
+use crate::helpers::{
+    add_secs, best_checkpoint, consent_key_at, load_game, retired_consent_key_count, trusted_seq,
+};
 use crate::msg::{
-    CheckpointView, CheckpointsResponse, ConfigResponse, GameDeadlines, GameResponse, GameSummary,
-    GamesResponse, QueryMsg, RemedyKeyResponse, RemedyKeysResponse, SeatView, SeatsResponse,
-    SettlementPreviewResponse, SignerKeyResponse, SignerKeysResponse,
+    CheckpointView, CheckpointsResponse, ConfigResponse, ConsentKeyAtResponse, GameDeadlines,
+    GameResponse, GameSummary, GamesResponse, QueryMsg, RemedyKeyResponse, RemedyKeysResponse,
+    SeatView, SeatsResponse, SettlementPreviewResponse, SignerKeyResponse, SignerKeysResponse,
 };
 use crate::payout::proportional_split;
 use crate::state::{
@@ -76,6 +78,19 @@ pub fn dispatch(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
         }
         QueryMsg::SettlementPreview { chain_game_id } => {
             to_json_binary(&settlement_preview(deps, chain_game_id)?)
+        }
+        QueryMsg::ConsentKeyAt {
+            chain_game_id,
+            seat_index,
+            at,
+        } => {
+            let game = load_game(deps.storage, chain_game_id).map_err(std_err)?;
+            to_json_binary(&ConsentKeyAtResponse {
+                pubkey: consent_key_at(deps.storage, &game, seat_index, at.u64())
+                    .map_err(std_err)?,
+                retired_keys: retired_consent_key_count(deps.storage, chain_game_id, seat_index)
+                    .map_err(std_err)?,
+            })
         }
     }
 }

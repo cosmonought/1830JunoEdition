@@ -516,6 +516,9 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
     delivered = new Set<string>();
     appliedIndex = -1;
     appliedId = undefined;
+    /* No page of an earlier catch-up is ever put in front of the resync's own (a resync is decided between frames,
+       never inside one catch-up's pages). */
+    catchUpPages = [];
     options.onResync?.(reason);
     resyncing = true;
     if (open && socket) {
@@ -849,6 +852,22 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
     }
     /* LIVE-4 (L4-3): after `reload` / `route` (or a deal this bundle cannot play) nothing more from this socket counts. */
     if (clientAnswered) return;
+    /* Phase 3 final clocks (owner ruling, 2026-10-07): A LONG HISTORY ARRIVES IN PAGES. The server sends one catch-up's
+       pages back to back (nothing of this socket's comes between them); each page is held, nothing of it applied or
+       settled, until the last one (no `more`) completes the catch-up -- which is then exactly the one frame a short
+       history would have been, with the last page's digest, `inReplyTo` and `inFlight` -- and only THEN is the frame
+       judged (the resync filter below sees the whole catch-up, never a page without its answer). */
+    if (message.kind === "catch-up") {
+      if (message.more === true) {
+        for (const entry of message.entries) catchUpPages.push(entry);
+        return;
+      }
+      if (catchUpPages.length > 0) {
+        const whole = catchUpPages.concat(message.entries);
+        catchUpPages = [];
+        message = { ...message, entries: whole };
+      }
+    }
     const inReplyTo = (message as { inReplyTo?: unknown }).inReplyTo;
     const answers = typeof inReplyTo === "string" ? inReplyTo : undefined;
 
@@ -882,19 +901,7 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
         return;
       }
       case "catch-up": {
-        /* Phase 3 final clocks (owner ruling, 2026-10-07): A LONG HISTORY ARRIVES IN PAGES. Each page is held, nothing
-           of it applied or settled, until the last one (no `more`) completes the catch-up -- which is then exactly the
-           one frame a short history would have been, with the last page's digest, `inReplyTo` and `inFlight`. */
-        if (message.more === true) {
-          for (const entry of message.entries) catchUpPages.push(entry);
-          return;
-        }
-        if (catchUpPages.length > 0) {
-          const whole = catchUpPages.concat(message.entries);
-          catchUpPages = [];
-          message = { ...message, entries: whole };
-        }
-        /* #1253: THE HELLO'S CATCH-UP IS NOT AN ANSWER TO ANY SUBMISSION. It reconciles whatever was in
+        /* (Its pages, if it came in pages, were reassembled above.) #1253: THE HELLO'S CATCH-UP IS NOT AN ANSWER TO ANY SUBMISSION. It reconciles whatever was in
            flight when the previous socket dropped, and then the submissions queued while the wire was down
            go out -- after it, so their `baseIndex` and the server's idea of this client agree. */
         if (awaitingHello && answers === undefined) {

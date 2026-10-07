@@ -87,6 +87,10 @@ export interface ClockParked {
   /** The required decision it was owing when the offer suspended it (`null`: not known -- a pre-correction record): it
    *  resumes its exact remainder only while it still owes that same decision. */
   readonly key: string | null;
+  /** TIMED ASYNC ONLY: the instant from which the parked remainder keeps RUNNING (owner, 2026-10-07: optional
+   *  negotiation never refreshes, nor stops, the responsible seat's Async deadline -- colluding offers cannot keep it
+   *  alive). Absent on a Live park: a Live park is frozen at its exact remainder (the 10:00 response timer runs). */
+  readonly since?: number;
 }
 
 export interface ClockVote {
@@ -329,7 +333,9 @@ function isDeclines(value: unknown): value is ClockDeclines {
 }
 
 function isParked(p: unknown): p is ClockParked {
-  return isObject(p) && exact(p, ["seat", "offer_key", "remaining_ms", "key"]) && seat(p.seat) && text(p.offer_key, 120) && time(p.remaining_ms) && (p.key === null || text(p.key, 200));
+  if (!isObject(p)) return false;
+  const running = Object.prototype.hasOwnProperty.call(p, "since");
+  return exact(p, running ? ["seat", "offer_key", "remaining_ms", "key", "since"] : ["seat", "offer_key", "remaining_ms", "key"]) && seat(p.seat) && text(p.offer_key, 120) && time(p.remaining_ms) && (p.key === null || text(p.key, 200)) && (!running || time(p.since));
 }
 
 function isEvidenceEvent(value: unknown): value is ClockEvidenceEvent {

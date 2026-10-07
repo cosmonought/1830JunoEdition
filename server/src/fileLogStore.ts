@@ -135,6 +135,9 @@ export interface StoreFs {
    *  position, so two writers never overwrite each other's line. */
   open(file: string, flags: "r" | "r+" | "wx" | "a"): Promise<StoreFileHandle>;
   readFile(file: string): Promise<Buffer>;
+  /** Phase 3 final clocks (no history length limit): the whole file read in bounded chunks, `onChunk` after each (so a
+   *  caller's deadline bounds a chunk, never the history), with no single-read size ceiling. Absent: `readFile`. */
+  readFileChunked?(file: string, onChunk: () => void): Promise<Buffer>;
   rename(from: string, to: string): Promise<void>;
   unlink(file: string): Promise<void>;
   mkdir(directory: string): Promise<void>;
@@ -142,9 +145,37 @@ export interface StoreFs {
   appendFile(file: string, text: string): Promise<void>;
 }
 
+/** The chunk `readFileChunked` reads at a time. */
+export const STORE_READ_CHUNK_BYTES = 16 * 1024 * 1024;
+
+/** Reads `file` to its end in `STORE_READ_CHUNK_BYTES` chunks into one Buffer (a Buffer has no 2 GiB ceiling, unlike a
+ *  single `readFile`); a file that grows while it is read is read to its end. */
+async function readFileChunked(file: string, onChunk: () => void): Promise<Buffer> {
+  const handle = await fs.open(file, "r");
+  try {
+    let buffer = Buffer.allocUnsafe(Math.max((await handle.stat()).size, 1));
+    let at = 0;
+    for (;;) {
+      if (at === buffer.length) {
+        const grown = Buffer.allocUnsafe(buffer.length + STORE_READ_CHUNK_BYTES);
+        buffer.copy(grown, 0, 0, at);
+        buffer = grown;
+      }
+      const { bytesRead } = await handle.read(buffer, at, Math.min(STORE_READ_CHUNK_BYTES, buffer.length - at), at);
+      if (bytesRead === 0) break;
+      at += bytesRead;
+      onChunk();
+    }
+    return buffer.subarray(0, at);
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
+}
+
 export const nodeStoreFs: StoreFs = {
   open: (file, flags) => fs.open(file, flags),
   readFile: (file) => fs.readFile(file),
+  readFileChunked,
   rename: (from, to) => fs.rename(from, to),
   unlink: (file) => fs.unlink(file),
   mkdir: async (directory) => {
@@ -322,7 +353,7 @@ export function createFileLogStore(directory: string, options: FileLogStoreOptio
       THE LOAD (§8.3): validate, truncate only a torn in-flight batch, sync before serving
      --------------------------------------------------------------------------- */
 
-  async function validatedLoad(room: string): Promise<ServerLogEntry[]> {
+  async function validatedLoad(room: string, onProgress?: () => void): Promise<ServerLogEntry[]> {
     await ready;
     const file = logPath(room);
     const known = states.get(room);
@@ -331,7 +362,7 @@ export function createFileLogStore(directory: string, options: FileLogStoreOptio
     }
     let bytes: Buffer;
     try {
-      bytes = await io.readFile(file);
+      bytes = io.readFileChunked !== undefined ? await io.readFileChunked(file, onProgress ?? (() => undefined)) : await io.readFile(file);
     } catch (error) {
       if (codeOf(error) !== "ENOENT") throw error;
       if (known?.exists) throw new StoreCorruptError(`${file} disappeared while the server was using it`, file, 0);
@@ -524,8 +555,8 @@ export function createFileLogStore(directory: string, options: FileLogStoreOptio
     directory,
     stats,
 
-    loadLog(room) {
-      return serial(logPath(room), () => validatedLoad(room));
+    loadLog(room, options) {
+      return serial(logPath(room), () => validatedLoad(room, options?.onProgress));
     },
 
     appendBatch,

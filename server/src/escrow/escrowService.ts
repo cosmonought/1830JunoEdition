@@ -89,7 +89,7 @@ import type { PrefixReplay, TerminalSettlementEvidence } from "./settlementEvide
 import type { WalletTicketLedger } from "./walletTickets";
 import { SignerError } from "./juno/signer";
 import { verifyDigest } from "./juno/secp256k1";
-import { junoGameView, parseConfigResponse, parseGameResponse, parseRemedyKeysResponse, parseSignerKeysResponse, QUERY, RELAYER_EXECUTE, type JunoGameResponse } from "./juno/junoContract";
+import { junoGameView, parseConfigResponse, parseConsentKeyAtResponse, parseGameResponse, parseRemedyKeysResponse, parseSignerKeysResponse, QUERY, RELAYER_EXECUTE, type JunoGameResponse } from "./juno/junoContract";
 import { prepareRemedyIntent, type PrepareRemedyOutcome } from "./juno/remedyIntents";
 import type { JoinAdmissionSigner } from "./juno/joinAdmission";
 import type { JunoRest } from "./juno/junoRest";
@@ -185,10 +185,10 @@ export interface RemedyChainContext {
   readonly trustedSeq: bigint;
   /** Every chain seat's CURRENT consent key (seat order). */
   readonly consentPubkeys: readonly string[];
-  /** Every chain seat's consent keys retired during play, oldest first, with the rotation's block time (seat order;
-   *  escrow 2.1.0 `Seat::retired_consent_keys`): what `consentKeyAt` needs to name the key a seat held at a remedy's
-   *  attested `final_at` (owner ruling, 2026-10-07). */
-  readonly retiredConsentKeys: readonly (readonly { readonly pubkey: string; readonly retired_at_secs: string }[])[];
+  /** Asked for (`keysAtSecs`): the consent key every chain seat HELD at that block second (seat order), as escrow 2.1.0's
+   *  own `consent_key_at` query answers it by quorum -- exactly the key `SubmitRemedy` verifies a seat's REMEDY-APPROVE
+   *  against for a remedy whose `final_at` is that second (owner ruling, 2026-10-07). `null` when not asked. */
+  readonly consentKeysAt: { readonly atSecs: bigint; readonly keys: readonly string[] } | null;
   /** player id -> chain seat index (the frozen roster). */
   readonly seatOf: Readonly<Record<string, number>>;
   /** The REMEDY key registry entry at `remedyKeyId`, as the chain holds it (`null`: not registered). */
@@ -381,7 +381,7 @@ export interface EscrowService {
   /** Phase 3 final clocks (FP4): a bound money game's chain facts for a remedy, read by QUORUM (the game, the REMEDY key
    *  registry entry `remedyKeyId`, the chain's latest block time). A refusal when the game is not bound, held, not this
    *  pool's, or the chain cannot be read by quorum now (nothing is attested on a single node's word). */
-  remedyContext(gameId: string, remedyKeyId: number | null): Promise<RemedyChainContext | ServiceRefusal>;
+  remedyContext(gameId: string, remedyKeyId: number | null, keysAtSecs?: bigint | null): Promise<RemedyChainContext | ServiceRefusal>;
   /** Phase 3 final clocks (FP4): writes one `submit-remedy` intent behind the per-game fence (`prepareRemedyIntent`),
    *  serialized per game, with the chain's QUORUM block time for the fence. */
   prepareRemedy(gameId: string, candidate: ChainIntentRecord, chainTimeSecs: number): Promise<PrepareRemedyOutcome>;
@@ -1652,7 +1652,7 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
   /* Phase 3 final clocks (FP4): the remedy pipeline's chain seams        */
   /* ------------------------------------------------------------------ */
 
-  async function remedyContext(gameId: string, remedyKeyId: number | null): Promise<RemedyChainContext | ServiceRefusal> {
+  async function remedyContext(gameId: string, remedyKeyId: number | null, keysAtSecs: bigint | null = null): Promise<RemedyChainContext | ServiceRefusal> {
     if (!ready()) return refuseRemedy("not-verified", "financial mode is not verified against the chain");
     /* A restored money game is read-only until verified against the chain: no remedy is attested meanwhile. */
     const restoring = restoreRefusal(gameId);
@@ -1698,6 +1698,16 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
     if (g.domain !== bound.roster.expected_domain) return refuseRemedy("binding-mismatch", "the chain game's domain is not the frozen roster's");
     const seatOf: Record<string, number> = {};
     for (const entry of bound.roster.roster) seatOf[entry.player_id] = entry.chain_seat_index;
+    let consentKeysAt: RemedyChainContext["consentKeysAt"] = null;
+    if (keysAtSecs !== null) {
+      try {
+        const keys: string[] = [];
+        for (let seat = 0; seat < g.seats.length; seat += 1) keys.push(parseConsentKeyAtResponse(await quorumSmart(QUERY.consentKeyAt(bound.binding.chain_game_id, seat, keysAtSecs.toString()))).pubkey);
+        consentKeysAt = { atSecs: keysAtSecs, keys };
+      } catch (error) {
+        return refuseRemedy("chain-unavailable", `the seats' consent keys at ${keysAtSecs} could not be read by quorum (${error instanceof Error ? error.message.slice(0, 200) : String(error)})`);
+      }
+    }
     return {
       instance: escrowInstanceKey(bound.binding),
       chainGameId: bound.binding.chain_game_id,
@@ -1709,7 +1719,7 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
       allowanceSecs: g.allowance_secs ?? 0,
       trustedSeq: BigInt(response.trusted_seq),
       consentPubkeys: g.seats.map((seat) => seat.consent_pubkey),
-      retiredConsentKeys: g.seats.map((seat) => seat.retired_consent_keys),
+      consentKeysAt,
       seatOf,
       remedyKey,
       blockTimeSecs,

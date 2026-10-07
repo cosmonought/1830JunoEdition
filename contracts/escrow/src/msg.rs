@@ -134,9 +134,16 @@ pub struct SeatSignature {
 
 /// A non-defaulting seat's approval of a remedy (escrow 2.1.0): its consent
 /// key's 64-byte low-s `r ‖ s` over the REMEDY-APPROVE digest, which binds
-/// `approve_until` (Unix seconds, compared with block time): the seat's own
-/// bound on how long its approval may be used. From that second on the
-/// approval is refused (`ApprovalExpired`), whatever the REMEDY key attests.
+/// `approve_until` (Unix seconds): the seat's own bound on the decision it
+/// approves. The approval is judged AT the attested decision's `final_at`
+/// (owner ruling, 2026-10-07: approvals valid at finality decide), never at
+/// the block time it lands in: `final_at` must be strictly before
+/// `approve_until` (else `ApprovalExpired`), and the signature must verify
+/// under the consent key the seat held at `final_at` (a rotation stamped at
+/// or before that second voids it; one after it changes nothing). A sealed
+/// decision therefore lands however late, through any later expiry or key
+/// rotation -- and only that decision: its `final_at` is signed by the REMEDY
+/// key, and a re-attestation keeps it.
 #[cw_serde]
 pub struct RemedyApproval {
     pub seat_index: u8,
@@ -403,6 +410,17 @@ pub enum QueryMsg {
     /// send each seat (and the treasury) right now.
     #[returns(SettlementPreviewResponse)]
     SettlementPreview { chain_game_id: u64 },
+    /// Escrow 2.1.0 (owner ruling, 2026-10-07): the consent key seat
+    /// `seat_index` held at block second `at` -- exactly the key `SubmitRemedy`
+    /// verifies that seat's REMEDY-APPROVE against for a remedy whose
+    /// `final_at` is `at` (`helpers::consent_key_at`) -- and how many keys the
+    /// seat has replaced in play.
+    #[returns(ConsentKeyAtResponse)]
+    ConsentKeyAt {
+        chain_game_id: u64,
+        seat_index: u8,
+        at: Uint64,
+    },
 }
 
 #[cw_serde]
@@ -486,6 +504,14 @@ pub struct SeatView {
     pub seat: Seat,
     /// This seat's consent to the stored settlement has been verified.
     pub consented: bool,
+}
+
+#[cw_serde]
+pub struct ConsentKeyAtResponse {
+    /// 33-byte compressed secp256k1 key.
+    pub pubkey: HexBinary,
+    /// Keys this seat replaced while its 2.1.0 game was IN_PROGRESS.
+    pub retired_keys: u32,
 }
 
 #[cw_serde]

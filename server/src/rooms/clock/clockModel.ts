@@ -172,6 +172,17 @@ export function dueOf(timer: ClockTimer | null): number | null {
   return timer === null || timer.since === null ? null : timer.since + timer.remaining_ms;
 }
 
+/** A parked remainder as of `at`: a Live park is frozen; a Timed Async park keeps running from its `since`. */
+export function parkedRemainingAt(p: ClockParked, at: number): number {
+  const since = p.since ?? null;
+  return since === null || at <= since ? p.remaining_ms : clamp(p.remaining_ms - (at - since));
+}
+
+/** A park of `seat`'s remainder behind an offer: frozen on a Live table, RUNNING on a Timed Async one. */
+function parkOf(live: boolean, seat: string, offerKey: string, remainingMs: number, key: string | null, at: number): ClockParked {
+  return live ? { seat, offer_key: offerKey, remaining_ms: remainingMs, key } : { seat, offer_key: offerKey, remaining_ms: remainingMs, key, since: at };
+}
+
 const freeze = (timer: ClockTimer, at: number): ClockTimer => (timer.since === null ? timer : { remaining_ms: remainingAt(timer, at), since: null });
 const run = (timer: ClockTimer, at: number): ClockTimer => (timer.since !== null ? timer : { remaining_ms: timer.remaining_ms, since: at });
 
@@ -467,7 +478,7 @@ export function foldBatch(record: GameClockRecord, batch: ClockBatch, now: numbe
       /* The answer is owed by another seat: the running obligation the offer suspends is frozen at its EXACT remainder
          (with the decision it was for). A QUALIFYING offer is one that suspends the PROPOSER's own required action. */
       if (current !== null && current.timer !== null && !d.parked.some((p) => p.seat === current?.seat && p.offer_key === after.key)) {
-        d.parked = [...d.parked.filter((p) => p.seat !== current?.seat), { seat: current.seat, offer_key: after.key, remaining_ms: remainingAt(current.timer, at), key: current.key }];
+        d.parked = [...d.parked.filter((p) => p.seat !== current?.seat), parkOf(isLive, current.seat, after.key, remainingAt(current.timer, at), current.key, at)];
       }
       const suspends = d.parked.some((p) => p.seat === proposer && p.offer_key === after.key);
       if (isLive && (suspends || after.slot === "train")) {
@@ -518,14 +529,16 @@ export function foldBatch(record: GameClockRecord, batch: ClockBatch, now: numbe
     const answered = (batch.msg === "accept" || batch.msg === "reject") && batch.actor === before.answerer;
     /* OPTIONAL NEGOTIATION NEVER MANUFACTURES CLOCK TIME (owner, 2026-10-07): whatever closed the offer -- an acceptance,
        a rejection, an unanswered expiry, a rescission -- a seat that still owes the SAME required decision it was owing
-       when the offer suspended it resumes EXACTLY the remainder it had (Live and Async alike). Only the proposer's own
-       RESCISSION is charged: the time the answerer's clock actually RAN while the offer stood (never a pause or an
-       outage). A seat newly responsible gets the ordinary fresh allowance. */
+       when the offer suspended it resumes the remainder it had. LIVE: exactly the frozen remainder; only the
+       proposer's own RESCISSION is charged the time the answerer's response clock actually RAN while the offer stood
+       (never a pause or an outage). TIMED ASYNC: the park kept RUNNING (`parkedRemainingAt`), so the seat resumes its
+       own deadline as it stands -- every hour the negotiation took is its own; trading offers can never keep an Async
+       deadline alive. A seat newly responsible gets the ordinary fresh allowance. */
     const resume = D !== null ? (parkedHere.find((p) => p.seat === D.seat && (p.key === null || p.key === D.key)) ?? null) : null;
     if (D !== null && resume !== null) {
       const ran = current !== null && current.key === `offer:${before.key}` && current.initial_ms !== null && current.timer !== null ? clamp(current.initial_ms - remainingAt(current.timer, at)) : 0;
-      const stood = batch.msg === "rescind" && batch.actor === resume.seat && resume.seat === before.proposer ? ran : 0;
-      const resumed = clamp(resume.remaining_ms - stood);
+      const stood = isLive && batch.msg === "rescind" && batch.actor === resume.seat && resume.seat === before.proposer ? ran : 0;
+      const resumed = clamp(parkedRemainingAt(resume, at) - stood);
       d.obligation = obligationFor(d, D, at, batch.first, resumed, null);
       d.obligation = { ...d.obligation, initial_ms: resumed };
       const why = batch.msg === "server-expiry" ? "offer-expired" : batch.msg === "reject" ? "offer-rejected" : batch.msg === "accept" ? "offer-accepted-resumed" : batch.msg === "rescind" ? "offer-withdrawn" : "offer-closed-resumed";
@@ -641,7 +654,14 @@ function restoreUndo(x: Draft, batch: ClockBatch): void {
       began_index: prior.began_index,
       timer: prior.timer === null ? null : { remaining_ms: clamp(prior.timer.remaining_ms - charge), since: at },
     };
-    d.parked = [...snap.parked];
+    /* A park restored for the seat whose CURRENT run began at the undone batch (it resumed there -- the answer to its
+       offer is what is undone) is never given back more than that run has left: an undo never gives time. A running
+       (Timed Async) park is restored as it stands now. */
+    d.parked = snap.parked.map((p) => {
+      const left = parkedRemainingAt(p, at);
+      const capped = current !== null && current.seat === p.seat && current.began_index === target && current.timer !== null ? Math.min(left, remainingAt(current.timer, at)) : left;
+      return p.since === undefined && capped === p.remaining_ms ? p : parkOf(p.since === undefined, p.seat, p.offer_key, capped, p.key, at);
+    });
     how = charge > 0 ? "undo-restored-charged" : "undo-restored";
   } else if (D === null) {
     restored = null;
@@ -709,7 +729,7 @@ export interface FinalityKeyCheck {
  *  foreclosure whose minute 30 falls due by `now` -- or null (none due, or nothing to check). */
 export function finalityKeyCheckDue(record: GameClockRecord, now: number): { readonly epoch: number; readonly proposal: number; readonly final_secs: number; readonly votes: readonly ClockVote[] } | null {
   const od = record.overdue;
-  if (record.money === null || record.policy.class !== "live" || record.phase !== "overdue" || od === null || od.cure === null) return null;
+  if (!record.money || record.policy.class !== "live" || record.phase !== "overdue" || od === null || od.cure === null) return null;
   if (record.system !== null || record.pause.paused_at !== null) return null;
   const proposal = od.proposal;
   if (proposal === null || proposal.kind !== "foreclose" || proposal.complete_at === null) return null;
@@ -718,10 +738,17 @@ export function finalityKeyCheckDue(record: GameClockRecord, now: number): { rea
   return { epoch: od.epoch, proposal: proposal.id, final_secs: finalSecsOf(od, due), votes: proposal.votes.filter((v) => v.yes && v.approval !== null) };
 }
 
+/** The controller tried to read the approvers' keys at a Live money finality's final second and could not (no quorum,
+ *  or no block past that second in time): nothing may be decided on approvals whose validity at finality is unknown. */
+export const FINALITY_KEYS_UNREAD = "unread" as const;
+
 /** Processes every transition due by `now`, in time order, each AT ITS OWN MOMENT (never at `now`). Stops at a train
  *  offer's expiry: that needs the log (the controller closes the offer, then folds it and advances again). `keys`: the
- *  controller's key check for a Live money finality due by `now` (`finalityKeyCheckDue`); null when none was made. */
-export function advance(record: GameClockRecord, now: number, position: LogPosition, keys: FinalityKeyCheck | null = null): ClockStep & { readonly tradeExpiry: Extract<ClockEffect, { kind: "trade-expiry" }> | null } {
+ *  controller's key check for a Live money finality due by `now` (`finalityKeyCheckDue`); null when none was made;
+ *  `FINALITY_KEYS_UNREAD` when the chain could not be read: that finality is then NOT processed (`finalityPending`) --
+ *  it stays due at its own moment, decided once the keys are read (fail closed: never a seal whose approvals' keys at
+ *  finality are unknown, never a cure after its moment -- the controller refuses every move and vote meanwhile). */
+export function advance(record: GameClockRecord, now: number, position: LogPosition, keys: FinalityKeyCheck | null | typeof FINALITY_KEYS_UNREAD = null): ClockStep & { readonly tradeExpiry: Extract<ClockEffect, { kind: "trade-expiry" }> | null; readonly finalityPending: boolean } {
   const x = new Draft(record, now);
   const d = x.d;
   for (let guard = 0; guard < 8; guard += 1) {
@@ -733,7 +760,7 @@ export function advance(record: GameClockRecord, now: number, position: LogPosit
       if (due !== null && due <= now) {
         if (ob.trade !== null) {
           const step = x.done();
-          return { ...step, tradeExpiry: { kind: "trade-expiry", at: due, offerKey: ob.trade.offer_key, proposer: ob.trade.proposer, recipient: ob.seat } };
+          return { ...step, tradeExpiry: { kind: "trade-expiry", at: due, offerKey: ob.trade.offer_key, proposer: ob.trade.proposer, recipient: ob.seat }, finalityPending: false };
         }
         becomeOverdue(x, due, position);
         continue;
@@ -743,13 +770,14 @@ export function advance(record: GameClockRecord, now: number, position: LogPosit
     if (d.phase === "overdue" && od !== null && od.cure !== null) {
       const due = dueOf(od.cure);
       if (due !== null && due <= now) {
-        finality(x, due, keys);
+        if (keys === FINALITY_KEYS_UNREAD && finalityKeyCheckDue(d, due) !== null) return { ...x.done(), tradeExpiry: null, finalityPending: true };
+        finality(x, due, keys === FINALITY_KEYS_UNREAD ? null : keys);
         continue;
       }
     }
     break;
   }
-  return { ...x.done(), tradeExpiry: null };
+  return { ...x.done(), tradeExpiry: null, finalityPending: false };
 }
 
 /** When the next transition falls due (ms), or `null` (nothing is counting down). */
@@ -1163,6 +1191,8 @@ export function continuityBreak(record: GameClockRecord, input: { readonly now: 
     const ob = d.obligation;
     const from = Math.min(input.now, Math.max(preserved, input.resumeFrom ?? input.now));
     if (ob !== null && ob.timer !== null && ob.timer.since !== null) d.obligation = { ...ob, timer: { remaining_ms: remainingAt(ob.timer, preserved), since: from } };
+    /* A parked (running) Async remainder is credited the same outage. */
+    if (d.parked.some((p) => p.since !== undefined)) d.parked = d.parked.map((p) => (p.since === undefined ? p : { ...p, remaining_ms: parkedRemainingAt(p, preserved), since: from }));
     /* A credited outage is a fence: no undo reaches back across it (it would charge the outage). */
     d.undo_floor = Math.max(d.undo_floor, d.watermark);
     x.emit("outage-credited", input.now, { preserved_at: preserved, credited_ms: from - preserved });
@@ -1240,9 +1270,11 @@ export function recoverGap(record: GameClockRecord, input: { readonly now: numbe
   } else {
     const standing = offer !== null && offer.proposer !== null && offer.answerer === D.seat && offer.proposer !== D.seat ? offer : null;
     if (standing !== null && standing.proposer !== null) {
-      const kept = keptParked.find((p) => p.offer_key === standing.key && p.seat === standing.proposer) ?? null;
-      const parkedMs = kept !== null ? kept.remaining_ms : prior !== null && prior.seat === standing.proposer && prior.timer !== null ? remainingAt(prior.timer, at) : (allowance ?? 0);
-      if (allowance !== null) d.parked = [{ seat: standing.proposer, offer_key: standing.key, remaining_ms: parkedMs, key: kept !== null ? kept.key : prior !== null && prior.seat === standing.proposer ? prior.key : null }];
+      /* The proposer's own park: of THIS offer, or -- the gap closed its earlier offer and it proposed again -- of an
+         earlier one (never a fresh allowance from a gap). */
+      const kept = keptParked.find((p) => p.offer_key === standing.key && p.seat === standing.proposer) ?? keptParked.find((p) => p.seat === standing.proposer) ?? null;
+      const parkedMs = kept !== null ? parkedRemainingAt(kept, at) : prior !== null && prior.seat === standing.proposer && prior.timer !== null ? remainingAt(prior.timer, at) : (allowance ?? 0);
+      if (allowance !== null) d.parked = [parkOf(d.policy.class === "live", standing.proposer, standing.key, parkedMs, kept !== null ? kept.key : prior !== null && prior.seat === standing.proposer ? prior.key : null, at)];
     }
     /* LIVE: the response timer for a train offer and for any offer that suspended its proposer (the proposer held the
        running obligation, or this record already parked it behind this offer) -- as `foldBatch` decides it. */
@@ -1256,8 +1288,10 @@ export function recoverGap(record: GameClockRecord, input: { readonly now: numbe
     if (continues && prior !== null) {
       d.obligation = { ...prior, kind: D.kind, key: D.key, timer: prior.timer === null ? null : { remaining_ms: remainingAt(prior.timer, at), since: at } };
     } else {
-      const resumed = trade === null && cured !== D.seat ? (keptParked.find((p) => p.seat === D.seat && p.offer_key !== standing?.key) ?? null) : null;
-      d.obligation = obligationFor(d, D, at, input.lastIndex, trade !== null ? LIVE_TRADE_MS : resumed !== null && allowance !== null ? resumed.remaining_ms : allowance, trade);
+      /* A seat resumes a closed offer's park only while it owes the SAME decision and took no required action in the gap
+         (as `foldBatch` resumes it); otherwise responsibility genuinely passed: fresh. */
+      const resumed = trade === null && cured !== D.seat && !input.actors.includes(D.seat) ? (keptParked.find((p) => p.seat === D.seat && p.offer_key !== standing?.key && (p.key === null || p.key === D.key)) ?? null) : null;
+      d.obligation = obligationFor(d, D, at, input.lastIndex, trade !== null ? LIVE_TRADE_MS : resumed !== null && allowance !== null ? parkedRemainingAt(resumed, at) : allowance, trade);
     }
   }
   d.declines = d.declines.round_key === input.facts.roundKey ? d.declines : emptyDeclines(input.facts.roundKey);
@@ -1423,6 +1457,7 @@ export function clockViewOf(record: GameClockRecord, now: number): RoomClockView
       ob?.trade && record.phase !== "ended"
         ? { proposer: ob.trade.proposer, recipient: ob.seat, respond: timerView(ob.timer) ?? { remainingMs: 0, running: false }, proposerRemainingMs: parked, kind: offerKindOf(ob.trade.offer_key) }
         : null,
+    running: record.phase === "ended" ? [] : record.parked.filter((p) => p.since !== undefined).map((p) => ({ seat: p.seat, remainingMs: parkedRemainingAt(p, now) })),
     overdue:
       od === null || record.phase !== "overdue"
         ? null

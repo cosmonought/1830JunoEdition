@@ -8,9 +8,8 @@
 // data, which replaces the host on change) and the ECS task definition are byte-identical to the base's (pinned by the
 // modules' own `conduct_reviewers_absent_by_default` tftest runs). A later change to any of these files -- a new
 // resource, another `write_files` entry, another environment line -- is a different diff and fails the guards.
-// Test support only: nothing at runtime imports it.
-
-import { spawnSync } from "child_process";
+// Test support only: nothing at runtime imports it, and it spawns nothing (the guards hand it each file's diff; COST-2C:
+// only hostcert/awsCliTransport.ts spawns a process under aws/deploy).
 
 /** Each wired file -> its exact added lines in order, or "test" (a tftest file: runs may be added, nothing removed). */
 export const CONDUCT_REVIEWERS_WIRING: Readonly<Record<string, readonly string[] | "test">> = Object.freeze({
@@ -75,19 +74,20 @@ export const CONDUCT_REVIEWERS_WIRING: Readonly<Record<string, readonly string[]
 });
 
 /** The wiring's problems among `changed` (the guard's `git diff --name-only <base>` list, repository-relative): a
- *  wired file whose diff from `base` removes a line, or (outside the tftest files) adds anything but its pinned lines.
- *  Files that are not wired are the caller's to judge. */
-export function conductReviewersWiringProblems(repo: string, base: string, changed: readonly string[]): string[] {
+ *  wired file whose diff from the base removes a line, or (outside the tftest files) adds anything but its pinned
+ *  lines. `diffOf(file)` is the guard's own `git diff --unified=0 <base> -- <file>` output (null: it failed). Files that
+ *  are not wired are the caller's to judge. */
+export function conductReviewersWiringProblems(changed: readonly string[], diffOf: (file: string) => string | null): string[] {
   const problems: string[] = [];
   for (const file of changed) {
     const pinned = CONDUCT_REVIEWERS_WIRING[file];
     if (pinned === undefined) continue;
-    const d = spawnSync("git", ["-C", repo, "diff", "--unified=0", base, "--", file], { encoding: "utf8" });
-    if (d.status !== 0) {
+    const diff = diffOf(file);
+    if (diff === null) {
       problems.push(`${file}: git diff failed`);
       continue;
     }
-    const lines = d.stdout.split("\n");
+    const lines = diff.split("\n");
     const removed = lines.filter((l) => l.startsWith("-") && !l.startsWith("---"));
     const added = lines.filter((l) => l.startsWith("+") && !l.startsWith("+++")).map((l) => l.slice(1));
     if (removed.length > 0) problems.push(`${file}: removes or changes ${removed.length} line(s) of the certified base`);

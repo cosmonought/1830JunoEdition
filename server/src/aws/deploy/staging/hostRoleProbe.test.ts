@@ -568,7 +568,11 @@ describe("PHASE 1 REMAINDER F5 / F6: the operator wrappers (static)", () => {
        resource shape is untouched). Exactly the wired files, exactly their pinned added lines, nothing of the base
        removed (`conductReviewersWiring.ts`); any other change to those files fails here. */
     const changed = r.stdout.trim().split("\n").filter((f) => f !== "");
-    assert.deepEqual(conductReviewersWiringProblems(REPO, "083d0668556c05a84eb8b3e5befc4e973544aa9a", changed), [], r.stdout);
+    const diffOf = (file: string) => {
+      const d = spawnSync("git", ["-C", REPO, "diff", "--unified=0", "083d0668556c05a84eb8b3e5befc4e973544aa9a", "--", file], { encoding: "utf8" });
+      return d.status === 0 ? d.stdout : null;
+    };
+    assert.deepEqual(conductReviewersWiringProblems(changed, diffOf), [], r.stdout);
     const conductReviewers = CONDUCT_REVIEWERS_FILES;
     assert.deepEqual(r.stdout.trim().split("\n").filter((f) => f !== "" && !freshHost.has(f) && !conductReviewers.has(f)), [], r.stdout);
     assert.ok(!fs.existsSync(path.join(REPO, "infra/aws/modules/single-host/files/bin/host-role-probe.sh")), "the wrapper is never one of the host's installed files");

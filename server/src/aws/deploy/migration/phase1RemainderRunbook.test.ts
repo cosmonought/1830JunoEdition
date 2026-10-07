@@ -149,7 +149,11 @@ describe("PHASE 1 REMAINDER: the migration runbook's corrections", () => {
        resource shape is untouched). Exactly the wired files, exactly their pinned added lines, nothing of the base
        removed (`conductReviewersWiring.ts`); any other change to those files fails here. */
     const changed = r.stdout.trim().split("\n").filter((f) => f !== "");
-    assert.deepEqual(conductReviewersWiringProblems(REPO, BASE, changed), [], r.stdout);
+    const diffOf = (file: string) => {
+      const d = spawnSync("git", ["-C", REPO, "diff", "--unified=0", BASE, "--", file], { encoding: "utf8" });
+      return d.status === 0 ? d.stdout : null;
+    };
+    assert.deepEqual(conductReviewersWiringProblems(changed, diffOf), [], r.stdout);
     const conductReviewers = CONDUCT_REVIEWERS_FILES;
     assert.deepEqual(r.stdout.trim().split("\n").filter((f) => f !== "" && !freshHost.has(f) && !conductReviewers.has(f)), [], r.stdout);
   });

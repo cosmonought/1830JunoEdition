@@ -20,20 +20,26 @@
 // request) changes nothing; one that moves it starts the new obligation fresh.
 //
 // OFFERS. A proposal (train, private, funding, private trade) by the responsible human whose answerer is SOMEONE ELSE
-// -- a QUALIFYING offer: it suspends the proposer's own required action -- parks the proposer's remaining time EXACTLY
-// and puts the answer on the answerer. LIVE: the answerer gets the distinct 10:00 RESPONSE timer (never an action
-// clock, never an overdue timer) -- the owner's train rule, generalised by the owner (2026-10-06) to every inter-player
-// offer that puts its proposer in a waiting state (a Live train offer is always answered on it). An accepted offer is
-// the answerer's completed decision: the next decision starts fresh. A rejection, an unanswered expiry or anything else
-// that closes it resumes the proposer's parked time EXACTLY (never a fresh 20:00); a rescission is charged the time the
-// answerer's clock ran. LIVE ONLY: a rejection or an unanswered expiry of a qualifying offer counts one DECLINE for that
-// direction (one counter per direction, whatever the kind) in the current ROUND INSTANCE (one operating sub-round,
-// one Stock Round); two block a third
-// qualifying offer in that direction until the next OR (the reverse direction and other players stay open). ASYNC
-// (Timed and No-deadline): an offer follows the ordinary responsibility model -- no response timer, no decline count,
-// no limit. No count of offers per round and no history length ever limits an offer (owner, 2026-10-06; offer churn is
-// bounded by the transport's frequency limit, `gameServer.ts`). An offer that suspends nothing of its proposer's (to
-// oneself, or made TO the responsible player) parks nothing and refreshes nothing until it is accepted.
+// -- a QUALIFYING offer: it suspends the proposer's own required action -- PARKS the proposer's remaining time and puts
+// the answer on the answerer. LIVE: the answerer gets the distinct 10:00 RESPONSE timer (never an action clock, never an
+// overdue timer) -- the owner's train rule, generalised by the owner (2026-10-06) to every inter-player offer that puts
+// its proposer in a waiting state (a Live train offer is always answered on it). The proposer's park is FROZEN only
+// within its required-action episode's FREEZE BUDGET (owner ruling, 2026-10-07): each fresh Live required-action
+// episode includes at most 10 minutes TOTAL of optional inter-player offer freeze protection, cumulative across every
+// qualifying offer while that same action is owed; the answer's wait (the response timer's run: pauses and outages
+// consume nothing) is frozen up to what is left of it and CHARGED to the proposer beyond it. Once it is used up, further
+// offers stay legal but the proposer's clock keeps running; if it runs out while the offer waits, the server closes the
+// offer at that moment and the proposer is overdue (the answerer never is). Whatever closes the offer -- acceptance,
+// rejection, unanswered expiry, counter, rescission -- a proposer still owing the same decision resumes its remainder
+// (less any charged wait) with the budget left; only a new episode (a fresh 20:00: the required action done, or a
+// genuine handoff) renews it. LIVE ONLY: a rejection or an unanswered expiry of a qualifying offer counts one DECLINE
+// for that direction (one counter per direction, whatever the kind) in the current ROUND INSTANCE (one operating
+// sub-round, one Stock Round); two block a third qualifying offer in that direction until the next round instance (the
+// reverse direction and other players stay open); the freeze budget is independent of it. TIMED ASYNC: the park keeps
+// RUNNING (no freeze, no response timer, no decline count); No-deadline: nothing is timed. No count of offers per round
+// and no history length ever limits an offer (offer churn is bounded by the transport's frequency limit,
+// `gameServer.ts`). An offer that suspends nothing of its proposer's (to oneself, or made TO the responsible player)
+// parks nothing and refreshes nothing until it is accepted.
 //
 // OVERDUE (Live). At 20:00 the seat is OVERDUE: its durable overdue count rises; the first and second open a 10-minute
 // cure window (gameplay is INTERRUPTED: only the overdue seat's own owed action is taken, and it cures); the N-1
@@ -76,6 +82,7 @@ import {
   LIVE_CURABLE_OVERDUES,
   LIVE_CURE_MS,
   LIVE_DECLINES_PER_ROUND_INSTANCE,
+  LIVE_FREEZE_BUDGET_MS,
   LIVE_TRADE_MS,
   emptyDeclines,
   type ClockEnded,
@@ -112,7 +119,7 @@ export interface ClockBoardFacts {
 
 /** `optional`: an accepted action that is never a REQUIRED decision (a private company's own power, taken at any time):
  *  it neither refreshes a clock nor cures an overdue. */
-export type ClockMsgClass = "deal" | "move" | "revert" | "propose" | "accept" | "reject" | "rescind" | "server-expiry" | "optional";
+export type ClockMsgClass = "deal" | "move" | "revert" | "propose" | "accept" | "reject" | "rescind" | "server-expiry" | "server-close" | "optional";
 
 /** One committed batch, as the clock folds it. */
 export interface ClockBatch {
@@ -136,8 +143,10 @@ export type ClockEffect =
   | { readonly kind: "fence-checkpoint"; readonly epoch: number }
   /** Money: a remedy decision was sealed -- the pipeline attests and relays it. */
   | { readonly kind: "remedy" }
-  /** Live: a train offer's response timer ran out at `at` -- the controller closes the offer in the log. */
-  | { readonly kind: "trade-expiry"; readonly at: number; readonly offerKey: string; readonly proposer: string; readonly recipient: string };
+  /** An offer must be closed at `at` -- the controller closes it in the log as its proposer's rescission: its Live
+   *  response timer ran out unanswered (`response`: a decline), or its PROPOSER's own clock ran out while it waited
+   *  (`proposer-deadline`: a Live proposer whose freeze budget was used up, or a Timed Async proposer -- no decline). */
+  | { readonly kind: "trade-expiry"; readonly at: number; readonly offerKey: string; readonly proposer: string; readonly recipient: string; readonly cause: "response" | "proposer-deadline" };
 
 export interface ClockStep {
   readonly record: GameClockRecord;
@@ -178,9 +187,34 @@ export function parkedRemainingAt(p: ClockParked, at: number): number {
   return since === null || at <= since ? p.remaining_ms : clamp(p.remaining_ms - (at - since));
 }
 
-/** A park of `seat`'s remainder behind an offer: frozen on a Live table, RUNNING on a Timed Async one. */
-function parkOf(live: boolean, seat: string, offerKey: string, remainingMs: number, key: string | null, at: number): ClockParked {
-  return live ? { seat, offer_key: offerKey, remaining_ms: remainingMs, key } : { seat, offer_key: offerKey, remaining_ms: remainingMs, key, since: at };
+/** A park of `seat`'s remainder behind an offer: on a Live table frozen for at most `freezeMs` of the answer's wait (the
+ *  episode's freeze budget left), on a Timed Async one RUNNING. */
+function parkOf(live: boolean, seat: string, offerKey: string, remainingMs: number, key: string | null, at: number, freezeMs: number | null = null): ClockParked {
+  return live ? { seat, offer_key: offerKey, remaining_ms: remainingMs, key, freeze_ms: clamp(freezeMs ?? 0) } : { seat, offer_key: offerKey, remaining_ms: remainingMs, key, since: at };
+}
+
+/** LIVE: a park behind a standing offer as of `at`, measured by the answer's wait -- the answerer's RESPONSE timer for
+ *  that offer (`ob`), so a voluntary pause, a system pause or an outage consumes nothing. The first `freeze_ms` of the
+ *  wait is FROZEN (the episode's optional-offer freeze budget); every moment beyond it is CHARGED to the parked
+ *  remainder (owner ruling, 2026-10-07). `waited`: the wait so far; `frozen` / `charged`: its two parts. */
+export function liveParkAt(p: ClockParked, ob: ClockObligation | null, at: number): { readonly remaining: number; readonly freeze: number; readonly waited: number; readonly frozen: number; readonly charged: number } {
+  const budget = p.freeze_ms ?? 0;
+  const waited = ob !== null && ob.trade !== null && ob.trade.offer_key === p.offer_key && ob.initial_ms !== null && ob.timer !== null ? clamp(ob.initial_ms - remainingAt(ob.timer, at)) : 0;
+  const frozen = Math.min(budget, waited);
+  const charged = waited - frozen;
+  return { remaining: clamp(p.remaining_ms - charged), freeze: budget - frozen, waited, frozen, charged };
+}
+
+/** LIVE: the moment a waiting proposer's own clock runs out -- its freeze budget used up and then its remainder -- while
+ *  the answerer's response timer still runs (null: no such park, or the response timer is not running). */
+function liveParkDueOf(record: Pick<GameClockRecord, "policy" | "parked" | "obligation">): { readonly park: ClockParked; readonly due: number } | null {
+  const ob = record.obligation;
+  if (record.policy.class !== "live" || ob === null || ob.trade === null || ob.timer === null || ob.timer.since === null || ob.initial_ms === null) return null;
+  const trade = ob.trade;
+  const park = record.parked.find((p) => p.since === undefined && p.freeze_ms !== undefined && p.offer_key === trade.offer_key && p.seat === trade.proposer) ?? null;
+  if (park === null) return null;
+  const waitedBefore = ob.initial_ms - ob.timer.remaining_ms;
+  return { park, due: ob.timer.since + (park.freeze_ms as number) + park.remaining_ms - waitedBefore };
 }
 
 const freeze = (timer: ClockTimer, at: number): ClockTimer => (timer.since === null ? timer : { remaining_ms: remainingAt(timer, at), since: null });
@@ -375,6 +409,8 @@ function obligationFor(record: GameClockRecord, decision: RequiredDecision, at: 
     initial_ms: remaining,
     timer: remaining === null ? null : { remaining_ms: remaining, since: at },
     trade,
+    /* A Live ACTION obligation made here is a fresh episode's unless its caller carries the episode's budget on. */
+    freeze_ms: record.policy.class === "live" && trade === null && remaining !== null ? LIVE_FREEZE_BUDGET_MS : null,
   };
 }
 
@@ -385,6 +421,8 @@ function emitResponsibility(x: Draft, ob: ClockObligation | null, at: number, ca
     key: ob?.key ?? null,
     timer_ms: ob?.timer?.remaining_ms ?? null,
     trade: ob?.trade !== null && ob?.trade !== undefined,
+    /* Live: the episode's optional-offer freeze budget (a fresh episode's full 10:00, or what a resumption carries on). */
+    freeze_ms: ob?.freeze_ms ?? null,
     actor: cause.actor,
     index: cause.index,
     reason: cause.reason,
@@ -396,7 +434,7 @@ function emitResponsibility(x: Draft, ob: ClockObligation | null, at: number, ca
    ================================================================== */
 
 /** Responsibility events that CONTINUE an obligation rather than begin one (the evidence window is not restarted). */
-const RESUMPTION_REASONS: ReadonlySet<string> = new Set(["offer-expired", "offer-rejected", "offer-withdrawn", "offer-accepted-resumed", "offer-closed-resumed", "undo-restored", "undo-restored-charged", "undo-unrecorded", "recovered-gap"]);
+const RESUMPTION_REASONS: ReadonlySet<string> = new Set(["offer-expired", "offer-rejected", "offer-withdrawn", "offer-accepted-resumed", "offer-closed-resumed", "offer-closed-at-deadline", "undo-restored", "undo-restored-charged", "undo-unrecorded", "recovered-gap"]);
 
 /** Brings the record in line with one committed batch. */
 export function foldBatch(record: GameClockRecord, batch: ClockBatch, now: number): ClockStep {
@@ -452,7 +490,7 @@ export function foldBatch(record: GameClockRecord, batch: ClockBatch, now: numbe
       d.undo_floor = Math.max(d.undo_floor, batch.last);
       if (d.money) x.effects.push({ kind: "fence-checkpoint", epoch: od.epoch });
       if (current !== null && current.seat === od.seat && allowance !== null) {
-        current = { ...current, timer: { remaining_ms: allowance, since: at }, initial_ms: allowance, began_at: at };
+        current = { ...current, timer: { remaining_ms: allowance, since: at }, initial_ms: allowance, began_at: at, freeze_ms: d.policy.class === "live" && current.trade === null ? LIVE_FREEZE_BUDGET_MS : current.freeze_ms };
         d.obligation = current;
       }
     }
@@ -475,17 +513,22 @@ export function foldBatch(record: GameClockRecord, batch: ClockBatch, now: numbe
          suspended; its clock runs on; nothing parks, nothing refreshes. */
       d.obligation = { ...current, kind: D.kind, key: D.key };
     } else if (answerOwed && D !== null) {
-      /* The answer is owed by another seat: the running obligation the offer suspends is frozen at its EXACT remainder
-         (with the decision it was for). A QUALIFYING offer is one that suspends the PROPOSER's own required action. */
+      /* The answer is owed by another seat: the running obligation the offer suspends is PARKED at its exact remainder
+         (with the decision it was for) -- on a Live table frozen only within its episode's freeze budget (owner ruling,
+         2026-10-07: at most 10:00 in all per required-action episode), on a Timed Async one running. A QUALIFYING offer
+         is one that suspends the PROPOSER's own required action. */
       if (current !== null && current.timer !== null && !d.parked.some((p) => p.seat === current?.seat && p.offer_key === after.key)) {
-        d.parked = [...d.parked.filter((p) => p.seat !== current?.seat), parkOf(isLive, current.seat, after.key, remainingAt(current.timer, at), current.key, at)];
+        /* LIVE: the park carries the episode's freeze budget left (owner ruling, 2026-10-07): the answer's wait is frozen
+           only that long in all, never per offer. */
+        d.parked = [...d.parked.filter((p) => p.seat !== current?.seat), parkOf(isLive, current.seat, after.key, remainingAt(current.timer, at), current.key, at, current.freeze_ms)];
       }
       const suspends = d.parked.some((p) => p.seat === proposer && p.offer_key === after.key);
       if (isLive && (suspends || after.slot === "train")) {
         /* LIVE: the answerer gets the distinct 10:00 RESPONSE timer -- never an action clock, an overdue or a strike (the
            owner's train rule, generalised by the owner to every inter-player offer that suspends its proposer). */
         fresh(D, after.slot === "train" ? "train-offer" : "offer", { proposer, offer_key: after.key });
-        x.emit("trade-begin", at, { proposer, recipient: answerer, offer: after.key, index: batch.first, parked_ms: d.parked.find((p) => p.seat === proposer)?.remaining_ms ?? null });
+        const parkedProposer = d.parked.find((p) => p.seat === proposer) ?? null;
+        x.emit("trade-begin", at, { proposer, recipient: answerer, offer: after.key, index: batch.first, parked_ms: parkedProposer?.remaining_ms ?? null, freeze_ms: parkedProposer?.freeze_ms ?? null });
       } else {
         /* ASYNC (any offer), or a Live offer that suspends nothing of its proposer's: the answerer owes the next required
            decision under the ordinary responsibility model (the Async pace; the Live action clock). An Async answerer
@@ -501,8 +544,9 @@ export function foldBatch(record: GameClockRecord, batch: ClockBatch, now: numbe
     /* THE STANDING OFFER RESOLVED (accepted, rejected, expired, rescinded or otherwise closed). */
     const parkedHere = d.parked.filter((p) => p.offer_key === before.key);
     d.parked = d.parked.filter((p) => p.offer_key !== before.key);
-    /* An unanswered expiry is a fence: no undo may resurrect the expired offer. */
-    if (batch.msg === "server-expiry") d.undo_floor = Math.max(d.undo_floor, batch.last);
+    /* An unanswered expiry, or the server's close at a waiting proposer's deadline, is a fence: no undo may resurrect
+       the closed offer. */
+    if (batch.msg === "server-expiry" || batch.msg === "server-close") d.undo_floor = Math.max(d.undo_floor, batch.last);
     const selfOffer = before.proposer !== null && before.proposer === before.answerer;
     /* A qualifying offer is one that parked its proposer (it suspended the proposer's required action); a Live train
        offer is always answered on the response timer (the owner's train rule). */
@@ -519,32 +563,37 @@ export function foldBatch(record: GameClockRecord, batch: ClockBatch, now: numbe
       const proposedAt = current !== null && current.trade !== null && current.trade.offer_key === before.key ? current.began_index : batch.first;
       bumpDeclines(x, batch.before.roundKey, declineKey(before.proposer, before.answerer), `${before.key}@${proposedAt}`.slice(-200));
     }
+    /* LIVE: the proposer's wait, split into its frozen part (from the episode's freeze budget) and its charged part. */
+    const waitSplit = isLive && proposerPark !== null && proposerPark.since === undefined ? liveParkAt(proposerPark, current, at) : null;
     if (liveQualifying) {
       x.emit("trade-end", at, {
-        result: batch.msg === "accept" ? "accept" : batch.msg === "reject" ? "reject" : batch.msg === "server-expiry" ? "expire" : batch.msg === "rescind" ? "rescind" : "other",
+        result: batch.msg === "accept" ? "accept" : batch.msg === "reject" ? "reject" : batch.msg === "server-expiry" ? "expire" : batch.msg === "server-close" ? "proposer-deadline" : batch.msg === "rescind" ? "rescind" : "other",
         proposer: before.proposer,
         recipient: before.answerer,
         offer: before.key,
         index: batch.first,
         declines: before.proposer !== null && before.answerer !== null ? (d.declines.counts[declineKey(before.proposer, before.answerer)] ?? 0) : 0,
+        waited_ms: waitSplit?.waited ?? null,
+        frozen_ms: waitSplit?.frozen ?? null,
+        charged_ms: waitSplit?.charged ?? null,
+        freeze_left_ms: waitSplit?.freeze ?? null,
       });
     }
     const answered = (batch.msg === "accept" || batch.msg === "reject") && batch.actor === before.answerer;
-    /* OPTIONAL NEGOTIATION NEVER MANUFACTURES CLOCK TIME (owner, 2026-10-07): whatever closed the offer -- an acceptance,
-       a rejection, an unanswered expiry, a rescission -- a seat that still owes the SAME required decision it was owing
-       when the offer suspended it resumes the remainder it had. LIVE: exactly the frozen remainder; only the
-       proposer's own RESCISSION is charged the time the answerer's response clock actually RAN while the offer stood
-       (never a pause or an outage). TIMED ASYNC: the park kept RUNNING (`parkedRemainingAt`), so the seat resumes its
-       own deadline as it stands -- every hour the negotiation took is its own; trading offers can never keep an Async
-       deadline alive. A seat newly responsible gets the ordinary fresh allowance. */
+    /* OPTIONAL NEGOTIATION NEVER MANUFACTURES CLOCK TIME (owner rulings, 2026-10-07): whatever closed the offer -- an
+       acceptance, a rejection, an unanswered expiry, a rescission, the server's close at the proposer's deadline -- a
+       seat that still owes the SAME required decision it was owing when the offer suspended it resumes the SAME
+       episode. LIVE: its remainder, less whatever of the answer's wait went beyond its freeze budget; the budget it
+       resumes with is what is left (never replenished, whatever the resolution). TIMED ASYNC: the park kept RUNNING
+       (`parkedRemainingAt`), so the seat resumes its own deadline as it stands. A seat newly responsible gets the
+       ordinary fresh allowance and a fresh episode. */
     const resume = D !== null ? (parkedHere.find((p) => p.seat === D.seat && (p.key === null || p.key === D.key)) ?? null) : null;
     if (D !== null && resume !== null) {
-      const ran = current !== null && current.key === `offer:${before.key}` && current.initial_ms !== null && current.timer !== null ? clamp(current.initial_ms - remainingAt(current.timer, at)) : 0;
-      const stood = isLive && batch.msg === "rescind" && batch.actor === resume.seat && resume.seat === before.proposer ? ran : 0;
-      const resumed = clamp(parkedRemainingAt(resume, at) - stood);
+      const live = isLive && resume.since === undefined ? liveParkAt(resume, current, at) : null;
+      const resumed = live !== null ? live.remaining : parkedRemainingAt(resume, at);
       d.obligation = obligationFor(d, D, at, batch.first, resumed, null);
-      d.obligation = { ...d.obligation, initial_ms: resumed };
-      const why = batch.msg === "server-expiry" ? "offer-expired" : batch.msg === "reject" ? "offer-rejected" : batch.msg === "accept" ? "offer-accepted-resumed" : batch.msg === "rescind" ? "offer-withdrawn" : "offer-closed-resumed";
+      d.obligation = { ...d.obligation, initial_ms: resumed, freeze_ms: live !== null ? live.freeze : null };
+      const why = batch.msg === "server-expiry" ? "offer-expired" : batch.msg === "server-close" ? "offer-closed-at-deadline" : batch.msg === "reject" ? "offer-rejected" : batch.msg === "accept" ? "offer-accepted-resumed" : batch.msg === "rescind" ? "offer-withdrawn" : "offer-closed-resumed";
       emitResponsibility(x, d.obligation, at, { actor: batch.actor, index: batch.first, reason: why });
     } else if (parkedHere.length === 0 && D !== null && current !== null && D.seat === current.seat && current.trade === null && (D.key === current.key || current.key === `offer:${before.key}`)) {
       /* An offer that suspended nobody (made TO the responsible seat, or to oneself) closed -- accepted or not: that
@@ -668,7 +717,7 @@ function restoreUndo(x: Draft, batch: ClockBatch): void {
          exactly what its seat's own run since the undone batch used -- never the offer's standing time again. */
       if (p.since !== undefined) return parkOf(false, p.seat, p.offer_key, parkedRemainingAt(p, at), p.key, at);
       const ran = current !== null && current.seat === p.seat && current.began_index === target && current.timer !== null && current.initial_ms !== null ? clamp(current.initial_ms - remainingAt(current.timer, at)) : 0;
-      return ran === 0 ? p : parkOf(true, p.seat, p.offer_key, clamp(p.remaining_ms - ran), p.key, at);
+      return ran === 0 ? p : parkOf(true, p.seat, p.offer_key, clamp(p.remaining_ms - ran), p.key, at, p.freeze_ms ?? 0);
     });
     how = charge > 0 ? "undo-restored-charged" : "undo-restored";
   } else if (D === null) {
@@ -679,6 +728,8 @@ function restoreUndo(x: Draft, batch: ClockBatch): void {
        with the time the current clock has left (or, being the same seat, simply continues). */
     const left = current?.timer !== null && current?.timer !== undefined ? remainingAt(current.timer, at) : allowanceOf(d);
     restored = obligationFor(d, D, at, batch.first, left, null);
+    /* Never a fresh freeze budget either: the same seat's episode carries on with what it had; another seat gets none. */
+    if (restored.freeze_ms !== null) restored = { ...restored, freeze_ms: current !== null && current.seat === D.seat && current.trade === null ? (current.freeze_ms ?? 0) : 0 };
     how = "undo-unrecorded";
   }
   if (snap !== null && snap.declines.round_key === batch.after.roundKey) d.declines = mergeDeclines(snap.declines, d.declines);
@@ -769,14 +820,22 @@ export function advance(record: GameClockRecord, now: number, position: LogPosit
        never outlives the proposer's deadline (owner, 2026-10-07: negotiation never extends an Async deadline). */
     const drained = d.phase === "active" ? drainedParkOf(d) : null;
     if (drained !== null && drained.due <= now && (ob === null || ob.timer === null || dueOf(ob.timer) === null || drained.due <= (dueOf(ob.timer) as number))) {
-      return { ...x.done(), tradeExpiry: { kind: "trade-expiry", at: drained.due, offerKey: drained.park.offer_key, proposer: drained.park.seat, recipient: ob?.seat ?? drained.park.seat }, finalityPending: false };
+      return { ...x.done(), tradeExpiry: { kind: "trade-expiry", at: drained.due, offerKey: drained.park.offer_key, proposer: drained.park.seat, recipient: ob?.seat ?? drained.park.seat, cause: "proposer-deadline" }, finalityPending: false };
+    }
+    /* LIVE: a proposer whose freeze budget is used up keeps running while its offer waits; if its OWN clock runs out
+       strictly before the answerer's response time does, the server closes the offer at that moment (no decline -- the
+       answerer did nothing wrong, and is never struck) and the proposer, owing its decision with nothing left, is
+       OVERDUE at it under the ordinary Live rules. */
+    const liveDrain = d.phase === "active" ? liveParkDueOf(d) : null;
+    if (liveDrain !== null && ob !== null && ob.trade !== null && liveDrain.due <= now && liveDrain.due < (dueOf(ob.timer) ?? Number.MAX_SAFE_INTEGER)) {
+      return { ...x.done(), tradeExpiry: { kind: "trade-expiry", at: liveDrain.due, offerKey: ob.trade.offer_key, proposer: liveDrain.park.seat, recipient: ob.seat, cause: "proposer-deadline" }, finalityPending: false };
     }
     if (d.phase === "active" && ob !== null && ob.timer !== null) {
       const due = dueOf(ob.timer);
       if (due !== null && due <= now) {
         if (ob.trade !== null) {
           const step = x.done();
-          return { ...step, tradeExpiry: { kind: "trade-expiry", at: due, offerKey: ob.trade.offer_key, proposer: ob.trade.proposer, recipient: ob.seat }, finalityPending: false };
+          return { ...step, tradeExpiry: { kind: "trade-expiry", at: due, offerKey: ob.trade.offer_key, proposer: ob.trade.proposer, recipient: ob.seat, cause: "response" }, finalityPending: false };
         }
         becomeOverdue(x, due, position);
         continue;
@@ -804,9 +863,8 @@ export function nextDue(record: GameClockRecord): number | null {
   if (record.phase !== "active" && record.phase !== "overdue") return null;
   if (record.system !== null || record.pause.paused_at !== null) return null;
   if (record.phase === "active") {
-    const action = dueOf(record.obligation?.timer ?? null);
-    const drained = drainedParkOf(record)?.due ?? null;
-    return action === null ? drained : drained === null ? action : Math.min(action, drained);
+    const dues = [dueOf(record.obligation?.timer ?? null), drainedParkOf(record)?.due ?? null, liveParkDueOf(record)?.due ?? null].filter((due): due is number => due !== null);
+    return dues.length === 0 ? null : Math.min(...dues);
   }
   return dueOf(record.overdue?.cure ?? null);
 }
@@ -1319,7 +1377,9 @@ export function recoverGap(record: GameClockRecord, input: { readonly now: numbe
       const kept = keptParked.find((p) => p.offer_key === standing.key && p.seat === standing.proposer) ?? (!input.actors.includes(standing.proposer) ? (keptParked.find((p) => p.seat === standing.proposer) ?? null) : null);
       keptPark = kept;
       const parkedMs = kept !== null ? parkedRemainingAt(kept, at) : prior !== null && prior.seat === standing.proposer && prior.timer !== null ? remainingAt(prior.timer, at) : (allowance ?? 0);
-      if (allowance !== null) d.parked = [parkOf(d.policy.class === "live", standing.proposer, standing.key, parkedMs, kept !== null ? kept.key : prior !== null && prior.seat === standing.proposer ? prior.key : null, at)];
+      /* (Live: the park's freeze budget is the kept park's, else the proposer's own episode's, else a fresh episode's.) */
+      const freeze = kept !== null ? (kept.freeze_ms ?? 0) : prior !== null && prior.seat === standing.proposer && prior.trade === null ? (prior.freeze_ms ?? 0) : LIVE_FREEZE_BUDGET_MS;
+      if (allowance !== null) d.parked = [parkOf(d.policy.class === "live", standing.proposer, standing.key, parkedMs, kept !== null ? kept.key : prior !== null && prior.seat === standing.proposer ? prior.key : null, at, freeze)];
     }
     /* LIVE: the response timer for a train offer and for any offer that suspended its proposer (the proposer held the
        running obligation, or this record already parked it behind this offer) -- as `foldBatch` decides it. */
@@ -1339,6 +1399,8 @@ export function recoverGap(record: GameClockRecord, input: { readonly now: numbe
          (as `foldBatch` resumes it); otherwise responsibility genuinely passed: fresh. */
       const resumed = trade === null && cured !== D.seat && !input.actors.includes(D.seat) ? (keptParked.find((p) => p.seat === D.seat && p.offer_key !== standing?.key && (p.key === null || p.key === D.key)) ?? null) : null;
       d.obligation = obligationFor(d, D, at, input.lastIndex, trade !== null ? LIVE_TRADE_MS : resumed !== null && allowance !== null ? parkedRemainingAt(resumed, at) : allowance, trade);
+      /* A resumed Live park carries its episode's freeze budget on (never a fresh one from a gap). */
+      if (resumed !== null && d.obligation.freeze_ms !== null) d.obligation = { ...d.obligation, freeze_ms: resumed.freeze_ms ?? 0 };
     }
   }
   d.declines = d.declines.round_key === input.facts.roundKey ? d.declines : emptyDeclines(input.facts.roundKey);
@@ -1486,7 +1548,10 @@ export function clockViewOf(record: GameClockRecord, now: number): RoomClockView
   else if (record.phase === "overdue") state = "overdue";
   else if (ob?.trade) state = "trade";
   else state = "running";
-  const parked = ob?.trade ? (record.parked.find((p) => p.seat === ob.trade?.proposer)?.remaining_ms ?? 0) : 0;
+  /* The waiting proposer's park as of now: its clock (frozen while its episode's freeze budget lasts, then running) and
+     the budget left -- both counted on by the answerer's response timer. */
+  const proposerPark = ob?.trade ? (record.parked.find((p) => p.seat === ob.trade?.proposer && p.offer_key === ob.trade?.offer_key) ?? null) : null;
+  const parkNow = proposerPark === null ? null : proposerPark.since !== undefined ? { remaining: parkedRemainingAt(proposerPark, now), freeze: 0 } : liveParkAt(proposerPark, ob ?? null, now);
   const proposal = od?.proposal ?? null;
   const needed = od === null ? [] : others(record, od.seat);
   return {
@@ -1502,8 +1567,17 @@ export function clockViewOf(record: GameClockRecord, now: number): RoomClockView
     action: ob === null || ob.trade !== null || record.phase === "ended" ? null : timerView(ob.timer),
     trade:
       ob?.trade && record.phase !== "ended"
-        ? { proposer: ob.trade.proposer, recipient: ob.seat, respond: timerView(ob.timer) ?? { remainingMs: 0, running: false }, proposerRemainingMs: parked, kind: offerKindOf(ob.trade.offer_key) }
+        ? {
+            proposer: ob.trade.proposer,
+            recipient: ob.seat,
+            respond: timerView(ob.timer) ?? { remainingMs: 0, running: false },
+            proposerRemainingMs: parkNow?.remaining ?? 0,
+            proposerFreezeMs: parkNow?.freeze ?? 0,
+            kind: offerKindOf(ob.trade.offer_key),
+          }
         : null,
+    /* Live: the responsible seat's optional-offer freeze budget left in this required-action episode. */
+    freezeBudgetMs: ob !== null && ob.trade === null && record.phase !== "ended" ? ob.freeze_ms : null,
     running: record.phase === "ended" ? [] : record.parked.filter((p) => p.since !== undefined).map((p) => ({ seat: p.seat, remainingMs: parkedRemainingAt(p, now) })),
     overdue:
       od === null || record.phase !== "overdue"

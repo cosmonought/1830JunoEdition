@@ -297,21 +297,32 @@ export function presentClock(input: ClockPresentationInput): ClockPresentation {
   if (clock.state === "trade" && clock.trade !== null) {
     const respond = left(clock.trade.respond);
     const value = respond === null ? null : formatClockDuration(respond);
+    /* The proposer's own clock (owner ruling, 2026-10-07): frozen while its episode's optional-offer freeze budget
+       lasts, then counting down beside the response timer (an older server sends no budget: shown as paused). */
+    const waited = clock.trade.respond.running ? elapsed : 0;
+    const freezeAt = clock.trade.proposerFreezeMs;
+    const freezeLeft = freezeAt === undefined ? null : Math.max(0, freezeAt - waited);
+    const proposerLeft = freezeAt === undefined ? clock.trade.proposerRemainingMs : Math.max(0, clock.trade.proposerRemainingMs - Math.max(0, waited - freezeAt));
+    const whose = clock.trade.proposer === me ? "Your" : `${input.nameOf(clock.trade.proposer)}'s`;
+    const proposerLine =
+      freezeLeft === null || freezeLeft > 0
+        ? `${whose} action clock is paused at ${formatClockDuration(proposerLeft)}${freezeLeft !== null ? ` (offer pause left this action: ${formatClockDuration(freezeLeft)})` : ""}.`
+        : `${whose} action clock is running while the offer waits: ${formatClockDuration(proposerLeft)} left (this action's 10:00 of offer pause is used up).`;
     return {
       ...base,
       warning,
       controls,
-      banner: clock.trade.proposer === me ? `Your action clock is paused at ${formatClockDuration(clock.trade.proposerRemainingMs)}.` : warning,
+      banner: clock.trade.proposer === me ? proposerLine : warning,
       state: "trade",
       label: `${clock.trade.kind === undefined || clock.trade.kind === "train" ? "Train offer" : "Offer"} — ${value ?? "10:00"} to respond`,
       value: null,
       lines: [
         `${name(clock.trade.recipient)} ${clock.trade.recipient === me ? "have" : "has"} ${clock.trade.kind === undefined || clock.trade.kind === "train" ? "a train offer" : "an offer"} from ${clock.trade.proposer === me ? "you" : input.nameOf(clock.trade.proposer)}.`,
-        `${clock.trade.proposer === me ? "Your" : `${input.nameOf(clock.trade.proposer)}'s`} action clock is paused at ${formatClockDuration(clock.trade.proposerRemainingMs)}.`,
+        proposerLine,
         TRADE_NOT_OVERDUE_DETAIL,
         ...extra,
       ],
-      tone: "normal",
+      tone: freezeLeft === 0 && clock.trade.proposer === me ? "warning" : "normal",
       ticking: clock.trade.respond.running,
     };
   }
@@ -330,7 +341,12 @@ export function presentClock(input: ClockPresentationInput): ClockPresentation {
     state: "running",
     label: actorLabel,
     value: remaining === null ? null : formatClockDuration(remaining),
-    lines: extra,
+    /* Live: what is left of this action's optional-offer freeze budget (at most 10:00 in all, never renewed by an
+       offer's outcome). */
+    lines:
+      clock.deadline === "live" && typeof clock.freezeBudgetMs === "number" && responsible !== null
+        ? [...extra, `${responsible.seat === me ? "Your" : `${input.nameOf(responsible.seat)}'s`} offer pause left this action: ${formatClockDuration(clock.freezeBudgetMs)}.`]
+        : extra,
     tone: warning !== null && responsible?.seat === me ? "warning" : tone,
     ticking: clock.action?.running === true,
   };

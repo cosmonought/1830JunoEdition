@@ -38,7 +38,7 @@ import {
   type ClockMsgClass,
   type ClockStep,
 } from "./clockModel";
-import { CLOCK_EVIDENCE_WINDOW, isGameClockRecord, LIVE_ACTION_MS, LIVE_CURE_MS, LIVE_TRADE_MS, parseClockDocument, ClockUnreadableError, type GameClockRecord } from "./clockRecord";
+import { CLOCK_EVIDENCE_WINDOW, isGameClockRecord, LIVE_ACTION_MS, LIVE_CURE_MS, LIVE_FREEZE_BUDGET_MS, LIVE_TRADE_MS, parseClockDocument, ClockUnreadableError, type GameClockRecord } from "./clockRecord";
 import { sealedRemedyProblem } from "../../escrow/remedyPipeline";
 
 const SEC = 1_000;
@@ -223,6 +223,154 @@ describe("Live action clock: 20 minutes per REQUIRED action", () => {
     LIVE TRAIN-OFFER RESPONSE TIMER AND THE TWO-DECLINE LIMIT
    ================================================================== */
 
+/* ==================================================================
+    LIVE OPTIONAL-OFFER FREEZE BUDGET (owner ruling, 2026-10-07)
+   ================================================================== */
+
+describe("Live optional-offer FREEZE BUDGET: at most 10:00 in total per required-action episode", () => {
+  /** A's qualifying trade offer to B (`n` names it), and its resolution `wait` later, A still owing `owed`. */
+  const cycle = (t: Table, n: number, wait: number, ending: "accept" | "reject" | "rescind" = "accept", owed = turn(A, 0)) => {
+    t.move(A, offering(offerOf("trade", A, B, n)), "propose");
+    t.advance(wait);
+    t.move(ending === "rescind" ? A : B, facts(owed), ending);
+  };
+  const budget = (t: Table) => t.record.obligation?.freeze_ms;
+
+  test("BASIC: a fresh Live episode starts with 10:00; a 4:00 accepted offer leaves 6:00; another 6:00 uses the rest; a later offer is still LEGAL but A's clock runs while it waits", () => {
+    const t = new Table("live");
+    assert.deepEqual([budget(t), clockViewOf(t.record, t.t).freezeBudgetMs], [LIVE_FREEZE_BUDGET_MS, LIVE_FREEZE_BUDGET_MS]);
+    t.advance(5 * MIN + 40 * SEC); // A has 14:20
+    cycle(t, 1, 4 * MIN, "accept");
+    assert.deepEqual([t.remaining(), budget(t)], [14 * MIN + 20 * SEC, 6 * MIN], "offer 1 waited 4:00: the clock stays 14:20, the budget becomes 6:00");
+    cycle(t, 2, 6 * MIN, "reject");
+    assert.deepEqual([t.remaining(), budget(t)], [14 * MIN + 20 * SEC, 0], "offer 2 waited 6:00: the clock stays 14:20, the budget is spent");
+    assert.equal(t.refusal(A, "propose"), null, "never refused for an exhausted budget");
+    t.move(A, offering(offerOf("trade", A, B, 3)), "propose");
+    t.advance(MIN);
+    const view = clockViewOf(t.record, t.t);
+    assert.deepEqual([view.trade?.proposerRemainingMs, view.trade?.proposerFreezeMs], [13 * MIN + 20 * SEC, 0], "A's own clock runs while offer 3 waits");
+    t.move(B, facts(turn(A, 0)), "accept");
+    assert.deepEqual([t.remaining(), budget(t)], [13 * MIN + 20 * SEC, 0], "offer 3's minute was charged to A");
+    assert.ok(t.events.filter((e) => e === "trade-end").length === 3);
+  });
+
+  test("PARTIAL: with 2:30 of budget left, a 7:00 wait is frozen for its first 2:30 and charged 4:30", () => {
+    const t = new Table("live");
+    cycle(t, 1, 7 * MIN + 30 * SEC, "reject"); // budget 2:30, clock still 20:00
+    assert.deepEqual([t.remaining(), budget(t)], [LIVE_ACTION_MS, 2 * MIN + 30 * SEC]);
+    t.advance(12 * MIN); // A has 8:00
+    t.move(A, offering(offerOf("trade", A, B, 2)), "propose");
+    t.advance(2 * MIN + 30 * SEC);
+    let view = clockViewOf(t.record, t.t);
+    assert.deepEqual([view.trade?.proposerRemainingMs, view.trade?.proposerFreezeMs], [8 * MIN, 0], "the first 2:30 frozen");
+    t.advance(2 * MIN);
+    view = clockViewOf(t.record, t.t);
+    assert.deepEqual([view.trade?.proposerRemainingMs, view.trade?.respond.remainingMs], [6 * MIN, 5 * MIN + 30 * SEC], "then A's clock counts down beside B's response timer");
+    t.advance(2 * MIN + 30 * SEC);
+    t.move(B, facts(turn(A, 0)), "accept");
+    assert.deepEqual([t.remaining(), budget(t)], [3 * MIN + 30 * SEC, 0], "8:00 - 4:30 charged");
+    assert.ok(t.record.evidence.window.some((e) => e.kind === "trade-end" && e.f.frozen_ms === 2 * MIN + 30 * SEC && e.f.charged_ms === 4 * MIN + 30 * SEC), "the evidence splits the wait into its frozen and charged parts");
+  });
+
+  test("COLLUSION: repeated accepted, rejected, withdrawn or expired offers extend one episode by at most 10:00 in all -- nothing replenishes the budget, and A is overdue 10:00 after its own clock would have ended", () => {
+    const t = new Table("live");
+    t.advance(15 * MIN); // A has 5:00
+    const start = t.t;
+    const endings = ["accept", "reject", "rescind", "accept", "reject"] as const;
+    for (let n = 0; n < endings.length; n += 1) cycle(t, n + 1, 2 * MIN, endings[n]);
+    assert.deepEqual([t.remaining(), budget(t)], [5 * MIN, 0], "five 2:00 waits used the whole budget; A's clock untouched");
+    /* An unanswered expiry does not replenish it either. */
+    let n = 10;
+    for (; t.record.phase === "active"; n += 1) {
+      t.move(A, offering(offerOf("trade", A, B, n)), "propose");
+      const close = t.advance(2 * MIN);
+      if (close !== null) {
+        assert.equal(close.cause, "proposer-deadline");
+        t.t = close.at; // the controller stamps the server's close at the exact moment
+        t.commit(A, facts(turn(A, 0)), "server-close");
+        t.advance(0);
+        break;
+      }
+      t.move(B, facts(turn(A, 0)), "accept");
+    }
+    assert.deepEqual([t.record.phase, t.record.overdue?.seat, t.record.overdue?.at], ["overdue", A, start + 5 * MIN + 10 * MIN], "the episode lasted exactly A's 5:00 plus the 10:00 budget");
+    assert.equal(t.record.strikes[B] ?? 0, 0);
+    /* And a full 10:00 unanswered expiry on a fresh episode uses the whole budget at once. */
+    const u = new Table("live");
+    u.move(A, offering(offerOf("trade", A, B, 1)), "propose");
+    const expiry = u.advance(LIVE_TRADE_MS);
+    assert.equal(expiry?.cause, "response");
+    u.commit(A, facts(turn(A, 0)), "server-expiry");
+    assert.deepEqual([u.remaining(), u.record.obligation?.freeze_ms, u.record.declines.counts[`${A}>${B}`]], [LIVE_ACTION_MS, 0, 1]);
+  });
+
+  test("RESET: a completed required action (fresh 20:00 for the same seat) and a genuine handoff each start a fresh 10:00; an offer's resolution, a reload and a round-instance change alone never do", () => {
+    const t = new Table("live");
+    cycle(t, 1, 7 * MIN, "accept");
+    assert.equal(budget(t), 3 * MIN);
+    /* A reload (the stored record read back) changes nothing. */
+    t.record = parseClockDocument(JSON.stringify(t.record), GAME);
+    assert.equal(budget(t), 3 * MIN);
+    /* Another seat's accepted move that leaves A owing the same decision -- across a round-instance change -- resets
+       the declines' scope, never A's freeze budget. */
+    t.move(B, facts(turn(A, 0), { roundKey: "OperatingRound/1/2" }), "move");
+    assert.deepEqual([t.record.obligation?.seat, budget(t), t.record.declines.round_key], [A, 3 * MIN, "OperatingRound/1/2"]);
+    /* A's REQUIRED action that leaves A owing the next decision: a new episode -- fresh 20:00, fresh 10:00. */
+    t.move(A, facts(turn(A, 1), { roundKey: "OperatingRound/1/2" }));
+    assert.deepEqual([t.remaining(), budget(t)], [LIVE_ACTION_MS, LIVE_FREEZE_BUDGET_MS]);
+    cycle(t, 2, 4 * MIN, "reject", turn(A, 1));
+    assert.equal(budget(t), 6 * MIN);
+    /* A genuine handoff: B's own fresh episode. */
+    t.move(A, facts(turn(B, 2), { roundKey: "OperatingRound/1/2" }));
+    assert.deepEqual([t.record.obligation?.seat, t.remaining(), budget(t)], [B, LIVE_ACTION_MS, LIVE_FREEZE_BUDGET_MS]);
+    assert.ok(t.record.evidence.window.some((e) => e.kind === "responsibility" && e.f.reason === "handoff" && e.f.freeze_ms === LIVE_FREEZE_BUDGET_MS), "the evidence names the episode's initial budget");
+  });
+
+  test("PAUSE / OUTAGE: a voluntary pause and a system pause freeze the action clock, the budget and the response timer exactly; the outage consumes none; resume restores the exact values; a mid-offer reload too", () => {
+    const t = new Table("live");
+    t.advance(6 * MIN); // A has 14:00
+    t.move(A, offering(offerOf("trade", A, B, 1)), "propose");
+    t.advance(3 * MIN);
+    t.ok(pauseOp(t.record, A, { action: "request", kind: "pause", id: null }, t.t));
+    for (const seat of [B, C]) t.ok(pauseOp(t.record, seat, { action: "yes", kind: "pause", id: t.record.pause.request?.id ?? null }, t.t));
+    t.advance(2 * HOUR);
+    let view = clockViewOf(t.record, t.t);
+    assert.deepEqual([view.trade?.respond.remainingMs, view.trade?.proposerFreezeMs, view.trade?.proposerRemainingMs], [7 * MIN, 7 * MIN, 14 * MIN], "two hours paused consumed nothing");
+    t.ok(pauseOp(t.record, B, { action: "request", kind: "resume", id: null }, t.t));
+    for (const seat of [A, C]) t.ok(pauseOp(t.record, seat, { action: "yes", kind: "resume", id: t.record.pause.request?.id ?? null }, t.t));
+    t.advance(MIN);
+    /* A restart midway: the stored record read back, then an outage under a new authority (a system pause). */
+    t.record = parseClockDocument(JSON.stringify(t.record), GAME);
+    const preserved = t.t;
+    t.t += 5 * HOUR;
+    t.take(continuityBreak(t.record, { now: t.t, preservedAt: preserved, reason: "restart", authority: "auth-2" }));
+    view = clockViewOf(t.record, t.t);
+    assert.deepEqual([view.state, view.trade?.respond.remainingMs, view.trade?.proposerFreezeMs, view.trade?.proposerRemainingMs], ["system-paused", 6 * MIN, 6 * MIN, 14 * MIN], "the outage consumed nothing");
+    for (const seat of [A, B, C]) t.ok(systemResumeVote(t.record, seat, t.t, t.record.system?.since ?? null));
+    t.advance(MIN);
+    t.move(B, facts(turn(A, 0)), "accept");
+    assert.deepEqual([t.remaining(), budget(t)], [14 * MIN, 5 * MIN], "exact: 5:00 of real waiting used, 14:00 untouched");
+  });
+
+  test("Timed Async keeps no freeze budget (its deadline keeps running); a pre-budget Live record is read with a full budget once", () => {
+    const a = new Table("async-pace", { pace: 86_400 });
+    assert.equal(a.record.obligation?.freeze_ms, null);
+    a.move(A, offering(offerOf("private", A, B, 1)), "propose");
+    assert.equal("freeze_ms" in (a.record.parked[0] ?? {}), false);
+    const t = new Table("live");
+    t.move(A, offering(offerOf("trade", A, B, 1)), "propose");
+    const legacy = JSON.parse(JSON.stringify(t.record)) as Record<string, unknown> & { parked: Array<Record<string, unknown>>; obligation: Record<string, unknown>; snapshots: Array<{ obligation: Record<string, unknown> | null; parked: Array<Record<string, unknown>> }> };
+    for (const p of legacy.parked) delete p.freeze_ms;
+    delete legacy.obligation.freeze_ms;
+    for (const snap of legacy.snapshots) {
+      if (snap.obligation !== null) delete snap.obligation.freeze_ms;
+      for (const p of snap.parked) delete p.freeze_ms;
+    }
+    const read = parseClockDocument(JSON.stringify(legacy), GAME);
+    assert.deepEqual([read.parked[0]?.freeze_ms, read.obligation?.freeze_ms, read.snapshots[read.snapshots.length - 1]?.obligation?.freeze_ms], [LIVE_FREEZE_BUDGET_MS, null, LIVE_FREEZE_BUDGET_MS]);
+  });
+});
+
 describe("Live train offer: the proposer's clock freezes; the recipient has a distinct 10:00 to respond", () => {
   const offer = offerOf("train", A, B);
 
@@ -233,7 +381,7 @@ describe("Live train offer: the proposer's clock freezes; the recipient has a di
     assert.equal(t.record.obligation?.seat, B);
     assert.deepEqual(t.record.obligation?.trade, { proposer: A, offer_key: offer.key });
     assert.equal(t.remaining(), LIVE_TRADE_MS);
-    assert.deepEqual(t.record.parked, [{ seat: A, offer_key: offer.key, remaining_ms: 13 * MIN + 48 * SEC, key: turn(A).key }]);
+    assert.deepEqual(t.record.parked, [{ seat: A, offer_key: offer.key, remaining_ms: 13 * MIN + 48 * SEC, key: turn(A).key, freeze_ms: LIVE_FREEZE_BUDGET_MS }]);
     const view = clockViewOf(t.record, t.t);
     assert.equal(view.state, "trade");
     assert.equal(view.action, null, "no ordinary action clock is shown for the recipient");
@@ -246,7 +394,7 @@ describe("Live train offer: the proposer's clock freezes; the recipient has a di
     t.move(A, offering(offer), "propose", { trainRecipient: B });
     assert.equal(t.advance(LIVE_TRADE_MS - 1), null, "nothing due a millisecond early");
     const expiry = t.advance(1);
-    assert.deepEqual(expiry, { kind: "trade-expiry", at: T0 + 6 * MIN + 12 * SEC + LIVE_TRADE_MS, offerKey: offer.key, proposer: A, recipient: B });
+    assert.deepEqual(expiry, { kind: "trade-expiry", at: T0 + 6 * MIN + 12 * SEC + LIVE_TRADE_MS, offerKey: offer.key, proposer: A, recipient: B, cause: "response" });
     /* The controller closes the offer as the server's own move, stamped at the expiry. */
     t.commit(A, facts(turn(A, 0)), "server-expiry");
     assert.equal(t.record.obligation?.seat, A);
@@ -293,7 +441,7 @@ describe("Live train offer: the proposer's clock freezes; the recipient has a di
     const priv = offerOf("private", A, B, 9);
     t.move(A, offering(priv), "propose");
     assert.deepEqual([t.record.obligation?.seat, t.record.obligation?.trade?.proposer, t.remaining()], [B, A, LIVE_TRADE_MS], "B's distinct 10:00 response timer");
-    assert.deepEqual(t.record.parked, [{ seat: A, offer_key: priv.key, remaining_ms: 10 * SEC, key: turn(A).key }], "A frozen at its exact remainder");
+    assert.deepEqual(t.record.parked, [{ seat: A, offer_key: priv.key, remaining_ms: 10 * SEC, key: turn(A).key, freeze_ms: LIVE_FREEZE_BUDGET_MS }], "A frozen at its exact remainder (within its freeze budget)");
     assert.equal(clockViewOf(t.record, t.t).trade?.kind, "private");
     t.advance(4 * MIN);
     t.move(B, facts(turn(A, 0)), "reject");
@@ -355,7 +503,7 @@ describe("Live train offer: the proposer's clock freezes; the recipient has a di
     assert.equal(t.record.obligation?.seat, B);
     assert.equal(t.record.obligation?.trade, null, "no 10:00 response timer: the ordinary action clock");
     assert.equal(t.remaining(), LIVE_ACTION_MS);
-    assert.deepEqual(t.record.parked, [{ seat: A, offer_key: "trade:4", remaining_ms: 15 * MIN, key: turn(A).key }], "the RESPONSIBLE seat's clock (A's) is suspended meanwhile: frozen exactly");
+    assert.deepEqual(t.record.parked, [{ seat: A, offer_key: "trade:4", remaining_ms: 15 * MIN, key: turn(A).key, freeze_ms: LIVE_FREEZE_BUDGET_MS }], "the RESPONSIBLE seat's clock (A's) is suspended meanwhile: frozen exactly");
     t.advance(2 * MIN);
     t.move(B, facts(turn(A, 0)), "reject");
     assert.deepEqual(t.record.declines.counts, {}, "no decline for an offer that never suspended its proposer");
@@ -444,8 +592,8 @@ describe("Live train offer: the proposer's clock freezes; the recipient has a di
     t.move(A, offering(offerOf("private", A, B, 9)), "propose");
     assert.equal(t.advance(10 * MIN - 1), null, "nothing due a millisecond early");
     const expiry = t.advance(1);
-    assert.deepEqual(expiry, { kind: "trade-expiry", at: offeredAt + 10 * MIN, offerKey: "private:9", proposer: A, recipient: B });
-    t.commit(A, facts(turn(A, 0)), "server-expiry");
+    assert.deepEqual(expiry, { kind: "trade-expiry", at: offeredAt + 10 * MIN, offerKey: "private:9", proposer: A, recipient: B, cause: "proposer-deadline" });
+    t.commit(A, facts(turn(A, 0)), "server-close");
     t.advance(0);
     assert.deepEqual([t.record.phase, t.record.overdue?.seat, t.record.overdue?.at], ["overdue", A, offeredAt + 10 * MIN], "A is overdue exactly at its own deadline; B is never struck");
     assert.deepEqual(t.record.declines.counts, {}, "Async keeps no decline count");
@@ -593,20 +741,33 @@ describe("Live train offer: the proposer's clock freezes; the recipient has a di
     assert.equal(broken.system, null);
   });
 
-  test("the proposer's own rescission is no decline, and is charged the time its offer stood (a propose-and-rescind never gives time)", () => {
+  test("FREEZE BUDGET: the proposer's own rescission is no decline and, like every resolution, draws on the episode's freeze budget -- never replenished: propose-and-rescind stalls at most 10:00 in all, then A's own clock runs to an overdue (the answerer never struck)", () => {
     const t = new Table("live");
-    t.advance(18 * MIN);
+    t.advance(18 * MIN); // A has 2:00
     t.move(A, offering(offer), "propose", { trainRecipient: B });
     t.advance(1 * MIN);
     t.move(A, facts(turn(A, 0)), "rescind");
-    assert.equal(t.remaining(), 1 * MIN, "the 2:00 A had, less the 1:00 its offer stood: rescinding never stops A's own clock");
+    assert.deepEqual([t.remaining(), t.record.obligation?.freeze_ms], [2 * MIN, 9 * MIN], "the 1:00 it stood came from the budget, not A's clock");
     assert.equal(t.record.declines.counts[`${A}>${B}`] ?? 0, 0);
-    /* Repeated propose-and-rescind cannot stall: the stood time keeps running out A's clock, to an overdue. */
-    t.move(A, offering(offerOf("train", A, B, 2)), "propose", { trainRecipient: B });
-    t.advance(1 * MIN + 1);
-    t.move(A, facts(turn(A, 0)), "rescind");
+    for (let n = 2; n <= 4; n += 1) {
+      t.move(A, offering(offerOf("train", A, B, n)), "propose", { trainRecipient: B });
+      t.advance(3 * MIN);
+      t.move(A, facts(turn(A, 0)), "rescind");
+    }
+    assert.deepEqual([t.remaining(), t.record.obligation?.freeze_ms], [2 * MIN, 0], "four withdrawals used the whole 10:00 -- nothing replenished it");
+    /* Budget spent: the next offer is still LEGAL, but A's clock runs while it waits; it runs out before B's 10:00. */
+    assert.equal(t.refusal(A, "propose", { trainRecipient: B }), null, "never refused for an exhausted budget");
+    const offeredAt = t.t;
+    t.move(A, offering(offerOf("train", A, B, 5)), "propose", { trainRecipient: B });
+    assert.equal(t.advance(2 * MIN - 1), null);
+    const close = t.advance(1);
+    assert.deepEqual(close, { kind: "trade-expiry", at: offeredAt + 2 * MIN, offerKey: "train:5", proposer: A, recipient: B, cause: "proposer-deadline" });
+    t.commit(A, facts(turn(A, 0)), "server-close");
     t.advance(0);
-    assert.equal(t.record.phase, "overdue");
+    assert.deepEqual([t.record.phase, t.record.overdue?.seat, t.record.overdue?.at, t.record.strikes[A], t.record.strikes[B] ?? 0], ["overdue", A, offeredAt + 2 * MIN, 1, 0]);
+    assert.equal(t.record.declines.counts[`${A}>${B}`] ?? 0, 0, "a close at the proposer's deadline is no decline");
+    assert.ok(t.record.undo_floor >= t.index, "the close is fenced: no undo resurrects the offer");
+    assert.ok(t.events.includes("trade-end"));
   });
 
   test("two declines (one rejection, one expiry) (train) block a third A -> B proposal until the next operating sub-round (round instance)", () => {
@@ -1289,10 +1450,10 @@ describe("Undo never manufactures a clock", () => {
     assert.deepEqual(t.record.parked.map((p) => [p.seat, p.remaining_ms]), [[A, 14 * MIN]], "A is charged its own 1:00");
     t.advance(MIN);
     t.move(A, facts(turn(A, 0)), "rescind");
-    assert.equal(t.remaining(), 11 * MIN, "15:00 - A's own 1:00 - the 3:00 the offer stood");
+    assert.deepEqual([t.remaining(), t.record.obligation?.freeze_ms], [14 * MIN, 7 * MIN], "15:00 less only A's own 1:00; the 3:00 the offer stood came from the budget (never twice)");
   });
 
-  test("REVIEW (last correction): undoing a Live RESCISSION charges the proposer exactly its own run since -- never the offer's standing time twice; an accepted answer then resumes that remainder", () => {
+  test("REVIEW (last correction): undoing a Live RESCISSION charges the proposer exactly its own run since -- never the offer's standing time twice -- and the freeze budget the offer used stays used", () => {
     for (const ending of ["rescind", "accept"] as const) {
       const t = new Table("live");
       t.advance(5 * MIN); // A has 15:00
@@ -1300,18 +1461,13 @@ describe("Undo never manufactures a clock", () => {
       t.advance(3 * MIN);
       t.move(A, facts(turn(A, 0)), "rescind");
       const rescindIndex = t.index;
-      assert.equal(t.remaining(), 12 * MIN, "the rescission is charged the 3:00 the offer stood");
+      assert.deepEqual([t.remaining(), t.record.obligation?.freeze_ms], [15 * MIN, 7 * MIN], "the 3:00 the offer stood came from the freeze budget");
       t.advance(MIN);
       t.move(A, offering(offerOf("trade", A, B, 1)), "revert", { revertTarget: rescindIndex });
       assert.deepEqual(t.record.parked.map((p) => [p.seat, p.remaining_ms]), [[A, 14 * MIN]], "15:00 less only A's own 1:00");
       t.advance(2 * MIN);
-      if (ending === "rescind") {
-        t.move(A, facts(turn(A, 0)), "rescind");
-        assert.equal(t.remaining(), 9 * MIN, "15:00 - 1:00 run - 5:00 the offer stood in all");
-      } else {
-        t.move(B, facts(turn(A, 0)), "accept");
-        assert.equal(t.remaining(), 14 * MIN, "frozen while the offer stood: 15:00 - A's own 1:00");
-      }
+      t.move(ending === "rescind" ? A : B, facts(turn(A, 0)), ending);
+      assert.deepEqual([t.remaining(), t.record.obligation?.freeze_ms], [14 * MIN, 5 * MIN], `${ending}: 15:00 - A's own 1:00; the 5:00 the offer stood in all came from the budget -- the undo replenished none`);
     }
   });
 

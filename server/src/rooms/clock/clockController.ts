@@ -855,10 +855,11 @@ export function createClockController(deps: ClockControllerDeps) {
     return read;
   }
 
-  /** Every transition due by now, at its own moment; a train offer's expiry closes the offer in the log first. Returns
-   *  whether an expiry was committed in this task (the caller then does not use `tx.session` again). */
-  async function catchUp(entry: Entry, game: GameActor, tx: Tx, at: number): Promise<boolean> {
-    let expired = false;
+  /** Every transition due by now, at its own moment; an offer the clock must close (its response timer ran out, or its
+   *  waiting proposer's own clock did) is closed in the log first. Returns why an offer was closed in this task (the
+   *  caller then does not use `tx.session` again), or null. */
+  async function catchUp(entry: Entry, game: GameActor, tx: Tx, at: number): Promise<"response" | "proposer-deadline" | null> {
+    let expired: "response" | "proposer-deadline" | null = null;
     entry.finalityPending = false;
     for (let round = 0; round < 4; round += 1) {
       if (entry.record === null) return expired;
@@ -876,7 +877,7 @@ export function createClockController(deps: ClockControllerDeps) {
       const due = step.tradeExpiry;
       counters.tradeExpiries += 1;
       const closed = await deps.closeOffer(game, tx, { proposer: due.proposer, at: due.at, offerKey: due.offerKey });
-      if (closed.ok || closed.kind === "store") expired = true;
+      if (closed.ok || closed.kind === "store") expired = due.cause;
       if (!closed.ok && closed.kind === "store") {
         /* The expiry could not be committed: nothing changed in the log; the clock stays as it was and the expiry is
            retried (no move is taken meanwhile: the submit that found it is refused). */
@@ -896,7 +897,8 @@ export function createClockController(deps: ClockControllerDeps) {
         }
         break;
       }
-      const batch: ClockBatch = { actor: due.proposer, first: closed.first, last: closed.last, at: due.at, msg: "server-expiry", revertTarget: null, before: closed.before, after: closed.after };
+      /* An unanswered response is a decline (`server-expiry`); a close at the proposer's own deadline is not (`server-close`). */
+      const batch: ClockBatch = { actor: due.proposer, first: closed.first, last: closed.last, at: due.at, msg: due.cause === "response" ? "server-expiry" : "server-close", revertTarget: null, before: closed.before, after: closed.after };
       applyStep(entry, foldBatch(entry.record as GameClockRecord, batch, now()), game.gameId);
       entry.retries = 0;
       entry.retryAt = null;
@@ -962,7 +964,7 @@ export function createClockController(deps: ClockControllerDeps) {
     if (expired) {
       await settle(entry, game.gameId);
       counters.refusals += 1;
-      return { ok: false, code: CLOCK_REFUSAL.stale, reason: "The offer expired unanswered. Check the board and try again." };
+      return { ok: false, code: CLOCK_REFUSAL.stale, reason: expired === "response" ? "The offer expired unanswered. Check the board and try again." : "The offer was withdrawn when its proposer's time ran out. Check the board and try again." };
     }
     if (entry.finalityPending) {
       await settle(entry, game.gameId);

@@ -25,7 +25,7 @@ import type { GameActor, Tx } from "../gameActor";
 import { createClockController, rescindExpiredOffer, type GateResult } from "./clockController";
 import { createMemoryClockStore } from "./clockStore";
 import { fakeTime } from "./clockTestSupport";
-import { LIVE_ACTION_MS, LIVE_CURE_MS, LIVE_TRADE_MS, type GameClockRecord } from "./clockRecord";
+import { LIVE_ACTION_MS, LIVE_CURE_MS, LIVE_FREEZE_BUDGET_MS, LIVE_TRADE_MS, type GameClockRecord } from "./clockRecord";
 import { logHash } from "../../../../frontend/src/gameEngine/logHash";
 
 const SEC = 1_000;
@@ -154,7 +154,7 @@ describe("Live train offers through the controller (real engine offers)", () => 
     assert.equal(proposed.ok, true, JSON.stringify(proposed));
     const r = h.record();
     assert.deepEqual([r.obligation?.seat, r.obligation?.trade?.proposer, h.remaining()], [P2, P1, LIVE_TRADE_MS], "the recipient's distinct response timer");
-    assert.deepEqual(r.parked, [{ seat: P1, offer_key: r.parked[0].offer_key, remaining_ms: 15 * MIN + 30 * SEC, key: r.parked[0].key }], "the proposer's 15:30 frozen exactly");
+    assert.deepEqual(r.parked, [{ seat: P1, offer_key: r.parked[0].offer_key, remaining_ms: 15 * MIN + 30 * SEC, key: r.parked[0].key, freeze_ms: LIVE_FREEZE_BUDGET_MS }], "the proposer's 15:30 frozen exactly, with its episode's whole 10:00 freeze budget");
     assert.match(String(r.parked[0].key), /^turn:OperatingRound\|/, "with the required decision it was owing");
     const view = h.clock.viewOf(GAME);
     assert.equal(view?.state, "trade");
@@ -167,12 +167,43 @@ describe("Live train offers through the controller (real engine offers)", () => 
     assert.ok(rescind, "the server's own rescission is in the log");
     assert.equal(rescind.at, T0 + 4 * MIN + 30 * SEC + LIVE_TRADE_MS, "stamped at the exact moment the response time ended");
     assert.equal(rescind.actor, P1, "as the proposer's rescission");
-    assert.deepEqual([after.obligation?.seat, h.remaining()], [P1, 15 * MIN + 30 * SEC], "the proposer resumes exactly what was left");
+    assert.deepEqual([after.obligation?.seat, h.remaining(), after.obligation?.freeze_ms], [P1, 15 * MIN + 30 * SEC, 0], "the proposer resumes exactly what was left; the 10:00 wait used its whole freeze budget");
     assert.deepEqual(after.strikes, {}, "an expiry is no strike");
     assert.equal(after.phase, "active", "an expiry is never an overdue");
     assert.equal(after.declines.counts[`${P1}>${P2}`], 1, "an expiry counts as a decline");
     assert.ok(after.undo_floor >= rescind.index, "no undo may resurrect the expired offer");
     assert.ok(h.ops.lines.some((line) => line.event === "clock.trade-end"));
+  });
+
+  test("FREEZE BUDGET (owner ruling, 2026-10-07): an unanswered 10:00 offer uses the episode's whole budget; a later offer is still taken, P1's own clock runs while it waits, and when it runs out first the SERVER closes the offer (a real rescission at that moment, fenced, no decline) and P1 -- never the answerer -- is overdue; a reload never renews the budget", async () => {
+    const h = harness();
+    await h.deal();
+    assert.equal(h.record().obligation?.freeze_ms, LIVE_FREEZE_BUDGET_MS);
+    assert.equal((await h.submit(P1, proposeTrain(NYC, "2", "50"))).ok, true);
+    await h.time.advance(LIVE_TRADE_MS);
+    await h.clock.idle();
+    assert.deepEqual([h.record().obligation?.seat, h.remaining(), h.record().obligation?.freeze_ms], [P1, LIVE_ACTION_MS, 0], "the unanswered 10:00 was frozen -- and used the whole budget");
+    /* A reload of the table's clock (dropped, read back from the store) renews nothing. */
+    h.clock.drop(GAME);
+    h.clock.loaded(GAME);
+    await h.clock.idle();
+    assert.equal(h.record().obligation?.freeze_ms, 0);
+    await h.time.advance(18 * MIN); // P1 has 2:00
+    await h.clock.idle();
+    const offeredAt = h.time.now();
+    const proposed = await h.submit(P1, proposeTrain(CO, "3", "100"));
+    assert.equal(proposed.ok, true, `an exhausted budget never refuses an offer: ${JSON.stringify(proposed)}`);
+    assert.deepEqual([h.clock.viewOf(GAME)?.trade?.proposerFreezeMs, h.clock.viewOf(GAME)?.trade?.proposerRemainingMs], [0, 2 * MIN]);
+    await h.time.advance(2 * MIN);
+    await h.clock.idle();
+    const r = h.record();
+    assert.equal(h.room.state.train_purchase_offer ?? null, null, "the offer was closed in the log");
+    const rescind = h.room.entries.filter((e) => e.payload.includes("RescindTrainPurchase")).pop();
+    assert.ok(rescind !== undefined);
+    assert.deepEqual([rescind.at, rescind.actor], [offeredAt + 2 * MIN, P1], "the proposer's rescission, stamped when its clock ran out");
+    assert.deepEqual([r.phase, r.overdue?.seat, r.overdue?.at, r.strikes[P1], r.strikes[P3] ?? 0], ["overdue", P1, offeredAt + 2 * MIN, 1, 0], "P1 is overdue under the ordinary Live rules; the answerer, who still had response time, is never struck");
+    assert.equal(r.declines.counts[`${P1}>${P3}`] ?? 0, 0, "a close at the proposer's deadline is no decline");
+    assert.ok(r.undo_floor >= rescind.index, "fenced: no undo resurrects the closed offer");
   });
 
   test("an answer that arrives after the response time ended is refused (the offer is gone), never accepted late", async () => {
@@ -210,20 +241,20 @@ describe("Live train offers through the controller (real engine offers)", () => 
     assert.equal(h.record().obligation?.seat, P3);
   });
 
-  test("an ACCEPTED real train purchase does not refresh the proposer still owing its turn (owner, 2026-10-07); a rescission is charged the time its offer stood", async () => {
+  test("an ACCEPTED real train purchase does not refresh the proposer still owing its turn (owner, 2026-10-07); a rescission, like every resolution, draws on the episode's freeze budget", async () => {
     const h = harness();
     await h.deal();
     await h.time.advance(6 * MIN);
     await h.submit(P1, proposeTrain(NYC, "2", "50"));
     await h.time.advance(2 * MIN);
     await h.submit(P1, { RescindTrainPurchase: { game_id: 1, seller_protocol_id: NYC } });
-    assert.deepEqual([h.record().obligation?.seat, h.remaining()], [P1, 12 * MIN], "the proposer's own rescission never stops its clock: the 2:00 the offer stood is charged");
+    assert.deepEqual([h.record().obligation?.seat, h.remaining(), h.record().obligation?.freeze_ms], [P1, 14 * MIN, 8 * MIN], "the 2:00 the offer stood came from the freeze budget, never replenished by the withdrawal");
     assert.equal(h.record().declines.counts[`${P1}>${P2}`] ?? 0, 0, "a rescission is not a decline");
     await h.submit(P1, proposeTrain(NYC, "2", "50"));
     await h.time.advance(3 * MIN);
     const accepted = await h.submit(P2, answerTrain(NYC, true));
     assert.equal(accepted.ok, true, JSON.stringify(accepted));
-    assert.deepEqual([h.record().obligation?.seat, h.remaining()], [P1, 12 * MIN], "the 12:00 P1 had when it proposed: the trade happened, the turn did not end");
+    assert.deepEqual([h.record().obligation?.seat, h.remaining(), h.record().obligation?.freeze_ms], [P1, 14 * MIN, 5 * MIN], "the 14:00 P1 had when it proposed: the trade happened, the turn did not end; 3:00 more of the budget used");
   });
 
   test("a stall inside one process (no heartbeat for over a minute) is a continuity break: SYSTEM PAUSE as of the last proof, never an overdue from it", async () => {
@@ -648,7 +679,8 @@ describe("Owner-policy correction: Live inter-player offers that suspend the pro
     await h.submit(P1, proposeTrain(NYC, "2", "50"));
     await h.time.advance(LIVE_TRADE_MS);
     await h.serial(async () => undefined);
-    assert.deepEqual([h.record().declines.counts[`${P1}>${P2}`], h.remaining()], [2, 16 * MIN]);
+    /* (That 10:00 wait went beyond the 7:00 of freeze budget left: its last 3:00 were charged to P1.) */
+    assert.deepEqual([h.record().declines.counts[`${P1}>${P2}`], h.remaining(), h.record().obligation?.freeze_ms], [2, 13 * MIN, 0]);
     /* A third qualifying offer P1 -> P2 (any kind), checked on the board the speculation made, before commit. */
     const blocked = h.clock.offerBlocked(h.game, { actor: P1, board: privStanding });
     assert.equal(blocked?.code, CLOCK_REFUSAL.declines);

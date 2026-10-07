@@ -70,6 +70,24 @@ describe("Phase 3 final clocks: the Live action clock", () => {
   });
 });
 
+describe("Live optional-offer freeze budget (owner ruling, 2026-10-07)", () => {
+  it("while the budget lasts the proposer's clock shows paused, with the budget counting down; once it is used up the proposer's own clock counts down beside the response timer", () => {
+    const trade = (proposerFreezeMs: number) => view({ state: "trade", action: null, responsible: { seat: BOB, kind: "offer-answer" }, trade: { proposer: ME, recipient: BOB, respond: { remainingMs: 10 * MIN, running: true }, proposerRemainingMs: 8 * MIN, proposerFreezeMs } });
+    let p = present(trade(2 * MIN + 30_000), { since: MIN });
+    expect(p.lines.join(" ")).toMatch(/Your action clock is paused at 8:00 \(offer pause left this action: 1:30\)\./);
+    p = present(trade(2 * MIN + 30_000), { since: 5 * MIN });
+    expect(p.lines.join(" ")).toMatch(/Your action clock is running while the offer waits: 5:30 left \(this action's 10:00 of offer pause is used up\)\./);
+    expect(p.banner).toMatch(/running while the offer waits: 5:30/);
+    expect(p.tone).toBe("warning");
+    expect(present(trade(0), { me: BOB }).lines.join(" ")).toMatch(/Me's action clock is running while the offer waits: 8:00 left/);
+  });
+
+  it("the responsible seat's budget left this action is shown with its clock", () => {
+    expect(present(view({ responsible: { seat: ME, kind: "turn" }, freezeBudgetMs: 6 * MIN })).lines).toContain("Your offer pause left this action: 6:00.");
+    expect(present(view({ freezeBudgetMs: null })).lines.join(" ")).not.toMatch(/offer pause/);
+  });
+});
+
 describe("Phase 3 final clocks: OVERDUE, strikes and the third expiry", () => {
   const overdue = (over: Partial<NonNullable<RoomClockView["overdue"]>> = {}) =>
     view({

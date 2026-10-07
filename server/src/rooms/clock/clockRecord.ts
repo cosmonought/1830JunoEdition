@@ -29,6 +29,10 @@ export const CLOCK_VERSION = 2;
 export const LIVE_ACTION_MS = 20 * 60_000;
 export const LIVE_CURE_MS = 10 * 60_000;
 export const LIVE_TRADE_MS = 10 * 60_000;
+/** Live (owner ruling, 2026-10-07): each fresh required-action EPISODE carries at most this much optional-offer FREEZE
+ *  protection in total -- cumulative across every qualifying offer made while that same action is owed, never
+ *  replenished by an offer's resolution. Once used up, further offers stay legal and the proposer's clock runs. */
+export const LIVE_FREEZE_BUDGET_MS = 10 * 60_000;
 export const ASYNC_PACES_SECS: readonly number[] = Object.freeze([43_200, 86_400, 172_800, 259_200, 604_800]);
 /** Live: the current ROUND INSTANCE's offer declines per direction ("from>to"), and the proposals already counted
  *  (an offer is declined at most ONCE: an answer undone and given again never counts twice). */
@@ -76,6 +80,11 @@ export interface ClockObligation {
   readonly timer: ClockTimer | null;
   /** Live: a train offer's 10-minute RESPONSE timer (never an action clock, never an overdue timer). */
   readonly trade: { readonly proposer: string; readonly offer_key: string } | null;
+  /** LIVE ACTION obligations only (a fresh episode starts at `LIVE_FREEZE_BUDGET_MS`): the optional-offer freeze budget
+   *  left in this required-action episode -- consumed only while a qualifying offer of this seat waits for its answer,
+   *  carried across every resumption of the same episode, renewed only by a genuinely new episode (a fresh allowance).
+   *  `null`: a response obligation, Timed Async, No-deadline. */
+  readonly freeze_ms: number | null;
 }
 
 /** A proposer's clock set aside while its counterparty answers an offer: resumed exactly (rescind, unanswered expiry),
@@ -89,8 +98,12 @@ export interface ClockParked {
   readonly key: string | null;
   /** TIMED ASYNC ONLY: the instant from which the parked remainder keeps RUNNING (owner, 2026-10-07: optional
    *  negotiation never refreshes, nor stops, the responsible seat's Async deadline -- colluding offers cannot keep it
-   *  alive). Absent on a Live park: a Live park is frozen at its exact remainder (the 10:00 response timer runs). */
+   *  alive). Absent on a Live park. */
   readonly since?: number;
+  /** LIVE ONLY: the episode's freeze budget left when the offer parked it. The answer's wait -- measured by the
+   *  answerer's RESPONSE timer, so a pause or an outage consumes nothing -- is FROZEN for its first `freeze_ms` and
+   *  CHARGED to `remaining_ms` beyond it (owner ruling, 2026-10-07). */
+  readonly freeze_ms?: number;
 }
 
 export interface ClockVote {
@@ -278,7 +291,8 @@ function isTimer(value: unknown): value is ClockTimer {
 }
 
 function isObligation(value: unknown): value is ClockObligation {
-  if (!isObject(value) || !exact(value, ["seat", "kind", "key", "began_at", "began_index", "initial_ms", "timer", "trade"])) return false;
+  if (!isObject(value) || !exact(value, ["seat", "kind", "key", "began_at", "began_index", "initial_ms", "timer", "trade", "freeze_ms"])) return false;
+  if (!(value.freeze_ms === null || time(value.freeze_ms))) return false;
   if (!seat(value.seat) || !DECISION_KINDS.includes(value.kind as string) || !text(value.key, 200) || !time(value.began_at) || !int(value.began_index) || (value.began_index as number) < -1) return false;
   if (!(value.initial_ms === null || time(value.initial_ms))) return false;
   if (!(value.timer === null || isTimer(value.timer))) return false;
@@ -335,7 +349,10 @@ function isDeclines(value: unknown): value is ClockDeclines {
 function isParked(p: unknown): p is ClockParked {
   if (!isObject(p)) return false;
   const running = Object.prototype.hasOwnProperty.call(p, "since");
-  return exact(p, running ? ["seat", "offer_key", "remaining_ms", "key", "since"] : ["seat", "offer_key", "remaining_ms", "key"]) && seat(p.seat) && text(p.offer_key, 120) && time(p.remaining_ms) && (p.key === null || text(p.key, 200)) && (!running || time(p.since));
+  const budgeted = Object.prototype.hasOwnProperty.call(p, "freeze_ms");
+  if (running && budgeted) return false;
+  const keys = ["seat", "offer_key", "remaining_ms", "key", ...(running ? ["since"] : []), ...(budgeted ? ["freeze_ms"] : [])];
+  return exact(p, keys) && seat(p.seat) && text(p.offer_key, 120) && time(p.remaining_ms) && (p.key === null || text(p.key, 200)) && (!running || time(p.since)) && (!budgeted || time(p.freeze_ms));
 }
 
 function isEvidenceEvent(value: unknown): value is ClockEvidenceEvent {
@@ -501,20 +518,29 @@ export function parseClockDocument(raw: string, gameId: string): GameClockRecord
        TIMED ASYNC table recorded before the last correction (2026-10-07) was frozen: from this read on it RUNS, from the
        record's last write (an Async deadline is never stopped by an offer; the time since that write is real). */
     const asyncPolicy = isObject(record.policy) && record.policy.class === "async-pace";
+    const livePolicy = isObject(record.policy) && record.policy.class === "live";
     const runningFrom = typeof record.updated_at === "number" ? record.updated_at : null;
+    /* A Live park or action obligation recorded before the freeze budget (2026-10-07) carries none: it is read with a
+       full budget once (a legacy park was frozen without limit; its offer's 10:00 response bounds it the same way). */
+    const has = (o: Record<string, unknown>, key: string): boolean => Object.prototype.hasOwnProperty.call(o, key);
     const keyed = (parked: unknown): unknown =>
       Array.isArray(parked)
         ? parked.map((p) => {
             if (!isObject(p)) return p;
-            const withKey = Object.prototype.hasOwnProperty.call(p, "key") ? p : { ...p, key: null };
-            return asyncPolicy && runningFrom !== null && !Object.prototype.hasOwnProperty.call(withKey, "since") ? { ...withKey, since: runningFrom } : withKey;
+            const withKey = has(p, "key") ? p : { ...p, key: null };
+            if (asyncPolicy && runningFrom !== null && !has(withKey, "since")) return { ...withKey, since: runningFrom };
+            if (livePolicy && !has(withKey, "since") && !has(withKey, "freeze_ms")) return { ...withKey, freeze_ms: LIVE_FREEZE_BUDGET_MS };
+            return withKey;
           })
         : parked;
+    const budgeted = (ob: unknown): unknown =>
+      isObject(ob) && !has(ob, "freeze_ms") ? { ...ob, freeze_ms: livePolicy && ob.trade === null && ob.timer !== null ? LIVE_FREEZE_BUDGET_MS : null } : ob;
     parsed = {
       ...record,
-      ...(Object.prototype.hasOwnProperty.call(record, "declines") ? { declines: renamed(record.declines) } : {}),
-      ...(Object.prototype.hasOwnProperty.call(record, "parked") ? { parked: keyed(record.parked) } : {}),
-      ...(Array.isArray(record.snapshots) ? { snapshots: record.snapshots.map((snap) => (isObject(snap) ? { ...snap, declines: renamed(snap.declines), parked: keyed(snap.parked) } : snap)) } : {}),
+      ...(has(record, "declines") ? { declines: renamed(record.declines) } : {}),
+      ...(has(record, "parked") ? { parked: keyed(record.parked) } : {}),
+      ...(has(record, "obligation") ? { obligation: budgeted(record.obligation) } : {}),
+      ...(Array.isArray(record.snapshots) ? { snapshots: record.snapshots.map((snap) => (isObject(snap) ? { ...snap, declines: renamed(snap.declines), parked: keyed(snap.parked), obligation: budgeted(snap.obligation) } : snap)) } : {}),
     };
   }
   if (!isGameClockRecord(parsed) || parsed.game_id !== gameId) throw new ClockUnreadableError(`the clock of ${gameId} is not a clock of that game`, gameId);

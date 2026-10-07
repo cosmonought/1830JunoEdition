@@ -626,4 +626,54 @@ describe("Offers through the server: no game-rule cap, no history bound; frequen
         await stopServer(server);
       }
     }));
+
+  test("FREEZE BUDGET through the real server: a restart midway through an offer keeps the proposer's action remainder, the response remainder and the freeze budget exactly; the outage consumes none of them; after the unanimous resume the budget carries on, never renewed", () =>
+    withDir("freeze-restart", async (dir) => {
+      const time = fakeTime(T0);
+      let booted = await boot(dir, time, "auth-1");
+      let gameId = "";
+      let ids: Record<string, string> = {};
+      let seller = "";
+      let buyer = "";
+      let privateId = 0;
+      let action = 0;
+      try {
+        ({ gameId, ids } = await openTable(booted.port, TWO));
+        const watcher = await tab(booted.port, ALICE, gameId);
+        ({ seller, buyer, privateId } = await toSecondStockRound(booted.port, gameId, ids, watcher));
+        let view = await clockWhere(watcher, (c) => c.responsible?.seat === ids[seller] && c.state === "running", "the seller to act");
+        assert.equal(view.freezeBudgetMs, 10 * MIN, "a fresh Live episode carries the whole 10:00 freeze budget");
+        action = view.action?.remainingMs as number;
+        await play(booted.port, seller, gameId, offer(privateId, ids[seller], ids[buyer]), "offer");
+        view = await clockWhere(watcher, (c) => c.state === "trade", "the offer stands");
+        assert.deepEqual([view.trade?.proposerRemainingMs, view.trade?.proposerFreezeMs, view.trade?.respond.remainingMs], [action, 10 * MIN, 10 * MIN]);
+        await time.advance(2 * MIN);
+        await watcher.close();
+      } finally {
+        await stopServer(booted.server);
+      }
+      time.jump(3 * HOUR); // the outage
+      booted = await boot(dir, time, "auth-2");
+      try {
+        const watcher = await tab(booted.port, BOB, gameId);
+        let view = await clockWhere(watcher, (c) => c.state === "system-paused", "system pause");
+        const respond = view.trade?.respond.remainingMs as number;
+        assert.ok(respond >= 8 * MIN - 10 * SEC && respond <= 8 * MIN, `the response timer kept its remainder as of the last proof (${respond})`);
+        assert.deepEqual([view.trade?.proposerRemainingMs, view.trade?.proposerFreezeMs, view.trade?.respond.running], [action, respond, false], "the action remainder exact; the freeze budget consumed only by the real wait -- none by the outage");
+        await time.advance(HOUR);
+        view = await clockWhere(watcher, (c) => c.state === "system-paused", "still paused: recovery is not resume");
+        assert.deepEqual([view.trade?.proposerFreezeMs, view.trade?.respond.remainingMs], [respond, respond]);
+        const since = view.system?.since as number;
+        await opOk(booted.port, ALICE, gameId, { type: "clock-sysresume", since });
+        await opOk(booted.port, BOB, gameId, { type: "clock-sysresume", since });
+        await clockWhere(watcher, (c) => c.state === "trade", "resumed: the offer still waits");
+        await time.advance(MIN);
+        await play(booted.port, buyer, gameId, { AnswerPrivateTrade: { game_id: 0, private_id: privateId, accept: true } }, "accept");
+        view = await clockWhere(watcher, (c) => c.state === "running" && c.responsible?.seat === ids[seller], "the seller resumes its episode");
+        assert.deepEqual([view.action?.remainingMs, view.freezeBudgetMs], [action, respond - MIN], "the same remainder; the budget carried on, less the minute waited after the resume -- never renewed by the acceptance or the restart");
+        await watcher.close();
+      } finally {
+        await stopServer(booted.server);
+      }
+    }));
 });

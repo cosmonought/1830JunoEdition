@@ -14,9 +14,13 @@
 //   Live         20:00 per REQUIRED action (never per turn); an accepted action refreshes the allowance of whoever owes
 //                the next one. A valid inter-player offer that puts its proposer in a waiting state (a train offer,
 //                and -- owner, 2026-10-06 -- every other offer that suspends the proposer's own required action)
-//                freezes the proposer's clock and gives the recipient a distinct 10:00 to respond (never an overdue
-//                timer); accepted, rejected, expired or countered, a proposer still owing the same decision resumes
-//                exactly what was left (owner, 2026-10-07: optional offers never refresh the allowance). Two declines
+//                gives the recipient a distinct 10:00 to respond (never an overdue timer) and freezes the proposer's
+//                clock -- but only within the action's FREEZE BUDGET (owner, 2026-10-07): each fresh Live
+//                required-action episode includes at most 10 minutes TOTAL of optional inter-player offer freeze
+//                protection; once it is used up, further offers stay legal but the proposer's clock keeps running
+//                (`trade.proposerFreezeMs`, `freezeBudgetMs`). Accepted, rejected, expired, countered or withdrawn, a
+//                proposer still owing the same decision resumes its remainder, less any wait beyond the budget; nothing
+//                renews the budget but a new episode. Two declines
 //                (rejections or expiries) per direction per ROUND INSTANCE (each operating sub-round -- OR 2.1 and
 //                OR 2.2 are separate -- or Stock Round instance), Live only. No count of offers and no history
 //                length ever limits them. Timed Async: an offer's proposer's deadline keeps running (`running`). At 20:00 the seat is OVERDUE: the first and second may cure until
@@ -160,10 +164,17 @@ export interface RoomClockView {
     readonly proposer: string;
     readonly recipient: string;
     readonly respond: ClockTimerView;
+    /** The proposer's own action clock as of `serverNow`: frozen while its episode's freeze budget lasts, then counting
+     *  down with the response timer (owner ruling, 2026-10-07). */
     readonly proposerRemainingMs: number;
+    /** The proposer's optional-offer freeze budget left as of `serverNow` (absent from an older server: treat as frozen). */
+    readonly proposerFreezeMs?: number;
     /** The offer's kind (absent: a train offer). */
     readonly kind?: "train" | "private" | "trade" | "funding";
   } | null;
+  /** LIVE: the responsible seat's optional-offer FREEZE BUDGET left in this required-action episode (at most 10:00 in
+   *  all, across every qualifying offer, renewed only by a new episode); `null` / absent otherwise. */
+  readonly freezeBudgetMs?: number | null;
   /** TIMED ASYNC: a seat whose required action an offer suspended -- its own deadline keeps RUNNING while the offer is
    *  answered (owner, 2026-10-07: optional negotiation never refreshes, nor stops, an Async deadline). Absent or empty
    *  otherwise (a Live proposer's clock is frozen: `trade.proposerRemainingMs`). */

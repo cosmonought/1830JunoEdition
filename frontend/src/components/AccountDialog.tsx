@@ -60,6 +60,7 @@ import { renewRoomLinks } from "../utils/roomLink";
 import { sessionPort, type SessionPort } from "../utils/sessionBootstrap";
 import { SANDBOX_TEXT, SANDBOX_TITLE } from "../styles/palette";
 import { APP_NAME } from "../config";
+import { RADIUS } from "../styles/typography";
 
 /** The question asked instead of resuming: who this browser is signed in as (null: not known yet). */
 type Pending = { readonly kind: "already"; readonly name: string | null } | { readonly kind: "unconfirmed" };
@@ -506,7 +507,7 @@ const dialogStyles: Record<"scrim" | "card" | "header" | "close" | "link" | "wal
   /* "Forgot password?": a quiet text button under Log in. */
   link: { alignSelf: "flex-start", background: "none", border: "none", padding: "2px 0", color: SANDBOX_TEXT, textDecoration: "underline", cursor: "pointer", fontSize: "13px", fontFamily: "inherit" },
   /* The Authorization Wallet step: a quiet inset, not a warning. */
-  wallet: { margin: "6px 0 4px", padding: "12px 12px 2px", borderRadius: "8px", border: `1px solid rgba(255, 255, 255, 0.12)` },
+  wallet: { margin: "6px 0 4px", padding: "12px 12px 2px", borderRadius: RADIUS.card, border: `1px solid rgba(255, 255, 255, 0.12)` },
   explain: { margin: "0 0 8px", fontSize: "13px", lineHeight: 1.5, color: SANDBOX_TEXT },
   chosen: { margin: "0 0 10px", fontSize: "13px", color: SANDBOX_TITLE },
   address: { fontFamily: "monospace" },

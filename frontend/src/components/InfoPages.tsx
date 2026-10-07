@@ -24,7 +24,7 @@ import { ConductReviewPanel } from "./ConductReviewPanel";
 import { closeInfoPage, openInfoPage, useInfoPage } from "../utils/infoPages";
 import { profileStyles as styles } from "./profileStyles";
 import { SANDBOX_PANEL, SANDBOX_INK, SANDBOX_RULE, SANDBOX_TEXT } from "../styles/palette";
-import { FONT_FAMILY, FONT_SIZE } from "../styles/typography";
+import { FONT_FAMILY, FONT_SIZE, RADIUS } from "../styles/typography";
 
 /** OD-16 / AUD-20.08: what the Terms page says while the owner's copy is pending -- a fact about this build, not terms. */
 export const TERMS_PENDING_SENTENCE = "The operator's terms for real-money play have not been published yet.";
@@ -108,7 +108,7 @@ const pageStyles: Record<"scrim" | "page" | "wide" | "header" | "list" | "faint"
     maxWidth: "1040px",
     padding: "20px",
     boxSizing: "border-box",
-    borderRadius: "12px",
+    borderRadius: RADIUS.layer,
     border: `1px solid ${SANDBOX_RULE}`,
     backgroundColor: SANDBOX_PANEL,
     color: SANDBOX_INK,

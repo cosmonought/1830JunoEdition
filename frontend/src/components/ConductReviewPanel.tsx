@@ -36,7 +36,7 @@ import { CONDUCT_STATUS_LABELS, CONDUCT_TRANSITIONS, MAX_REVIEW_NOTE_LENGTH, isC
 import { decideCase, reviewCase, reviewErrorSentence, reviewQueue, type CaseSummary, type CaseView, type ClockEvidenceView, type OfferCounts } from "../utils/conductApi";
 import { sessionPort, type SessionPort } from "../utils/sessionBootstrap";
 import { SANDBOX_INK, SANDBOX_PANEL, SANDBOX_RULE, SANDBOX_TEXT } from "../styles/palette";
-import { FONT_FAMILY, FONT_FAMILY_MONO, FONT_SIZE } from "../styles/typography";
+import { FONT_FAMILY, FONT_FAMILY_MONO, FONT_SIZE, RADIUS } from "../styles/typography";
 
 const when = (ms: number | null): string => (ms === null ? "—" : new Date(ms).toISOString().replace("T", " ").slice(0, 19) + " UTC");
 const COUNT_ROWS: ReadonlyArray<[keyof OfferCounts, string]> = [
@@ -510,7 +510,7 @@ const page: React.CSSProperties = {
   maxWidth: "1100px",
   padding: "20px",
   boxSizing: "border-box",
-  borderRadius: "12px",
+  borderRadius: RADIUS.layer,
   border: `1px solid ${SANDBOX_RULE}`,
   backgroundColor: SANDBOX_PANEL,
   color: SANDBOX_INK,
@@ -529,7 +529,7 @@ const queueItem: React.CSSProperties = {
   flexDirection: "column",
   gap: "2px",
   padding: "8px 10px",
-  borderRadius: "8px",
+  borderRadius: RADIUS.card,
   border: `1px solid ${SANDBOX_RULE}`,
   background: "transparent",
   color: "inherit",

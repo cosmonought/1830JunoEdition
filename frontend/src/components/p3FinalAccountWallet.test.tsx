@@ -112,8 +112,10 @@ function fakeServer(initial: Profile | null) {
     },
     queue: (path: string, answer: Answer) => queued.set(path, [...(queued.get(path) ?? []), answer]),
     bodiesOf: (path: string) => calls.filter((call) => call.path === path).map((call) => JSON.parse(call.body) as Record<string, unknown>),
-    /** The account routes asked, in order (the bootstrap, the menu's reads and the trust facts left out). */
-    actions: () => calls.map((call) => call.path).filter((path) => !["/gs/api/session", "/gs/api/account/me", "/gs/api/trust/me"].includes(path)),
+    /** The account routes asked, in order (the bootstrap, the menu's reads and the trust facts left out). CONSOLIDATED
+     *  FINAL INTEGRATION: player reporting's menu read -- `conduct/me`, "does this account review conduct reports?" --
+     *  is one of the menu's reads, never an account action. */
+    actions: () => calls.map((call) => call.path).filter((path) => !["/gs/api/session", "/gs/api/account/me", "/gs/api/trust/me", "/gs/api/conduct/me"].includes(path)),
   };
 }
 

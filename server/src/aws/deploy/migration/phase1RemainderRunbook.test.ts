@@ -143,6 +143,18 @@ describe("PHASE 1 REMAINDER: the migration runbook's corrections", () => {
        the instance: the live host takes them by the reviewed one-file install (runbook 13r), and step 22b is planned from
        the host-create commit's module (the runbook says so). */
     const freshHost = new Set(["files/bin/gs-preflight", "files/bin/gs-lib.sh", "files/bin/gs-health", "tests/host-scripts.test.sh", "tests/preflight-real-docker.test.sh", "README.md"].map((f) => `infra/aws/modules/single-host/${f}`));
-    assert.deepEqual(r.stdout.trim().split("\n").filter((f) => f !== "" && !freshHost.has(f)), [], r.stdout);
+    /* CONSOLIDATED FINAL PRE-PLAYTEST INTEGRATION (player reporting, P3-N035): GS_CONDUCT_REVIEWERS is wired through
+       exactly these module / stack files -- SOURCE ONLY, ADDITIONS ONLY, absent by default. With the default (no
+       reviewer) the rendered server.env (so the user data) and the ECS task definition are byte-identical to the
+       certified base's (pinned by the modules' own `conduct_reviewers_absent_by_default` tftest runs), so the host's
+       resource shape is untouched. No line of the certified base's text is removed or changed in them. */
+    const conductReviewers = new Set(["infra/aws/modules/single-host/locals.tf", "infra/aws/modules/single-host/variables.tf", "infra/aws/modules/single-host/templates/server.env.tftpl", "infra/aws/modules/single-host/tests/single-host.tftest.hcl", "infra/aws/modules/app/locals.tf", "infra/aws/modules/app/variables.tf", "infra/aws/modules/app/tests/app.tftest.hcl", "infra/aws/stacks/app/main.tf", "infra/aws/stacks/app/variables.tf", "infra/aws/stacks/single-host/main.tf", "infra/aws/stacks/single-host/variables.tf"]);
+    for (const file of r.stdout.trim().split("\n").filter((f) => conductReviewers.has(f))) {
+      const d = spawnSync("git", ["-C", REPO, "diff", "--unified=0", BASE, "--", file], { encoding: "utf8" });
+      const removed = d.stdout.split("\n").filter((l) => l.startsWith("-") && !l.startsWith("---"));
+      assert.deepEqual(removed, [], `${file}: additions only`);
+      assert.match(d.stdout, /conduct_reviewers/, `${file}: the reviewer input`);
+    }
+    assert.deepEqual(r.stdout.trim().split("\n").filter((f) => f !== "" && !freshHost.has(f) && !conductReviewers.has(f)), [], r.stdout);
   });
 });

@@ -245,8 +245,11 @@ describe("COST-1: exposure and credentials", () => {
     for (const [file, text] of [...HOST_FILES, ...TF]) assert.ok(!credential.test(text), `${file} carries no credential`);
     const env = read("infra/aws/modules/single-host/templates/server.env.tftpl");
     for (const line of env.split("\n").filter((l) => /^[A-Z]/.test(l))) {
-      assert.match(line, /^(GS_MODE|GS_STORAGE|GS_AWS_CONFIG_PARAMETER|PORT|GS_ALLOWED_ORIGINS|GS_TRUSTED_PROXY_HOPS|GS_METRICS_PROFILE|ESCROW_MONEY_TABLES|GS_EDGE_DIAGNOSTIC)=/, line);
+      assert.match(line, /^(GS_MODE|GS_STORAGE|GS_AWS_CONFIG_PARAMETER|PORT|GS_ALLOWED_ORIGINS|GS_TRUSTED_PROXY_HOPS|GS_METRICS_PROFILE|ESCROW_MONEY_TABLES|GS_EDGE_DIAGNOSTIC|GS_CONDUCT_REVIEWERS)=/, line);
     }
+    /* CONSOLIDATED FINAL PRE-PLAYTEST INTEGRATION (player reporting): the reviewer list is USERNAMES (no secret), and it
+       is rendered only when given -- absent by default, so the default server.env is the certified one. */
+    assert.match(env, /^%\{ if length\(conduct_reviewers\) > 0 ~\}\nGS_CONDUCT_REVIEWERS=\$\{join\(",", conduct_reviewers\)\}\n%\{ endif ~\}$/m);
     assert.match(env, /^GS_STORAGE=aws$/m);
     assert.match(env, /^GS_METRICS_PROFILE=single-host$/m);
     assert.ok(!/AmazonSSMManagedInstanceCore|AdministratorAccess|PowerUserAccess/.test(TF_ALL), "no broad managed policy");

@@ -257,8 +257,11 @@ describe("L5-8 §2: the IaC's static evidence", () => {
     assert.ok(locals !== undefined && locals.includes("container_environment") && locals.includes("healthz_command"), "modules/app/locals.tf was found");
     const envBlock = locals.slice(locals.indexOf("container_environment"), locals.indexOf("healthz_command"));
     const names = [...envBlock.matchAll(/name = "([A-Z_]+)"/g)].map((m) => m[1]).sort();
-    /* LIVE-6 L6-6 adds exactly one optional name: GS_EDGE_DIAGNOSTIC (the staging certification's edge mirror). */
-    assert.deepEqual(names, ["BUILD_ID", "ESCROW_MONEY_TABLES", "GS_ALLOWED_ORIGINS", "GS_AWS_CONFIG_PARAMETER", "GS_EDGE_DIAGNOSTIC", "GS_MODE", "GS_STORAGE", "GS_TRUSTED_PROXY_HOPS", "PORT"]);
+    /* LIVE-6 L6-6 adds exactly one optional name: GS_EDGE_DIAGNOSTIC (the staging certification's edge mirror). The
+       CONSOLIDATED FINAL PRE-PLAYTEST INTEGRATION adds one more optional name, present only when reviewers are given:
+       GS_CONDUCT_REVIEWERS (player reporting's reviewer usernames; no secret). */
+    assert.deepEqual(names, ["BUILD_ID", "ESCROW_MONEY_TABLES", "GS_ALLOWED_ORIGINS", "GS_AWS_CONFIG_PARAMETER", "GS_CONDUCT_REVIEWERS", "GS_EDGE_DIAGNOSTIC", "GS_MODE", "GS_STORAGE", "GS_TRUSTED_PROXY_HOPS", "PORT"]);
+    assert.match(envBlock, /length\(var\.conduct_reviewers\) > 0 \? \[\{ name = "GS_CONDUCT_REVIEWERS", value = join\(",", var\.conduct_reviewers\) \}\] : \[\]/, "only when reviewers are given");
     const ecs = files.find((f) => f.file === "modules/app/ecs.tf")?.text;
     assert.ok(ecs !== undefined, "modules/app/ecs.tf was found");
     assert.ok(!/^\s*secrets\s*=/m.test(ecs) && !/environmentFiles\s*=/.test(ecs), "no secrets / environmentFiles injection");

@@ -47,13 +47,96 @@ import { keplrAccount, type KeplrAccount } from "../testSupport/authorizationWal
 import type { RoomMoneyView } from "../../../frontend/src/utils/moneyProtocol";
 import { cleanLoginName, cleanPassword, DEFAULT_PASSWORD_KDF, hashPassword, hasRecoveryKey, isPasswordHash, KdfGate, loginKeyOf, sealedRecoveryDigest, verifyPassword } from "./accountCredentials";
 import { readSessionCookie } from "./cookies";
-import { familyIdOf, mintPrincipalId, mintProfileId, mintRecoverySelector, mintSecret, mintSessionId, secretHash } from "./ids";
+import { familyIdOf, mintPrincipalId, mintProfileId, mintRecoveryKey, mintRecoverySelector, mintSecret, mintSessionId, secretHash } from "./ids";
 import { createJournalIdentityStore } from "./journalStore";
 import { planSecurityReplay } from "./securityReplay";
 import { SECURITY_EVENT_FORMAT, SECURITY_EVENT_VERSION, type SecurityEvent } from "./securityEvents";
 import { IdentityService } from "./sessions";
 import { applyChange, authorizationWalletOf, createMemoryIdentityStore, loginOf, walletOf, type FullIdentitySnapshot, type Principal, type Profile, type Session, type SessionFamily } from "./store";
-import { FIXTURE_WALLET, FIXTURE_WALLET_2, identitySet, accountProfile } from "../persistence/conformance/fixtures";
+import { createHash } from "crypto";
+
+/* CONSOLIDATED FINAL PRE-PLAYTEST INTEGRATION: this suite's few stored-shape fixtures are built HERE. It used to import
+   them from the conformance harness's fixtures module, which the AWS-client convention (aws/awsClients.test.ts:
+   "nothing outside the conformance directory may import the harness") refuses. The values are the conformance fixtures' own
+   (same seeds, same production id minting, same canonical wallets), so every assertion below reads exactly as before. */
+const T0 = 1_780_000_000_000;
+const FIXTURE_WALLET = "juno1qyqszqgpqyqszqgpqyqszqgpqyqszqgpypz92q";
+const FIXTURE_WALLET_2 = "juno1qgpqyqszqgpqyqszqgpqyqszqgpqyqsz49yqpk";
+const FIXTURE_PASSWORD_HASH = `scrypt$1$10$1$1$${Buffer.alloc(16, 7).toString("base64url")}$${Buffer.alloc(32, 9).toString("base64url")}`;
+
+function seededRandom(seed: string): (size: number) => Buffer {
+  let counter = 0;
+  return (size: number) => {
+    const out = Buffer.alloc(size);
+    let filled = 0;
+    while (filled < size) {
+      const block = createHash("sha256").update(`${seed}#${counter++}`).digest();
+      block.copy(out, filled, 0, Math.min(block.length, size - filled));
+      filled += block.length;
+    }
+    return out;
+  };
+}
+
+interface IdentitySet {
+  readonly principal: Principal;
+  readonly profiledPrincipal: Principal;
+  readonly profile: Profile;
+  readonly session: Session;
+  readonly family: SessionFamily;
+}
+
+function identitySet(n: number): IdentitySet {
+  const random = seededRandom(`identity-${n}`);
+  const principalId = mintPrincipalId(random);
+  const sessionId = mintSessionId(random);
+  const profileId = mintProfileId(random);
+  const key = mintRecoveryKey(random);
+  const principal: Principal = { principal_id: principalId, kind: "unprofiled", status: "active", created_at: T0, activated_at: T0, last_seen_at: T0, account_link: null };
+  const profiledPrincipal: Principal = { ...principal, kind: "profile", account_link: profileId };
+  const profile: Profile = {
+    profile_id: profileId,
+    principal_id: principalId,
+    display_name: `Conf ${n}`,
+    created_at: T0,
+    status: "active",
+    recovery_selector: key.selector,
+    recovery_hash: secretHash(key.secret),
+    recovery_rotated_at: T0,
+    schema: 1,
+  };
+  const session: Session = {
+    session_id: sessionId,
+    principal_id: principalId,
+    secret_hash: secretHash(mintSecret(random)),
+    created_at: T0,
+    last_seen_at: T0,
+    expires_at: T0 + 30 * 86_400_000,
+    revoked_at: null,
+    revoke_reason: null,
+    rotated_to: null,
+    family_id: familyIdOf(sessionId),
+  };
+  const family: SessionFamily = { family_id: session.family_id, principal_id: principalId, created_at: T0, origin: "bootstrap", revoked_at: null, revoke_reason: null };
+  return { principal, profiledPrincipal, profile, session, family };
+}
+
+/** `set`'s profile as schema 2, with `login` (a username) and/or a wallet. */
+function accountProfile(set: IdentitySet, over: { readonly login?: string | null; readonly wallet?: string | null; readonly at?: number } = {}): Profile {
+  const at = over.at ?? T0;
+  const login = over.login ?? null;
+  const wallet = over.wallet ?? null;
+  return {
+    ...set.profile,
+    schema: 2,
+    login_key: login === null ? null : login.normalize("NFKC").toLowerCase().normalize("NFKC"),
+    login_name: login,
+    password_hash: login === null ? null : FIXTURE_PASSWORD_HASH,
+    password_set_at: login === null ? null : at,
+    wallet_address: wallet,
+    wallet_verified_at: wallet === null ? null : at,
+  };
+}
 
 quietConsole();
 

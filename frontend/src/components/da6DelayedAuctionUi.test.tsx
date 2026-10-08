@@ -15,14 +15,9 @@ import { AuctionPromptModal } from "./AuctionPromptModal";
 import { ModalLayerHost } from "./ModalPortal";
 import { PhaseThreeNoticeModal } from "./PhaseThreeNoticeModal";
 import RulesReference, { type RulesReferenceProps } from "./RulesReference";
-import {
-  DELAYED_STOCK_ROUND_TUTORIAL,
-  DELAYED_WATERFALL_AUCTION_TUTORIAL,
-  STOCK_ROUND_TUTORIAL,
-  TUTORIAL_LIBRARY,
-  WATERFALL_AUCTION_TUTORIAL,
-  tutorialLibraryFor,
-} from "./TutorialModal";
+// PHASE 3 FINAL PLAY TUTORIAL: the tutorials are the canonical lesson registry now (`tutorial/lessons.ts`); a
+// Delayed Auction table reads them through `lessonText(lesson, { delayedAuction: true })`.
+import { LESSONS, LIBRARY_TOPICS, lessonById, lessonText } from "../tutorial/lessons";
 
 declare global {
   // eslint-disable-next-line no-var
@@ -156,25 +151,33 @@ describe("the Phase 3 notice under the Delayed Auction", () => {
 
 /* ================================================================================================== */
 describe("DA-F8h: the tutorials a Delayed Auction table reads", () => {
-  it("replaces only the two pages written for an opening auction", () => {
-    expect(DELAYED_WATERFALL_AUCTION_TUTORIAL).toHaveLength(WATERFALL_AUCTION_TUTORIAL.length);
-    expect(DELAYED_WATERFALL_AUCTION_TUTORIAL.slice(0, -1)).toEqual(WATERFALL_AUCTION_TUTORIAL.slice(0, -1));
-    const cash = DELAYED_WATERFALL_AUCTION_TUTORIAL[DELAYED_WATERFALL_AUCTION_TUTORIAL.length - 1];
-    expect(cash.title).toBe("Watch your cash");
-    expect(cash.body).not.toContain("You start this Auction");
-    expect(cash.body).toContain("in the middle of the game");
+  const delayed = (id: string) => lessonText(lessonById(id)!, { delayedAuction: true });
+  const standard = (id: string) => lessonText(lessonById(id)!, {});
 
-    expect(DELAYED_STOCK_ROUND_TUTORIAL.slice(1)).toEqual(STOCK_ROUND_TUTORIAL.slice(1));
-    expect(DELAYED_STOCK_ROUND_TUTORIAL[0].body).not.toContain("Now that the Private Company auction is complete");
-    expect(DELAYED_STOCK_ROUND_TUTORIAL[0].body).toContain("first 3-train");
+  it("rewrites only the lessons written for an opening auction", () => {
+    const cash = delayed("auction.cash");
+    expect(cash.title).toBe("Watch your cash");
+    expect(cash.summary).not.toContain("Everyone starts with the same cash");
+    expect(cash.summary).toContain("in the middle of the game");
+    expect(standard("auction.cash").summary).toContain("Everyone starts with the same cash");
+
+    expect(delayed("auction.primer").summary).toContain("first 3-train");
+    expect(standard("auction.primer").summary).toContain("Before any corporation exists");
+    expect((delayed("stock.primer").detail ?? []).join(" ")).toContain("first 3-train");
+    expect((standard("stock.primer").detail ?? []).join(" ")).not.toContain("first 3-train");
+
+    expect(delayed("orientation.flow").summary).toContain("opens with a Stock Round");
+    expect(standard("orientation.flow").summary).toContain("opens with an auction of private companies");
+    const rewritten = new Set(["auction.cash", "auction.primer", "stock.primer", "orientation.flow"]);
+    for (const lesson of LESSONS) {
+      if (rewritten.has(lesson.id)) continue;
+      expect([lesson.id, delayed(lesson.id)]).toEqual([lesson.id, standard(lesson.id)]);
+    }
   });
 
-  it("the library: the standard one is untouched; the delayed one drops 'before the game proper starts'", () => {
-    expect(tutorialLibraryFor(false)).toBe(TUTORIAL_LIBRARY);
-    const auction = tutorialLibraryFor(true).find((topic) => topic.topicKey === "waterfall-auction")!;
+  it("the library names no opening auction a Delayed Auction table never has", () => {
+    const auction = LIBRARY_TOPICS.find((topic) => topic.id === "auction")!;
     expect(auction.blurb).not.toContain("before the game proper starts");
-    expect(auction.pages).toBe(DELAYED_WATERFALL_AUCTION_TUTORIAL);
-    expect(tutorialLibraryFor(true).find((topic) => topic.topicKey === "stock-round")!.pages).toBe(DELAYED_STOCK_ROUND_TUTORIAL);
   });
 });
 

@@ -200,7 +200,6 @@ describe("the client persists no principal, player id, seat PIN or seat token (L
     expect(writes.sort()).toEqual(
       [
         "App.tsx: ACTIVE_GAME_STORAGE_KEY",
-        "components/TutorialModal.tsx: key",
         "context/WalletContext.tsx: CACHED_ADDRESS_STORAGE_KEY",
         "utils/activeGame.ts: ACTIVE_SANDBOX_ROOM_STORAGE_KEY",
         "utils/audio.ts: STATION_STORAGE_KEY",
@@ -211,6 +210,11 @@ describe("the client persists no principal, player id, seat PIN or seat token (L
            is the game's id and the seat's PUBLIC table position (`seat1`), never the seat's player id. */
         "utils/noticeAcknowledgements.ts: key",
         "utils/sessionKey.ts: SESSION_STORAGE_KEY",
+        /* PHASE 3 FINAL PLAY TUTORIAL: the per-game tutorial ledger (the notice ledger's key shape: game id + the seat's
+           PUBLIC table position, never a player id) and the browser's automatic-tutorial preference. They replace
+           `TutorialModal.tsx`'s per-browser flags. */
+        "tutorial/tutorialLedger.ts: TUTORIAL_AUTO_KEY",
+        "tutorial/tutorialLedger.ts: key",
         "utils/uiScale.ts: UI_SCALE_STORAGE_KEY",
       ].sort(),
     );

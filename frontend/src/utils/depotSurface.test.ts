@@ -51,7 +51,8 @@ const strip = (raw: string) =>
 const PANEL_RAW = read("components/TrainPurchasePanel.tsx");
 /** #490a: the note quotes the deleted sentence and the old colour while explaining both. */
 const PANEL = strip(PANEL_RAW);
-const TUTORIAL = strip(read("components/TutorialModal.tsx"));
+/* PHASE 3 FINAL PLAY TUTORIAL: the tutorial's words now live in the canonical lesson registry. */
+const TUTORIAL = strip(read("tutorial/lessons.ts"));
 
 /** The panel's own `root` style block, sliced so a colour elsewhere in the file cannot satisfy these. */
 const ROOT = PANEL.slice(PANEL.indexOf("  root: {"), PANEL.indexOf("rootCondensed: {"));
@@ -138,17 +139,17 @@ describe("the rule moved rather than vanished", () => {
     /* "Steps 5 and 6" described step 6 and was the one place that did not mention the depot's ordering --
        which is the rule a player is most likely to be surprised by, since it is the one that makes a
        four-train two purchases away rather than one. */
-    expect(TUTORIAL).toContain("The Depot sells CHEAPEST-FIRST, one tier per purchase.");
+    expect(TUTORIAL).toContain("The depot sells cheapest-first, one tier per purchase");
     /* A FRAGMENT, and the first draft chose the wrong one. The slide's body is built by `+`-joining string
        literals, so a phrase that reads as one sentence to a player is split across two lines of source at a
        point no reader would guess -- here, between "two " and "separate actions". A source scan has to search
        within a literal, not within the rendered text. */
-    expect(TUTORIAL).toContain("separate actions, with a phase change in between.");
+    expect(TUTORIAL).toContain("every 3-train must be sold before the first 4-train can be bought");
     const slide = TUTORIAL.slice(
-      TUTORIAL.indexOf('title: "Steps 5 and 6"'),
-      TUTORIAL.indexOf('title: "Train Obsolescence'),
+      TUTORIAL.indexOf('id: "operating.trains"'),
+      TUTORIAL.indexOf('id: "operating.privates"'),
     );
-    expect(slide).toContain("CHEAPEST-FIRST");
+    expect(slide).toContain("cheapest-first");
   });
 
   it("keeps every fact a player acts on", () => {

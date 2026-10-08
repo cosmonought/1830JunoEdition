@@ -86,9 +86,16 @@ export const HOUSE_RULE_ROWS: ReadonlyArray<{
   { key: "unpredictableRevenue", title: "Unpredictable Revenue", tag: "chaotic" },
 ];
 
-/** The dev-subsidy line under the ante -- the project's gas-subsidisation rule, said where the money is set. */
+/** The line under a table with no ante.
+ *
+ *  PHASE 3 FINAL PLAY TUTORIAL (copy correction): this read "Antes are off for the playtest. When they are on, a small
+ *  share of every ante funds the developer treasury that pays players' transaction fees." Both halves were wrong for
+ *  this build: every player game is anted (`tablePolicy.ts`), and the certified escrow sends its basis-point fee on
+ *  EVERY deposit to its configured treasury, where nothing on chain pays anyone's transaction fees -- each player pays
+ *  their own network fee in Keplr. The sentence now says only what the implementation supports, and no percentage
+ *  (the fee is the deployment's configuration). */
 export const ANTE_SUBSIDY_NOTE =
-  "Antes are off for the playtest. When they are on, a small share of every ante funds the developer treasury that pays players' transaction fees.";
+  "No ante at this table: nothing is deposited. At a real-money table every seat's ante goes into an escrow on Juno, which keeps a fee, set by the escrow, from each deposit; the fee is not refunded.";
 
 export interface HostSetupCardProps {
   busy: boolean;

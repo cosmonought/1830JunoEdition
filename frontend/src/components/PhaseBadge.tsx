@@ -163,6 +163,7 @@ export function PhaseBadge({ label, tint, flip }: PhaseBadgeProps) {
       <style>{PHASE_BADGE_FLIP_CSS}</style>
       <span
         className={motionClass}
+        data-tutorial-anchor="phase-badge"
         style={{
           ...styles.phaseBadge,
           ...PHASE_TINT_STYLES[shownTint],

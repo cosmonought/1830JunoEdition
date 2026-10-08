@@ -132,8 +132,9 @@ export function noticeHeadline(notice: FleetLossNotice): string {
  *  2-trains has rusted." The template was written for the plural case and "have" is simply wrong for one.
  *
  *  THE LIMIT NOTICE IS UNTOUCHED. The ruling names the rust modal, and the limit copy is carrying a rule the
- *  player genuinely cannot infer -- which train went, and that they had no say. Trimming it was not asked for
- *  and it is not the same kind of text. */
+ *  player genuinely cannot infer -- which train went, and where. Trimming it was not asked for and it is not the
+ *  same kind of text. (PHASE 3 FINAL PLAY TUTORIAL: "and that they had no say" was the pre-#1530 trim; the
+ *  president chooses now, and the body below says where the train went instead.) */
 export function noticeBody(notice: FleetLossNotice): string {
   const trains = namedTrains(notice.trains);
   if (notice.cause === "rust") {
@@ -142,17 +143,22 @@ export function noticeBody(notice: FleetLossNotice): string {
        capitalised here rather than by `spellCount` -- see that function's note. */
     return `${capitalise(spellCount(notice.trains.length))} of your ${notice.trains[0]}-trains ${verb} rusted.`;
   }
-  /* THE LIMIT IS NAMED AND SO IS THE RULE, for #704's reason: "discarded its 2-train" without them reads as a
-     choice the president made. It is not a choice -- 1830 takes the train, and the only latitude is which one. */
+  /* THE LIMIT IS NAMED AND SO IS THE RULE, for #704's reason: the train left because the limit fell, not on a
+     whim. (PHASE 3 FINAL PLAY TUTORIAL: under #1530 the president picks WHICH train; the limit is still the cause.) */
   const ceiling =
     notice.trainLimit === null ? "the new train limit" : `the new limit of ${notice.trainLimit}`;
   const trigger =
     notice.arrivingTier === null
       ? "The phase changed"
       : `The first ${notice.arrivingTier}-train started a new phase`;
+  /* PHASE 3 FINAL PLAY TUTORIAL (copy correction, a genuine correctness fix): this said the trains "returned to the
+     depot" and "The cheapest go first; the corporation gets no say in which" -- the pre-#1530 trim. Under the rules in
+     force the PRESIDENT chooses the train (`DiscardTrain`, #1530), it goes to the Bank Pool and the corporation is not
+     paid (#1513; the Rules Reference's "Train limits"). The notice was tutorial-gated and so unseen by default; now that
+     it is mandatory again it must say what actually happened. */
   return (
-    `${trigger} and cut the train limit. ${notice.ticker}'s ${trains} ${count(notice)} returned to ` +
-    `the depot to meet ${ceiling}. The cheapest go first; the corporation gets no say in which.`
+    `${trigger} and cut the train limit. ${notice.ticker}'s ${trains} ${count(notice)} discarded to the ` +
+    `Bank Pool to meet ${ceiling}; the corporation receives no payment.`
   );
 }
 

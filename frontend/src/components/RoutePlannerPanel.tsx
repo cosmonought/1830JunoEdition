@@ -153,6 +153,7 @@ export function AutoRouteButton({
   return (
     <button
       type="button"
+      data-tutorial-anchor="auto-route"
       onClick={onAutoRoute}
       disabled={!controlsEnabled || !ownsAnyTrain}
       style={{

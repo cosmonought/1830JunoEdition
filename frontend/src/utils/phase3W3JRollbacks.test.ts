@@ -215,10 +215,13 @@ describe("AUD-25.05 / AUD-25.13 #8: the shell's call sites (outside every RED re
     expect(paid).toContain("if (isMyTurnRef.current) setTokenTargetMode(true);");
   });
 
-  it("End Turn's market lesson waits for the pass, and not for a refused one", () => {
-    const endTurn = sliceBetween(shell, "const handleEndOperatingTurn = useCallback(", "}, [handlePassTurn, viewerAddress, gameState]);");
-    expect(endTurn).toContain("const passed = handlePassTurn();");
-    const lesson = sliceFrom(endTurn, "void Promise.resolve(passed).then((answer) => {");
-    expectOrder(lesson, "if (submissionRefused(answer)) return;", "setMarketTutorialArmed(true);");
+  it("End Turn no longer arms a market lesson or navigates (PHASE 3 FINAL PLAY TUTORIAL)", () => {
+    /* AUD-25.05 made the old first-OR market lesson wait for an accepted pass. The final tutorial pass retires that
+       lesson's in-memory arm and its forced navigation altogether: the market lesson is raised from a WITNESSED price
+       move -- which a refused pass never produces -- and the chart opens only when the player asks. */
+    const endTurn = sliceBetween(shell, "const handleEndOperatingTurn = useCallback(", "}, [handlePassTurn]);");
+    expect(endTurn).toContain("handlePassTurn();");
+    expect(endTurn).not.toContain("setActiveMainTab");
+    expect(shell).not.toContain("setMarketTutorialArmed");
   });
 });

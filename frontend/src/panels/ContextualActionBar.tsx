@@ -3356,6 +3356,7 @@ export default function ContextualActionBar({
               {contextualButtons.map((btn) => (
                 <button
                   key={btn.key}
+                  data-tutorial-anchor={`action-${btn.key}`}
                   type="button"
                   /* Design note #619: a disabled button has to LOOK
                      disabled. */
@@ -4219,6 +4220,7 @@ export default function ContextualActionBar({
           {contextualButtons.map((btn) => (
             <button
               key={btn.key}
+              data-tutorial-anchor={`action-${btn.key}`}
               /* Design note #619: same treatment as the expanded copy above --
                  the two forms of this bar must not disagree about whether a
                  control is available. */

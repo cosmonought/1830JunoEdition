@@ -291,13 +291,13 @@ describe("a jump is not an action", () => {
        in `TutorialModal` -- checked before converting -- so this asserts the same thing and now asserts it
        somewhere the sweep can see. Stripping is the stronger form anyway: it is the version in which the
        sentence being present means the tutorial SAYS it rather than merely mentioning it in a note. */
-    const tutorial = readStripped("components/TutorialModal.tsx");
-    expect(tutorial).toContain("click the laid preview again to ROTATE it");
+    const tutorial = readStripped("tutorial/lessons.ts"); // PHASE 3 FINAL PLAY TUTORIAL: the canonical lesson registry
+    expect(tutorial).toContain("click the laid preview again to rotate it");
     /* `anchorIndex` RATHER THAN `indexOf` (#1090): a rotted anchor throws and names itself, where `indexOf`
        answers -1 and -1 is less than every real index -- so the comparison would pass for a sentence that is
        not there, or fail with "expected > -1" and tell you nothing about which end went missing. */
-    expect(anchorIndex(tutorial, "click the laid preview again to ROTATE it")).toBeGreaterThan(
-      anchorIndex(tutorial, "OPERATING_ROUND_TUTORIAL"),
+    expect(anchorIndex(tutorial, "click the laid preview again to rotate it")).toBeGreaterThan(
+      anchorIndex(tutorial, 'id: "operating.track"'),
     );
   });
 

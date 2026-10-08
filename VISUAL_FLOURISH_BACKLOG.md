@@ -2004,6 +2004,9 @@ blocking dialog interrupts a phase change. Shipping that with no way to reach th
 (`TutorialLibrary`), beside the existing "Turn tutorials off" preference rather than in a second home.
 **Flagged for owner review:** this is a settings-surface change inside a flourish batch, and if a general
 settings screen is coming it belongs there instead.
+**Superseded in substance (owner's final Play tutorial brief, 2026-10-08; `phase3/final-play-tutorial`):** Fleet Loss must not depend
+on any tutorial preference, so the tutorial-mode gates and the "Tutorial mode" checkbox are retired; the library's settings are now
+"Automatic tutorials: On / Off" (default On) and "Restart tutorials for this game".
 
 ### I-3 · `RESOLVED` (audio wiring pass) · Audio is answered: `rust.mp3`
 Wanted: ONE cue per global rust event — never one per train — short, brittle, dry, a single useful onset,

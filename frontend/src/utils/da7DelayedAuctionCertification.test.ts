@@ -1302,7 +1302,7 @@ describe("variant isolation: the standard game's round flow, privates and B&O ar
 /* ==================================================================================================================== */
 
 describe("player-facing rules text the certification leaves correct", () => {
-  const tutorial = readStripped("components/TutorialModal.tsx");
+  const tutorial = readStripped("tutorial/lessons.ts"); // PHASE 3 FINAL PLAY TUTORIAL: the canonical lesson registry
   const rules = readStripped("components/RulesReference.tsx");
   const app = readShell();
 

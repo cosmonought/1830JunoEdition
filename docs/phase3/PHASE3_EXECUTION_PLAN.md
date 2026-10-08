@@ -748,6 +748,7 @@ gates.
 - **OD-15 RULED (transcribed 2026-10-04, §7.3):** the intro and end-game videos are full-viewport cinematic takeovers (not NativeModal / `<dialog>`, not modal-looking), sized by true viewport geometry with the counter-scale removed (`GameIntroOverlay.tsx`, AUD-13.05; `GameOutroOverlay.tsx` likewise); genuine modals stay on the native dialog / top layer, with no second manual modal / inert architecture (AUD-13.06). AUD-13.04 (tutorials as native dialogs) is tutorial work: OD-5's ruled ordering sequences it to the final tutorial/UI pass.
 - **OD-15 RULED (2026-10-04, §7.3).** Status: **PARTIAL** on its slice branch `phase3/w3-d` (from `phase3/wave3-i-w2i-w2j-w3c-w3g-v13cert-integration` @ `d29bb2f`; NOT integrated): AUD-13.05 (OD-15(a): the intro and the end-game film are full-viewport takeovers outside every scaled root, no counter-zoom, no dialog semantics, the shell root `inert` beneath them) and AUD-13.06 (OD-15(b): `ModalPortal`'s last consumer outside `NativeModal` removed, no manual inert; `PrivateTradePanel`'s unreachable false-modal shape deleted) IMPLEMENTED, each C → B under the ruling. **AUD-13.04 (tutorials as native dialogs) is BLOCKED ONLY ON W3-A INTEGRATION** (the owner reports OD-5 ruled in W3-A's lane; W3-A records it, and R-TUT is W3-A's while it is active). Dock-control keyboard reach stays OD-10(b). Record: Project `claude/PHASE3_W3D_PARTIAL_OD15_2026-10-04.md`.
 - **Consolidated integration (2026-10-05):** PARTIAL — INTEGRATED on `phase3/consolidated-pre-playtest-integration` (merge `a57b01a`): AUD-13.05 and AUD-13.06 IMPLEMENTED under the canonical OD-15. `ModalPortal` is kept (on the combined tree its one consumer is `NativeModal`, as its scaled destination). **AUD-13.04 is DEFERRED to the final tutorial pass (OD-5)** -- not "blocked on W3-A integration" (superseded); by the closure contract (§11 item 2) the LAST Phase-3 lane (F) before the Phase-4 baseline, unless the owner places it after Phase 4 (an owner decision open then; RULED 2026-10-05 by the AUD-00.02 brief: the LAST pre-Phase-4 implementation lane, not after Phase 4). Dock-control keyboard reach is OD-10(b) = Phase 5.
+- **Final Play tutorial (2026-10-08):** COMPLETE -- AUD-13.04 IMPLEMENTED on `phase3/final-play-tutorial` (from `5caa4d6`; not integrated): `TutorialModal` deleted; the library is a NativeModal, the contextual coach deliberately non-modal (see §7.3 "FINAL PLAY TUTORIAL").
 
 #### W3-E
 **City bypass control (conditional)** · L4 · **5–8 h, only if OD-11 = build**
@@ -1276,6 +1277,16 @@ launch. The Phase-3 baseline is `phase3/consolidated-pre-playtest-integration` @
 **AUD-04.04 + AUD-08.01 — PLACED.** A pre-Phase-4 derivation residue lane (DERIV, §6). (Tracking disposition, not the owner's words: C → B.)
 
 **FINAL GAMEPLAY TUTORIAL PASS — LAST.** The last pre-Phase-4 implementation lane (F), before W3-F's closure; not after Phase 4.
+
+**FINAL PLAY TUTORIAL (owner brief, 2026-10-08; transcribed -- the brief's product decisions, not new OD rows).** Two learning systems: a
+future Ludum "Learn to Play" (ludum.netadao.org; NOT built in Phase 3) and the Play tutorial in the game, which must orient a complete
+newcomer while Ludum does not exist. Play: a short primer per major round plus contextual coach explanations tied to witnessed play, optional
+spotlighting of the real UI, and an always-available library. Automatic tutorials ON by default, with an obvious reversible On / Off and a
+"restart for this game"; the old one-way switch removed. Progress per player per game; reload-safe; no backlog for replay, late join or a
+new device; watchers get no automatic tutorials. Tutorials are NOT a forced notice and yield to every mandatory surface; Fleet Loss must not
+depend on any tutorial preference. The coach is non-modal (NativeModal would make the board inert). Content is structured with stable ids,
+separate from triggers and presentation. Project 18XX is the brand. **Status:** IMPLEMENTED on `phase3/final-play-tutorial` (from `5caa4d6`;
+not integrated) -- AUD-13.04 and P3-N036; W3-D COMPLETE. W3-F (closure bookkeeping, the Phase-4 checklist and the broad owner gate) follows.
 
 **ACCOUNT / PROFILE / WALLET LANE.** The onboarding redesign, the homepage overlap fix and trust indicators are pre-Phase-4 work; W1-K
 (AUD-19.02) and AUD-20.08 (the Terms shell / link infrastructure) are folded into it. The official Keplr logo stays ASSET PENDING; the

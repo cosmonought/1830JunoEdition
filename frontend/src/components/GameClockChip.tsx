@@ -222,7 +222,7 @@ export function GameClockChip({ gameId, clock, players, viewerPlayerId, current,
   const title = detail.join(" ") || undefined;
 
   return (
-    <span style={{ ...chipStyle, ...TONE_STYLE[presentation.tone] }} title={open ? undefined : title} data-testid="game-clock" data-state={presentation.state} data-deadline={clock.deadline}>
+    <span style={{ ...chipStyle, ...TONE_STYLE[presentation.tone] }} title={open ? undefined : title} data-testid="game-clock" data-tutorial-anchor="game-clock" data-state={presentation.state} data-deadline={clock.deadline}>
       <span style={modeStyle} data-testid="game-clock-mode">
         {presentation.modeLabel}
       </span>

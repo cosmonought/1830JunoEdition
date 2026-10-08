@@ -15,7 +15,8 @@ import { readFileSync } from "fs";
 import { readShell, readShellRaw, sliceBetween } from "../utils/sourceScan"; // AUD-25.10 (g)
 import { join } from "path";
 
-import { STOCK_ROUND_TUTORIAL } from "./TutorialModal";
+// PHASE 3 FINAL PLAY TUTORIAL: the Stock Round tutorial is the canonical lesson registry's `stock.*` lessons now.
+import { LESSONS, lessonById, lessonText } from "../tutorial/lessons";
 import { PRIVATE_COMPANY_CATALOG, abilitySummary } from "../utils/privateCatalog";
 import { mhExchangeDisposition } from "../gameEngine/mohawkExchange";
 import type { GameStateResponse } from "../gameEngine/gameState";
@@ -35,22 +36,26 @@ const sentences = (text: string) =>
     .map((entry) => entry.trim())
     .filter((entry) => entry.length > 0);
 
-describe("W3-J AUD-25.13 (tutorial): the Selling shares page describes the v13 turn", () => {
-  const page = STOCK_ROUND_TUTORIAL.find((entry) => entry.title === "Selling shares");
+describe("W3-J AUD-25.13 (tutorial): the Stock Round lessons describe the v13 turn", () => {
+  const all = (id: string) => {
+    const text = lessonText(lessonById(id)!);
+    return [text.summary, ...(text.detail ?? [])].join("\n");
+  };
 
   it("no longer says a sale is an alternative to buying", () => {
-    expect(page).toBeDefined();
-    expect(page!.body).not.toMatch(/Instead of buying/i);
+    expect(all("stock.selling")).not.toMatch(/Instead of buying/i);
   });
 
   it("quotes the Rules Reference's Sell -> Buy -> Sell gotcha verbatim", () => {
     const gotcha = "The turn is Sell → Buy 1 certificate → Sell. You may sell after buying.";
     expect(RULES_REFERENCE).toContain(`{ text: "${gotcha}", page: "stock" }`);
-    expect(page!.body.split("\n")[0]).toContain(gotcha);
+    expect(all("stock.turn")).toContain(gotcha);
   });
 
-  it("no other Stock Round tutorial page offers selling as an alternative to buying", () => {
-    for (const entry of STOCK_ROUND_TUTORIAL) expect([entry.title, /instead of buying/i.test(entry.body)]).toEqual([entry.title, false]);
+  it("no Stock Round lesson offers selling as an alternative to buying", () => {
+    for (const lesson of LESSONS.filter((entry) => entry.topic === "stock")) {
+      expect([lesson.id, /instead of buying/i.test(all(lesson.id))]).toEqual([lesson.id, false]);
+    }
   });
 });
 

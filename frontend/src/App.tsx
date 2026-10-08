@@ -19,7 +19,7 @@
 // Design note #605: the status dock's scroll compensation is a `useLayoutEffect` -- it has to run after React
 // commits the new bottom padding and before the browser paints, or the correction is visible as a jump. Since
 // Phase 3 W1-I it lives in `utils/useStatusDockHeight.ts` with the dock's observer.
-import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
 
 import { WalletProvider, useWallet, CONTRACT_ADDRESS } from "./context/WalletContext";
 import { CosmWasmClient } from "@cosmjs/cosmwasm-stargate";
@@ -686,6 +686,8 @@ import {
   privateRevenuePayloadForStorage,
 } from "./utils/noticeAcknowledgements";
 import { useNoticeChain } from "./utils/useNoticeChain";
+import { anyNoticeDue } from "./utils/noticeChain";
+import { openNativeModalCount, subscribeNativeModals } from "./utils/nativeModalRegistry";
 import GameScreenHeading from "./components/GameScreenHeading";
 import { operatingCorporationId } from "./gameEngine/dividendGate";
 // Design note #1683 (Stage 10.1): the one `LayTile` authority the grid asks, and the one board geometry it is handed.
@@ -775,16 +777,14 @@ import { privateProposalRefusal, trainOfferRefusal, type OfferAuthorityInput, ty
 
 // Step 4: Firebase Real-Time Integration -- see design notes #1 and #22.
 import Lobby from "./components/Lobby";
-import TutorialModal, {
-  TutorialLibrary,
-  OPERATING_ROUND_TUTORIAL,
-  STOCK_MARKET_TUTORIAL,
-  STOCK_ROUND_TUTORIAL,
-  WATERFALL_AUCTION_TUTORIAL,
-  DELAYED_STOCK_ROUND_TUTORIAL, // DA-6
-  DELAYED_WATERFALL_AUCTION_TUTORIAL, // DA-6
-  tutorialModeEnabled,
-} from "./components/TutorialModal";
+/* PHASE 3 FINAL PLAY TUTORIAL: the contextual coach, its ledger and coordinator, and the library (`tutorial/`).
+   They replace `components/TutorialModal.tsx` (the four auto-opening decks and the one-way off switch). */
+import { TutorialLayer } from "./tutorial/TutorialCoach";
+import { TutorialLibrary } from "./tutorial/TutorialLibrary";
+import { useTutorialSystem } from "./tutorial/useTutorialSystem";
+import { tutorialLedgerKey } from "./tutorial/tutorialLedger";
+import { lessonsForTransition, waitingRoomLessons, type RaisedLesson } from "./tutorial/triggers";
+import type { RulesPageId } from "./tutorial/lessons";
 import { useRoomChat } from "./components/ChatBox";
 // truncateAddress comes from utils/address.ts (configurable lead/trail), not utils/lobby.
 // Importing both would collide. See docs/ai_architecture/ui_shell_layout.md - App.tsx #382
@@ -4129,15 +4129,19 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
   }, [hexClickQuery]);
 
 
-  // Manual route-point state. routeSelectMode rewires the canvas click to the builder (#44 arms the first-OR tutorial).
+  // Manual route-point state. routeSelectMode rewires the canvas click to the builder.
   // See docs/ai_architecture/routing_pathfinding.md - App.tsx #11
-  const [marketTutorialArmed, setMarketTutorialArmed] = useState(false);
+  /* PHASE 3 FINAL PLAY TUTORIAL: #44's `marketTutorialArmed` (an in-memory arm a reload lost for good) is retired;
+     the market lesson is raised from a witnessed price move like every other lesson. */
 
-  // Design note #158: the Tutorials front door's open/closed state. Separate
-  // from the four `TutorialModal`s' own state, and deliberately so -- those
-  // track "has this player been shown this yet", which is a different
-  // question from "is the reader open right now".
+  // Design note #158: the Tutorials front door's open/closed state. Separate from what this seat has been taught
+  // (the tutorial ledger), which is a different question from "is the reader open right now".
   const [tutorialLibraryOpen, setTutorialLibraryOpen] = useState(false);
+  /* PHASE 3 FINAL PLAY TUTORIAL: a tutorial's "Rules Reference" link -- the page (and element) the Rules tab opens on
+     next. Cleared when the tab is left, so an ordinary later open still lands on Overview. */
+  const [rulesLink, setRulesLink] = useState<{ page: RulesPageId; anchor?: string; nonce: number } | null>(null);
+  /* The tutorial's `raise`, reachable from `runGameplayAction` (declared long before the hook that owns it). */
+  const tutorialRaiseRef = useRef<(lessons: readonly RaisedLesson[]) => void>(() => {});
 
   // Design note #159: station-token targeting mode. Same shape as
   // `routeSelectMode` -- while it is on, the board's query-firing click
@@ -7497,6 +7501,21 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
             }
           }
 
+          /* ==================================================================
+              PHASE 3 FINAL PLAY TUTORIAL: LESSONS FROM A WITNESSED ENTRY
+             ==================================================================
+             LIVE PLAY ONLY. `replayingHistory` is true for a catch-up, a reload's rebuild and an Undo's replay, so a
+             late joiner, a new device or a reload never receives a backlog of lessons for what happened before --
+             the same guard every one-shot in this function obeys (#825). A watcher has no tutorial ledger, so its
+             raise is refused there. The triggers read the two boards and the message; they decide nothing about the
+             game. */
+          if (!replayingHistory && after) {
+            const viewerId = viewerAddressRef.current ?? "";
+            if (viewerId) {
+              tutorialRaiseRef.current(lessonsForTransition({ before, after, msg: gameplay, viewer: viewerId }));
+            }
+          }
+
           /* Design note #1340a: the auction's sentences, from the diff. Same lines as before, same order --
              the win, the C&A's share, the markdown, the payouts -- read off what the reducer did rather than
              off a report of what it was about to do. */
@@ -8410,23 +8429,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
                    change for every corporation, which is #896's standing rule -- silencing or deferring a
                    modal changes WHEN a player finds out, never whether the game told them. */
                 if (gentleRustOn && notice.cause === "rust") continue;
-                /* ==================================================================
-                    DESIGN NOTE (VF-7): THE RUST MODAL IS A TUTORIAL, AND ONLY A TUTORIAL
-                   ==================================================================
-                   RULED: with tutorial mode ON the explanatory rust modal stays, because a novice should
-                   be told in words what just happened and why; with it OFF there is no click-through,
-                   because the chips have just oxidised, fractured and left the row in front of the
-                   player and a dialog restating that is an interruption charging for information
-                   already delivered.
-                   #896's STANDING RULE IS UNTOUCHED, and it is what makes this safe: "silencing a notice
-                   changes WHEN a player finds out, never whether the game told them." The Activity Log
-                   line is written above, unconditionally, for every corporation, under both settings.
-                   THE LIMIT NOTICE IS DELIBERATELY NOT GATED. This batch's scope is rust; a train-limit
-                   drop still has no visual vocabulary of its own, so its modal is still the only thing
-                   that says a train was taken -- and gating it now would remove the only notice a
-                   president gets. `notice.cause` is the whole of the distinction, which is #896's split
-                   earning its keep for the third time. */
-                if (notice.cause === "rust" && !tutorialModeEnabled()) continue;
+                /* PHASE 3 FINAL PLAY TUTORIAL: VF-7's tutorial-mode gate on this notice is REMOVED (owner ruling: a
+                   Fleet Loss that is due belongs to the forced-notice chain whatever the optional-tutorial
+                   preference). The rust notice is raised for the affected president again, as #896 built it. */
                 /* IDEMPOTENT, for #706's reason one function over: the Undo path replays the whole log, so
                    this block runs again for a phase change the player already saw. Keyed by CONTENT rather
                    than by position -- two different phase changes carry different arriving tiers and both
@@ -8531,8 +8536,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
                    clock, same flourish -- the train really is gone now. */
                 collectRust(loss);
                 for (const notice of fleetLossNotices(loss, expiryTier, expiryLimit)) {
-                  // Design note (VF-7): the same tutorial gate as the phase-change queue above.
-                  if (notice.cause === "rust" && !tutorialModeEnabled()) continue;
+                  // PHASE 3 FINAL PLAY TUTORIAL: no tutorial gate (VF-7's is removed, as in the phase-change queue above).
                   /* IDEMPOTENT ON A REPLAY, by content, exactly as the phase-change queue above is: Undo
                      rebuilds by replaying the log, so this block runs again for an expiry the player has
                      already acknowledged. Design note #1032: and the dismissed set is consulted here too --
@@ -8597,10 +8601,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
                    SO THE EXPLANATION MOVES TO THE EVENT IT EXPLAINS. Same `FleetLossNotice` shape, same
                    copy (#704/#980), same replay-stable dismiss key (#1032) -- raised from the action the
                    president just took, which is also the only place the chosen train is known.
-                   TUTORIAL-GATED, on VF-7's rule for the rust notice: with tutorials off the cut and the
-                   Activity Log have just said this, and a dialog restating it charges an interruption
-                   for information already delivered. */
-                if (tutorialModeEnabled()) {
+                   PHASE 3 FINAL PLAY TUTORIAL: NOT TUTORIAL-GATED. VF-8 gated it on the opt-in tutorial mode; the
+                   owner's ruling is that a due Fleet Loss is a mandatory notice whatever the optional-tutorial
+                   preference, so it is raised for every discard. (The block is kept so this diff stays small.) */
+                {
                   const limitInForce = derivePhase(after)?.trainLimit ?? null;
                   const notice = fleetLossNotices(
                     { companyId: protocol_id, ticker, rusted: [], discarded: [model_type] },
@@ -12304,22 +12308,110 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
      Fleet Loss, Private Revenue, Phase Three, Herald), none of them over or under another native dialog; when the
      chain is exhausted, focus goes to the game-screen heading. An answered notice is never due, whichever of this
      player's tabs answered it. Tutorial is NOT part of this chain (owner ruling OD-5; the consolidated integration,
-     2026-10-05, removed the sixth entry W3-A had added): the tutorial modals below keep their own presentation until
-     the final tutorial pass. */
+     2026-10-05, removed the sixth entry W3-A had added). The PHASE 3 FINAL PLAY TUTORIAL keeps it that way: the coach
+     below reads this chain and yields to it; the chain never reads the coach. */
   const gameScreenHeadingRef = useRef<HTMLHeadingElement | null>(null);
-  const { presented: presentedNotice } = useNoticeChain(
-    {
-      emergency: emergencyModalPlan !== null && emergencyModalPlan.stage !== "legacy",
-      fleetLoss: dueFleetNotice !== null && !noticeLedger.isAcknowledged(noticeDismissKey(dueFleetNotice)),
-      privateRevenue:
-        privatePayoutPhase !== null &&
-        !noticeLedger.isAcknowledged(privateRevenueNoticeKey(privatePayoutPhase.roundLabel)),
-      phaseThree: phaseThreeNotice && !noticeLedger.isAcknowledged(PHASE_THREE_NOTICE_KEY),
-      herald:
-        heraldFloatNotice !== null &&
-        !noticeLedger.isAcknowledged(heraldFloatNoticeKey(heraldFloatNotice.companyId)),
+  const forcedNoticesDue = {
+    emergency: emergencyModalPlan !== null && emergencyModalPlan.stage !== "legacy",
+    fleetLoss: dueFleetNotice !== null && !noticeLedger.isAcknowledged(noticeDismissKey(dueFleetNotice)),
+    privateRevenue:
+      privatePayoutPhase !== null &&
+      !noticeLedger.isAcknowledged(privateRevenueNoticeKey(privatePayoutPhase.roundLabel)),
+    phaseThree: phaseThreeNotice && !noticeLedger.isAcknowledged(PHASE_THREE_NOTICE_KEY),
+    herald:
+      heraldFloatNotice !== null &&
+      !noticeLedger.isAcknowledged(heraldFloatNoticeKey(heraldFloatNotice.companyId)),
+  };
+  const { presented: presentedNotice } = useNoticeChain(forcedNoticesDue, gameScreenHeadingRef);
+
+  /* ==================================================================
+      PHASE 3 FINAL PLAY TUTORIAL: THE COACH, AND EVERYTHING IT YIELDS TO
+     ==================================================================
+     ONE SEAT'S LEDGER (`tutorial/tutorialLedger.ts`: game id + seat position, never an identity), the automatic
+     tutorial preference, and the coordinator's one decision. A watcher -- `watchOnly`, spectating, or no seat --
+     gets no automatic tutorials (the library stays open to everyone). The coach is held, unacknowledged, while a
+     film plays, while ANY native dialog is open (every forced notice, the stale-board notice, Game Over, the library
+     itself), while a forced notice is due but held, while the Home Station prompt stands, and during a replay
+     scrub. */
+  const anyNativeDialogOpen = useSyncExternalStore(subscribeNativeModals, () => openNativeModalCount() > 0, () => false);
+  const tutorialSeated = !spectator && !watchOnly && localId !== "";
+  /* Spelled apart from the render's own waiting-room gate (joinFlash.test.ts scans for that gate's text). */
+  const lifecycleIsWaiting = sandbox && sandboxRoom !== null && sandboxRoom !== undefined && sandboxRoom.lifecycle === "waiting";
+  const tutorial = useTutorialSystem({
+    storageKey: tutorialLedgerKey(sandboxRoomDoc),
+    seated: tutorialSeated,
+    viewer: localId,
+    /* No board before the deal: the waiting room's lessons are judged on the room, and every board lesson is held. */
+    state: lifecycleIsWaiting ? null : liveState,
+    blockers: {
+      cinematic: cinematicTakeoverActive(introPlaying, outro),
+      nativeDialogOpen: anyNativeDialogOpen,
+      forcedNoticeDue: anyNoticeDue(forcedNoticesDue),
+      /* The Home Station prompt, and the board's own placement overlays -- the tile ring and the station confirm --
+         which a coach card could otherwise sit on. */
+      boardInteraction:
+        homePromptPending(pendingHomeToken, homeStationPlacement !== null, freeStationInFlight) !== null ||
+        (activeMainTab === "map" && (pendingToken !== null || radialSelector !== null)),
+      scrubbing,
     },
-    gameScreenHeadingRef,
+  });
+  tutorialRaiseRef.current = tutorial.raise;
+  /* The waiting room teaches from the room's own terms, not the log: what an ante is at a money table, and what the
+     table's pace means. Current state, so a reload may show an unanswered one again; never history. */
+  const waitingRoomTeaching = lifecycleIsWaiting && tutorialSeated;
+  const waitingMoney = sandboxRoomDoc?.money !== undefined;
+  const waitingClocked = sandboxRoomDoc?.clock !== undefined && sandboxRoomDoc.clock.deadline !== "no-deadline";
+  const tutorialRaise = tutorial.raise;
+  useEffect(() => {
+    if (!waitingRoomTeaching) return;
+    tutorialRaise(waitingRoomLessons({ money: waitingMoney, clocked: waitingClocked }).map((id) => ({ id })));
+  }, [waitingRoomTeaching, waitingMoney, waitingClocked, tutorialRaise]);
+  const openRulesAt = useCallback((page: RulesPageId, anchor?: string) => {
+    setRulesLink((current) => ({ page, anchor, nonce: (current?.nonce ?? 0) + 1 }));
+    setTutorialLibraryOpen(false);
+    setActiveMainTab("rules");
+  }, []);
+  useEffect(() => {
+    if (activeMainTab !== "rules") setRulesLink(null);
+  }, [activeMainTab]);
+  const tutorialScope = useMemo(() => ({ delayedAuction: tableVariants.delayedAuction === true }), [tableVariants]);
+  const tutorialLibrary = (
+    <TutorialLibrary
+      open={tutorialLibraryOpen}
+      onClose={() => setTutorialLibraryOpen(false)}
+      scope={tutorialScope}
+      auto={tutorial.auto}
+      onSetAuto={tutorial.setAuto}
+      onRestart={
+        tutorialSeated && tutorial.ledger.storageKey !== null
+          ? () =>
+              tutorial.restart(
+                waitingRoomTeaching
+                  ? waitingRoomLessons({ money: waitingMoney, clocked: waitingClocked }).map((id) => ({ id }))
+                  : [],
+              )
+          : null
+      }
+      restartUnavailableReason="Automatic tutorials are for seated players; watchers can read every topic here."
+      onOpenRules={lifecycleIsWaiting ? undefined : openRulesAt}
+    />
+  );
+  const tutorialLayer = (
+    <TutorialLayer
+      presented={tutorial.presented}
+      scope={tutorialScope}
+      onAcknowledge={tutorial.acknowledge}
+      onTurnOff={() => tutorial.setAuto(false)}
+      onOpenLibrary={() => {
+        /* The library restores focus to its opener on close; the coach is suspended (unmounted) while it is open, so
+           the opener is the tab bar's Tutorials button, which outlives both. */
+        document.querySelector<HTMLElement>("[data-testid='open-tutorials']")?.focus({ preventScroll: true });
+        setTutorialLibraryOpen(true);
+      }}
+      onShowMarket={() => setActiveMainTab("stock")}
+      fallbackFocus={() => gameScreenHeadingRef.current}
+      onOpenRules={lifecycleIsWaiting ? undefined : openRulesAt}
+    />
   );
 
   /* OD-5(a): answering the payout and the Phase 3 notice is this player's acknowledgement for this game. */
@@ -12336,28 +12428,15 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
     setPhaseThreeNotice(false);
   }, [noticeLedger]);
 
-  // End Turn dispatches the same PassTurn the Stock Round uses. #44: the first-OR market lesson interrupts, guarded three ways; #412 gates only the NAVIGATION on tutorialMode.
+  // End Turn dispatches the same PassTurn the Stock Round uses.
   // See docs/ai_architecture/state_machine.md - App.tsx #44
+  /* PHASE 3 FINAL PLAY TUTORIAL: #44's first-OR market lesson -- an in-memory arm plus a forced navigation to the
+     market tab under tutorial mode -- is RETIRED. The market lesson is raised from a witnessed price move
+     (`tutorial/triggers.ts`), persists across a reload, and opens the chart only when the player asks. */
   const handleEndOperatingTurn = useCallback(() => {
-    const viewerIsPresident =
-      viewerAddress != null &&
-      (gameState?.public_companies ?? []).some((c) => c.president === viewerAddress);
-    const isFirstOperatingRound = (gameState?.macro_round_number ?? 0) <= 1;
-
-    const passed = handlePassTurn();
+    handlePassTurn();
     setLiveOrSubPhase("Track");
-
-    /* Phase 3 W3-J (AUD-25.05): THE LESSON FOLLOWS A TURN THAT ENDED. The navigation and the arm waited for nothing,
-       so a refused End Turn still took the president to the market lesson with their turn unfinished. They now run
-       once the room has answered, and not when it says the pass was not applied; the solo sandbox answers at once. */
-    if (viewerIsPresident && isFirstOperatingRound) {
-      void Promise.resolve(passed).then((answer) => {
-        if (submissionRefused(answer)) return;
-        if (tutorialModeEnabled()) setActiveMainTab("stock");
-        setMarketTutorialArmed(true);
-      });
-    }
-  }, [handlePassTurn, viewerAddress, gameState]);
+  }, [handlePassTurn]);
 
   // State, not a memo: applySandboxLayTile must replace the object, because that identity change is what the renderer's draw effect watches.
   // See docs/ai_architecture/canvas_rendering.md - App.tsx #435
@@ -14237,6 +14316,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
       <>
       {/* PHASE 3 FINAL (§9): the waiting room is where a seat antes -- an account change under it is asked about too. */}
       <TableAccountNotice change={tableAccount.change} onContinue={tableAccount.accept} onLeave={handleLeaveTableToLobby} />
+      {/* PHASE 3 FINAL PLAY TUTORIAL: the coach teaches the table's money and pace terms here, before the deal. */}
+      {tutorialLayer}
+      {tutorialLibrary}
       <SandboxWaitingRoom
         roomCode={sandboxRoom.code ?? "Private game"}
         room={sandboxRoom}
@@ -14404,40 +14486,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
          fixture were all controls for playing four people from one keyboard. The pickers went with them rather
          than being kept: they seed a board, and a room's board comes from its log. */}
 
-      {/* Design note #32: FTUE mounted at the shell level, not inside the phase panels, so a modal survives its
-         panel unmounting on a tab switch.
-         Design note #39: THREE topics, one per round, all mounted unconditionally and each keyed on its own
-         `active`. Safe against two firing at once because `current_round_type` is a single value -- the flags are
-         mutually exclusive by construction, not by coordination. Each tracks its own "seen" flag. */}
-      <TutorialModal
-        topicKey="waterfall-auction"
-        heading="Waterfall Auction"
-        /* DA-6 (DA-F8h): the Delayed Auction arrives mid-game -- its own last page, not the opening auction's. */
-        pages={tableVariants.delayedAuction ? DELAYED_WATERFALL_AUCTION_TUTORIAL : WATERFALL_AUCTION_TUTORIAL}
-        active={isWaterfallPhase}
-      />
-      <TutorialModal
-        topicKey="stock-round"
-        heading="Stock Round"
-        /* DA-6 (DA-F8h): a Delayed Auction table's Stock Round 1 follows no auction. */
-        pages={tableVariants.delayedAuction ? DELAYED_STOCK_ROUND_TUTORIAL : STOCK_ROUND_TUTORIAL}
-        active={gameState?.current_round_type === "StockRound"}
-      />
-      <TutorialModal
-        topicKey="operating-round"
-        heading="Operating Round"
-        pages={OPERATING_ROUND_TUTORIAL}
-        active={gameState?.current_round_type === "OperatingRound"}
-      />
-      {/* Design note #44: the only tutorial not keyed to a round type. It
-          opens on an event -- the player's first OR turn ending -- and the
-          tab switch that precedes it is deliberate, not incidental. */}
-      <TutorialModal
-        topicKey="stock-market"
-        heading="The Stock Market"
-        pages={STOCK_MARKET_TUTORIAL}
-        active={marketTutorialArmed}
-      />
+      {/* PHASE 3 FINAL PLAY TUTORIAL: the contextual coach, one lesson at a time, chosen by the coordinator above.
+         Replaces #32/#39's four auto-opening `TutorialModal` decks. Non-modal: the board stays usable under it. */}
+      {tutorialLayer}
 
       {/* Design note #332: the mandatory buy the treasury cannot fund. Mounted at shell level beside the
          tutorials because it is a full-screen decision about the PRESIDENT's money -- the corporation's own
@@ -15348,11 +15399,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
           auto-opening modals rather than inside the tab bar -- it is a modal
           over the whole shell, not a part of the navigation that summons
           it. */}
-      <TutorialLibrary
-        open={tutorialLibraryOpen}
-        onClose={() => setTutorialLibraryOpen(false)}
-        delayedAuction={tableVariants.delayedAuction === true}
-      />
+      {tutorialLibrary}
 
       {/* Design note #1141: the mini-camera. Rendered beside `TutorialLibrary` for the same reason it is --
           a modal over the whole shell rather than a part of the panel that summoned it. */}
@@ -15375,7 +15422,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
          present, never modal, and needing no dismissal at 1830's event volume.
          FIXED, so it survives scrolling. The app root carries matching bottom padding, and the box is anchored
          at the bottom rather than sized -- so the expanded history grows UPWARD instead of off the screen. */}
-      <div ref={statusDockRef} style={styles.statusLineDock}>
+      <div ref={statusDockRef} style={styles.statusLineDock} data-status-dock="">
         {/* #1425/#1430: the round replayer, at the bottom above the Activity Log, for as long as the ending
             stands and the modal is down. The dock's measured height already pads the page for it. */}
         {gameEndReason && gameOverDismissed && gameHistory && (
@@ -15923,6 +15970,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
 
       {activeMainTab === "rules" && (
         <RulesReference
+          /* A tutorial link opened while this tab is already showing remounts it on the linked page. */
+          key={rulesLink ? `link-${rulesLink.nonce}` : "rules"}
           /* Design note #898: `GameEnd` is deliberately NOT widened into `RulesRoundType`. That union is the
              set of rounds with a rules FLOW to show, and the ending has none -- passing `null` falls back to
              the full reference, which is what a player reading the rules after the game is looking for.
@@ -15964,6 +16013,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
              follow the board on screen (a scrub shows the scrubbed position's), as every other board fact does. */
           gameOver={gameState?.current_round_type === "GameEnd"}
           rulesEngineVersion={boardRulesVersion(liveState)}
+          /* PHASE 3 FINAL PLAY TUTORIAL: a tutorial's "Rules Reference" link opens the related rule. */
+          initialSection={rulesLink?.page}
+          initialAnchor={rulesLink?.anchor}
         />
       )}
 

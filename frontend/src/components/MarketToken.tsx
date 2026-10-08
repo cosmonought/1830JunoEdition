@@ -47,13 +47,16 @@ export interface MarketTokenProps {
   /** Placement -- absolute offsets, z-index, transforms. See the note above on why it lives at the call site. */
   style?: React.CSSProperties;
   className?: string;
+  /** PHASE 3 FINAL PLAY TUTORIAL: the chart's tokens carry `market-token-<companyId>` so a lesson about a price move
+   *  can highlight the token that moved (`tutorial/presentation.ts`). */
+  tutorialAnchor?: string;
 }
 
 /* Design note #1268: a forwarded ref, so the preview's slide can hand the disc to the Web Animations API.
    Placement still lives at the call site (#1155); the ref is the one thing a caller needs that a style
    cannot carry. */
 export const MarketToken = React.forwardRef<HTMLSpanElement, MarketTokenProps>(function MarketToken(
-  { companyId, ticker, diameterPx, fontSizePx, title, style, className },
+  { companyId, ticker, diameterPx, fontSizePx, title, style, className, tutorialAnchor },
   ref,
 ) {
   const fill = corporationLiveryColor(companyId);
@@ -63,6 +66,7 @@ export const MarketToken = React.forwardRef<HTMLSpanElement, MarketTokenProps>(f
     <span
       ref={ref}
       className={className}
+      data-tutorial-anchor={tutorialAnchor}
       style={{
         ...styles.token,
         backgroundColor: fill,

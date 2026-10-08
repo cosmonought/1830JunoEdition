@@ -152,7 +152,7 @@ describe("the shell wires the hook and names the dock", () => {
 
   it("measures the status dock through the hook, not an `[]` effect on a plain ref", () => {
     expect(APP).toContain("const { dockRef: statusDockRef, dockHeight: statusDockHeight } = useStatusDockHeight();");
-    expect(APP).toContain("<div ref={statusDockRef} style={styles.statusLineDock}>");
+    expect(APP).toContain("<div ref={statusDockRef} style={styles.statusLineDock} data-status-dock=\"\">");
     expect(APP).not.toContain("useState(96)");
     expect(APP).not.toContain("measuredDockHeightRef");
   });

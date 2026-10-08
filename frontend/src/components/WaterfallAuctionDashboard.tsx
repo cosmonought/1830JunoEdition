@@ -292,7 +292,7 @@ export function WaterfallAuctionDashboard({
   }
 
   return (
-    <div style={styles.root}>
+    <div style={styles.root} data-tutorial-anchor="auction-dashboard">
       <style>{MINI_AUCTION_GLOW_KEYFRAMES}</style>
       {/* Design note #305: ONE LINE, NOT THREE SAYING THE SAME THING. A title, a subtitle and a hint were
          three restatements of the same fact stacked above the one piece of live information in the row.

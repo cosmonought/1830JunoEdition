@@ -343,15 +343,18 @@ describe("the four excluded candidates are untouched", () => {
      file's business is the half 6A excluded and 6B-i also declined: the LIBRARY's listener, whose Escape is
      navigation rather than dismissal. The notice's own contract is asserted in depth in
      `components/tutorialDismissal.test.tsx`. */
-  it("leaves the tutorial LIBRARY's Escape hand-rolled, because it navigates rather than dismisses", () => {
-    const source = readStripped("components/TutorialModal.tsx");
-    /* Exactly one hand-written listener survives in the file, and it is the library's: it reads the current
-       topic to decide between going back to the list and closing. */
-    expect((source.match(/addEventListener\("keydown"/g) || []).length).toBe(1);
-    expect(source.includes("setTopicKey((current) => {")).toBe(true);
-    /* And the notice still records completion on whichever route dismisses it -- unchanged by 6B-i, which
-       reused `dismiss` rather than adding a flag-free exit. */
-    expect(source.includes("writeFlag(seenKey, true)")).toBe(true);
+  /* PHASE 3 FINAL PLAY TUTORIAL: `TutorialModal.tsx` is deleted. Its library became a NativeModal, whose one close
+     path is the platform's (no hand-written Escape); the coach that replaced the first-time notice is non-modal and
+     answers Escape only from inside itself (a React handler that consumes the key), never through a window
+     listener -- the one window listener it adds is its Alt+Shift+T focus shortcut. */
+  it("the tutorial library is a NativeModal and the coach owns no window Escape", () => {
+    const library = readStripped("tutorial/TutorialLibrary.tsx");
+    expect(library.includes("<NativeModal")).toBe(true);
+    expect(library.includes('addEventListener("keydown"')).toBe(false);
+    const coach = readStripped("tutorial/TutorialCoach.tsx");
+    expect((coach.match(/addEventListener\("keydown"/g) || []).length).toBe(1);
+    expect(coach.includes('event.code === "KeyT"')).toBe(true);
+    expect(coach.includes("useDialogDismissal")).toBe(false);
   });
 
   it("leaves EmergencyTrainPurchaseModal alone, which has no dismissal route to keep", () => {

@@ -142,7 +142,7 @@ export function PlayerCards({
   }
 
   return (
-    <div style={styles.grid}>
+    <div style={styles.grid} data-tutorial-anchor="player-cards">
       {/* Design note #606: injected, not inline. `React.CSSProperties` cannot
           express `@media (prefers-reduced-motion)`, and a lift that cannot be
           switched off is the kind of motion this app turns off everywhere

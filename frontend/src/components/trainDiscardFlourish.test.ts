@@ -451,11 +451,12 @@ describe("the shell raises it from the action, under the replay guard", () => {
 describe("Tutorial policy", () => {
   const CODE = readShell();
 
-  it("queues the limit explanation only in tutorial mode", () => {
-    /* VF-7's rule for the rust notice, applied to this one: with tutorials off, the cut and the Activity
-       Log have just said this, and a dialog restating it charges an interruption for nothing. */
+  it("queues the limit notice for every discard, whatever the tutorial preference (PHASE 3 FINAL PLAY TUTORIAL)", () => {
+    /* SUPERSEDED: VF-8 gated this on tutorial mode. Owner ruling (final tutorial pass): a due Fleet Loss is a
+       mandatory notice, so no optional-tutorial preference may suppress it. */
     const RAISE = sliceBetween(CODE, "showTrainDiscard({ companyId: protocol_id, ticker, before: was, model: model_type, at });", "const closures = describePrivateClosures(before, after);");
-    expect(RAISE).toContain("if (tutorialModeEnabled()) {");
+    expect(RAISE).not.toContain("tutorialModeEnabled");
+    expect(RAISE).toContain("const limitInForce = derivePhase(after)?.trainLimit ?? null;");
     expect(RAISE).toContain("discarded: [model_type]");
     expect(RAISE).toContain("rusted: []");
     // The replay-stable dismiss key (#1032) and the queue are the existing ones, not a second mechanism.
@@ -476,8 +477,8 @@ describe("Tutorial policy", () => {
     /* #896's standing rule: "silencing a notice changes WHEN a player finds out, never whether the game
        told them." The discard's own log line is the reducer's narration and is not gated here. */
     const RAISE = sliceBetween(CODE, "if (!replayingHistory && before !== null && before !== after && isDiscardTrainMsg(msg)) {", "const closures = describePrivateClosures(before, after);");
-    const gated = sliceFrom(RAISE, "if (tutorialModeEnabled()) {");
-    expect(gated).not.toContain("logInfo(");
+    const raised = sliceFrom(RAISE, "const limitInForce = derivePhase(after)?.trainLimit ?? null;");
+    expect(raised).not.toContain("logInfo(");
   });
 
   it("has retired the limit silence machinery, which was the last thing holding it up", () => {
@@ -498,10 +499,9 @@ describe("Tutorial policy", () => {
     expect(readShell()).not.toContain("setNoticeSilenced");
   });
 
-  it("gives tutorial mode a writable control, since it decides whether a dialog interrupts", () => {
-    // VF-7 added this; VF-8 is the second reader of the same setting, so it is pinned from here too.
-    const LIB = readStripped("components/TutorialModal.tsx");
-    expect(LIB).toContain("setTutorialMode(event.target.checked);");
+  it("no tutorial setting decides whether this dialog interrupts (PHASE 3 FINAL PLAY TUTORIAL)", () => {
+    expect(readShell()).not.toContain("tutorialModeEnabled");
+    expect(readStripped("tutorial/TutorialLibrary.tsx")).not.toContain("setTutorialMode");
   });
 });
 

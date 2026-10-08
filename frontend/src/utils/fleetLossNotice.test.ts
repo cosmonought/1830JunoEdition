@@ -132,12 +132,15 @@ describe("the copy tells a president what happened and what it costs", () => {
     expect(noticeBody(one)).toBe("One of your 4-trains has rusted.");
   });
 
-  it("names the limit AND the cheapest-first rule in the limit body", () => {
-    /* #704'S REASON, CARRIED FORWARD: "discarded its 2-train" without the limit reads as a choice the
-       president made. It is not a choice, and the copy has to say both halves -- what the ceiling is, and that
-       the corporation got no say in which train met it. */
+  it("names the limit and where the train went, and no longer claims a cheapest-first trim", () => {
+    /* PHASE 3 FINAL PLAY TUTORIAL (correction): #704's copy said the cheapest trains went and the corporation had no
+       say. Under #1530 the president chooses the train (`DiscardTrain`) and it goes to the Bank Pool unpaid (#1513);
+       the body names the ceiling and that destination, and makes no claim about who picked. */
     expect(noticeBody(limit)).toContain("new limit of 3");
-    expect(noticeBody(limit)).toContain("cheapest");
+    expect(noticeBody(limit)).toContain("Bank Pool");
+    expect(noticeBody(limit)).toContain("receives no payment");
+    expect(noticeBody(limit)).not.toContain("cheapest");
+    expect(noticeBody(limit)).not.toContain("depot");
   });
 
   it("has stopped promising the discarded train comes back (design note #990)", () => {

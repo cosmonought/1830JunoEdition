@@ -250,7 +250,7 @@ export function MoneyPanel({ room, onStart, busy = false, port, services }: Mone
   const tableLine = flow.stage === "funding" && flow.step !== "funded" ? startBlockerSentence(money, money.start.blocker, table.now) : null;
 
   return (
-    <section className="money-seat-panel" style={styles.panel} aria-label="Your deposit" data-testid="money-panel">
+    <section className="money-seat-panel" style={styles.panel} aria-label="Your deposit" data-testid="money-panel" data-tutorial-anchor="money-panel">
       <style>{MONEY_PANEL_CSS}</style>
       <p style={styles.sectionLabel} aria-hidden="true">
         Your deposit

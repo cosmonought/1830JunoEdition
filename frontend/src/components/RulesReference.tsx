@@ -2474,6 +2474,11 @@ export interface RulesReferenceProps {
    *  shown beside the build stamp. `null` for a board dealt from a legacy (unpinned) log; omitted with no board, when
    *  the stamp shows the build alone. The game id is never shown (LIVE-2 §7.2; OD-6 RESOLVED). */
   rulesEngineVersion?: number | null;
+  /** PHASE 3 FINAL PLAY TUTORIAL: open on this page instead of Overview -- a tutorial's "Rules Reference" link. Read
+   *  once, at mount (the tab mounts this component afresh on every open). */
+  initialSection?: RulesSection;
+  /** With `initialSection`: an element id on that page to bring into view once it has rendered. */
+  initialAnchor?: string;
 }
 
 /** OD-6 (AUD-01.07): the diagnostic line's rules half -- `Rules v13`; a legacy unpinned board says so. */
@@ -5533,6 +5538,8 @@ export function RulesReference({
   delayedAuctionStatus = null,
   gameOver: gameOverProp,
   rulesEngineVersion,
+  initialSection,
+  initialAnchor,
 }: RulesReferenceProps) {
   const roundType: RulesRoundType | null = roundTypeProp ?? null;
   /* Phase 3 W2-I (AUD-11.03): only a round-less reference can be the ended game -- a live round type wins. */
@@ -5577,7 +5584,18 @@ export function RulesReference({
      round still ANNOUNCES itself -- the dot in the strip, the accented crumb, `Go to current →` -- and the
      player decides whether to follow it. `RulesReference` is mounted only while its main tab is active
      (`App.tsx`), so a fresh mount IS a fresh open and this initial value is the whole landing rule. */
-  const [section, setSection] = useState<RulesSection>("overview");
+  /* PHASE 3 FINAL PLAY TUTORIAL: a tutorial link may name the page to open on -- still a fresh open, decided once. */
+  const [section, setSection] = useState<RulesSection>(initialSection ?? "overview");
+  useEffect(() => {
+    if (!initialSection || !initialAnchor) return undefined;
+    const timer = window.setTimeout(
+      () => document.getElementById(initialAnchor)?.scrollIntoView?.({ block: "start", behavior: "smooth" }),
+      0,
+    );
+    return () => window.clearTimeout(timer);
+    // Mount only: the link is read once, like the landing page.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   /* Game Flow is collapsed on every open while a round is live -- and OPEN when none is, because with no
      current round the architecture is the only thing the page has to say. Same mechanism either way: a fresh
      mount is a fresh open. */

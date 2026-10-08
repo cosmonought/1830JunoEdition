@@ -172,11 +172,9 @@ describe("4. every aria-modal left in source is classified", () => {
   /* The only surfaces still claiming `aria-modal` on a hand-written element, each with its owner and reason. A
      new one fails here until it is classified; a migrated one fails here until it is struck from the list. */
   const CLASSIFIED: Record<string, string> = {
-    /* AUD-13.04: GENUINELY MODAL (a library the player opens and closes; the notice blocks the board while up), so
-       its target is NativeModal. Owner ruling OD-5 (restated at the Phase-3 consolidated integration, 2026-10-05):
-       the tutorial work -- this conversion included -- is the FINAL tutorial pass's (contextual whitebox / spotlight,
-       built last), not W3-D's now. Not touched by this pass. */
-    "components/TutorialModal.tsx": "AUD-13.04 -- deferred to the final tutorial pass (OD-5)",
+    /* AUD-13.04: CLOSED by the PHASE 3 FINAL PLAY TUTORIAL. `TutorialModal.tsx` is deleted: the library is a
+       NativeModal (`tutorial/TutorialLibrary.tsx`) and the coach is deliberately NON-modal -- no scrim, no
+       `aria-modal`, no focus trap (`tutorial/TutorialCoach.tsx`) -- so neither is listed here. */
     /* CLASSIFIED BY BEHAVIOUR (W3-D review L4): GENUINELY MODAL -- a fixed scrim that blocks the board by pointer,
        with no keyboard isolation -- so under OD-15(b) its target is NativeModal, not the removal of the claim. Its
        migration is deferred, not refused: the President's card hands off to the MAP, and a top-layer dialog would

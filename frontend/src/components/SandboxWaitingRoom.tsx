@@ -937,7 +937,8 @@ export function SandboxWaitingRoom({
                       note={
                         ante.anteUjuno === "0"
                           ? ANTE_SUBSIDY_NOTE
-                          : `${formatJuno(ante.subsidyUjuno)} of each ante funds the developer treasury for fee grants; ${formatJuno(ante.netUjuno)} reaches the pool.`
+                          : /* PHASE 3 FINAL PLAY TUTORIAL (copy correction): no fee grants exist; the cut is the escrow's fee. */
+                            `${formatJuno(ante.subsidyUjuno)} of each ante is kept as the escrow's fee (not refunded); ${formatJuno(ante.netUjuno)} reaches the pool.`
                       }
                     />
                   )}

@@ -2586,7 +2586,7 @@ function CompanyActions({
         {company.par_value === null && (
           <div style={styles.numericRowBlock}>
             <span style={styles.cardActionsLabel}>Par</span>
-            <div style={styles.sellSlashRow} role="group" aria-label="Par value">
+            <div style={styles.sellSlashRow} role="group" aria-label="Par value" data-tutorial-anchor="stock-par">
               {PAR_VALUE_LADDER.map((value, index) => (
                 <React.Fragment key={value}>
                   {index > 0 && (
@@ -3389,7 +3389,9 @@ export function StockRoundPanel({
      The rule is about content volume, not house style. */
   return (
     <div style={styles.root}>
-      <div style={styles.headerRow}>
+      {/* PHASE 3 FINAL PLAY TUTORIAL: the Stock Round lesson highlights the panel's compact header, not the whole
+          panel, so the coach can sit beside it without covering the buy and sell controls. */}
+      <div style={styles.headerRow} data-tutorial-anchor="stock-panel">
         <span style={styles.headerTitle}>Stock Round</span>
         {/* Design note #34: name the seat rather than address an absent
             "you". Online the wallet check still decides; in hotseat the

@@ -298,6 +298,7 @@ export default function MainTabBar({
       {tabs.map((tab) => (
         <button
           key={tab.id}
+          data-tutorial-anchor={`tab-${tab.id}`}
           type="button"
           className={activeTab === tab.id ? "nav-tab nav-tab-active" : "nav-tab"}
           aria-current={activeTab === tab.id ? "page" : undefined}
@@ -326,6 +327,7 @@ export default function MainTabBar({
         className="nav-tab"
         style={styles.tutorialsButton}
         onClick={onOpenTutorials}
+        data-testid="open-tutorials"
         title="Read any tutorial at any time — the auction, the Stock Round, the Operating Round, or the stock market."
       >
         &#63; Tutorials

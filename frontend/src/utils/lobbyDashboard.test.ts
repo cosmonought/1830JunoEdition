@@ -134,7 +134,7 @@ describe("the sandbox purple is a signal with a ladder under it", () => {
     for (const path of [
       "components/Lobby.tsx",
       "components/SandboxWaitingRoom.tsx",
-      "components/TutorialModal.tsx",
+      "tutorial/TutorialCoach.tsx", // PHASE 3 FINAL PLAY TUTORIAL: the coach replaced `TutorialModal.tsx`
       "styles/appStyles.ts",
     ]) {
       expect(readStripped(path)).toContain("SANDBOX_");

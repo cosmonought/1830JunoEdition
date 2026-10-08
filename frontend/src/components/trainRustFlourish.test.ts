@@ -496,14 +496,16 @@ describe("the shell raises it from the authoritative narrators only", () => {
   });
 });
 
-describe("Tutorial policy", () => {
+describe("Tutorial policy -- SUPERSEDED: the rust notice is mandatory again (PHASE 3 FINAL PLAY TUTORIAL)", () => {
   const CODE = readShell();
 
-  it("queues the rust notice only in tutorial mode, and never gates the limit notice", () => {
-    expect((CODE.match(/if \(notice\.cause === "rust" && !tutorialModeEnabled\(\)\) continue;/g) ?? []).length).toBe(2);
-    /* THE LIMIT NOTICE IS UNTOUCHED, which is this batch's scope boundary: a train-limit drop still has
-       no visual vocabulary of its own, so its modal is still the only thing that says a train was taken. */
-    expect(CODE).not.toContain('notice.cause === "limit" && !tutorialModeEnabled()');
+  it("queues the rust notice whatever the tutorial preference: no tutorial gate remains", () => {
+    /* OWNER RULING (final tutorial pass): Fleet Loss must NOT depend on whether optional tutorials are enabled. VF-7's
+       two `!tutorialModeEnabled()` skips are gone, and so is the setting itself. */
+    expect(CODE).not.toContain("tutorialModeEnabled");
+    expect(CODE).not.toMatch(/notice\.cause === "rust" && !tutorial/);
+    /* The gentle-rust deferral (#1002) is a timing rule, not a preference, and stays. */
+    expect(CODE).toContain('if (gentleRustOn && notice.cause === "rust") continue;');
   });
 
   it("writes the Activity Log line whatever the setting says", () => {
@@ -511,7 +513,7 @@ describe("Tutorial policy", () => {
        player finds out, never whether the game told them." The line is above the gate and outside it. */
     const block = sliceBetween(CODE, "for (const loss of describeFleetLosses(before, after, msg)) {", "for (const notice of fleetLossNotices(loss, arrivingTier, limitNow)) {");
     expect(block).toContain('if (sentence) logInfo("Phase Change", sentence);');
-    expect(block).not.toContain("tutorialModeEnabled");
+    expect(block).not.toContain("tutorialsAutoEnabled");
   });
 
   it("holds the rust modal until the chips have finished, on the active schedule", () => {
@@ -529,10 +531,13 @@ describe("Tutorial policy", () => {
     expect(due).toContain('!(notice.cause === "limit" && discardNoticeHeld)');
   });
 
-  it("gives tutorial mode a control, since it now decides whether a dialog interrupts", () => {
-    const LIB = readStripped("components/TutorialModal.tsx");
-    expect(LIB).toContain("setTutorialMode(event.target.checked);");
-    expect(LIB).toContain("Tutorial mode");
+  it("the tutorial library's setting governs optional lessons only", () => {
+    /* VF-7's "Tutorial mode" checkbox decided whether this dialog interrupted. The final tutorial pass retires it: the
+       library's one preference is "Automatic tutorials", which reaches the coach and nothing mandatory. */
+    const LIB = readStripped("tutorial/TutorialLibrary.tsx");
+    expect(LIB).not.toContain("Tutorial mode");
+    expect(LIB).toContain("onSetAuto(event.target.checked)");
+    expect(readStripped("tutorial/useTutorialSystem.ts")).not.toContain("Fleet");
   });
 
   it("leaves one system deciding whether the rust modal appears", () => {
@@ -547,8 +552,8 @@ describe("Tutorial policy", () => {
        (#1530: describeFleetLosses reports nothing at the phase change, and the DiscardTrain message is
        spliced out before the narrator sees it). With no reader left on either half, the whole store is
        retired rather than narrowed again -- so this case now asserts its ABSENCE, which is the same
-       rule stated at its limit: exactly one system decides whether either dialog appears, and that
-       system is the tutorial setting. */
+       rule stated at its limit: exactly one system decides whether either dialog appears. (PHASE 3 FINAL PLAY
+       TUTORIAL: that system is the forced-notice chain alone; no tutorial setting decides it any more.) */
     const NOTICE = readStripped("utils/fleetLossNotice.ts");
     expect(NOTICE).not.toContain("SilenceableCause");
     expect(NOTICE).not.toContain("isNoticeSilenced");

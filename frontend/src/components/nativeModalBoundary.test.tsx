@@ -644,7 +644,7 @@ describe("#1651 three families, on the same boundary", () => {
        President's card hands off to the MAP (#440 / #1331), and at the start of an Operating Round it opens beside
        the forced private-revenue notice -- a second top-layer dialog there would leave whichever is on top making the
        board the President must click inert. Its waiting seats no longer get a scrim at all (`WaitingStatusBanner`). */
-    for (const name of ["TutorialModal", "PrivateTradePanel", "HomeStationPrompt", "GameIntroOverlay"]) {
+    for (const name of ["PrivateTradePanel", "HomeStationPrompt", "GameIntroOverlay"]) {
       const source = readStripped(`components/${name}.tsx`);
       expect([name, "untouched by the boundary", source.includes("NativeModal")]).toEqual([
         name,
@@ -652,14 +652,10 @@ describe("#1651 three families, on the same boundary", () => {
         false,
       ]);
     }
-    for (const name of ["TutorialModal"]) {
-      const source = readStripped(`components/${name}.tsx`);
-      expect([name, "still on useDialogDismissal", source.includes("useDialogDismissal(")]).toEqual([
-        name,
-        "still on useDialogDismissal",
-        true,
-      ]);
-    }
+    /* PHASE 3 FINAL PLAY TUTORIAL: the tutorial left this list. Its library is a NativeModal now; its coach is
+       non-modal by design (a contextual card must leave the board usable) and so never acquires the boundary. */
+    expect(readStripped("tutorial/TutorialLibrary.tsx").includes("<NativeModal")).toBe(true);
+    expect(readStripped("tutorial/TutorialCoach.tsx").includes("NativeModal")).toBe(false);
   });
 });
 

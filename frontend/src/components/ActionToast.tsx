@@ -368,6 +368,7 @@ export function ActionToast({
            interruption. */
         role="status"
         aria-live="polite"
+        data-action-toast="" /* PHASE 3 FINAL PLAY TUTORIAL: the coach keeps clear of the toast slot */
         /* Design note #697: `key` on the token, so React remounts and the entrance animation replays for a
            repeated action. Without it a second identical purchase would update nothing in the DOM and the
            player would see a toast that never moved. */

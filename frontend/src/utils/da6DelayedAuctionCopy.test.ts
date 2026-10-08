@@ -260,9 +260,11 @@ describe("source pins: the shell hands the surfaces the table's own facts", () =
     expect(app).toContain("delayedAuction={tableVariants.delayedAuction === true}");
     expect(app).not.toContain('"The Waterfall Auction is complete \\u2014 Stock Round 1 begins."');
   });
-  it("the tutorials read the Delayed Auction's pages on its tables (DA-F8h)", () => {
-    expect(app).toContain("pages={tableVariants.delayedAuction ? DELAYED_WATERFALL_AUCTION_TUTORIAL : WATERFALL_AUCTION_TUTORIAL}");
-    expect(app).toContain("pages={tableVariants.delayedAuction ? DELAYED_STOCK_ROUND_TUTORIAL : STOCK_ROUND_TUTORIAL}");
+  it("the tutorials read the Delayed Auction's lessons on its tables (DA-F8h)", () => {
+    /* PHASE 3 FINAL PLAY TUTORIAL: one scope, handed to the coach and the library alike (`tutorial/lessons.ts`
+       `lessonText`); the rendered wording is asserted in `da6DelayedAuctionUi.test.tsx`. */
+    expect(app).toContain("const tutorialScope = useMemo(() => ({ delayedAuction: tableVariants.delayedAuction === true }), [tableVariants]);");
+    expect((app.match(/scope=\{tutorialScope\}/g) ?? []).length).toBe(2);
   });
   it("the dashboard and the sub-panel read the shared title and status line (DA-F8c, DA-F8d)", () => {
     const dashboard = readStripped("components/WaterfallAuctionDashboard.tsx");

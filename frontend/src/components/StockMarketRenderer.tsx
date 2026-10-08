@@ -1039,6 +1039,7 @@ export function StockMarketRenderer({
                         className={isOperated ? "market-token market-token-operated" : "market-token"}
                         companyId={occupant.company_id}
                         ticker={occupant.ticker}
+                        tutorialAnchor={`market-token-${occupant.company_id}`}
                         diameterPx={tokenDiameterPx}
                         fontSizePx={tokenFontSizePx}
                         title={`${corporationLabel(occupant.ticker)} — $${occupant.price ?? "?"}${

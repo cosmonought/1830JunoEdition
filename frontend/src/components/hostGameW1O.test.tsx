@@ -129,7 +129,7 @@ describe("AUD-17.01: each option is named by its label and described by its sent
       expect([key, textOfIds(box.getAttribute("aria-describedby")).length > 10]).toEqual([key, true]);
     }
     const ante = document.querySelector<HTMLInputElement>('input[aria-label="Ante"]');
-    if (ante) expect(textOfIds(ante.getAttribute("aria-describedby"))).toMatch(/Antes are off/);
+    if (ante) expect(textOfIds(ante.getAttribute("aria-describedby"))).toMatch(/No ante at this table/);
   });
 });
 

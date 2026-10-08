@@ -3,11 +3,12 @@
 //
 // THE REAL NOTICES, DRIVEN BY THE REAL CHAIN. `useNoticeChain` and the five notice components below are the shell's
 // own, mounted the way the shell mounts them: each one handed its notice only when the chain presents it, the
-// heading beside them, and a tutorial mounted as the shell mounts it -- OUTSIDE the chain (owner ruling OD-5: the
+// heading beside them, and the tutorial COACH mounted as the shell mounts it -- OUTSIDE the chain (owner ruling OD-5: the
 // forced-notice chain is Emergency, Fleet Loss, Private Revenue, Phase Three, Herald; Tutorial is not part of it.
-// The consolidated integration, 2026-10-05, removed the sixth entry W3-A had added). No test in this repository renders `AppShell`
-// (it needs a room, a link and a reducer); `noticeChainShellWiring` below pins that the shell is wired exactly this
-// way, which is the one part a render here cannot see.
+// The consolidated integration, 2026-10-05, removed the sixth entry W3-A had added). PHASE 3 FINAL PLAY TUTORIAL: the
+// coach is the real `TutorialLayer`, its one lesson chosen by the real `coordinateTutorial` from the same facts the shell
+// hands it -- so these cases prove the coach YIELDS to every forced notice and never joins the chain. The shell's own
+// wiring is also exercised end to end by `tutorial/appTutorial.test.tsx`, which renders the real App.
 //
 // THE EMERGENCY IS A STAND-IN: the real `EmergencyTrainPurchaseModal` needs a v13 funding plan to render at all.
 // The stand-in is the same `NativeModal` contract the real one uses -- non-dismissible, no restore, `chainedNotice`
@@ -16,7 +17,7 @@
 // jsdom 16.7 has `HTMLDialogElement` without `showModal` / `close`, so they are stubbed to toggle `open`, as
 // `nativeModalBoundary.test.tsx` does.
 
-import React, { act, useRef, useState } from "react";
+import React, { act, useRef, useState, useSyncExternalStore } from "react";
 import { createRoot, type Root } from "react-dom/client";
 
 import { ModalLayerHost } from "./ModalPortal";
@@ -25,14 +26,15 @@ import FleetLossModal from "./FleetLossModal";
 import PrivateRevenueModal from "./PrivateRevenueModal";
 import PhaseThreeNoticeModal from "./PhaseThreeNoticeModal";
 import HeraldHomeFloatModal from "./HeraldHomeFloatModal";
-import TutorialModal from "./TutorialModal";
+import { TutorialLayer } from "../tutorial/TutorialCoach";
+import { coordinateTutorial } from "../tutorial/coordinator";
 import GameScreenHeading, { GAME_SCREEN_HEADING_TEXT } from "./GameScreenHeading";
 import BoardBehindNotice from "./BoardBehindNotice";
 import GameOverModal from "./GameOverModal";
 import { NativeModalTurn } from "./NativeModalTurn";
 import { useNoticeChain } from "../utils/useNoticeChain";
-import { NOTICE_PRIORITY } from "../utils/noticeChain";
-import { openNativeModalCount } from "../utils/nativeModalRegistry";
+import { NOTICE_PRIORITY, anyNoticeDue } from "../utils/noticeChain";
+import { openNativeModalCount, subscribeNativeModals } from "../utils/nativeModalRegistry";
 import { readShell, readStripped, sliceBetween } from "../utils/sourceScan";
 import type { FleetLossNotice } from "../utils/fleetLossNotice";
 
@@ -68,8 +70,8 @@ const ROUND = {
   others: [],
 };
 const HERALD = { companyId: 3, ticker: "PRR", hexLabel: "H12", place: "Altoona (H12)", revenue: 10, firstTokenCost: 40 };
-const TOPIC = "w3a-test-topic";
-const TUTORIAL_HEADING = "A test tutorial";
+/** The coach's lesson in these cases (`tutorial/lessons.ts`), and the heading it shows. */
+const TUTORIAL_HEADING = "A corporation has floated";
 
 type Due = {
   emergency: boolean;
@@ -108,16 +110,30 @@ function Shell({ initial }: { initial: Due }) {
   const [due, setDue] = useState(initial);
   update = (patch) => setDue((current) => ({ ...current, ...patch }));
   const headingRef = useRef<HTMLHeadingElement | null>(null);
-  const { presented } = useNoticeChain(
-    {
-      emergency: due.emergency,
-      fleetLoss: due.fleet !== null,
-      privateRevenue: due.revenue !== null,
-      phaseThree: due.phaseThree,
-      herald: due.herald !== null,
+  const forced = {
+    emergency: due.emergency,
+    fleetLoss: due.fleet !== null,
+    privateRevenue: due.revenue !== null,
+    phaseThree: due.phaseThree,
+    herald: due.herald !== null,
+  };
+  const { presented } = useNoticeChain(forced, headingRef);
+  /* As the shell: the coach's one lesson is the coordinator's decision, held while a film covers the shell, while any
+     native dialog is open and while any forced notice is due. */
+  const nativeOpen = useSyncExternalStore(subscribeNativeModals, () => openNativeModalCount() > 0, () => false);
+  const coach = coordinateTutorial({
+    pending: due.tutorialActive ? [{ id: "stock.float" }] : [],
+    auto: true,
+    seated: true,
+    blockers: {
+      cinematic: due.covered,
+      nativeDialogOpen: nativeOpen,
+      forcedNoticeDue: anyNoticeDue(forced),
+      boardInteraction: false,
+      scrubbing: false,
     },
-    headingRef,
-  );
+    relevant: () => true,
+  });
   return (
     <>
       <button type="button" data-testid="board-control" data-tick={due.tick}>
@@ -174,11 +190,12 @@ function Shell({ initial }: { initial: Due }) {
         liveryInk="#fff"
         onDismiss={() => update({ herald: null })}
       />
-      <TutorialModal
-        topicKey={TOPIC}
-        heading={TUTORIAL_HEADING}
-        pages={[{ title: "One", body: "The only page." }]}
-        active={due.tutorialActive}
+      <TutorialLayer
+        presented={coach.present}
+        scope={{}}
+        onAcknowledge={() => update({ tutorialActive: false })}
+        onTurnOff={() => update({ tutorialActive: false })}
+        onOpenLibrary={() => undefined}
       />
     </>
   );
@@ -207,7 +224,8 @@ function render(initial: Due) {
   });
 }
 
-/** Every surface on screen that covers the page: open native dialogs and ARIA modal divs (the tutorial). */
+/** Every surface on screen: open native dialogs, any ARIA modal div (there should be none), and the tutorial coach
+ *  (named by its heading). */
 function surfaces(): string[] {
   const native = Array.from(document.querySelectorAll<HTMLDialogElement>("dialog[open]")).map(
     (node) => node.getAttribute("aria-label") ?? "(unnamed dialog)",
@@ -215,7 +233,10 @@ function surfaces(): string[] {
   const aria = Array.from(document.querySelectorAll<HTMLElement>("[role='dialog'][aria-modal='true']")).map(
     (node) => node.getAttribute("aria-label") ?? "(unnamed modal)",
   );
-  return [...native, ...aria];
+  const coach = Array.from(document.querySelectorAll<HTMLElement>("[data-tutorial-coach]")).map(
+    (node) => node.querySelector("h2")?.textContent ?? "(unnamed coach)",
+  );
+  return [...native, ...aria, ...coach];
 }
 
 function click(label: RegExp) {
@@ -293,17 +314,46 @@ describe("8-10. AUD-13.07 / OD-5(c): forced notices present one at a time, in th
     expect(surfaces()).toEqual(["Phase 3: private companies are for sale"]);
   });
 
-  it("a tutorial is not part of the chain: the chain neither holds it nor waits for it (owner ruling OD-5)", () => {
-    /* The consolidated integration's correction of W3-A's sixth entry. A tutorial keeps the presentation it had before
-       W3-A -- it opens on its own arming -- until the final tutorial pass replaces it. The co-presence below is that
-       pre-W3-A presentation, asserted only to prove the chain neither holds nor waits for the tutorial; it is not a
-       design for how a tutorial and a forced notice should share the screen (the final tutorial pass decides that). */
+  it("a tutorial is not part of the chain, and it YIELDS to it: suspended, not answered, then back (final tutorial pass)", () => {
+    /* OD-5 stands: the chain neither holds nor waits for a tutorial. The PHASE 3 FINAL PLAY TUTORIAL adds the other
+       half -- the coach yields to every forced notice: it is not on screen beside one, and it is not answered by one. */
     render({ ...NOTHING, herald: HERALD, tutorialActive: true });
-    expect(surfaces()).toContain("PRR has floated");
-    expect(surfaces()).toContain(TUTORIAL_HEADING);
+    expect(surfaces()).toEqual(["PRR has floated"]);
     click(/Understood/);
-    expect(surfaces()).toEqual([TUTORIAL_HEADING]); // the chain ended; the tutorial is still the player's to answer
-    expect(window.localStorage.getItem(`1830juno.tutorial_seen.v1.${TOPIC}`)).toBeNull();
+    expect(surfaces()).toEqual([TUTORIAL_HEADING]); // suspended, never acknowledged: it comes back on its own
+  });
+
+  it("each forced notice in turn holds the coach; the coach follows the whole chain", () => {
+    render({ ...NOTHING, emergency: true, fleet: FLEET, revenue: ROUND, phaseThree: true, herald: HERALD, tutorialActive: true });
+    expect(surfaces()).toEqual(["Emergency Train Purchase"]);
+    act(() => update({ emergency: false }));
+    expect(surfaces()).toHaveLength(1);
+    expect(surfaces()[0]).toMatch(/PRR/);
+    click(/Continue to PRR's turn/);
+    expect(surfaces()).toHaveLength(1);
+    expect(surfaces()).not.toContain(TUTORIAL_HEADING);
+    act(() => update({ revenue: null, phaseThree: false, herald: null }));
+    expect(surfaces()).toEqual([TUTORIAL_HEADING]);
+  });
+
+  it("a forced notice that comes due while the coach is up takes the screen; the coach returns unanswered", () => {
+    render({ ...NOTHING, tutorialActive: true });
+    expect(surfaces()).toEqual([TUTORIAL_HEADING]);
+    act(() => update({ phaseThree: true }));
+    expect(surfaces()).toEqual(["Phase 3: private companies are for sale"]);
+    click(/^Got it$/);
+    expect(surfaces()).toEqual([TUTORIAL_HEADING]);
+  });
+
+  it("a foreign dialog and a cinematic each hold the coach", () => {
+    render({ ...NOTHING, tutorialActive: true, foreign: true });
+    expect(surfaces()).toEqual(["Market peek"]);
+    click(/Close peek/);
+    expect(surfaces()).toEqual([TUTORIAL_HEADING]);
+    act(() => update({ covered: true }));
+    expect(surfaces()).toEqual([]);
+    act(() => update({ covered: false }));
+    expect(surfaces()).toEqual([TUTORIAL_HEADING]);
   });
 });
 
@@ -414,35 +464,28 @@ describe("11-12. AUD-13.02 / OD-5(b): where focus lands, and when it does not mo
   });
 });
 
-describe("6-7. AUD-01.06 (INTERIM): the zero-state auto-reset is gone -- not the tutorial redesign", () => {
-  /* W3-A removed design note #301's effect, which cleared every tutorial's seen flag on each zero-state mount (the
-     default scenario). That removal is kept; it is a known bad auto-reset gone, nothing more. The tutorial system and
-     its re-arm policy are the FINAL tutorial pass's (owner ruling OD-5): the existing seen flags simply stay set. */
-  it("an answered tutorial does not come back on a zero-state remount, nor when its round becomes active again", () => {
+describe("6-7. AUD-01.06: the zero-state auto-reset is gone; an answered lesson leaves the screen", () => {
+  /* W3-A removed design note #301's effect, which cleared every tutorial's seen flag on each zero-state mount. The
+     PHASE 3 FINAL PLAY TUTORIAL replaced the flags with the per-game ledger (`tutorial/tutorialLedger.test.ts`). Here:
+     answering the coach takes it off the screen, and nothing else does. */
+  it("Got it answers the coach", () => {
     render({ ...NOTHING, tutorialActive: true });
     expect(surfaces()).toEqual([TUTORIAL_HEADING]);
     click(/^Got it$/);
-    expect(surfaces()).toEqual([]);
-    // A remount of the shell in its zero state -- what every table, reload and remount used to be.
-    act(() => root.unmount());
-    root = createRoot(host);
-    render({ ...NOTHING, tutorialActive: true });
-    expect(surfaces()).toEqual([]);
-    // A later game: the round becomes active again in a fresh shell.
-    act(() => update({ tutorialActive: false }));
-    act(() => update({ tutorialActive: true }));
     expect(surfaces()).toEqual([]);
   });
 });
 
 describe("consolidated integration (2026-10-05): surfaces the chain did not meet on W3-A's branch", () => {
-  it("the chain ending while an interim tutorial is still up does not move focus behind it", () => {
-    /* Tutorial left the forced-notice chain (owner ruling OD-5), so the chain can end with a tutorial's aria-modal card
-       on screen. Focusing the heading then would put focus BEHIND that card. */
+  it("the chain ending hands focus to the heading even as the coach comes up: the coach is not modal and steals nothing", () => {
+    /* The interim tutorial was an aria-modal card, so focus could not go to the heading behind it. The coach is a
+       non-modal region: the chain's one focus move goes to the heading as ruled (OD-5(b)), and the coach appears
+       without taking focus (keyboard users reach it with Alt+Shift+T). */
     render({ ...NOTHING, herald: HERALD, tutorialActive: true });
     click(/Understood/);
     expect(surfaces()).toEqual([TUTORIAL_HEADING]);
-    expect(document.activeElement).not.toBe(heading());
+    expect(document.activeElement).toBe(heading());
+    expect(document.querySelector("[data-tutorial-coach]")?.getAttribute("aria-modal")).toBeNull();
   });
 
   it("the chain ending while a cinematic takeover makes the shell inert does not focus into the inert subtree", () => {
@@ -480,7 +523,7 @@ describe("noticeChainShellWiring: the shell mounts every forced notice through t
   const APP = readShell();
 
   it("asks the chain, hands each notice its turn, and puts the heading on the game screen", () => {
-    expect(APP).toContain("const { presented: presentedNotice } = useNoticeChain(");
+    expect(APP).toContain("const { presented: presentedNotice } = useNoticeChain(forcedNoticesDue, gameScreenHeadingRef);");
     expect(APP).toContain('plan={presentedNotice === "emergency" ? emergencyModalPlan : null}');
     expect(APP).toContain('notice={presentedNotice === "fleetLoss" ? dueFleetNotice : null}');
     expect(APP).toContain('round={presentedNotice === "privateRevenue" ? privatePayoutPhase : null}');
@@ -493,13 +536,14 @@ describe("noticeChainShellWiring: the shell mounts every forced notice through t
     expect(APP).not.toContain("presentedTutorial");
     expect(APP).not.toContain("TUTORIAL_CHAIN_ORDER");
     expect(APP).not.toContain("handleTutorialOpenChange");
-    const modal = readStripped("components/TutorialModal.tsx");
-    expect(modal).not.toContain("onOpenChange");
-    expect(modal).not.toContain("held?: boolean");
+    /* PHASE 3 FINAL PLAY TUTORIAL: the coach reads the chain (`forcedNoticeDue: anyNoticeDue(forcedNoticesDue)`) and
+       the chain never reads the coach; the coach's surface is not a chained notice. */
+    expect(APP).toContain("forcedNoticeDue: anyNoticeDue(forcedNoticesDue),");
+    expect(readStripped("tutorial/TutorialCoach.tsx")).not.toContain("chainedNotice");
   });
 
   it("feeds the chain the ruled due notices, an answered one never due", () => {
-    const chain = sliceBetween(APP, "const { presented: presentedNotice } = useNoticeChain(", "gameScreenHeadingRef,\n  );");
+    const chain = sliceBetween(APP, "const forcedNoticesDue = {", "const { presented: presentedNotice } = useNoticeChain(forcedNoticesDue, gameScreenHeadingRef);");
     expect(chain).toContain('emergency: emergencyModalPlan !== null && emergencyModalPlan.stage !== "legacy"');
     expect(chain).toContain("!noticeLedger.isAcknowledged(noticeDismissKey(dueFleetNotice))");
     expect(chain).toContain("!noticeLedger.isAcknowledged(privateRevenueNoticeKey(privatePayoutPhase.roundLabel))");

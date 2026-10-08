@@ -338,14 +338,18 @@ export const VARIANT_COPY: Readonly<Record<VariantCopyKey, { label: string; blur
  * was played at a table, in one sitting. */
 export type GameMode = "live" | "async";
 
+/* PHASE 3 FINAL PLAY TUTORIAL (copy correction): the blurbs promised payout timings ("pays out the same day", "a 48-hour
+   window") that are the escrow deployment's configured challenge windows, not facts of the mode -- and a result waits
+   out its window whether or not anyone disputes it. They now describe the pace only, which the final clocks policy
+   fixes (`docs/phase3/PHASE3_FINAL_CLOCKS_REMEDIES.md`). */
 export const GAME_MODE_COPY: Readonly<Record<GameMode, { label: string; blurb: string }>> = {
   live: {
     label: "Live",
-    blurb: "Everyone is at the table now. Short clocks; a game that disputes nothing pays out the same day.",
+    blurb: "Everyone is at the table now, playing in one sitting, with a short clock on each required action.",
   },
   async: {
     label: "Async",
-    blurb: "Turns taken over days. Long clocks, and a 48-hour window before any disputed result is paid.",
+    blurb: "Turns taken over days, with a long clock on each required action.",
   },
 };
 

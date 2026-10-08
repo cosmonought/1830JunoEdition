@@ -25,7 +25,9 @@ const strip = (raw: string) =>
 const DEPOT = strip(read("components/TrainPurchasePanel.tsx"));
 const PRIVATE_RAW = read("components/PrivateTradePanel.tsx");
 const PRIVATE = strip(PRIVATE_RAW);
-const TUTORIAL = strip(read("components/TutorialModal.tsx"));
+/* PHASE 3 FINAL PLAY TUTORIAL: the tutorial's words moved from `TutorialModal.tsx`'s page arrays into the canonical
+   lesson registry; the consent rule lives on the private-company lesson. */
+const TUTORIAL = strip(read("tutorial/lessons.ts"));
 
 describe("the bank no longer stands aside, because it no longer folds (#812 -> #859/#860)", () => {
   /* #812 COLLAPSED THE DEPOT WHEN THE ROSTER OPENED, and its reasoning was about height: the roster with
@@ -99,11 +101,12 @@ describe("the private panel's intro moved to the tutorial (design note #814)", (
   it("gives the consent rule a home, since it had none", () => {
     /* THE HALF THAT COULD NOT SIMPLY BE DELETED, and the reason I left this paragraph alone two reports ago
        after flagging it. "The owner has to agree" was stated nowhere else in the app. */
-    expect(TUTORIAL).toContain("The OWNER has to agree");
+    expect(TUTORIAL).toContain("The owner has to agree");
     const slide = TUTORIAL.slice(
-      TUTORIAL.indexOf('title: "Steps 1 and 2"'),
-      TUTORIAL.indexOf('title: "Terrain Costs"'),
+      TUTORIAL.indexOf('id: "operating.privates"'),
+      TUTORIAL.indexOf('id: "market.moves"'),
     );
+    expect(slide).toContain("The owner has to agree");
     expect(slide).toContain("negotiation, not a purchase you can force");
   });
 

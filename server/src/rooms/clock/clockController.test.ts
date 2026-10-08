@@ -383,6 +383,8 @@ describe("Live train offers through the controller (real engine offers)", () => 
     const approval = (byte: string) => ({ approve_until: 9_999_999_999, signature: byte.repeat(64) });
     let answer: readonly string[] | null = null;
     let reads = 0;
+    /* A stalled chain read (a halted node: the read waits its whole timeout) -- released by the test. */
+    let stall: Promise<void> | null = null;
     const port = {
       configured: true,
       annulOpen: async () => false,
@@ -391,6 +393,7 @@ describe("Live train offers through the controller (real engine offers)", () => 
       fence: () => undefined,
       staleApprovals: async () => {
         reads += 1;
+        if (stall !== null) await stall;
         return answer;
       },
     } as unknown as RemedyPort;
@@ -406,17 +409,53 @@ describe("Live train offers through the controller (real engine offers)", () => 
     await h.clock.idle();
     assert.ok(reads >= 1);
     assert.deepEqual([h.record().phase, h.record().remedy, h.record().ended], ["overdue", null, null], "nothing decided on unknown keys");
+    /* PHASE 3 ESCROW 2.1 release readiness: the hold is VISIBLE to the operator -- a count (the ClockFinalityHeldTables
+       gauge), one audit line when it begins (game id, epoch, final second: never a key, signature or vote), and the
+       per-read counter. */
+    assert.equal(h.clock.finalityHeld(), 1, "one table frozen at an undecided minute 30");
+    assert.ok(h.clock.counters.finalityKeysUnread >= 1);
+    const unread = h.ops.lines.filter((line) => line.event === "clock.finality-keys-unread");
+    assert.equal(unread.length, 1, "audited once per hold, not per re-read");
+    assert.deepEqual(Object.keys(unread[0]).sort(), ["epoch", "event", "final_secs", "game_id"]);
+    assert.equal(unread[0].game_id, GAME);
+    assert.ok(!JSON.stringify(unread[0]).includes("22".repeat(64)) && !JSON.stringify(unread[0]).includes("33".repeat(64)), "no approval signature in the audit line");
     /* The defaulter's move after minute 30 is no cure: refused while the decision waits. So is a vote. */
     const late = await h.submit(P1, { PassTurn: { game_id: 1 } });
     assert.deepEqual([late.ok, (late as { code?: string }).code], [false, CLOCK_REFUSAL.unavailable]);
     const veto = await h.serial(() => h.clock.op(h.game, h.tx, { type: "clock-vote", seat: P2, proposalId: id, yes: false, approval: null, verifiedFor: null, stale: [], renew: false }));
     assert.deepEqual([veto.ok, (veto as { code?: string }).code], [false, CLOCK_REFUSAL.unavailable]);
     /* The chain answers: the retry decides minute 30 at its own moment. */
+    /* Still unread across further re-reads: still one audit line, still held. */
+    await h.time.advance(10 * SEC);
+    await h.clock.idle();
+    assert.equal(h.ops.lines.filter((line) => line.event === "clock.finality-keys-unread").length, 1);
+    /* Review (observability HIGH): while a re-read is IN FLIGHT the table is still frozen -- the gauge must not blink to
+       0 (the catch-up clears `finalityPending` before its read returns). */
+    let release: () => void = () => undefined;
+    stall = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await h.time.advance(6 * SEC); // past FINALITY_KEY_REREAD_MS: the next catch-up reads the chain again
+    const readsBefore = reads;
+    /* A refused move runs the table's catch-up, which re-reads the keys (and clears `finalityPending` meanwhile). */
+    const inFlight = h.submit(P1, { PassTurn: { game_id: 1 } });
+    for (let i = 0; i < 200 && reads === readsBefore; i += 1) await new Promise((resolve) => setImmediate(resolve));
+    assert.ok(reads > readsBefore, "a re-read is in flight");
+    assert.equal(h.clock.finalityHeld(), 1, "still counted while the re-read is in flight");
+    stall = null;
+    release();
+    await inFlight;
+    await h.clock.idle();
+    assert.equal(h.clock.finalityHeld(), 1);
     answer = [];
     await h.time.advance(40 * SEC);
     await h.clock.idle();
     const r = h.record();
     assert.deepEqual([r.ended?.kind, r.remedy?.kind, r.remedy?.final_ms], ["live-foreclosure", 2, minute30]);
+    assert.equal(h.clock.finalityHeld(), 0, "decided: nothing held");
+    const read = h.ops.lines.filter((line) => line.event === "clock.finality-keys-read");
+    assert.equal(read.length, 1);
+    assert.ok(typeof read[0].held_ms === "number" && (read[0].held_ms as number) > 0, "the hold's duration is reported");
   });
 
   test("the recipient's response timer is never an overdue: no strike, no interruption, no remedy", async () => {

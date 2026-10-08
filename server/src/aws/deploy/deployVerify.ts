@@ -50,7 +50,7 @@ import { DescribeContinuousBackupsCommand, DescribeTableCommand, DescribeTimeToL
 import { DescribeKeyCommand, ListGrantsCommand, type KMSClient } from "@aws-sdk/client-kms";
 
 import { compressedKeyFromSpki, type KmsClient } from "../../escrow/juno/signer";
-import { checkSignerIdentities, settlementKeyConfigOf, type JunoBackendConfig } from "../../escrow/juno/junoConfig";
+import { checkSignerIdentities, settlementKeyConfigOf, type JunoBackendConfig, type SignerRef } from "../../escrow/juno/junoConfig";
 import { deadline } from "../awsClients";
 import { KMS_KEY_SPEC, KMS_KEY_USAGE, KMS_SIGNING_ALGORITHM } from "../kms/kmsDigestClient";
 import type { AwsRuntimeConfig } from "../runtime/runtimeConfig";
@@ -279,14 +279,16 @@ export function kmsKeyReader(client: KMSClient, digest: KmsClient): KeyReader {
   };
 }
 
-/** The escrow configuration's three keys: their metadata, and their public keys against the configuration. */
+/** The escrow configuration's three keys -- and (Phase 3 escrow 2.1) its dedicated REMEDY key when it names one: their
+ *  metadata, no grants, and their public keys against the configuration. */
 export async function checkSigningKeys(config: JunoBackendConfig, reader: KeyReader): Promise<Check[]> {
   const checks: Check[] = [];
-  const refs = [
+  const refs: ReadonlyArray<readonly [string, SignerRef]> = [
     ["relayer", config.relayer.signer],
     ["settlement", config.settlementKey.signer],
     ["admission", config.admissionKey.signer],
-  ] as const;
+    ...(config.remedyKey !== null ? [["remedy", config.remedyKey.signer] as const] : []),
+  ];
   const publicKeys = new Map<string, Buffer>();
   for (const [purpose, signer] of refs) {
     const label = `KMS ${purpose} key`;
@@ -316,13 +318,14 @@ export async function checkSigningKeys(config: JunoBackendConfig, reader: KeyRea
   const relayer = publicKeys.get("relayer");
   const settlement = publicKeys.get("settlement");
   const admission = publicKeys.get("admission");
-  if (relayer === undefined || settlement === undefined || admission === undefined || config.settlementKey.signer.kind !== "kms") {
+  const remedy = config.remedyKey === null ? null : (publicKeys.get("remedy") ?? undefined);
+  if (relayer === undefined || settlement === undefined || admission === undefined || remedy === undefined || config.settlementKey.signer.kind !== "kms") {
     checks.push(fail("KMS public keys = the configuration's", "not every key could be read"));
     return checks;
   }
   try {
-    checkSignerIdentities(config, relayer, settlement, settlementKeyConfigOf(config, config.settlementKey.signer.key_ref), admission);
-    checks.push(pass("KMS public keys = the configuration's", `the relayer key controls ${config.relayer.address}; the settlement and admission keys are the configured public keys`));
+    checkSignerIdentities(config, relayer, settlement, settlementKeyConfigOf(config, config.settlementKey.signer.key_ref), admission, remedy);
+    checks.push(pass("KMS public keys = the configuration's", `the relayer key controls ${config.relayer.address}; the settlement and admission keys are the configured public keys${remedy === null ? "; no remedy key is configured (timed money refused: fail closed)" : "; the dedicated remedy key is the configured remedy public key"}`));
   } catch (error) {
     checks.push(fail("KMS public keys = the configuration's", error instanceof Error ? error.message : String(error)));
   }

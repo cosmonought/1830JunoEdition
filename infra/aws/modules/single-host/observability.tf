@@ -8,7 +8,9 @@
 #   HostHealthProblems the server's `single-host` metric profile (GS_METRICS_PROFILE): the count of standing problems at
 #                      each 30 s status tick (not ready, pool writer unconfirmed, not primary / not the identity writer,
 #                      money sweep stale >= 180 s, relayer unusable, escrow inactive, relayer paging, restored money games
-#                      unverified, signer unavailable). 0 = healthy. Three consecutive minutes page.
+#                      unverified, signer unavailable, and -- Phase 3 escrow 2.1 -- a timed money table FROZEN at an
+#                      undecided minute 30 because its consent keys cannot be read on chain: ClockFinalityHeldTables >= 1).
+#                      0 = healthy. Three consecutive minutes page.
 #                      MISSING DATA IS BREACHING: a dead, stopped or wedged server pages through the same alarm.
 #   HostCriticalEvents the sum of the incident counters (task loss of any cause, uncertain store, refused start, money
 #                      sweep pass / game failures, relayer takeover not taken, KMS refused / invalid / other failure,

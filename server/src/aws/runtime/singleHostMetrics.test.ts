@@ -128,6 +128,9 @@ describe("COST-1: the single-host metric profile", () => {
     assert.equal(tick({ RelayerPaging: 2 }), 1);
     assert.equal(tick({}, ["RelayerUsable", "EscrowActive", "RelayerPaging", "RelayerHeld"]), 0, "no escrow: no relayer problem");
     assert.equal(tick({ RestoreUnverifiedGames: 1 }), 1, "money games of a restored table still unverified (L6-5B R3)");
+    assert.equal(tick({ ClockFinalityHeldTables: 0 }), 0, "no table held at minute 30");
+    assert.equal(tick({ ClockFinalityHeldTables: 2 }), 1, "Phase 3 escrow 2.1: timed money tables frozen at an undecided minute 30 (consent keys unread) are ONE standing problem -- the health alarm pages after 3 minutes");
+    assert.equal(tick({ ClockFinalityKeysUnread: 7 }), 0, "the per-read counter alone is never a health problem (the gauge is the hold)");
     assert.equal(tick({ KmsTransient: 2, KmsSigns: 0 }), 1, "the signer unavailable this tick (L6-5B A10)");
     assert.equal(tick({ KmsSignWithheld: 1, KmsSigns: 0 }), 1, "signatures withheld, none made");
     assert.equal(tick({ KmsTransient: 2, KmsSigns: 1 }), 0, "a transient failure beside a successful Sign is not a problem");
@@ -170,5 +173,24 @@ describe("COST-1: the single-host metric profile", () => {
     });
     assert.equal(sink.emit(HEALTHY_TICK), false);
     assert.equal(sink.failures(), 1);
+  });
+});
+
+describe("Phase 3 escrow 2.1: the minute-30 hold's metrics carry counts only", () => {
+  test("ClockFinalityHeldTables (gauge) and ClockFinalityKeysUnread (counter) are catalog metrics under [Environment, Pool]; a game, key or signature never rides along", () => {
+    assert.deepEqual(METRICS.ClockFinalityHeldTables, { kind: "gauge", unit: "Count", scope: "pool" });
+    assert.deepEqual(METRICS.ClockFinalityKeysUnread, { kind: "counter", unit: "Count", scope: "pool" });
+    const line = buildEmfRecord(CONTEXT, AT, {
+      event: "task-status",
+      metrics: { ClockFinalityHeldTables: 1, ClockFinalityKeysUnread: 4 },
+      /* What a careless caller might pass: none of it may reach the line (properties are an allow-list). */
+      properties: { game_id: "g_00000000000000000000000020", signature: "22".repeat(64), consent_pubkey: "03" + "ab".repeat(32) } as never,
+    })!;
+    assert.equal(line.ClockFinalityHeldTables, 1);
+    assert.equal(line.ClockFinalityKeysUnread, 4);
+    const text = JSON.stringify(line);
+    for (const secret of ["g_00000000000000000000000020", "22".repeat(64), "ab".repeat(32), "game_id", "signature", "consent_pubkey"]) assert.ok(!text.includes(secret), secret);
+    const directives = (line._aws as { CloudWatchMetrics: Array<{ Dimensions: string[][]; Metrics: Array<{ Name: string }> }> }).CloudWatchMetrics;
+    for (const d of directives) if (d.Metrics.some((m) => m.Name.startsWith("ClockFinality"))) assert.deepEqual(d.Dimensions, [["Environment", "Pool"]]);
   });
 });

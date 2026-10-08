@@ -98,6 +98,22 @@ locals {
         Condition = { StringEquals = { "kms:SigningAlgorithm" = "ECDSA_SHA_256", "kms:MessageType" = "DIGEST" } }
       },
     ] : statement if var.signing_keys != null],
+    # --- KMS: the DEDICATED REMEDY key (Phase 3 escrow 2.1; owner decision 2026-10-08), in its OWN statements ----------
+    [for statement in [
+      {
+        Sid      = "RemedyKeyPublicKey"
+        Effect   = "Allow"
+        Action   = ["kms:GetPublicKey"]
+        Resource = [var.remedy_signing_key]
+      },
+      {
+        Sid       = "RemedyKeySignDigestOnly"
+        Effect    = "Allow"
+        Action    = ["kms:Sign"]
+        Resource  = [var.remedy_signing_key]
+        Condition = { StringEquals = { "kms:SigningAlgorithm" = "ECDSA_SHA_256", "kms:MessageType" = "DIGEST" } }
+      },
+    ] : statement if var.remedy_signing_key != null],
     [
       # --- the image: the ONE existing repository (GetAuthorizationToken has no resource-level scope) ---------------
       {

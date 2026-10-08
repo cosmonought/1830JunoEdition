@@ -195,6 +195,9 @@ export interface MigrationContext {
   readonly region?: string;
   readonly ledgerTableArn?: string;
   readonly signingKeyArns?: readonly string[];
+  /** Phase 3 escrow 2.1: the DEDICATED REMEDY key's ARN (the ledger stack's `remedy_key_arns.<label>`), or absent / null:
+   *  no remedy key. The host policy's remedy statements must name exactly this -- a plan alone never adds one. */
+  readonly remedyKeyArn?: string | null;
 }
 
 /** The accepted post-abandonment staging facts the gates assume unless told otherwise. */
@@ -942,12 +945,19 @@ export function expectedHostPolicy(plan: Json, ctx: MigrationContext): Map<strin
   const ssmAgent = variable(plan, "ssm_agent");
   const repoVar = variable(plan, "ecr_repository_name");
   const gensVar = variable(plan, "game_generations");
+  /* Phase 3 escrow 2.1: the dedicated REMEDY key (absent from older plans: none). */
+  const remedyVar = variable(plan, "remedy_signing_key");
   if (typeof region !== "string" || typeof pool !== "string" || typeof ledger !== "string" || typeof escrow !== "boolean" || typeof ssmAgent !== "boolean") return null;
   if (keys !== null && (typeof keys !== "object" || Array.isArray(keys))) return null;
   /* The facts come from the OPERATOR (the ledger stack's outputs), never from the plan alone. */
   if (ctx.region === undefined || ctx.ledgerTableArn === undefined || ctx.signingKeyArns === undefined) return null;
   if (region !== ctx.region || ledger !== ctx.ledgerTableArn) return null;
   if (keys !== null && !same(Object.values(keys as Obj).map(String).sort(), [...ctx.signingKeyArns].sort())) return null;
+  /* The remedy key is the OPERATOR's fact too: the plan names exactly the one the operator gave (or both none). */
+  const remedy = remedyVar === undefined || remedyVar === null ? null : remedyVar;
+  if (remedy !== null && typeof remedy !== "string") return null;
+  if (remedy !== (ctx.remedyKeyArn ?? null)) return null;
+  if (remedy !== null && (keys === null || Object.values(keys as Obj).map(String).includes(remedy))) return null;
   if (repoVar !== null && repoVar !== undefined && repoVar !== `gs-${ctx.environment}-server`) return null;
   if (gensVar !== null && gensVar !== undefined && !Array.isArray(gensVar)) return null;
   const a = ctx.appAccountId;
@@ -968,6 +978,12 @@ export function expectedHostPolicy(plan: Json, ctx: MigrationContext): Map<strin
       : [
           { Sid: "SigningKeysPublicKey", Effect: "Allow", Action: ["kms:GetPublicKey"], Resource: keyArns },
           { Sid: "SigningKeysSignDigestOnly", Effect: "Allow", Action: ["kms:Sign"], Resource: keyArns, Condition: { StringEquals: { "kms:SigningAlgorithm": "ECDSA_SHA_256", "kms:MessageType": "DIGEST" } } },
+        ]),
+    ...(remedy === null
+      ? []
+      : [
+          { Sid: "RemedyKeyPublicKey", Effect: "Allow", Action: ["kms:GetPublicKey"], Resource: [remedy] },
+          { Sid: "RemedyKeySignDigestOnly", Effect: "Allow", Action: ["kms:Sign"], Resource: [remedy], Condition: { StringEquals: { "kms:SigningAlgorithm": "ECDSA_SHA_256", "kms:MessageType": "DIGEST" } } },
         ]),
     { Sid: "EcrAuthTokenUnscopable", Effect: "Allow", Action: ["ecr:GetAuthorizationToken"], Resource: ["*"] },
     { Sid: "PullThisRepositoryOnly", Effect: "Allow", Action: ["ecr:BatchCheckLayerAvailability", "ecr:GetDownloadUrlForLayer", "ecr:BatchGetImage"], Resource: [`arn:aws:ecr:${region}:${a}:repository/${repo}`] },
@@ -1030,7 +1046,7 @@ export function hostPolicyProblem(policyText: Json, ctx: MigrationContext, plan:
   const expected = expectedHostPolicy(plan, ctx);
   if (expected === null)
     problems.push(
-      `the host policy's inputs do not match: region ${JSON.stringify(variable(plan, "region"))} / ${String(ctx.region)}, ledger_table_arn ${JSON.stringify(variable(plan, "ledger_table_arn"))} / ${String(ctx.ledgerTableArn)}, signing_keys ${canonical(variable(plan, "signing_keys"))} / ${canonical(ctx.signingKeyArns ?? null)}, ecr_repository_name ${JSON.stringify(variable(plan, "ecr_repository_name"))} (the plan's variables must name exactly the ledger and keys the operator gave: --region, --ledger-table-arn, --signing-keys)`,
+      `the host policy's inputs do not match: region ${JSON.stringify(variable(plan, "region"))} / ${String(ctx.region)}, ledger_table_arn ${JSON.stringify(variable(plan, "ledger_table_arn"))} / ${String(ctx.ledgerTableArn)}, signing_keys ${canonical(variable(plan, "signing_keys"))} / ${canonical(ctx.signingKeyArns ?? null)}, ecr_repository_name ${JSON.stringify(variable(plan, "ecr_repository_name"))}, remedy_signing_key ${JSON.stringify(variable(plan, "remedy_signing_key") ?? null)} / ${JSON.stringify(ctx.remedyKeyArn ?? null)} (the plan's variables must name exactly the ledger and keys the operator gave: --region, --ledger-table-arn, --signing-keys, --remedy-key)`,
     );
   else {
     if (policy.version !== "2012-10-17") problems.push(`Version ${String(policy.version)}`);

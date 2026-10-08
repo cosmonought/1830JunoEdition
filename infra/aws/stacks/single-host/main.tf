@@ -36,6 +36,7 @@ module "host" {
   game_generations        = var.game_generations
   ledger_table_arn        = var.ledger_table_arn
   signing_keys            = var.signing_keys
+  remedy_signing_key      = var.remedy_signing_key
   escrow_enabled          = var.escrow_enabled
   network                 = var.network
   instance                = var.instance

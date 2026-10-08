@@ -514,6 +514,10 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
   let primaryGauges: () => Partial<Record<MetricName, number>> = () => ({});
   let kmsCounters: Readonly<KmsCounters> | null = null;
   let kmsSent: KmsCounterView | null = null;
+  /* Phase 3 escrow 2.1 release readiness: the table clock's minute-30 hold, read once the game server exists (declared
+     here, set after it is built: a status tick before then reports nothing of it, and never throws). */
+  let clockSource: { finalityHeld(): number; readonly counters: { readonly finalityKeysUnread: number } } | null = null;
+  let clockUnreadSent = 0;
   let taskStatusFailures = 0;
   let reporter: TaskStatusReporter | null = null;
   const taskStatusNow = (): TaskStatus => {
@@ -550,9 +554,12 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
     if (failures > 0) values.TaskStatusWriteFailures = failures;
     const kmsNow = kmsCounters === null ? null : snapshotKms(kmsCounters);
     if (kmsNow !== null) Object.assign(values, kmsDeltas(kmsNow, kmsSent));
+    const clockUnreadNow = clockSource === null ? null : clockSource.counters.finalityKeysUnread;
+    if (clockUnreadNow !== null && clockUnreadNow > clockUnreadSent) values.ClockFinalityKeysUnread = clockUnreadNow - clockUnreadSent;
     return {
       values,
       commit() {
+        if (clockUnreadNow !== null) clockUnreadSent = Math.max(clockUnreadSent, clockUnreadNow);
         readinessMetrics.settle(readinessCarried);
         relayerTransitions.settle(relayerCarried);
         taskStatusFailures = Math.max(0, taskStatusFailures - failures);
@@ -1099,6 +1106,9 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
         values.RelayerOldestWaitingSeconds = status.paging.oldest_since === null ? 0 : Math.max(0, Math.floor((input.now() - status.paging.oldest_since) / 1000));
       }
     }
+    /* Phase 3 escrow 2.1 release readiness: the timed money tables frozen at an undecided minute 30 (consent keys unread
+       on chain). Only with escrow (only money tables have a minute-30 key check); a count, never a game. */
+    if (opened !== null && clockSource !== null) values.ClockFinalityHeldTables = clockSource.finalityHeld();
     /* L6-5B: post-restore safe mode (L6-2) -- a state of the table, and how many checked money games are still pending. */
     values.RestoreSafeMode = restoredTable ? 1 : 0;
     if (restoredTable && opened !== null) Object.assign(values, restoreUnverifiedMetrics(opened.service.restoreStatus().pending));
@@ -1168,6 +1178,7 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
   }
   serverRef.current = server;
   clockWiring?.serverBuilt(server, opened?.service ?? null);
+  clockSource = server.clock ?? null;
   closers.push(() => void server.close().catch(() => undefined));
   step("game-server", `game server built with POOL ownership, listening on ${input.bindHost}:${input.port}; /gs/readyz answers from the pool writer's readiness`);
   if (input.edgeDiagnostic === true) input.warn("  edge: GS_EDGE_DIAGNOSTIC=staging -- /gs/diag/edge answers the staging certification's edge probe (hashed mirror of each request; never on mainnet)");

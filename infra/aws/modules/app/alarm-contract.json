@@ -115,6 +115,10 @@
     { "id": "r3-restore-unverified", "scope": "pool", "class": "page", "suppressible": false, "requires": "escrow",
       "metrics": [{ "id": "m1", "metric": "RestoreUnverifiedGames", "stat": "Minimum" }], "expression": null,
       "period": 60, "evaluation_periods": 60, "datapoints_to_alarm": 60, "comparison": "GreaterThanOrEqualToThreshold", "threshold": 1, "missing": "notBreaching",
-      "description": "R3: on a restored table, money games still read-only (check pending, neither verified nor held) for a whole hour. Ordinary verifications clear long before. Never suppressed." }
+      "description": "R3: on a restored table, money games still read-only (check pending, neither verified nor held) for a whole hour. Ordinary verifications clear long before. Never suppressed." },
+    { "id": "c1-clock-finality-held", "scope": "pool", "class": "page", "suppressible": false, "requires": "escrow",
+      "metrics": [{ "id": "m1", "metric": "ClockFinalityHeldTables", "stat": "Minimum" }], "expression": null,
+      "period": 60, "evaluation_periods": 3, "datapoints_to_alarm": 3, "comparison": "GreaterThanOrEqualToThreshold", "threshold": 1, "missing": "notBreaching",
+      "description": "C1 (Phase 3 escrow 2.1): a timed money table FROZEN for 3 minutes at a Live minute 30 whose approvers' consent keys cannot be read on chain (no quorum, a halted or lagging node): every move and vote refused until a read succeeds (fail closed). On every pool (only the primary emits it). A count only: the games are in the clock.finality-keys-unread audit lines. Never suppressed." }
   ]
 }

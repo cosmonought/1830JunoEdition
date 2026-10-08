@@ -323,7 +323,10 @@ defaulting player and the outcome.
   out while an offer waits, the proposer is overdue.
 - **Minute 30 waits for the chain.** A Live money minute 30 whose keys cannot be read conclusively (Juno halted, no
   quorum, a lagging or height-silent node, the chain reader not yet opened) holds the table -- no move, no vote -- until
-  they can; ops should alert on `finalityKeysUnread` (the warning is rate-limited).
+  they can; ops should alert on `finalityKeysUnread` (the warning is rate-limited). **Implemented 2026-10-08** (escrow 2.1
+  release readiness): `clock.finality-keys-unread` / `clock.finality-keys-read` audit lines once per hold, the primary's
+  `ClockFinalityHeldTables` gauge (and `ClockFinalityKeysUnread` delta), alarm C1 (page, 3 minutes, every pool), and the single
+  host's `HostHealthProblems`.
 - **Compromised REMEDY key.** Approvals being judged at the attested `final_at`, a compromised REMEDY key holding the
   approvals of a CURED instance could attest a back-dated `final_at < approve_until` until the fencing checkpoint past
   the stall lands; the cure posts it (`fenceCheckpoint`), but tracking it to landing is a residual of the clock lane

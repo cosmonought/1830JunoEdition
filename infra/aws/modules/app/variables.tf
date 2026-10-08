@@ -106,6 +106,41 @@ variable "signing_keys" {
   }
 }
 
+variable "remedy_signing_key" {
+  description = <<-EOT
+    PHASE 3 ESCROW 2.1 (owner decision 2026-10-08): the DEDICATED REMEDY signing key -- the ledger stack's
+    `remedy_key_arns.<label>`, by KEY ARN (never an alias) -- or null (the default: no remedy key, every policy and the
+    Juno document exactly as before). Its own purpose: never the relayer, settlement or admission key, nor a relayer
+    rotation key. When set, (1) the Juno document carries `remedy_key` (this ARN, with `escrow.remedy_key`'s on-chain id
+    and public key -- both or neither), (2) the task role gets GetPublicKey + Sign (ECDSA_SHA_256 over a DIGEST) on THIS key
+    only, in its own statements (RemedyKeyPublicKey / RemedyKeySignDigestOnly), and (3) the bootstrap role reads it
+    (RemedyKeyReadOnly: DescribeKey, GetPublicKey, ListGrants) for `awsDeploy verify` / `signer-keys`. Null: the server
+    signs no remedy and refuses every timed money table (fail closed).
+  EOT
+  type        = string
+  default     = null
+  validation {
+    condition     = var.remedy_signing_key == null || can(regex("^arn:aws:kms:[a-z]{2}(-[a-z]+)+-[0-9]{1,2}:[0-9]{12}:key/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|mrk-[0-9a-f]{32})$", var.remedy_signing_key))
+    error_message = "remedy_signing_key must be a KMS KEY ARN (arn:aws:kms:<region>:<account>:key/<id>); an alias is refused."
+  }
+  validation {
+    condition     = var.remedy_signing_key == null || var.signing_keys != null
+    error_message = "remedy_signing_key needs signing_keys: a remedy key belongs to a configured escrow."
+  }
+  validation {
+    condition     = var.remedy_signing_key == null || var.signing_keys == null ? true : !contains(values(var.signing_keys), var.remedy_signing_key) && !contains(var.relayer_rotation_key_arns, var.remedy_signing_key)
+    error_message = "remedy_signing_key must be its OWN key: never the relayer, settlement or admission key, nor a relayer rotation key."
+  }
+  validation {
+    condition     = var.remedy_signing_key == null || var.signing_keys == null ? true : split(":", var.remedy_signing_key)[3] == split(":", var.signing_keys.relayer)[3]
+    error_message = "remedy_signing_key must be in the signing keys' one region (the Juno configuration's KMS region)."
+  }
+  validation {
+    condition     = (var.remedy_signing_key == null) == (try(var.escrow.remedy_key, null) == null)
+    error_message = "remedy_signing_key and escrow.remedy_key go together: both (a configured remedy signer) or neither (no remedy: timed money refused)."
+  }
+}
+
 variable "relayer_rotation_key_arns" {
   description = <<-EOT
     LIVE-6 relayer rotation: relayer keys (the ledger stack's `relayer_key_arns`, by KEY ARN) that are NOT the configured
@@ -178,11 +213,21 @@ variable "escrow" {
     }))
     timeout_blocks     = optional(number)
     request_timeout_ms = optional(number)
+    # PHASE 3 ESCROW 2.1: the dedicated REMEDY key's on-chain registry id (1..64) and public key (`signer-keys --remedy`);
+    # its signer is `remedy_signing_key`. Absent / null: no remedy key (the server refuses timed money: fail closed).
+    remedy_key = optional(object({
+      remedy_key_id  = number
+      public_key_hex = string
+    }))
   })
   default = null
   validation {
     condition     = var.escrow == null ? true : contains(["mainnet", "testnet", "local"], var.escrow.network_class)
     error_message = "escrow.network_class must be mainnet, testnet or local."
+  }
+  validation {
+    condition     = try(var.escrow.remedy_key, null) == null ? true : (floor(var.escrow.remedy_key.remedy_key_id) == var.escrow.remedy_key.remedy_key_id && var.escrow.remedy_key.remedy_key_id >= 1 && var.escrow.remedy_key.remedy_key_id <= 64 && can(regex("^0[23][0-9a-f]{64}$", var.escrow.remedy_key.public_key_hex)) && var.escrow.remedy_key.public_key_hex != var.escrow.settlement_key.public_key_hex && var.escrow.remedy_key.public_key_hex != var.escrow.admission_key.public_key_hex)
+    error_message = "escrow.remedy_key: remedy_key_id a whole number 1..64, public_key_hex a 33-byte compressed key (lowercase hex) that is neither the settlement nor the admission key."
   }
   validation {
     condition     = var.escrow == null ? true : alltrue([for url in var.escrow.rest_endpoints : startswith(url, "https://")])

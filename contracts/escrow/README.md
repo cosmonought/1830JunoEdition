@@ -19,6 +19,10 @@
 > escrow **2.0.0** (`5ecc3022…09e8`, the JX-1 deployment, untouched) until the
 > separate release steps (Junox StoreCode simulation, StoreCode / instantiate,
 > the REMEDY KMS signer, the production pin, deployment verification) are done.
+> Release readiness (2026-10-08, `phase3/escrow21-release-readiness`, source only):
+> the server source pins `c3bd0618…` (`junoConfig.ts`), the dedicated REMEDY KMS
+> key's infrastructure and tooling exist (none created), and
+> `scripts/verify_escrow21_deployment.py` verifies a 2.1 instantiate read-only.
 
 A CosmWasm 1.5 settlement escrow for Juno money rooms. It is a vault, a deposit
 holder, a roster record, a secp256k1 signature verifier, a settlement/challenge
@@ -279,7 +283,7 @@ profile, and the library denies `clippy::arithmetic_side_effects` outside tests.
 | `src/query.rs` | config, games (with `trusted_seq` and every open deadline), seats, checkpoints (with the liveness candidate), signer keys, settlement preview |
 | `schema/` | generated JSON schema of every message and response (the ESCROW-3 client ABI) |
 | `testdata/` | independent Python vector generators and their frozen output (`payload_vectors_v1.json`; `join_admission_vectors_v1.json`, ESCROW-JOIN; `remedy_vectors_v1.json`, escrow 2.1.0), and the SET-0A rev 2 payout goldens |
-| `scripts/` | `wasm-gate.sh` (optimizer build, ≤ 90 locals per function, every `cosmwasm-check`) and `wasm_locals.py` (the per-function local count) |
+| `scripts/` | `wasm-gate.sh` (optimizer build, ≤ 90 locals per function, every `cosmwasm-check`) and `wasm_locals.py` (the per-function local count); `verify-escrow21-inputs.sh` (the certified-input adoption check, portable to Git < 2.40; `test-verify-escrow21-inputs.sh`) and `verify_escrow21_deployment.py` (the read-only 2.1 on-chain verifier; offline tests `test_verify_escrow21_deployment.py`, fixtures in `scripts/fixtures/`). None is a Wasm input |
 | `gasbench/` | stand-alone gas harness that runs the optimized wasm in cosmwasm-vm 3.0.5 (own workspace and lockfile; see its README) |
 
 ## Tests
@@ -446,7 +450,8 @@ max 80 locals (limit 90); `cosmwasm-check` 1.5.11, 2.2.9, 3.0.5 and 3.0.9 pass;
 `scripts/wasm-gate.sh` PASS; gasbench on those bytes: the largest 2.1.0 execute
 is Resolve Replace at 64 checkpoints, ≈547k estimated SDK gas. A later source
 tree reuses this checksum only if its Wasm build inputs are byte-identical
-(the kit's `verify-escrow21-inputs.sh`). The history below is superseded.
+(`scripts/verify-escrow21-inputs.sh`; the kit's earlier copy reported its attribute step SAME
+without comparing on Git < 2.40 -- use the repository's). The history below is superseded.
 
 **Escrow 2.1.0 (earlier source-branch approximation, superseded).** Without Docker,
 an approximation of the optimizer route (`cargo +1.81.0 build --release --lib

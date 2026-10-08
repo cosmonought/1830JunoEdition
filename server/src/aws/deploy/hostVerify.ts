@@ -679,7 +679,7 @@ export function judgeHostPolicy(doc: Record<string, Json>, expect: HostExpect): 
   else {
     const want = [...a.kmsKeyArns].sort();
     const got = [...kmsSeen].sort();
-    checks.push(judge("IAM: KMS keys = the runtime Juno configuration's", JSON.stringify(want) === JSON.stringify(got), `${want.length} key(s): the configuration's relayer, settlement and admission keys`, `the role names [${got.join(", ")}], the configuration names [${want.join(", ")}]`));
+    checks.push(judge("IAM: KMS keys = the runtime Juno configuration's", JSON.stringify(want) === JSON.stringify(got), `${want.length} key(s): the configuration's relayer, settlement and admission keys${want.length === 4 ? " and its dedicated remedy key" : ""}`, `the role names [${got.join(", ")}], the configuration names [${want.join(", ")}]`));
   }
   const wantSsm = [...ssmParameters].sort();
   checks.push(judge("IAM: SSM documents = this pool's", JSON.stringify([...ssmSeen].sort()) === JSON.stringify(wantSsm), wantSsm.join(", "), `the role reads [${[...ssmSeen].sort().join(", ")}], expected [${wantSsm.join(", ")}]`));

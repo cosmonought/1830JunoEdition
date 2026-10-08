@@ -1,0 +1,37 @@
+{
+ "_note": "EXAMPLE ONLY (synthetic addresses and keys; no real deployment). Copy, fill in the real code id, admin, operator (= the relayer), resolver, treasury and the KMS-derived public keys (`awsDeploy signer-keys ... --remedy <arn>`), then run `verify`.",
+ "chain_id": "uni-7",
+ "code_id": 4242,
+ "wasm_admin": null,
+ "creator": "juno1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqnrql8a",
+ "admin": "juno1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqnrql8a",
+ "operator": "juno1xc5etfhxjg4qfc9cx25qh3tvxdcf5skjj5epte",
+ "resolver": "juno1wfk5fda0sg5z2lqrpwh7wexnckpe6hqzljkt4v",
+ "treasury": "juno1qyqszqgpqyqszqgpqyqszqgpqyqszqgpjnp7du",
+ "denom": "ujunox",
+ "admission_pubkey": "03f28773c2d975288bc7d1d205c3748651b075fbc6610e58cddeeddf8f19405aa8",
+ "signer_keys": [
+  {
+   "key_id": 1,
+   "pubkey": "03d01115d548e7561b15c38f004d734633687cf4419620095bc5b0f47070afe85a"
+  }
+ ],
+ "remedy_keys": [
+  {
+   "key_id": 1,
+   "pubkey": "0238194abfc289cc915ccc280e22ab5959c87e379a2039e494433e70f29c3c1a6b"
+  }
+ ],
+ "params": {
+  "subsidy_bps": 250,
+  "min_ante": "2000000",
+  "bond_bps": 5000,
+  "bond_floor": "1000000",
+  "challenge_window_live_secs": 900,
+  "challenge_window_async_secs": 1800,
+  "funding_period_live_secs": 3600,
+  "funding_period_async_secs": 7200,
+  "liveness_window_secs": 3600,
+  "resolver_timeout_secs": 7200
+ }
+}

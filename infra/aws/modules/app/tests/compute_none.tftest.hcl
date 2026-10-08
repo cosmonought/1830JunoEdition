@@ -66,7 +66,7 @@ variables {
     network_class    = "testnet"
     rest_endpoints   = ["https://juno-testnet-rest.example.net"]
     contract_address = "juno1qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qursaq28r5"
-    code_checksum    = "5ecc302221a2dab4bb4f0f71b632f2beeafe9523ebd7b33bd0e94d017b8d09e8"
+    code_checksum    = "c3bd0618615e0d8688f71860a90f235a796b0152be84e2489ce6639e3a218219"
     wasm_admin       = null
     denom            = "ujunox"
     asset_symbol     = "JUNOX"

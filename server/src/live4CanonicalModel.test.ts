@@ -52,16 +52,32 @@ const HOLD_CODES_EXIST: Readonly<Record<keyof typeof CONFLICT_HOLD_CODES, Financ
  *  + `hashlib.sha256`) from the literal descriptor below. L4-3: `client_protocols` [0, 1] (was [0]). Route v12 R12-2:
  *  rules 12 reading [12] (was 11 / [11]); settlement still [10, 11]. Route v12 R12-3: settlement certified [10, 11, 12].
  *  Phase 3 W3-K: rules 13 reading [13] (was 12 / [12]); settlement still [10, 11, 12]. Phase 3's dedicated v13
- *  certification: settlement certified [10, 11, 12, 13]. */
+ *  certification: settlement certified [10, 11, 12, 13]. Phase 3 escrow 2.1 release readiness (2026-10-08): the canonical
+ *  escrow checksum is the certified 2.1.0 artifact's (`c3bd0618…`), no longer 2.0.0's. */
 const THIS_BUILD_NO_ESCROW_TEXT =
-  '{"client_protocols":[0,1],"escrow_abi_checksums":["5ecc302221a2dab4bb4f0f71b632f2beeafe9523ebd7b33bd0e94d017b8d09e8"],' +
+  '{"client_protocols":[0,1],"escrow_abi_checksums":["c3bd0618615e0d8688f71860a90f235a796b0152be84e2489ce6639e3a218219"],' +
   '"escrow_deployments":[],"financial_protocols":[],"format":"18COSMOS/DEPLOYMENT-CAPABILITY/v1","hosted_protocols":[1],' +
   '"rules":{"certified":[10,11,12,13],"current":13,"supported":[13]},"settlement_codecs":["18JUNO/v1"]}';
-const THIS_BUILD_NO_ESCROW_KEY = "dc1-e8d0b4792a7ba07e67199ad2";
+const THIS_BUILD_NO_ESCROW_KEY = "dc1-a9aea13a21fbc921a315ab25";
 /** This build serving the ESCROW-3B fixture deployment (`escrow3bSupport.PIN`), cross-checked the same way. Phase 3's
  *  escrow 2.1 (financial protocol 4) moved it by `financial_protocols` alone; the no-escrow key lists no financial
  *  protocol and did not move. */
-const THIS_BUILD_FIXTURE_KEY = "dc1-30d893675c773e9b609699e7";
+const THIS_BUILD_FIXTURE_KEY = "dc1-28fab6d8333d24d3271c408d";
+/** The same two keys before the escrow 2.1 checksum pin (Phase 3 FP4 source through 8c4dca9: the canonical checksum was
+ *  2.0.0's `5ecc3022…`): the pin moved them by the checksum ALONE (`asPre21Pin` gives them back exactly). Computed
+ *  independently (Python, as above) from the same descriptors with the 2.0.0 checksum. */
+const PRE21_NO_ESCROW_KEY = "dc1-e8d0b4792a7ba07e67199ad2";
+const PRE21_FIXTURE_KEY = "dc1-30d893675c773e9b609699e7";
+/** escrow 2.0.0's artifact: the canonical checksum before the 2.1 pin. */
+const ESCROW_2_0_0 = "5ecc302221a2dab4bb4f0f71b632f2beeafe9523ebd7b33bd0e94d017b8d09e8";
+/** A capability as the build made it before the escrow 2.1 pin: the canonical checksum list, and every served pin's code
+ *  checksum, were escrow 2.0.0's. Every historical reconstruction below starts from it. */
+const asPre21Pin = (capability: DeploymentCapability): DeploymentCapability =>
+  deploymentCapability({
+    ...capability,
+    escrow_abi_checksums: [ESCROW_2_0_0],
+    escrow_deployments: capability.escrow_deployments.map((served) => ({ ...served, pin: { ...served.pin, code_checksum: ESCROW_2_0_0 } })),
+  });
 /** The fixture key at Phase 3's v13 certification (financial protocol 3): the FP4 bump moved it. */
 const V13CERT_FIXTURE_KEY = "dc1-32fcc4967978e78f10874490";
 /** A capability as the build made it before financial protocol 4 (the historical reconstructions below): a served
@@ -230,7 +246,7 @@ describe("L4-1: this build's capability and its key (visible in review when eith
       hosted_protocols: [1],
       financial_protocols: [],
       settlement_codecs: ["18JUNO/v1"],
-      escrow_abi_checksums: ["5ecc302221a2dab4bb4f0f71b632f2beeafe9523ebd7b33bd0e94d017b8d09e8"],
+      escrow_abi_checksums: ["c3bd0618615e0d8688f71860a90f235a796b0152be84e2489ce6639e3a218219"],
       escrow_deployments: [],
       client_protocols: [0, 1],
     });
@@ -244,7 +260,7 @@ describe("L4-1: this build's capability and its key (visible in review when eith
       [[] as DeploymentPin[], LIVE4_NO_ESCROW_KEY, L4_2_NO_ESCROW_KEY],
       [[PIN] as DeploymentPin[], LIVE4_FIXTURE_KEY, L4_2_FIXTURE_KEY],
     ] as const) {
-      const capability = deploymentCapability({ ...asFp3(thisDeploymentCapability(pins)), rules: RULES_11 });
+      const capability = deploymentCapability({ ...asFp3(asPre21Pin(thisDeploymentCapability(pins))), rules: RULES_11 });
       assert.equal(compatibilityKey(capability), now);
       assert.notEqual(now, before, "the key moved");
       const legacyOnly = deploymentCapability({ ...capability, client_protocols: [0] });
@@ -259,10 +275,10 @@ describe("L4-1: this build's capability and its key (visible in review when eith
 
   test("Route v12 R12-2 moved both keys on the rules axis ALONE: rules 11 gives back the LIVE-4 keys exactly", () => {
     for (const [pins, now, before] of [
-      [[] as DeploymentPin[], THIS_BUILD_NO_ESCROW_KEY, LIVE4_NO_ESCROW_KEY],
+      [[] as DeploymentPin[], PRE21_NO_ESCROW_KEY, LIVE4_NO_ESCROW_KEY],
       [[PIN] as DeploymentPin[], V13CERT_FIXTURE_KEY, LIVE4_FIXTURE_KEY],
     ] as const) {
-      const capability = asFp3(thisDeploymentCapability(pins));
+      const capability = asFp3(asPre21Pin(thisDeploymentCapability(pins)));
       assert.equal(compatibilityKey(capability), now);
       const atEleven = deploymentCapability({ ...capability, rules: RULES_11 });
       assert.equal(compatibilityKey(atEleven), before, "with rules 11, the LIVE-4 key comes back exactly");
@@ -277,7 +293,7 @@ describe("L4-1: this build's capability and its key (visible in review when eith
       [[] as DeploymentPin[], R12_3_NO_ESCROW_KEY, R12_2_NO_ESCROW_KEY],
       [[PIN] as DeploymentPin[], R12_3_FIXTURE_KEY, R12_2_FIXTURE_KEY],
     ] as const) {
-      const capability = deploymentCapability({ ...asFp3(thisDeploymentCapability(pins)), rules: RULES_12_CERTIFIED });
+      const capability = deploymentCapability({ ...asFp3(asPre21Pin(thisDeploymentCapability(pins))), rules: RULES_12_CERTIFIED });
       assert.equal(compatibilityKey(capability), r12_3);
       const uncertified = deploymentCapability({ ...capability, rules: RULES_12_UNCERTIFIED });
       assert.equal(compatibilityKey(uncertified), before, "with 12 uncertified, the R12-2 key comes back exactly");
@@ -289,7 +305,7 @@ describe("L4-1: this build's capability and its key (visible in review when eith
       [[] as DeploymentPin[], W3K_NO_ESCROW_KEY, R12_3_NO_ESCROW_KEY],
       [[PIN] as DeploymentPin[], W3K_FIXTURE_KEY, R12_3_FIXTURE_KEY],
     ] as const) {
-      const capability = deploymentCapability({ ...asFp3(thisDeploymentCapability(pins)), rules: RULES_13_UNCERTIFIED });
+      const capability = deploymentCapability({ ...asFp3(asPre21Pin(thisDeploymentCapability(pins))), rules: RULES_13_UNCERTIFIED });
       assert.equal(compatibilityKey(capability), w3k);
       const atTwelve = deploymentCapability({ ...capability, rules: RULES_12_CERTIFIED });
       assert.equal(compatibilityKey(atTwelve), before, "with rules 12, the R12-3 key comes back exactly");
@@ -303,10 +319,10 @@ describe("L4-1: this build's capability and its key (visible in review when eith
 
   test("Phase 3's dedicated v13 certification moved both keys again, by certifying 13 alone: rules 13 certified [10, 11, 12] gives back the W3-K keys exactly", () => {
     for (const [pins, now, before] of [
-      [[] as DeploymentPin[], THIS_BUILD_NO_ESCROW_KEY, W3K_NO_ESCROW_KEY],
+      [[] as DeploymentPin[], PRE21_NO_ESCROW_KEY, W3K_NO_ESCROW_KEY],
       [[PIN] as DeploymentPin[], V13CERT_FIXTURE_KEY, W3K_FIXTURE_KEY],
     ] as const) {
-      const capability = asFp3(thisDeploymentCapability(pins));
+      const capability = asFp3(asPre21Pin(thisDeploymentCapability(pins)));
       assert.equal(compatibilityKey(capability), now);
       const uncertified = deploymentCapability({ ...capability, rules: RULES_13_UNCERTIFIED });
       assert.equal(compatibilityKey(uncertified), before, "with 13 uncertified, the W3-K key comes back exactly");
@@ -319,8 +335,8 @@ describe("L4-1: this build's capability and its key (visible in review when eith
   });
 
   test("Phase 3's escrow 2.1 (financial protocol 4) moved the fixture key by financial_protocols ALONE: [3] gives back the v13-certification key; the no-escrow key did not move", () => {
-    const capability = thisDeploymentCapability([PIN]);
-    assert.equal(compatibilityKey(capability), THIS_BUILD_FIXTURE_KEY);
+    const capability = asPre21Pin(thisDeploymentCapability([PIN]));
+    assert.equal(compatibilityKey(capability), PRE21_FIXTURE_KEY);
     const fp3 = asFp3(capability);
     assert.equal(compatibilityKey(fp3), V13CERT_FIXTURE_KEY, "with financial protocol 3, the v13-certification key comes back exactly");
     const nowText = JSON.parse(capabilityCanonicalText(capability)) as Record<string, unknown>;
@@ -328,8 +344,29 @@ describe("L4-1: this build's capability and its key (visible in review when eith
     assert.deepEqual(Object.keys(nowText).filter((field) => JSON.stringify(nowText[field]) !== JSON.stringify(beforeText[field])), ["financial_protocols"]);
     assert.deepEqual([beforeText.financial_protocols, nowText.financial_protocols], [[3], [4]]);
     /* A pool of each protocol is a different pool: a protocol-3 (escrow 2.0.0) pool and this one never share a key. */
-    assert.notEqual(THIS_BUILD_FIXTURE_KEY, V13CERT_FIXTURE_KEY);
-    assert.equal(compatibilityKey(thisDeploymentCapability([])), THIS_BUILD_NO_ESCROW_KEY);
+    assert.notEqual(PRE21_FIXTURE_KEY, V13CERT_FIXTURE_KEY);
+    assert.equal(compatibilityKey(asPre21Pin(thisDeploymentCapability([]))), PRE21_NO_ESCROW_KEY);
+  });
+
+  test("Phase 3 escrow 2.1 release readiness: the certified 2.1.0 checksum pin moved BOTH keys by the checksum ALONE -- escrow 2.0.0's gives back the FP4-source keys exactly", () => {
+    for (const [pins, now, before] of [
+      [[] as DeploymentPin[], THIS_BUILD_NO_ESCROW_KEY, PRE21_NO_ESCROW_KEY],
+      [[PIN] as DeploymentPin[], THIS_BUILD_FIXTURE_KEY, PRE21_FIXTURE_KEY],
+    ] as const) {
+      const capability = thisDeploymentCapability(pins);
+      assert.equal(compatibilityKey(capability), now, capabilityCanonicalText(capability));
+      assert.deepEqual(capability.escrow_abi_checksums, ["c3bd0618615e0d8688f71860a90f235a796b0152be84e2489ce6639e3a218219"]);
+      const pre = asPre21Pin(capability);
+      assert.equal(compatibilityKey(pre), before, "with escrow 2.0.0's checksum, the FP4-source key comes back exactly");
+      assert.notEqual(now, before, "the key moved: a 2.1-pinned pool and an FP4-source pool never share a key");
+      const nowText = JSON.parse(capabilityCanonicalText(capability)) as Record<string, unknown>;
+      const beforeText = JSON.parse(capabilityCanonicalText(pre)) as Record<string, unknown>;
+      assert.deepEqual(
+        Object.keys(nowText).filter((field) => JSON.stringify(nowText[field]) !== JSON.stringify(beforeText[field])),
+        pins.length === 0 ? ["escrow_abi_checksums"] : ["escrow_abi_checksums", "escrow_deployments"],
+        "only the checksum moved (in the canonical list and, when served, in the served pin)",
+      );
+    }
   });
 
   test("serving the ESCROW-3B fixture deployment: financial 4 appears with it (3 until Phase 3's escrow 2.1), and the key moves", () => {

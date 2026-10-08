@@ -112,6 +112,15 @@ locals {
       trust   = var.escrow.trust
       journal = { kind = "dynamodb", table_arn = var.ledger_table_arn }
     },
+    # PHASE 3 ESCROW 2.1: the DEDICATED REMEDY key (`junoConfig.ts` `remedy_key`), only when configured -- absent, the
+    # server signs no remedy and refuses every timed money table (fail closed).
+    try(var.escrow.remedy_key, null) == null || var.remedy_signing_key == null ? {} : {
+      remedy_key = {
+        remedy_key_id  = var.escrow.remedy_key.remedy_key_id
+        public_key_hex = var.escrow.remedy_key.public_key_hex
+        signer         = { kind = "kms", key_ref = var.remedy_signing_key }
+      }
+    },
     length(local.juno_gas) == 0 ? {} : { gas = local.juno_gas },
     var.escrow.timeout_blocks == null ? {} : { timeout_blocks = var.escrow.timeout_blocks },
     var.escrow.request_timeout_ms == null ? {} : { request_timeout_ms = var.escrow.request_timeout_ms },

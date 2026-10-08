@@ -239,7 +239,7 @@ interface Entry {
   /** Live (money): the approvers' keys at minute 30, read BEFORE the finality task runs (outside the table's task) --
    *  bound to its overdue, proposal and final second (`check` "unread": read, but not conclusively -- read again after
    *  `FINALITY_KEY_REREAD_MS`; null: nothing to check). */
-  finalityKeys: { readonly epoch: number; readonly proposal: number; readonly final_secs: number; readonly check: FinalityKeyCheck | null | typeof FINALITY_KEYS_UNREAD; readonly readAt: number } | null;
+  finalityKeys: { readonly epoch: number; readonly proposal: number; readonly final_secs: number; readonly check: FinalityKeyCheck | null | typeof FINALITY_KEYS_UNREAD; readonly readAt: number; readonly unreadSince?: number } | null;
   /** Live (money): the last catch-up stopped at a minute 30 whose approvers' keys could not be read conclusively: it is
    *  not decided yet, so no move and no vote is taken until it is. */
   finalityPending: boolean;
@@ -714,7 +714,7 @@ export function createClockController(deps: ClockControllerDeps) {
         const due = record === null ? null : finalityKeyCheckDue(record, now());
         const precheck =
           record !== null && due !== null
-            ? finalityKeys(entry.gameId, record, now(), FINALITY_KEY_PRECHECK_MS).then((check) => void (entry.finalityKeys = { epoch: due.epoch, proposal: due.proposal, final_secs: due.final_secs, check, readAt: now() }))
+            ? finalityKeys(entry.gameId, record, now(), FINALITY_KEY_PRECHECK_MS).then((check) => noteFinalityKeys(entry, due, check))
             : Promise.resolve();
         void track(precheck.then(() => deps.runOn(entry.gameId, "clock", (game, tx) => tick(game, tx))))
           .then((ran) => {
@@ -851,8 +851,47 @@ export function createClockController(deps: ClockControllerDeps) {
     const ready = entry.finalityKeys;
     if (ready !== null && ready.epoch === due.epoch && ready.proposal === due.proposal && ready.final_secs === due.final_secs && (ready.check !== FINALITY_KEYS_UNREAD || now() - ready.readAt < FINALITY_KEY_REREAD_MS)) return ready.check;
     const read = await finalityKeys(gameId, record, at);
-    entry.finalityKeys = { epoch: due.epoch, proposal: due.proposal, final_secs: due.final_secs, check: read, readAt: now() };
+    noteFinalityKeys(entry, due, read);
     return read;
+  }
+
+  /** Records a minute-30 key read on the entry -- and, for the OPERATOR (Phase 3 escrow 2.1 release readiness), audits the
+   *  moment a minute 30 first becomes undecided because its keys cannot be read (`clock.finality-keys-unread`: the table
+   *  is frozen -- every move and vote refused -- until a read is conclusive) and the moment it is read again
+   *  (`clock.finality-keys-read`, with how long it was held). Once per hold, never per re-read: the rate-limited warning
+   *  keeps the per-read count. Only the game id, the overdue epoch and times: never a key, signature, approval or vote. */
+  function noteFinalityKeys(entry: Entry, due: { readonly epoch: number; readonly proposal: number; readonly final_secs: number }, check: FinalityKeyCheck | null | typeof FINALITY_KEYS_UNREAD): void {
+    const prior = entry.finalityKeys;
+    const same = prior !== null && prior.epoch === due.epoch && prior.proposal === due.proposal && prior.final_secs === due.final_secs;
+    const heldSince = same && prior.check === FINALITY_KEYS_UNREAD ? (prior.unreadSince ?? prior.readAt) : null;
+    const at = now();
+    if (check === FINALITY_KEYS_UNREAD) {
+      if (heldSince === null) deps.ops.audit("clock.finality-keys-unread", { game_id: entry.gameId, epoch: due.epoch, final_secs: due.final_secs });
+      entry.finalityKeys = { epoch: due.epoch, proposal: due.proposal, final_secs: due.final_secs, check, readAt: at, unreadSince: heldSince ?? at };
+      return;
+    }
+    if (heldSince !== null) deps.ops.audit("clock.finality-keys-read", { game_id: entry.gameId, epoch: due.epoch, held_ms: Math.max(0, at - heldSince) });
+    entry.finalityKeys = { epoch: due.epoch, proposal: due.proposal, final_secs: due.final_secs, check, readAt: at };
+  }
+
+  /** Phase 3 escrow 2.1 release readiness (operator visibility): how many tables this process holds RIGHT NOW at a Live
+   *  money minute 30 that is due but undecided because its approvers' consent keys could not be read conclusively on
+   *  chain -- each one frozen (no move, no vote) until a read succeeds. A count only (the AWS runtime's
+   *  `ClockFinalityHeldTables` gauge); which games is in the `clock.finality-keys-unread` audit lines. */
+  function finalityHeld(): number {
+    const at = now();
+    let held = 0;
+    for (const entry of entries.values()) {
+      /* Not `finalityPending`: a catch-up clears it while its chain re-read is in flight (seconds on a halted chain), so a
+         frozen table would blink to 0 on every heartbeat. The cached UNREAD result stays until a read is conclusive, and
+         `finalityKeyCheckDue` is null once a cure, a pause or a system pause makes minute 30 not due. */
+      if (entry.lost || entry.record === null) continue;
+      const keys = entry.finalityKeys;
+      if (keys === null || keys.check !== FINALITY_KEYS_UNREAD) continue;
+      const due = finalityKeyCheckDue(entry.record, at);
+      if (due !== null && due.epoch === keys.epoch && due.proposal === keys.proposal && due.final_secs === keys.final_secs) held += 1;
+    }
+    return held;
   }
 
   /** Every transition due by now, at its own moment; an offer the clock must close (its response timer ran out, or its
@@ -1360,6 +1399,7 @@ export function createClockController(deps: ClockControllerDeps) {
 
   return {
     counters,
+    finalityHeld,
     gateSubmit,
     offerBlocked,
     afterCommit,

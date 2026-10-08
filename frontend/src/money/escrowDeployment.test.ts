@@ -10,7 +10,7 @@ const PIN = {
   chainId: "uni-7",
   networkClass: "testnet",
   contract: CONTRACT,
-  codeChecksum: "5ecc302221a2dab4bb4f0f71b632f2beeafe9523ebd7b33bd0e94d017b8d09e8",
+  codeChecksum: "c3bd0618615e0d8688f71860a90f235a796b0152be84e2489ce6639e3a218219",
   denom: "ujunox",
   symbol: "JUNOX",
   exponent: 6,

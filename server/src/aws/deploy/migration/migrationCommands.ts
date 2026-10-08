@@ -45,7 +45,7 @@ import { judgeNatEvidence, NAT_EVIDENCE_FORMAT, NAT_FILES, type NatEvidence, typ
 
 export const MIGRATION_USAGE = [
   "usage:",
-  `  awsDeploy migration-guard (${GATE_NAMES.join(" | ")}) --plan-evidence <evidence>/terraform/<stack> --environment <env> --app-account <id> [--origin-domain <name>] [--region <r> --ledger-table-arn <ARN> --signing-keys <a,b,c>] [--commit <reviewed sha>] [--generation 1] [--pool p1] [--retired-pools p2] [--record <file>]`,
+  `  awsDeploy migration-guard (${GATE_NAMES.join(" | ")}) --plan-evidence <evidence>/terraform/<stack> --environment <env> --app-account <id> [--origin-domain <name>] [--region <r> --ledger-table-arn <ARN> --signing-keys <a,b,c> [--remedy-key <ARN>]] [--commit <reviewed sha>] [--generation 1] [--pool p1] [--retired-pools p2] [--record <file>]`,
   "      edge-cutover needs --origin-domain; host-create and host-create-complete need --region, --ledger-table-arn and --signing-keys (the ledger stack's outputs).",
   "      host-create-complete (STEP 9 ACME HOTFIX) judges ONLY the recovery of an interrupted step 9: the state every reviewed step-9 object but acme_http01, the plan creating exactly that rule and nothing else.",
   "      edge-cutover (the default --direction cutover) ALSO needs --arm64-live-smoke <saved gs-host arm64-smoke output> --release-digest <sha256:...> --instance-id <i-...>: the live ARM64 smoke must PASS; --direction rollback (back to the ALB) needs --cutover-record <the forward PASS record> instead.",
@@ -61,7 +61,7 @@ const TERRAFORM_MIN = [1, 9, 0];
 const AWS_PROVIDER = "registry.terraform.io/hashicorp/aws";
 const AWS_PROVIDER_VERSION = "6.66.0";
 
-const FLAGS_WITH_VALUES = new Set(["--plan-evidence", "--environment", "--app-account", "--origin-domain", "--generation", "--pool", "--retired-pools", "--record", "--evidence", "--min-quiet-hours", "--region", "--ledger-table-arn", "--signing-keys", "--commit", "--arm64-live-smoke", "--release-digest", "--instance-id", "--direction", "--cutover-record"]);
+const FLAGS_WITH_VALUES = new Set(["--plan-evidence", "--environment", "--app-account", "--origin-domain", "--generation", "--pool", "--retired-pools", "--record", "--evidence", "--min-quiet-hours", "--region", "--ledger-table-arn", "--signing-keys", "--remedy-key", "--commit", "--arm64-live-smoke", "--release-digest", "--instance-id", "--direction", "--cutover-record"]);
 
 function parseFlags(argv: readonly string[]): Map<string, string> {
   const out = new Map<string, string>();
@@ -336,6 +336,11 @@ export async function migrationGuardCommand(argv: readonly string[], out: (line:
     }
   }
   const signingKeyArns = flags.has("--signing-keys") ? String(flags.get("--signing-keys")).split(",").filter((k) => k !== "") : undefined;
+  /* Phase 3 escrow 2.1: --remedy-key is an operator fact of the host gates only (refused elsewhere, never silently carried). */
+  if (flags.has("--remedy-key") && gate !== "host-create" && gate !== "host-create-complete") {
+    out(`REFUSED: --remedy-key belongs to host-create / host-create-complete, not ${gate}`);
+    return EXIT_USAGE;
+  }
   if (gate === "host-create" || gate === "host-create-complete") {
     const region = flags.get("--region");
     const ledger = flags.get("--ledger-table-arn");
@@ -345,6 +350,12 @@ export async function migrationGuardCommand(argv: readonly string[], out: (line:
     }
     if (!/^[a-z]{2}(-[a-z]+)+-[0-9]$/.test(region) || !/^arn:aws:dynamodb:[a-z0-9-]+:[0-9]{12}:table\/[A-Za-z0-9_.-]+$/.test(ledger) || signingKeyArns.length !== 3 || new Set(signingKeyArns).size !== 3 || !signingKeyArns.every((k) => /^arn:aws:kms:[a-z0-9-]+:[0-9]{12}:key\/[0-9a-f-]{36}$/.test(k))) {
       out("REFUSED: --region, --ledger-table-arn (a DynamoDB table ARN) or --signing-keys (three distinct KMS key ARNs) malformed");
+      return EXIT_USAGE;
+    }
+    /* Phase 3 escrow 2.1: the optional DEDICATED REMEDY key -- a KMS key ARN of its own, never one of the three. */
+    const remedyKey = flags.get("--remedy-key");
+    if (remedyKey !== undefined && (!/^arn:aws:kms:[a-z0-9-]+:[0-9]{12}:key\/[0-9a-f-]{36}$/.test(remedyKey) || signingKeyArns.includes(remedyKey))) {
+      out("REFUSED: --remedy-key must be a KMS key ARN (never an alias) and its OWN key (never one of --signing-keys)");
       return EXIT_USAGE;
     }
   }
@@ -360,7 +371,7 @@ export async function migrationGuardCommand(argv: readonly string[], out: (line:
       return EXIT_USAGE;
     }
   }
-  const ctx: MigrationContext = { environment, appAccountId, servingGeneration: generation, pool, retiredPools, originDomain: flags.get("--origin-domain"), minEcrKeepImages: STAGING_DEFAULTS.minEcrKeepImages, region: flags.get("--region"), ledgerTableArn: flags.get("--ledger-table-arn"), signingKeyArns };
+  const ctx: MigrationContext = { environment, appAccountId, servingGeneration: generation, pool, retiredPools, originDomain: flags.get("--origin-domain"), minEcrKeepImages: STAGING_DEFAULTS.minEcrKeepImages, region: flags.get("--region"), ledgerTableArn: flags.get("--ledger-table-arn"), signingKeyArns, remedyKeyArn: flags.get("--remedy-key") ?? null };
 
   const expectCommit = flags.get("--commit");
   /* STEP 9 ACME HOTFIX (review): the recovery is judged only against the reviewed hotfix commit, never "any clean one". */

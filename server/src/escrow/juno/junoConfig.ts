@@ -15,8 +15,9 @@
 //   static (at startup; a problem refuses the start in production, and turns the backend off in development)
 //     - the chain id, network class and address prefix; a mainnet chain id is always class mainnet;
 //     - the contract address (bech32 `juno`), and its code checksum is the CANONICAL one this build carries
-//       (escrow 2.0.0, ESCROW-JOIN; the 1.0.0 artifact `b263277a…9296` admitted any payer to Join and is refused by
-//       name) -- configuration can narrow the accepted set, never widen it;
+//       (escrow 2.1.0, the certified Phase 3 artifact `c3bd0618…8219`; the 1.0.0 artifact `b263277a…9296` admitted any
+//       payer to Join and is refused by name; the 2.0.0 artifact `5ecc3022…09e8` is not this build's and is refused as
+//       non-canonical) -- configuration can narrow the accepted set, never widen it;
 //     - the endpoints (https; http only for a loopback development node), the gas policy (integers, bounded);
 //     - the signing journal: v2 names a directory (absolute, and OUTSIDE the data directory in production, GNOLAND-1
 //       F1); v3 (LIVE-5 L5-5) names its KIND -- that file directory, or the DynamoDB ledger by its full table ARN --
@@ -61,17 +62,22 @@ export const JUNO_BACKEND_CONFIG_FORMAT = "18COSMOS/JUNO-BACKEND/v2";
 export const JUNO_BACKEND_CONFIG_FORMAT_V3 = "18COSMOS/JUNO-BACKEND/v3";
 export const JUNO_BACKEND_CONFIG_FORMATS: readonly string[] = Object.freeze([JUNO_BACKEND_CONFIG_FORMAT, JUNO_BACKEND_CONFIG_FORMAT_V3]);
 
-/** The canonical optimized escrow wasm: escrow 2.0.0 with the join admission (ESCROW-JOIN, built by the ESCROW-B2
- *  procedure; PROJECT_CANONICAL_CONTEXT §D.3).
+/** The canonical optimized escrow wasm: escrow 2.1.0 (FINANCIAL PROTOCOL 4), the CERTIFIED Phase 3 artifact --
+ *  `eighteen_cosmos_escrow.wasm`, 641,842 B, SHA-256 `c3bd0618…8219`, built from `e2a67c3` by the owner-machine official
+ *  optimizer gate (`cosmwasm/optimizer:0.16.1`, two byte-identical builds; PROJECT_CANONICAL_CONTEXT §D.3a). Pinned by
+ *  the Phase 3 escrow 2.1 release-readiness pass (2026-10-08), which proved this source's Wasm build inputs byte-identical
+ *  to the certified ones (`verify-escrow21-inputs.sh`).
  *
- *  FINANCIAL PROTOCOL 4 (Phase 3 escrow 2.1, 2026-10-06) -- OWNER-MACHINE CERTIFICATION PENDING. This build speaks
- *  escrow 2.1.0 only (`JUNO_ESCROW_CONTRACT_VERSIONS`). The 2.1.0 artifact's canonical checksum is recorded HERE, in
- *  place of 2.0.0's, by the owner's official-optimizer build (the cloud pass that wrote this had no Docker daemon).
- *  Until then the pair of pins is unsatisfiable on any real chain -- the 2.0.0 code (this checksum) always reports
- *  `contract_version` 2.0.0, which the version pin refuses, and no 2.1.0 code has this checksum -- so financial mode
- *  verifies NO deployment (`verifyJunoDeployment`: mismatch): fail-closed. The offline fake chain (tests) reports 2.1.0
- *  with this checksum, which no real deployment can. */
-export const CANONICAL_JUNO_ESCROW_CHECKSUMS: readonly string[] = Object.freeze(["5ecc302221a2dab4bb4f0f71b632f2beeafe9523ebd7b33bd0e94d017b8d09e8"]);
+ *  THE PIN IS NOT A DEPLOYMENT. No 2.1.0 contract exists on any chain until the owner-authorized StoreCode / instantiate,
+ *  so no real configuration can name one yet, and financial mode still verifies NO deployment -- fail closed:
+ *    - a Juno configuration still naming escrow 2.0.0's checksum (`5ecc3022…09e8`, the deployed JX-1 artifact) is
+ *      REFUSED at the static stage (not canonical here): in production the server does not start on it, so this build
+ *      and a 2.0.0 document are never paired -- the document and the image change together at the cutover;
+ *    - a configuration naming this checksum with a contract whose code is anything else (the 2.0.0 deployment included:
+ *      its code id resolves to `5ecc3022…`, and it reports `contract_version` 2.0.0, which `JUNO_ESCROW_CONTRACT_VERSIONS`
+ *      refuses) is a `verifyJunoDeployment` MISMATCH: financial mode off for the life of the process.
+ *  The offline fake chain (tests) stores this checksum for its 2.1.0 code. */
+export const CANONICAL_JUNO_ESCROW_CHECKSUMS: readonly string[] = Object.freeze(["c3bd0618615e0d8688f71860a90f235a796b0152be84e2489ce6639e3a218219"]);
 /** Historical artifacts that must never hold money (ESCROW-B2 1.0.0: its Join seated any wallet paying the ante). */
 export const REFUSED_JUNO_ESCROW_CHECKSUMS: readonly string[] = Object.freeze(["b263277aa5d1d63c33e8e238f27ad2b9ee4749c9a66abe82ef3146d51d119296"]);
 /** The contract's cw2 identity (`contracts/escrow/src/contract.rs`). */
@@ -183,7 +189,7 @@ export function parseJunoBackendConfig(raw: unknown, context: { readonly serverM
   };
   const contract = address(raw.contract_address, "contract_address");
   const checksum = typeof raw.code_checksum === "string" ? raw.code_checksum : "";
-  need(!REFUSED_JUNO_ESCROW_CHECKSUMS.includes(checksum), `code_checksum ${checksum} is the historical escrow 1.0.0 artifact, whose Join seats any wallet paying the ante; deploy the canonical 2.0.0 wasm`);
+  need(!REFUSED_JUNO_ESCROW_CHECKSUMS.includes(checksum), `code_checksum ${checksum} is the historical escrow 1.0.0 artifact, whose Join seats any wallet paying the ante; deploy the canonical escrow wasm (${CANONICAL_JUNO_ESCROW_CHECKSUMS[0]})`);
   need(CANONICAL_JUNO_ESCROW_CHECKSUMS.includes(checksum), `code_checksum must be the canonical escrow wasm (${CANONICAL_JUNO_ESCROW_CHECKSUMS[0]})`);
   const wasmAdmin = raw.wasm_admin === null ? null : typeof raw.wasm_admin === "string" ? address(raw.wasm_admin, "wasm_admin") : "";
   need(raw.wasm_admin === null || typeof raw.wasm_admin === "string", "wasm_admin must be null (immutable) or the published admin address (OD-G1-1)");
@@ -427,9 +433,15 @@ export async function verifyJunoDeployment(config: JunoBackendConfig, rest: Juno
     const checksum = await rest.codeChecksum(contract.code_id);
     if (!config.codeChecksums.includes(checksum)) problems.push(`the contract runs code ${contract.code_id} with checksum ${checksum}, not the canonical escrow`);
     if (contract.admin !== config.wasmAdmin) problems.push(`the contract's wasm admin is ${contract.admin ?? "none"}, not the configured ${config.wasmAdmin ?? "none"}`);
+    /* Phase 3 escrow 2.1 release readiness (review): another code (escrow 2.0.0's, say) is a MISMATCH now, before any 2.1-only
+       query -- a 2.0.0 contract answers those with an error, which would otherwise read as "unavailable" and retry forever. */
+    if (!config.codeChecksums.includes(checksum)) return { kind: "mismatch", problems };
     const escrow = parseConfigResponse(await rest.smart(config.contract, QUERY.config()));
     if (escrow.contract_name !== JUNO_ESCROW_CONTRACT_NAME) problems.push(`the contract is ${escrow.contract_name}, not ${JUNO_ESCROW_CONTRACT_NAME}`);
-    if (!JUNO_ESCROW_CONTRACT_VERSIONS.includes(escrow.contract_version)) problems.push(`the contract version ${escrow.contract_version} is not certified here`);
+    if (!JUNO_ESCROW_CONTRACT_VERSIONS.includes(escrow.contract_version)) {
+      problems.push(`the contract version ${escrow.contract_version} is not certified here`);
+      return { kind: "mismatch", problems };
+    }
     if (escrow.denom !== config.denom) problems.push(`the contract's denom is ${escrow.denom}, not ${config.denom}`);
     if (escrow.operator !== config.relayer.address) problems.push(`the contract's operator is ${escrow.operator}, not the relayer ${config.relayer.address}`);
     if (!config.trust.resolvers.includes(escrow.resolver)) problems.push(`the contract's resolver ${escrow.resolver} is not a trusted resolver`);

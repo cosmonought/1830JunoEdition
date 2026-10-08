@@ -6475,7 +6475,7 @@
   },
   "account": "The profile / account is the player; a Keplr wallet is signer state (session -> profile -> seat). One Authorization Wallet per profile; username + password (>= 12 characters); no recovery key, no email; recovery = username + fresh ADR-036 from the Authorization Wallet + a new password, revoking every session; Authorization Wallet replacement = password + old-wallet APPROVE + new-wallet ACCEPT; creating an account requires the Authorization-Wallet proof; ordinary gameplay needs no Keplr; the seat's financial wallet is immutable while money is bound and frozen after Start; a full pre-Start withdrawal permits re-ante from another wallet; production player tables are ante-only; Watch available; factual trust indicators; the multi-game invariant (Authorization Wallet C; Game 1 wallet A; Game 2 wallet B) holds. Owner ruling 2026-10-07: the Authorization Wallet MAY also be a game's financial wallet when the player deliberately chooses it -- explicit, warned once before that first binding (separation recommended for operational-security isolation), never blocked, never auto-selected or auto-bound; the account-authority and game-money roles stay distinct even when they share an address (see same_wallet_ruling).",
   "clocks": "Live 20:00 per required action; at most 10:00 TOTAL optional-offer freeze per required-action episode; 10:00 offer response timer; two directional declines per round instance (OR 2.1 / OR 2.2 distinct; each SR instance); offers never refresh the allowance; first / second overdue -> 10:00 cure / resolution window inside the 30:00 horizon (N-1 vote decides only the minute-30 outcome; a cure defeats it until finality); third overdue -> automatic gameplay foreclosure, money challengeable on chain; voluntary pause unanimous in and out; system pause protective, left by unanimous resume; outage time never charged; Timed Async 12 h / 24 h / 2 d / 3 d / 7 d, no grace, no decline limit; No-deadline (disclosure acknowledged before every ante); universal unanimous annulment; a timed money table fails closed when no REMEDY signer can enforce its deadline: creation answers money-games-disabled; admission, deposit approval, the host's own ante and Start answer money-unavailable.",
-  "escrow": "Escrow 2.1 / FP4 SOURCE-COMPLETE: REMEDY-APPROVE judged at the sealed final_at; a sealed remedy is immutable; no old IN_PROGRESS standings liveness exit for 2.1; 2.0 terms unchanged. 2.1 is NOT deployed; its artifact is CERTIFIED, NOT DEPLOYED (2026-10-07, see escrow21_artifact_certification: canonical SHA-256 c3bd0618615e0d8688f71860a90f235a796b0152be84e2489ce6639e3a218219, 641,842 B); escrow 2.0.0 `5ecc3022...09e8` stays the canonical DEPLOYED money artifact; the earlier provisional 2.1 Wasm hash is obsolete. Consequently this baseline runs no real money table: FP4 financial mode accepts only contract version 2.1.0 while its checksum pin is still 2.0.0's (junoConfig.ts) -- unsatisfiable on any real chain -- so no deployment verifies (fail closed) until the owner-authorized 2.1.0 release steps are done (Junox StoreCode simulation, StoreCode / instantiate, REMEDY KMS signer, production / Terraform pin update, deployment verification).",
+  "escrow": "Escrow 2.1 / FP4 SOURCE-COMPLETE: REMEDY-APPROVE judged at the sealed final_at; a sealed remedy is immutable; no old IN_PROGRESS standings liveness exit for 2.1; 2.0 terms unchanged. 2.1 is NOT deployed; its artifact is CERTIFIED, NOT DEPLOYED (2026-10-07, see escrow21_artifact_certification: canonical SHA-256 c3bd0618615e0d8688f71860a90f235a796b0152be84e2489ce6639e3a218219, 641,842 B); escrow 2.0.0 `5ecc3022...09e8` stays the canonical DEPLOYED money artifact; the earlier provisional 2.1 Wasm hash is obsolete. Consequently this baseline runs no real money table: FP4 financial mode accepts only contract version 2.1.0 while its checksum pin was still 2.0.0's until the 2026-10-08 release-readiness source fixes, which pin the certified c3bd0618...8219 (no deployment verifies until the authorized 2.1 cutover) (junoConfig.ts) -- unsatisfiable on any real chain -- so no deployment verifies (fail closed) until the owner-authorized 2.1.0 release steps are done (Junox StoreCode simulation, StoreCode / instantiate, REMEDY KMS signer, production / Terraform pin update, deployment verification).",
   "reporting": "P3-N035: no automatic effect (no game / money / escrow / profile / trust / seat change; no score; nothing public); reviewer conflict judged from the DURABLE table roster (record store: seats, removed seats, creator) so it survives restart, pool handoff and another host; an unreadable roster withholds the case (503); clock evidence hook (responsibility, offer, reject, expiry, freeze exhaustion, overdue, cure, strike, foreclosure proposal, votes, pause, system pause, remedy finality) without signatures, wallet proofs, keys or secrets; GS_CONDUCT_REVIEWERS wired in the single-host and ECS Terraform, SOURCE ONLY, absent by default (byte-identical default rendering).",
   "keplr_asset": "ASSET PENDING: no original official Keplr icon / wordmark file exists in the repository or was supplied; KeplrMark's KEPLR_OFFICIAL_ICON / KEPLR_OFFICIAL_WORDMARK stay null; nothing redrawn. Dependency: the owner supplies the original files; import them in frontend/src/components/money/KeplrMark.tsx with intrinsic sizes and flip keplrMark.test.tsx's pins.",
   "aud_19_04": "The brief's option A -- deferred, with citation (tracking disposition E): OD-18 deferred host succession and the clock's automatic consequences; the owner's final clocks brief (2026-10-06) built the clock's escrow-2.1 REMEDY outcomes but kept 'no host succession'. Host succession and any Forfeit / Clemency settlement payload stay deferred. No policy invented.",
@@ -6532,9 +6532,11 @@
   },
   "covered_heads": {
    "e2a67c3ec567328b9cd5d533b80cbdb4f38997e2": "certified source",
-   "857694f76333515c32b2e7ea5457159e68e4c3f7": "verify-escrow21-inputs.sh: IDENTICAL (Authorization Wallet warning correction; no Wasm input changed)"
+   "857694f76333515c32b2e7ea5457159e68e4c3f7": "verify-escrow21-inputs.sh: IDENTICAL (Authorization Wallet warning correction; no Wasm input changed)",
+   "8c4dca931d06e1f22dba87a737d9f6bc485492d1": "verify-escrow21-inputs.sh: IDENTICAL (the final Play tutorial; predeployment readiness audit 2026-10-08; the kit script's attribute step was confirmed by hand on Git 2.34)",
+   "phase3/escrow21-release-readiness": "contracts/escrow/scripts/verify-escrow21-inputs.sh (the corrected in-repository copy): IDENTICAL (release-readiness source fixes; no Wasm input changed)"
   },
-  "adoption_check": "verify-escrow21-inputs.sh (owner kit target/escrow21-cert-kit/, SHA-256 e162bb6c91848fd42976c182445cd3ee24d2dd6388e6a4b77283f3fd1af6098e); a later head reuses the checksum only on IDENTICAL, otherwise rebuild and recertify",
+  "adoption_check": "contracts/escrow/scripts/verify-escrow21-inputs.sh (in the repository since 2026-10-08; portable attribute reading on any Git, test-verify-escrow21-inputs.sh). The owner-kit copy target/escrow21-cert-kit/ (SHA-256 e162bb6c91848fd42976c182445cd3ee24d2dd6388e6a4b77283f3fd1af6098e) is superseded: on Git < 2.40 its check-attr --source step reported SAME without comparing. A later head reuses the checksum only on IDENTICAL, otherwise rebuild and recertify",
   "certified": [
    "exact canonical checksum established",
    "reproducible official-optimizer build: cosmwasm/optimizer:0.16.1@sha256:b9c92b2900b7ebaab3499203615c1b8589592bc557355ed3432e48851ffde69e (Rust 1.81.0, wasm-opt 116), two fresh-clone fresh-volume builds byte-identical on the owner machine",
@@ -6544,14 +6546,16 @@
   ],
   "not_yet_done": [
    "Junox StoreCode simulation (about 3.98M SDK gas estimated, unmeasured)",
-   "2.1 StoreCode / instantiate",
-   "REMEDY KMS signer deployment",
-   "production / Terraform checksum pin update (junoConfig.ts still pins 2.0.0)",
-   "pointing servers at 2.1",
-   "real deployment verification"
+   "2.1 StoreCode",
+   "creating the dedicated REMEDY KMS key (ledger stack remedy_key_count = 1) BEFORE the instantiate",
+   "2.1 instantiate (remedy_keys = the remedy public key) and its on-chain verification (contracts/escrow/scripts/verify_escrow21_deployment.py)",
+   "the production Terraform values (contract address, code_checksum c3bd0618...8219, remedy_signing_key, escrow.remedy_key) applied together with the 2.1-pinned server image",
+   "the frontend bundle's deployment pin after the server verifies",
+   "real deployment verification and the money-table proof"
   ],
   "not_claimed": "Escrow 2.1 is not deployed and is not the canonical deployed contract; escrow 2.0.0 (JX-1, 5ecc3022...09e8) stays the deployed money artifact.",
-  "record": "Project claude/PHASE3_ESCROW21_CANONICAL_ARTIFACT_CERTIFICATION_c3bd0618_2026-10-07.md; gas table claude/ESCROW21_canonical_gas_table_c3bd0618.md"
+  "record": "Project claude/PHASE3_ESCROW21_CANONICAL_ARTIFACT_CERTIFICATION_c3bd0618_2026-10-07.md; gas table claude/ESCROW21_canonical_gas_table_c3bd0618.md",
+  "source_ready": "2026-10-08 phase3/escrow21-release-readiness: junoConfig.ts pins c3bd0618...8219 (a 2.0.0 document is refused at startup; the 2.0.0 contract is a deployment mismatch); the dedicated REMEDY key's IaC / IAM / rendered remedy_key / tooling; the finalityKeysUnread metric and alarm C1; the 2.1 on-chain verifier. Not deployed."
  },
  "final_play_tutorial": {
   "date": "2026-10-08",
@@ -6588,5 +6592,38 @@
   "branding": "No player-facing '1830' product branding was found (appNaming.test.ts already enforces it); Project 18XX retained; the server's plain-text '1830 game server' HTTP body (not player UI) left as a residual",
   "ludum": "NOT BUILT (future ludum.netadao.org Learn to Play); the lesson registry is portable for it",
   "record": "Project `claude/PHASE3_FINAL_PLAY_TUTORIAL_2026-10-08.md`"
+ },
+ "escrow21_release_readiness": {
+  "date": "2026-10-08",
+  "branch": "phase3/escrow21-release-readiness",
+  "base": "phase3/consolidated-final-preplaytest-integration @ 8c4dca931d06e1f22dba87a737d9f6bc485492d1",
+  "status": "SOURCE FIXES COMMITTED LOCALLY; NOT pushed; NOT merged; NOT deployed. Phase 3 is NOT closed (W3-F follows).",
+  "owner_decision": "2026-10-08 APPROVED: a DEDICATED REMEDY KMS key / signing purpose -- never the relayer, settlement or admission key; its own purpose, IAM permissions, rendered config and rotation / deployment handling.",
+  "blockers_addressed": [
+   "REMEDY KMS signer: ledger remedy_key_count (append-only remedy-r<N>, the established least-privilege key policy, output remedy_key_arns); app / single-host remedy_signing_key (RemedyKeyPublicKey / RemedyKeySignDigestOnly on exactly that key; bootstrap RemedyKeyReadOnly); the rendered Juno document's remedy_key (with escrow.remedy_key; both or neither); awsDeploy signer-keys --remedy; awsDeploy verify (metadata, no grants, public key); runtime check (KMS only); host verifier; migration plan guard --remedy-key (an operator fact)",
+   "finalityKeysUnread alerting: clock audits clock.finality-keys-unread / clock.finality-keys-read once per hold (game id, epoch, times; no key, signature or vote); the primary's ClockFinalityHeldTables gauge and ClockFinalityKeysUnread delta counter ([Environment, Pool] only); alarm contract C1 (page, every pool, Minimum >= 1 for 3 minutes, never suppressed); single host: HostHealthProblems counts it (the existing health alarm pages after 3 minutes)"
+  ],
+  "checksum_pin": "server/src/escrow/juno/junoConfig.ts CANONICAL_JUNO_ESCROW_CHECKSUMS = [c3bd0618615e0d8688f71860a90f235a796b0152be84e2489ce6639e3a218219]; escrow3bSupport CANONICAL_CHECKSUM; infra fixtures and Terraform test inputs; frontend money test pins; the build's capability keys moved by the checksum alone (no escrow dc1-a9aea13a21fbc921a315ab25, fixture dc1-28fab6d8333d24d3271c408d; FP4 source dc1-e8d0b479... / dc1-30d89367... reproduced exactly with 2.0.0's checksum)",
+  "fail_closed": "No live tfvars and no production contract address were written. A Juno document still naming 2.0.0's checksum is refused at the static stage (production: the server does not start on it); a 2.1-pinned configuration pointed at the 2.0.0 contract is a verifyJunoDeployment mismatch; no remedy key configured: timed money refused, as before.",
+  "tooling": [
+   "contracts/escrow/scripts/verify_escrow21_deployment.py: read-only 2.1 verifier (fixed checksum + cw2; required expectations; exact signer and REMEDY registries; operator, admin, wasm admin, paused, empty balance and games, history, instantiate message); its judgement is offline-tested (test_verify_escrow21_deployment.py)",
+   "contracts/escrow/scripts/verify-escrow21-inputs.sh: the kit script with the Git < 2.40 false PASS fixed (portable check-attr --cached reading, --source cross-check where supported, complete-reading checks); test-verify-escrow21-inputs.sh"
+  ],
+  "certified_inputs": "IDENTICAL to e2a67c3 on this branch (Cargo.toml f07686d2, Cargo.lock e34610fa, contracts/escrow/Cargo.toml e780c7ce, contracts/escrow/src 131d0a9c); the checksum c3bd0618...8219 continues to apply",
+  "not_done": [
+   "Junox StoreCode simulation NOT run",
+   "KMS remedy key NOT created",
+   "Terraform NOT applied",
+   "escrow 2.1 NOT deployed (no StoreCode / instantiate)",
+   "server / frontend NOT deployed",
+   "Keplr official asset integration outstanding",
+   "W3-F outstanding"
+  ],
+  "residuals": [
+   "the LIVE-6 staging certification probes (kmsProbe, certify, hostRoleProbe, rotationProof) still exercise the three original keys only; the remedy key is verified by the server's own startup identity check and awsDeploy verify",
+   "budget: the 2.1 release keys (3 + 1 remedy) fit max_kms_keys = 6; a remedy key beside the full LIVE-6 -> JX-1 transition keys (r2 + jx1) would be 7 -- an owner budget decision if both are ever present",
+   "a production server built from this source refuses to start on a 2.0.0 Juno document: the document and the image change together at the cutover (and roll back together)"
+  ],
+  "record": "Project claude/PHASE3_ESCROW21_RELEASE_READINESS_SOURCE_FIXES_2026-10-08.md; audit claude/PHASE3_ESCROW21_PREDEPLOYMENT_READINESS_8c4dca9_2026-10-08.md"
  }
 }

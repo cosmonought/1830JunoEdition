@@ -33,6 +33,12 @@ variable "relayer_rotation_key_arns" {
   default = []
 }
 
+# PHASE 3 ESCROW 2.1: the DEDICATED REMEDY key (the ledger stack's remedy_key_arns.<label>), with escrow.remedy_key.
+variable "remedy_signing_key" {
+  type    = string
+  default = null
+}
+
 variable "escrow" {
   type    = any
   default = null

@@ -105,13 +105,13 @@ describe("L6-5B the alarm contract", () => {
     assert.deepEqual(a10.metrics.map((m) => `${m.id}=${m.metric}`), ["t=KmsTransient", "o=KmsOtherFailure", "w=KmsSignWithheld", "s=KmsSigns"]);
   });
 
-  test("the expansion: 13 per environment + 9 per pool + 3 on the primary (escrow and services); nothing per task", () => {
+  test("the expansion: 13 per environment + 10 per pool + 3 on the primary (escrow and services); nothing per task", () => {
     const all = expectedAlarms({ environment: "staging", pools: ["p1", "p2", "p3"], primaryPool: "p1", escrow: true, services: true });
-    assert.equal(all.length, 13 + 9 * 3 + 3);
+    assert.equal(all.length, 13 + 10 * 3 + 3);
     assert.ok(all.every((e) => /^gs-staging-(primary|p[123])?-?[a-z0-9-]+$/.test(e.name) && !/t-[0-9a-f]{8,}/.test(e.name)), "names from the contract's ids and pool ids only");
     assert.deepEqual(new Set(all.map((e) => e.pool)), new Set([null, "p1", "p2", "p3"]));
     const bare = expectedAlarms({ environment: "staging", pools: ["p1"], primaryPool: "p1", escrow: false, services: false });
-    assert.ok(!bare.some((e) => /a6-|a7-|a8-|a9-|a10-|a15-|r2-|r3-|a13-/.test(e.key)), "no escrow: no relayer / KMS / money alarm; no services: no heartbeat");
+    assert.ok(!bare.some((e) => /a6-|a7-|a8-|a9-|a10-|a15-|r2-|r3-|c1-|a13-/.test(e.key)), "no escrow: no relayer / KMS / money / minute-30 hold alarm; no services: no heartbeat");
   });
 });
 

@@ -5,7 +5,8 @@
 #   gs-<env>-app-execution  ECS itself: pull the image, write the task's log stream. Nothing of the application.
 #   gs-<env>-app-task       the application -- the ONLY credential source of a running task (static keys are refused by
 #                           the runtime). Exactly the DynamoDB actions the L5-2..L5-6 adapters send, per table; KMS
-#                           GetPublicKey + Sign (ECDSA_SHA_256 over a DIGEST) on the three keys; ssm:GetParameter on the
+#                           GetPublicKey + Sign (ECDSA_SHA_256 over a DIGEST) on the three keys (+ the dedicated REMEDY
+#                           key, in its own statements, when `remedy_signing_key` names one); ssm:GetParameter on the
 #                           two documents. No Secrets Manager (nothing consumes a secret yet), no logs (the execution
 #                           role's), no ECS Exec. It never writes SYSTEM/* (the routing) or APPGEN.
 #   gs-<env>-bootstrap      the deploy pipeline / operator: create-if-absent SYSTEM/ROUTING, SYSTEM/GENERATION (L6-4)
@@ -198,6 +199,33 @@ data "aws_iam_policy_document" "task" {
       }
     }
   }
+  # --- KMS: the DEDICATED REMEDY key (Phase 3 escrow 2.1; owner decision 2026-10-08), by key ARN, in its OWN statements ---
+  dynamic "statement" {
+    for_each = var.remedy_signing_key == null ? [] : [1]
+    content {
+      sid       = "RemedyKeyPublicKey"
+      actions   = ["kms:GetPublicKey"]
+      resources = [var.remedy_signing_key]
+    }
+  }
+  dynamic "statement" {
+    for_each = var.remedy_signing_key == null ? [] : [1]
+    content {
+      sid       = "RemedyKeySignDigestOnly"
+      actions   = ["kms:Sign"]
+      resources = [var.remedy_signing_key]
+      condition {
+        test     = "StringEquals"
+        variable = "kms:SigningAlgorithm"
+        values   = ["ECDSA_SHA_256"]
+      }
+      condition {
+        test     = "StringEquals"
+        variable = "kms:MessageType"
+        values   = ["DIGEST"]
+      }
+    }
+  }
 }
 
 resource "aws_iam_role_policy" "task" {
@@ -300,6 +328,15 @@ data "aws_iam_policy_document" "bootstrap" {
       sid       = "SigningKeysReadOnly"
       actions   = ["kms:DescribeKey", "kms:GetPublicKey", "kms:ListGrants"]
       resources = concat(values(var.signing_keys), var.relayer_rotation_key_arns)
+    }
+  }
+  dynamic "statement" {
+    for_each = var.remedy_signing_key == null ? [] : [1]
+    content {
+      # PHASE 3 ESCROW 2.1: the dedicated REMEDY key -- read only (`awsDeploy verify` / `signer-keys`), never signed with.
+      sid       = "RemedyKeyReadOnly"
+      actions   = ["kms:DescribeKey", "kms:GetPublicKey", "kms:ListGrants"]
+      resources = [var.remedy_signing_key]
     }
   }
   # LIVE-6 relayer rotation: the staging certification's POST-ROTATION proof (`stage-cert certify --scenario

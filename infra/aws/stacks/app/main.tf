@@ -36,6 +36,7 @@ module "app" {
   ledger_table_arn                  = var.ledger_table_arn
   signing_keys                      = var.signing_keys
   relayer_rotation_key_arns         = var.relayer_rotation_key_arns
+  remedy_signing_key                = var.remedy_signing_key
   escrow                            = var.escrow
   money_tables_nonmainnet           = var.money_tables_nonmainnet
   edge_diagnostic_staging           = var.edge_diagnostic_staging

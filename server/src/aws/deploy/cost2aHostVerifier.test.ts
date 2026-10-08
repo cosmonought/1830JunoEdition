@@ -1266,3 +1266,30 @@ describe("COST-2A §6: capture-host-evidence.{sh,ps1} over a stubbed AWS CLI (no
     });
   }
 });
+
+/* ================================================================== */
+/* PHASE 3 ESCROW 2.1: the DEDICATED REMEDY key on the host role        */
+/* ================================================================== */
+
+describe("Phase 3 escrow 2.1: the host role and the dedicated REMEDY key", () => {
+  const f = finalFiles();
+  const REMEDY = `arn:aws:kms:${REGION}:222222222222:key/77777777-7777-4777-8777-777777777777`;
+  const withPolicy = (doc: Json) => ({ [HOST_EVIDENCE_FILES.rolePolicy]: { RoleName: `gs-${ENV}-host-app`, PolicyName: "gs-single-host-runtime", PolicyDocument: doc } });
+  const remedyPolicy = () => JSON.parse(fixture("host-role-policy-staging-remedy.json")) as Json;
+  const withRemedyExpected = () => expectFor("single-host", { authorities: { ...expectFor("single-host").authorities, kmsKeyArns: [...KEYS, REMEDY] } });
+
+  test("GOOD: the module's rendering with a remedy key (infra/aws/fixtures/host-role-policy-staging-remedy.json) against a Juno configuration naming it", () => {
+    assertPass(judged(f, withPolicy(remedyPolicy()), withRemedyExpected()));
+  });
+
+  test("the remedy key granted but not configured, or configured but not granted, is a wrong allow-list", () => {
+    assertFail(judged(f, withPolicy(remedyPolicy())), /KMS keys = the runtime Juno configuration's/, "a remedy key the configuration does not name (an extra signer)");
+    assertFail(judged(f, {}, withRemedyExpected()), /KMS keys = the runtime Juno configuration's/, "a configured remedy key the role cannot sign with (remedies would fail)");
+  });
+
+  test("the remedy statements keep the digest-only Sign condition", () => {
+    const doc = remedyPolicy() as { Statement: Array<Record<string, Json>> };
+    for (const s of doc.Statement) if (s.Sid === "RemedyKeySignDigestOnly") delete s.Condition;
+    assertFail(judged(f, withPolicy(doc as unknown as Json), withRemedyExpected()), /limited to the configured authorities/, "remedy Sign without the DIGEST / ECDSA_SHA_256 condition");
+  });
+});

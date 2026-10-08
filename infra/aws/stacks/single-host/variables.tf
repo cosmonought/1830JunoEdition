@@ -37,6 +37,12 @@ variable "signing_keys" {
   default = null
 }
 
+# PHASE 3 ESCROW 2.1: the DEDICATED REMEDY key (the ledger stack's remedy_key_arns.<label>; the app stack's same value).
+variable "remedy_signing_key" {
+  type    = string
+  default = null
+}
+
 variable "escrow_enabled" {
   type    = bool
   default = false

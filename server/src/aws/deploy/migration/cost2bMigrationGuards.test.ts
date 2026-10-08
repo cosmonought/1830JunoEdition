@@ -1332,3 +1332,71 @@ describe("COST-2B: the reconciled runbook", () => {
     assert.match(RUNBOOK, /desired.count drift/i);
   });
 });
+
+/* ------------------------------------------------------------------ */
+/* PHASE 3 ESCROW 2.1: the DEDICATED REMEDY key on the host role         */
+/* ------------------------------------------------------------------ */
+
+describe("Phase 3 escrow 2.1: host-create judges the dedicated REMEDY key as an operator fact", () => {
+  const REMEDY = "arn:aws:kms:us-east-1:222222222222:key/77777777-7777-4777-8777-777777777777";
+  /** The host-create plan as modules/single-host renders it WITH `remedy_signing_key = REMEDY`: the variable, and the two
+   *  RemedyKey statements right after the three-key statements (iam.tf's order). */
+  const withRemedy = (statements: (remedy: string) => Array<Record<string, unknown>> = (remedy) => [
+    { Action: ["kms:GetPublicKey"], Effect: "Allow", Resource: [remedy], Sid: "RemedyKeyPublicKey" },
+    { Action: ["kms:Sign"], Condition: { StringEquals: { "kms:MessageType": "DIGEST", "kms:SigningAlgorithm": "ECDSA_SHA_256" } }, Effect: "Allow", Resource: [remedy], Sid: "RemedyKeySignDigestOnly" },
+  ]): Obj => {
+    const p = plan("host-create");
+    (p.variables as Obj).remedy_signing_key = { value: REMEDY };
+    const r = rc(p, `${H}.aws_iam_role_policy.host`);
+    const after = (r.change as Obj).after as Obj;
+    const doc = JSON.parse(String(after.policy)) as { Statement: Array<Record<string, unknown>> };
+    const i = doc.Statement.findIndex((s) => s.Sid === "SigningKeysSignDigestOnly");
+    doc.Statement.splice(i + 1, 0, ...statements(REMEDY));
+    after.policy = JSON.stringify(doc);
+    return p;
+  };
+
+  test("a plan naming exactly the operator's remedy key, in its own two statements, passes", () => {
+    assert.equal(judgeOf("host-create", withRemedy(), { ...CTX, remedyKeyArn: REMEDY }).verdict, "PASS");
+    /* Without one on either side: unchanged (the committed fixture, no operator remedy key). */
+    assert.equal(judgeOf("host-create", plan("host-create"), CTX).verdict, "PASS");
+  });
+
+  test("the remedy key is the OPERATOR's fact: a plan cannot add, swap or drop it on its own", () => {
+    rejects("host-create", withRemedy(), /the host policy's inputs do not match/, CTX);
+    rejects("host-create", plan("host-create"), /the host policy's inputs do not match/, { ...CTX, remedyKeyArn: REMEDY });
+    rejects("host-create", withRemedy(), /the host policy's inputs do not match/, { ...CTX, remedyKeyArn: REMEDY.replace("77777777-7777-4777-8777-777777777777", "88888888-8888-4888-8888-888888888888") });
+  });
+
+  test("the remedy key never widens the three-key statements, and never signs without the digest conditions", () => {
+    const widened = withRemedy();
+    const r = rc(widened, `${H}.aws_iam_role_policy.host`);
+    const after = (r.change as Obj).after as Obj;
+    const doc = JSON.parse(String(after.policy)) as { Statement: Array<Record<string, unknown>> };
+    for (const s of doc.Statement) if (s.Sid === "SigningKeysSignDigestOnly") s.Resource = [...(s.Resource as string[]), REMEDY];
+    after.policy = JSON.stringify(doc);
+    rejects("host-create", widened, /SigningKeysSignDigestOnly/, { ...CTX, remedyKeyArn: REMEDY });
+    rejects("host-create", withRemedy((remedy) => [
+      { Action: ["kms:GetPublicKey"], Effect: "Allow", Resource: [remedy], Sid: "RemedyKeyPublicKey" },
+      { Action: ["kms:Sign"], Effect: "Allow", Resource: [remedy], Sid: "RemedyKeySignDigestOnly" },
+    ]), /RemedyKeySignDigestOnly/, { ...CTX, remedyKeyArn: REMEDY });
+    rejects("host-create", withRemedy((remedy) => [
+      { Action: ["kms:GetPublicKey"], Effect: "Allow", Resource: [remedy], Sid: "RemedyKeyPublicKey" },
+      { Action: ["kms:Sign"], Condition: { StringEquals: { "kms:MessageType": "DIGEST", "kms:SigningAlgorithm": "ECDSA_SHA_256" } }, Effect: "Allow", Resource: ["*"], Sid: "RemedyKeySignDigestOnly" },
+    ]), /RemedyKeySignDigestOnly/, { ...CTX, remedyKeyArn: REMEDY });
+  });
+
+  test("migration-guard --remedy-key must be a KMS key ARN of its own", async () => {
+    const lines: string[] = [];
+    const base = ["host-create", "--plan-evidence", "/nonexistent", "--environment", FIXTURE.environment, "--app-account", FIXTURE.appAccountId, "--region", FIXTURE.region, "--ledger-table-arn", FIXTURE.ledgerTableArn, "--signing-keys", FIXTURE.signingKeyArns.join(",")];
+    const out = (line: string) => lines.push(line);
+    for (const bad of ["arn:aws:kms:us-east-1:222222222222:alias/remedy", FIXTURE.signingKeyArns[1]]) {
+      lines.length = 0;
+      assert.equal(await migrationGuardCommand([...base, "--remedy-key", bad], out), 2, lines.join("\n"));
+      assert.ok(lines.some((l) => /--remedy-key must be a KMS key ARN/.test(l)), lines.join("\n"));
+    }
+    lines.length = 0;
+    assert.equal(await migrationGuardCommand(["ecr-lifecycle", "--plan-evidence", "/nonexistent", "--environment", FIXTURE.environment, "--app-account", FIXTURE.appAccountId, "--remedy-key", "arn:aws:kms:us-east-1:222222222222:key/77777777-7777-4777-8777-777777777777"], out), 2);
+    assert.ok(lines.some((l) => /--remedy-key belongs to host-create/.test(l)), lines.join("\n"));
+  });
+});

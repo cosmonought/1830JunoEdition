@@ -100,9 +100,12 @@ const sha = (bytes: Buffer | string) => createHash("sha256").update(bytes).diges
    dc1-41eb96a7… / dc1-63af8114…), and Phase 3's dedicated v13 certification moved them by certifying 13 alone
    (settlement [10, 11, 12, 13]; W3-K's were dc1-390107d5… / dc1-d01c50c4…). Phase 3's escrow 2.1 timed remedies
    (financial protocol 4) moved the fixture key by `financial_protocols` alone (the v13 certification's was
-   dc1-32fcc496…); the no-escrow key lists no financial protocol and did not move. */
-const KEY_NO_ESCROW = "dc1-e8d0b4792a7ba07e67199ad2";
-const KEY_FIXTURE_PIN = "dc1-30d893675c773e9b609699e7";
+   dc1-32fcc496…); the no-escrow key lists no financial protocol and did not move. The Phase 3 escrow 2.1 release-
+   readiness pin (2026-10-08) moved both by the canonical escrow checksum alone -- the certified 2.1.0 artifact's
+   `c3bd0618…` in place of 2.0.0's (the FP4 source's were dc1-e8d0b479… / dc1-30d89367…; live4CanonicalModel.test proves
+   the move is the checksum's alone). */
+const KEY_NO_ESCROW = "dc1-a9aea13a21fbc921a315ab25";
+const KEY_FIXTURE_PIN = "dc1-28fab6d8333d24d3271c408d";
 
 const OTHER_CHECKSUM = "ab".repeat(32);
 const PIN_B: FinancialDeploymentPin = Object.freeze({ ...PIN, contract_address: WALLETS[2] });

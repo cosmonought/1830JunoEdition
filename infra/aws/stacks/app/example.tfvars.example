@@ -20,6 +20,12 @@ signing_keys = {
 # gate and SetOperator): signing_keys.relayer = that key, and the previous relayer key here (kept readable for rollback).
 # relayer_rotation_key_arns = ["arn:aws:kms:us-east-1:222222222222:key/66666666-6666-4666-8666-666666666666"]
 
+# PHASE 3 ESCROW 2.1 (owner decision 2026-10-08): the DEDICATED REMEDY key -- the ledger stack's remedy_key_arns.r1 -- and,
+# in `escrow`, its on-chain registry entry: remedy_key = { remedy_key_id = <the contract's id, 1 for the first key
+# registered at instantiation>, public_key_hex = <`signer-keys ... --remedy <arn>`'s remedy.public_key_hex> }. Both or
+# neither. Absent: the server signs no remedy and refuses every timed money table (fail closed).
+# remedy_signing_key = "arn:aws:kms:us-east-1:222222222222:key/77777777-7777-4777-8777-777777777777"
+
 # null: no escrow. Public keys and the relayer address: `npm run awsDeploy -- signer-keys --relayer <arn> ...`.
 escrow = null
 

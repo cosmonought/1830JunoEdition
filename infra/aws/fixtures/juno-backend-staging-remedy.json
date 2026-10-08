@@ -48,5 +48,13 @@
     "kind": "dynamodb",
     "table_arn": "arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger"
   },
-  "timeout_blocks": 60
+  "timeout_blocks": 60,
+  "remedy_key": {
+    "remedy_key_id": 1,
+    "public_key_hex": "0238194abfc289cc915ccc280e22ab5959c87e379a2039e494433e70f29c3c1a6b",
+    "signer": {
+      "kind": "kms",
+      "key_ref": "arn:aws:kms:us-east-1:222222222222:key/77777777-7777-4777-8777-777777777777"
+    }
+  }
 }

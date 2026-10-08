@@ -1,0 +1,97 @@
+{
+ "balances": [],
+ "checksum": "c3bd0618615e0d8688f71860a90f235a796b0152be84e2489ce6639e3a218219",
+ "code_id": 4242,
+ "config": {
+  "config": {
+   "admin": "juno1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqnrql8a",
+   "admission_pubkey": "03f28773c2d975288bc7d1d205c3748651b075fbc6610e58cddeeddf8f19405aa8",
+   "denom": "ujunox",
+   "operator": "juno1xc5etfhxjg4qfc9cx25qh3tvxdcf5skjj5epte",
+   "params": {
+    "bond_bps": 5000,
+    "bond_floor": "1000000",
+    "challenge_window_async_secs": 1800,
+    "challenge_window_live_secs": 900,
+    "funding_period_async_secs": 7200,
+    "funding_period_live_secs": 3600,
+    "liveness_window_secs": 3600,
+    "min_ante": "2000000",
+    "resolver_timeout_secs": 7200,
+    "subsidy_bps": 250
+   },
+   "paused": false,
+   "resolver": "juno1wfk5fda0sg5z2lqrpwh7wexnckpe6hqzljkt4v",
+   "treasury": "juno1qyqszqgpqyqszqgpqyqszqgpqyqszqgpjnp7du"
+  },
+  "contract_name": "crates.io:eighteen-cosmos-escrow",
+  "contract_version": "2.1.0",
+  "next_chain_game_id": 1,
+  "next_remedy_key_id": 2,
+  "next_signer_key_id": 2
+ },
+ "contract": "juno1qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qursaq28r5",
+ "creator": "juno1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqnrql8a",
+ "cw2": {
+  "contract": "crates.io:eighteen-cosmos-escrow",
+  "version": "2.1.0"
+ },
+ "games": [],
+ "history": [
+  {
+   "code_id": 4242,
+   "msg": {
+    "admin": "juno1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqnrql8a",
+    "admission_pubkey": "03f28773c2d975288bc7d1d205c3748651b075fbc6610e58cddeeddf8f19405aa8",
+    "denom": "ujunox",
+    "operator": "juno1xc5etfhxjg4qfc9cx25qh3tvxdcf5skjj5epte",
+    "params": {
+     "bond_bps": 5000,
+     "bond_floor": "1000000",
+     "challenge_window_async_secs": 1800,
+     "challenge_window_live_secs": 900,
+     "funding_period_async_secs": 7200,
+     "funding_period_live_secs": 3600,
+     "liveness_window_secs": 3600,
+     "min_ante": "2000000",
+     "resolver_timeout_secs": 7200,
+     "subsidy_bps": 250
+    },
+    "remedy_keys": [
+     "0238194abfc289cc915ccc280e22ab5959c87e379a2039e494433e70f29c3c1a6b"
+    ],
+    "resolver": "juno1wfk5fda0sg5z2lqrpwh7wexnckpe6hqzljkt4v",
+    "signer_keys": [
+     "03d01115d548e7561b15c38f004d734633687cf4419620095bc5b0f47070afe85a"
+    ],
+    "treasury": "juno1qyqszqgpqyqszqgpqyqszqgpqyqszqgpjnp7du"
+   },
+   "operation": 1
+  }
+ ],
+ "label": "gs-staging-escrow21-test",
+ "remedy_keys": [
+  {
+   "added_at": "1760000000000000000",
+   "compromised": false,
+   "key_id": 1,
+   "pubkey": "0238194abfc289cc915ccc280e22ab5959c87e379a2039e494433e70f29c3c1a6b",
+   "retired_at": null
+  }
+ ],
+ "rpc": {
+  "catching_up": false,
+  "chain_id": "uni-7",
+  "height": 12345678
+ },
+ "signer_keys": [
+  {
+   "added_at": "1760000000000000000",
+   "compromised": false,
+   "key_id": 1,
+   "pubkey": "03d01115d548e7561b15c38f004d734633687cf4419620095bc5b0f47070afe85a",
+   "retired_at": null
+  }
+ ],
+ "wasm_admin": null
+}

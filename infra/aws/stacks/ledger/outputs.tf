@@ -16,6 +16,11 @@ output "financial_key_arns" {
   value = module.ledger.financial_key_arns
 }
 
+# PHASE 3 ESCROW 2.1: the dedicated REMEDY keys by label (r1 = the first); the app stack names one as remedy_signing_key.
+output "remedy_key_arns" {
+  value = module.ledger.remedy_key_arns
+}
+
 output "kms_region" {
   value = module.ledger.kms_region
 }

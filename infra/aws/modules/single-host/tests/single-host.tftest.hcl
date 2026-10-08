@@ -468,3 +468,73 @@ run "ecr_lifecycle_keeps_rollback_history" {
     error_message = "the existing repository keeps the newest 20 images"
   }
 }
+
+# ---------------------------------------------------------------- PHASE 3 ESCROW 2.1: the DEDICATED REMEDY key
+# Owner decision 2026-10-08: the host role signs remedy attestations with the remedy key ONLY, in its own statements; the
+# three-key statements are unchanged. No remedy key by default (the fixture above): the host policy is byte-for-byte as before.
+
+run "remedy_key_absent_by_default" {
+  command = plan
+
+  assert {
+    condition     = length([for s in local.host_policy_statements : s if startswith(s.Sid, "RemedyKey")]) == 0
+    error_message = "Default (remedy_signing_key = null): no remedy statement; the host policy is the unchanged fixture."
+  }
+}
+
+run "remedy_key_has_its_own_statements_and_fixture" {
+  command = plan
+  variables {
+    remedy_signing_key = "arn:aws:kms:us-east-1:222222222222:key/77777777-7777-4777-8777-777777777777"
+  }
+
+  assert {
+    condition     = jsondecode(local.host_policy) == jsondecode(file("${path.module}/../../fixtures/host-role-policy-staging-remedy.json"))
+    error_message = "The host role's policy with a remedy key must equal infra/aws/fixtures/host-role-policy-staging-remedy.json (the host verifier's GOOD evidence) -- update both and hostVerify.ts together."
+  }
+  assert {
+    condition = (flatten([for s in local.host_policy_statements : s.Resource if s.Sid == "RemedyKeyPublicKey"]) == ["arn:aws:kms:us-east-1:222222222222:key/77777777-7777-4777-8777-777777777777"]
+      && flatten([for s in local.host_policy_statements : s.Action if s.Sid == "RemedyKeyPublicKey"]) == ["kms:GetPublicKey"]
+      && flatten([for s in local.host_policy_statements : s.Resource if s.Sid == "RemedyKeySignDigestOnly"]) == ["arn:aws:kms:us-east-1:222222222222:key/77777777-7777-4777-8777-777777777777"]
+    && flatten([for s in local.host_policy_statements : s.Action if s.Sid == "RemedyKeySignDigestOnly"]) == ["kms:Sign"])
+    error_message = "GetPublicKey and Sign on exactly the remedy key, in RemedyKeyPublicKey / RemedyKeySignDigestOnly."
+  }
+  assert {
+    condition     = [for s in local.host_policy_statements : s.Condition.StringEquals if s.Sid == "RemedyKeySignDigestOnly"][0] == { "kms:SigningAlgorithm" = "ECDSA_SHA_256", "kms:MessageType" = "DIGEST" }
+    error_message = "Remedy Sign: ECDSA_SHA_256 over a DIGEST only."
+  }
+  assert {
+    condition     = toset(flatten([for s in local.host_policy_statements : s.Resource if s.Sid == "SigningKeysSignDigestOnly"])) == toset(values(var.signing_keys)) && toset(flatten([for s in local.host_policy_statements : s.Resource if s.Sid == "SigningKeysPublicKey"])) == toset(values(var.signing_keys))
+    error_message = "The three-key statements are unchanged (never widened to the remedy key)."
+  }
+  assert {
+    condition     = toset(flatten([for s in local.host_policy_statements : flatten([s.Resource]) if contains(flatten([s.Action]), "kms:Sign")])) == toset(concat(values(var.signing_keys), ["arn:aws:kms:us-east-1:222222222222:key/77777777-7777-4777-8777-777777777777"]))
+    error_message = "Everything the host may Sign with: the three configured keys plus the remedy key -- nothing else, never '*'."
+  }
+}
+
+run "remedy_key_refuses_an_alias" {
+  command = plan
+  variables {
+    remedy_signing_key = "arn:aws:kms:us-east-1:222222222222:alias/gs-staging-remedy"
+  }
+  expect_failures = [var.remedy_signing_key]
+}
+
+run "remedy_key_refuses_a_configured_signing_key" {
+  command = plan
+  variables {
+    remedy_signing_key = "arn:aws:kms:us-east-1:222222222222:key/22222222-2222-4222-8222-222222222222"
+  }
+  expect_failures = [var.remedy_signing_key]
+}
+
+run "remedy_key_needs_escrow" {
+  command = plan
+  variables {
+    signing_keys       = null
+    escrow_enabled     = false
+    remedy_signing_key = "arn:aws:kms:us-east-1:222222222222:key/77777777-7777-4777-8777-777777777777"
+  }
+  expect_failures = [var.remedy_signing_key]
+}

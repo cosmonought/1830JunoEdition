@@ -11,7 +11,7 @@
 // server cannot point a deposit at an escrow this build was not built for.
 //
 //   REACT_APP_ESCROW_DEPLOYMENT={"backend":"juno-cosmwasm","chainId":"uni-7","networkClass":"testnet",
-//     "contract":"juno1...","codeChecksum":"5ecc3022...","denom":"ujunox","symbol":"JUNOX","exponent":6,
+//     "contract":"juno1...","codeChecksum":"c3bd0618...","denom":"ujunox","symbol":"JUNOX","exponent":6,
 //     "rpc":"https://...","rest":"https://...","chainName":"Juno testnet","gasPrice":"0.075","explorerTx":null}
 //
 // No pin: no money action exists in this build (a table is still playable; its money panel says why nothing can be

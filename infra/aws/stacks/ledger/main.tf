@@ -33,6 +33,7 @@ module "ledger" {
   signing_keys_enabled = var.signing_keys_enabled
   relayer_key_count    = var.relayer_key_count
   financial_key_sets   = var.financial_key_sets
+  remedy_key_count     = var.remedy_key_count
 
   # COST-1: the single host's app role beside (then instead of) the ECS task role.
   app_runtime_role_arns    = var.app_runtime_role_arns

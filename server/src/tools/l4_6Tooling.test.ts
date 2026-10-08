@@ -74,9 +74,11 @@ const GAMES_DOCTOR = path.join(__dirname, "gamesDoctor.js");
  *  them on the rules axis alone (rules 13 reading [13], settlement still [10, 11, 12]; R12-3's were dc1-41eb96a7… and
  *  dc1-63af8114…), and as Phase 3's dedicated v13 certification moved them by certifying 13 alone (settlement
  *  [10, 11, 12, 13]; W3-K's were dc1-390107d5… and dc1-d01c50c4…), and as Phase 3's escrow 2.1 timed remedies moved the
- *  fixture key by `financial_protocols` alone (financial protocol 4; the v13 certification's was dc1-32fcc496…). */
-const KEY_NO_ESCROW = "dc1-e8d0b4792a7ba07e67199ad2";
-const KEY_FIXTURE_PIN = "dc1-30d893675c773e9b609699e7";
+ *  fixture key by `financial_protocols` alone (financial protocol 4; the v13 certification's was dc1-32fcc496…), and as
+ *  the Phase 3 escrow 2.1 release-readiness pin moved both by the canonical escrow checksum alone (the certified 2.1.0
+ *  artifact's; the FP4 source's were dc1-e8d0b479… and dc1-30d89367…). */
+const KEY_NO_ESCROW = "dc1-a9aea13a21fbc921a315ab25";
+const KEY_FIXTURE_PIN = "dc1-28fab6d8333d24d3271c408d";
 
 const PIN_B: FinancialDeploymentPin = Object.freeze({ ...PIN, contract_address: WALLETS[2] });
 const PIN_TYPO: FinancialDeploymentPin = Object.freeze({ ...PIN, denom: "ujunoy" });

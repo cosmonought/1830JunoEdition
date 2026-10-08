@@ -13,6 +13,8 @@ signing_keys = {
   settlement = "arn:aws:kms:us-east-1:222222222222:key/22222222-2222-4222-8222-222222222222"
   admission  = "arn:aws:kms:us-east-1:222222222222:key/33333333-3333-4333-8333-333333333333"
 }
+# PHASE 3 ESCROW 2.1: the DEDICATED REMEDY key -- the SAME ARN as the app stack's remedy_signing_key (null: no remedy key).
+# remedy_signing_key = "arn:aws:kms:us-east-1:222222222222:key/77777777-7777-4777-8777-777777777777"
 escrow_enabled          = true
 money_tables_nonmainnet = true
 

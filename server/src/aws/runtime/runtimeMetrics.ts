@@ -148,6 +148,16 @@ export const METRICS = Object.freeze({
   /** On a restored table: the money games whose restore check has run and is still PENDING (read-only, neither verified
    *  nor held). Only a primary has an escrow service; its alarm exists for every pool, like `RelayerPaging`. */
   RestoreUnverifiedGames: gauge(),
+  /* ---------------- PHASE 3 ESCROW 2.1 RELEASE READINESS: the table clock's minute-30 hold ---------------- */
+  /** The primary's tables held RIGHT NOW at a Live money minute 30 that is due but undecided because the approvers'
+   *  consent keys could not be read conclusively on chain (`clockController.finalityHeld`): each one FROZEN -- every move
+   *  and vote refused -- until a read succeeds (fail closed: never a decision on keys whose validity is unknown). A count
+   *  only: the games are in the `clock.finality-keys-unread` audit lines, never a dimension. Only the primary emits it;
+   *  its alarm (C1) exists for EVERY pool, like R3's. */
+  ClockFinalityHeldTables: gauge(),
+  /** The inconclusive minute-30 key reads since the last record (deltas of `clockController.counters.finalityKeysUnread`,
+   *  the one source of truth, like the KMS counters): the rate behind the gauge, for Logs Insights. */
+  ClockFinalityKeysUnread: counter(),
 } satisfies Record<string, MetricSpec>);
 
 export type MetricName = keyof typeof METRICS;
@@ -327,8 +337,9 @@ export function buildEmfRecord(context: EmfContext, at: number, record: MetricRe
 //                       writer unconfirmed, a non-primary (standby) task, not the identity writer (no `Primary`), the money
 //                       sweep stale (>= L6-5B A5's 180 s), the relayer not usable, escrow not active, the relayer paging,
 //                       money games of a restored table still unverified (L6-5B R3), and the signer unavailable this tick
-//                       (KMS transient failures or withheld signatures with no successful Sign -- L6-5B A10's condition).
-//                       0 when healthy. Its alarm treats missing data as breaching, so it is also the heartbeat.
+//                       (KMS transient failures or withheld signatures with no successful Sign -- L6-5B A10's condition),
+//                       and (Phase 3 escrow 2.1) a timed money table frozen at an undecided minute 30 whose consent keys
+//                       could not be read on chain (`ClockFinalityHeldTables` >= 1). 0 when healthy. Its alarm treats missing data as breaching, so it is also the heartbeat.
 //   HostCriticalEvents  (counter, only when > 0) the sum of the incident counters on the record: a task loss (any cause),
 //                       an uncertain store, a refused start, a failed sweep pass or game, a relayer takeover not taken, a
 //                       KMS refusal / invalid answer / other failure, a money game held journal-ahead.
@@ -386,6 +397,8 @@ export function singleHostDerived(record: MetricRecord): { HostHealthProblems?: 
     if (value("EscrowActive") === 0) problems += 1;
     if ((value("RelayerPaging") ?? 0) >= 1) problems += 1;
     if ((value("RestoreUnverifiedGames") ?? 0) >= 1) problems += 1;
+    /* Phase 3 escrow 2.1: a timed money table frozen at an undecided minute 30 (its consent keys unreadable on chain). */
+    if ((value("ClockFinalityHeldTables") ?? 0) >= 1) problems += 1;
     if ((value("KmsTransient") ?? 0) + (value("KmsSignWithheld") ?? 0) > 0 && (value("KmsSigns") ?? 0) === 0) problems += 1;
     out.HostHealthProblems = problems;
   }

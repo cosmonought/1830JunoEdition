@@ -65,7 +65,7 @@ variables {
     network_class    = "testnet"
     rest_endpoints   = ["https://juno-testnet-rest.example.net"]
     contract_address = "juno1qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qursaq28r5"
-    code_checksum    = "5ecc302221a2dab4bb4f0f71b632f2beeafe9523ebd7b33bd0e94d017b8d09e8"
+    code_checksum    = "c3bd0618615e0d8688f71860a90f235a796b0152be84e2489ce6639e3a218219"
     wasm_admin       = null
     denom            = "ujunox"
     asset_symbol     = "JUNOX"
@@ -837,7 +837,7 @@ run "refuses_the_edge_diagnostic_beside_mainnet_escrow" {
       network_class    = "mainnet"
       rest_endpoints   = ["https://a.example.net", "https://b.example.net"]
       contract_address = "juno1qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qursaq28r5"
-      code_checksum    = "5ecc302221a2dab4bb4f0f71b632f2beeafe9523ebd7b33bd0e94d017b8d09e8"
+      code_checksum    = "c3bd0618615e0d8688f71860a90f235a796b0152be84e2489ce6639e3a218219"
       wasm_admin       = null
       denom            = "ujuno"
       asset_symbol     = "JUNO"
@@ -893,7 +893,7 @@ run "refuses_a_mainnet_money_switch" {
       network_class    = "mainnet"
       rest_endpoints   = ["https://a.example.net", "https://b.example.net"]
       contract_address = "juno1qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qursaq28r5"
-      code_checksum    = "5ecc302221a2dab4bb4f0f71b632f2beeafe9523ebd7b33bd0e94d017b8d09e8"
+      code_checksum    = "c3bd0618615e0d8688f71860a90f235a796b0152be84e2489ce6639e3a218219"
       wasm_admin       = null
       denom            = "ujuno"
       asset_symbol     = "JUNO"
@@ -1073,4 +1073,185 @@ run "refuses_a_rotation_without_signing_keys" {
     relayer_rotation_key_arns = ["arn:aws:kms:us-east-1:222222222222:key/66666666-6666-4666-8666-666666666666"]
   }
   expect_failures = [var.relayer_rotation_key_arns]
+}
+
+/* ------------------------------------------------------------------ */
+/* PHASE 3 ESCROW 2.1: the DEDICATED REMEDY key (`remedy_signing_key`) */
+/* ------------------------------------------------------------------ */
+# Owner decision 2026-10-08: the REMEDY authority is its own purpose -- its own key, its own IAM statements, its own field of
+# the rendered Juno document. The ledger stack's remedy_key_arns.r1 = 7777... below; the original three are 1111/2222/3333.
+
+run "no_remedy_key_by_default_and_nothing_changes" {
+  command = apply
+
+  assert {
+    condition     = !contains(keys(jsondecode(aws_ssm_parameter.juno_backend[0].insecure_value)), "remedy_key")
+    error_message = "Default (remedy_signing_key = null): the Juno document carries no remedy_key -- the server signs no remedy and refuses timed money (fail closed)."
+  }
+  assert {
+    condition     = length([for s in concat(data.aws_iam_policy_document.task[0].statement, data.aws_iam_policy_document.bootstrap.statement) : s if startswith(s.sid, "RemedyKey")]) == 0
+    error_message = "Default: no remedy statement on any role (every existing policy unchanged)."
+  }
+}
+
+run "a_remedy_key_is_rendered_and_granted_on_its_own" {
+  command = apply
+  variables {
+    remedy_signing_key = "arn:aws:kms:us-east-1:222222222222:key/77777777-7777-4777-8777-777777777777"
+    escrow             = merge(var.escrow, { remedy_key = { remedy_key_id = 1, public_key_hex = "0238194abfc289cc915ccc280e22ab5959c87e379a2039e494433e70f29c3c1a6b" } })
+  }
+
+  assert {
+    condition     = jsondecode(aws_ssm_parameter.juno_backend[0].insecure_value) == jsondecode(file("${path.module}/../../fixtures/juno-backend-staging-remedy.json"))
+    error_message = "The Juno document must equal infra/aws/fixtures/juno-backend-staging-remedy.json (which the server's parser checks): the base document plus remedy_key."
+  }
+  assert {
+    condition = jsondecode(aws_ssm_parameter.juno_backend[0].insecure_value).remedy_key == {
+      remedy_key_id  = 1
+      public_key_hex = "0238194abfc289cc915ccc280e22ab5959c87e379a2039e494433e70f29c3c1a6b"
+      signer         = { kind = "kms", key_ref = "arn:aws:kms:us-east-1:222222222222:key/77777777-7777-4777-8777-777777777777" }
+    }
+    error_message = "remedy_key = { remedy_key_id, public_key_hex, signer: { kind: kms, key_ref: <the remedy key ARN> } } -- junoConfig.ts's field, exactly."
+  }
+  assert {
+    condition = (jsondecode(aws_ssm_parameter.juno_backend[0].insecure_value).relayer.signer.key_ref == "arn:aws:kms:us-east-1:222222222222:key/11111111-1111-4111-8111-111111111111"
+      && jsondecode(aws_ssm_parameter.juno_backend[0].insecure_value).settlement_key.signer.key_ref == "arn:aws:kms:us-east-1:222222222222:key/22222222-2222-4222-8222-222222222222"
+    && jsondecode(aws_ssm_parameter.juno_backend[0].insecure_value).admission_key.signer.key_ref == "arn:aws:kms:us-east-1:222222222222:key/33333333-3333-4333-8333-333333333333")
+    error_message = "The relayer, settlement and admission signers are unchanged: the remedy key never substitutes for one of them."
+  }
+  assert {
+    condition = alltrue([for sid in ["SigningKeysPublicKey", "SigningKeysSignDigestOnly"] : toset(one([for s in data.aws_iam_policy_document.task[0].statement : s if s.sid == sid]).resources) == toset([
+      "arn:aws:kms:us-east-1:222222222222:key/11111111-1111-4111-8111-111111111111",
+      "arn:aws:kms:us-east-1:222222222222:key/22222222-2222-4222-8222-222222222222",
+      "arn:aws:kms:us-east-1:222222222222:key/33333333-3333-4333-8333-333333333333",
+    ])])
+    error_message = "The three-key statements are unchanged (not widened to the remedy key)."
+  }
+  assert {
+    condition = (toset(one([for s in data.aws_iam_policy_document.task[0].statement : s if s.sid == "RemedyKeyPublicKey"]).actions) == toset(["kms:GetPublicKey"])
+      && toset(one([for s in data.aws_iam_policy_document.task[0].statement : s if s.sid == "RemedyKeyPublicKey"]).resources) == toset(["arn:aws:kms:us-east-1:222222222222:key/77777777-7777-4777-8777-777777777777"])
+      && toset(one([for s in data.aws_iam_policy_document.task[0].statement : s if s.sid == "RemedyKeySignDigestOnly"]).actions) == toset(["kms:Sign"])
+    && toset(one([for s in data.aws_iam_policy_document.task[0].statement : s if s.sid == "RemedyKeySignDigestOnly"]).resources) == toset(["arn:aws:kms:us-east-1:222222222222:key/77777777-7777-4777-8777-777777777777"]))
+    error_message = "The task role reaches the remedy key in its OWN statements: GetPublicKey and Sign on exactly that one key ARN."
+  }
+  assert {
+    condition = toset([for c in one([for s in data.aws_iam_policy_document.task[0].statement : s if s.sid == "RemedyKeySignDigestOnly"]).condition : "${c.test}|${c.variable}|${join(",", c.values)}"]) == toset([
+      "StringEquals|kms:SigningAlgorithm|ECDSA_SHA_256", "StringEquals|kms:MessageType|DIGEST",
+    ])
+    error_message = "kms:Sign on the remedy key only with ECDSA_SHA_256 over a DIGEST."
+  }
+  assert {
+    condition = (toset(one([for s in data.aws_iam_policy_document.bootstrap.statement : s if s.sid == "RemedyKeyReadOnly"]).actions) == toset(["kms:DescribeKey", "kms:GetPublicKey", "kms:ListGrants"])
+      && toset(one([for s in data.aws_iam_policy_document.bootstrap.statement : s if s.sid == "RemedyKeyReadOnly"]).resources) == toset(["arn:aws:kms:us-east-1:222222222222:key/77777777-7777-4777-8777-777777777777"])
+    && toset(one([for s in data.aws_iam_policy_document.bootstrap.statement : s if s.sid == "SigningKeysReadOnly"]).resources) == toset(values(var.signing_keys)))
+    error_message = "The bootstrap role READS the remedy key (DescribeKey, GetPublicKey, ListGrants) in its own statement; its three-key read is unchanged."
+  }
+  assert {
+    condition     = length([for s in data.aws_iam_policy_document.bootstrap.statement : s if contains(s.actions, "kms:Sign")]) == 0
+    error_message = "The bootstrap role never signs -- with the remedy key or any other."
+  }
+  assert {
+    condition = alltrue([for s in concat(data.aws_iam_policy_document.task[0].statement, data.aws_iam_policy_document.bootstrap.statement) :
+    !contains(s.resources, "*") || length([for a in s.actions : a if startswith(a, "kms:")]) == 0])
+    error_message = "No KMS action on a '*' resource (no accidental broad kms:Sign or read)."
+  }
+  assert {
+    condition = alltrue(flatten([for s in concat(data.aws_iam_policy_document.task[0].statement, data.aws_iam_policy_document.bootstrap.statement) :
+    [for a in s.actions : !contains(["kms:*", "kms:CreateGrant", "kms:Sign*", "kms:Decrypt", "kms:Encrypt"], a)]]))
+    error_message = "No wildcard KMS action, no CreateGrant, no encrypt/decrypt on any role."
+  }
+  assert {
+    condition     = toset(flatten([for s in data.aws_iam_policy_document.task[0].statement : s.resources if contains(s.actions, "kms:Sign")])) == toset(concat(values(var.signing_keys), ["arn:aws:kms:us-east-1:222222222222:key/77777777-7777-4777-8777-777777777777"]))
+    error_message = "Everything the task role may Sign with is exactly the three configured keys plus the configured remedy key."
+  }
+}
+
+run "refuses_a_remedy_key_alias" {
+  command = plan
+  variables {
+    remedy_signing_key = "arn:aws:kms:us-east-1:222222222222:alias/gs-staging-remedy"
+    escrow             = merge(var.escrow, { remedy_key = { remedy_key_id = 1, public_key_hex = "0238194abfc289cc915ccc280e22ab5959c87e379a2039e494433e70f29c3c1a6b" } })
+  }
+  expect_failures = [var.remedy_signing_key]
+}
+
+run "refuses_the_settlement_key_as_the_remedy_key" {
+  command = plan
+  variables {
+    remedy_signing_key = "arn:aws:kms:us-east-1:222222222222:key/22222222-2222-4222-8222-222222222222"
+    escrow             = merge(var.escrow, { remedy_key = { remedy_key_id = 1, public_key_hex = "0238194abfc289cc915ccc280e22ab5959c87e379a2039e494433e70f29c3c1a6b" } })
+  }
+  expect_failures = [var.remedy_signing_key]
+}
+
+run "refuses_the_relayer_or_admission_key_as_the_remedy_key" {
+  command = plan
+  variables {
+    remedy_signing_key = "arn:aws:kms:us-east-1:222222222222:key/33333333-3333-4333-8333-333333333333"
+    escrow             = merge(var.escrow, { remedy_key = { remedy_key_id = 1, public_key_hex = "0238194abfc289cc915ccc280e22ab5959c87e379a2039e494433e70f29c3c1a6b" } })
+  }
+  expect_failures = [var.remedy_signing_key]
+}
+
+run "refuses_a_relayer_rotation_key_as_the_remedy_key" {
+  command = plan
+  variables {
+    relayer_rotation_key_arns = ["arn:aws:kms:us-east-1:222222222222:key/66666666-6666-4666-8666-666666666666"]
+    remedy_signing_key        = "arn:aws:kms:us-east-1:222222222222:key/66666666-6666-4666-8666-666666666666"
+    escrow                    = merge(var.escrow, { remedy_key = { remedy_key_id = 1, public_key_hex = "0238194abfc289cc915ccc280e22ab5959c87e379a2039e494433e70f29c3c1a6b" } })
+  }
+  expect_failures = [var.remedy_signing_key]
+}
+
+run "refuses_a_remedy_key_in_another_region" {
+  command = plan
+  variables {
+    remedy_signing_key = "arn:aws:kms:us-west-2:222222222222:key/77777777-7777-4777-8777-777777777777"
+    escrow             = merge(var.escrow, { remedy_key = { remedy_key_id = 1, public_key_hex = "0238194abfc289cc915ccc280e22ab5959c87e379a2039e494433e70f29c3c1a6b" } })
+  }
+  expect_failures = [var.remedy_signing_key]
+}
+
+run "refuses_a_remedy_signer_without_its_on_chain_key" {
+  command = plan
+  variables {
+    remedy_signing_key = "arn:aws:kms:us-east-1:222222222222:key/77777777-7777-4777-8777-777777777777"
+  }
+  expect_failures = [var.remedy_signing_key]
+}
+
+run "refuses_an_on_chain_remedy_key_without_its_signer" {
+  command = plan
+  variables {
+    escrow = merge(var.escrow, { remedy_key = { remedy_key_id = 1, public_key_hex = "0238194abfc289cc915ccc280e22ab5959c87e379a2039e494433e70f29c3c1a6b" } })
+  }
+  expect_failures = [var.remedy_signing_key]
+}
+
+run "refuses_a_remedy_key_without_signing_keys" {
+  command = plan
+  variables {
+    signing_keys       = null
+    escrow             = null
+    remedy_signing_key = "arn:aws:kms:us-east-1:222222222222:key/77777777-7777-4777-8777-777777777777"
+  }
+  expect_failures = [var.remedy_signing_key]
+}
+
+run "refuses_a_malformed_on_chain_remedy_key" {
+  command = plan
+  variables {
+    remedy_signing_key = "arn:aws:kms:us-east-1:222222222222:key/77777777-7777-4777-8777-777777777777"
+    escrow             = merge(var.escrow, { remedy_key = { remedy_key_id = 65, public_key_hex = "0238194abfc289cc915ccc280e22ab5959c87e379a2039e494433e70f29c3c1a6b" } })
+  }
+  expect_failures = [var.escrow]
+}
+
+run "refuses_the_settlement_public_key_as_the_remedy_public_key" {
+  command = plan
+  variables {
+    remedy_signing_key = "arn:aws:kms:us-east-1:222222222222:key/77777777-7777-4777-8777-777777777777"
+    escrow             = merge(var.escrow, { remedy_key = { remedy_key_id = 1, public_key_hex = "03d01115d548e7561b15c38f004d734633687cf4419620095bc5b0f47070afe85a" } })
+  }
+  expect_failures = [var.escrow]
 }

@@ -5,6 +5,11 @@ files are fed to the server's own parsers by `server/src/aws/deploy/l5_8Deploy.t
 (`parseAwsRuntimeConfigText`, `parseJunoBackendConfig` in production mode, `checkEscrowConfigForAws`), so a rendering the
 runtime would refuse fails one of the two suites. The keys, addresses and ARNs are test values (no real account).
 
+PHASE 3 ESCROW 2.1 (2026-10-08): `juno-backend-staging.json` names the certified escrow 2.1.0 checksum (`c3bd0618…`, the
+server's pin) and NO remedy key (the fail-closed default); `juno-backend-staging-remedy.json` is the same document with the
+dedicated REMEDY key (`remedy_signing_key` + `escrow.remedy_key`), and `host-role-policy-staging-remedy.json` the host role's
+policy with it (its own two statements). Each is asserted by its module test and fed to the server's parser / verifiers.
+
 COST-2A adds the single-host module's two IAM documents, as `modules/single-host/tests/single-host.tftest.hcl` renders
 them for its test inputs (that test asserts equality with these files): `host-role-policy-staging.json` (the host role's
 inline policy) and `host-assume-role-policy-staging.json` (its trust policy). `server/src/aws/deploy/cost2aHostVerifier.test.ts`

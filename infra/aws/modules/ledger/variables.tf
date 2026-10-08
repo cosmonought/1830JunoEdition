@@ -139,6 +139,29 @@ variable "financial_key_sets" {
   }
 }
 
+variable "remedy_key_count" {
+  description = <<-EOT
+    PHASE 3 ESCROW 2.1 (owner decision 2026-10-08): how many DEDICATED REMEDY signing keys this ledger holds -- escrow 2.1.0's
+    REMEDY attestation authority, its own signing purpose (never the relayer, settlement or admission key). Default 0: no
+    remedy key, every existing plan unchanged (and the server, configured without one, refuses every timed money table: fail
+    closed). Key N is `aws_kms_key.signing["remedy-r<N>"]` -- same spec (ECC_SECG_P256K1 / SIGN_VERIFY, single-region), same
+    least-privilege key policy, `prevent_destroy`. APPEND-ONLY: raise it by one to create the first key or to PREPARE a
+    rotation (the new key exists beside the current one; the app stack's `remedy_signing_key` still names the current one).
+    Lowering it would destroy the newest key: `prevent_destroy` refuses that plan. Output: `remedy_key_arns`.
+  EOT
+  type        = number
+  default     = 0
+  nullable    = false
+  validation {
+    condition     = var.remedy_key_count >= 0 && var.remedy_key_count <= 16 && floor(var.remedy_key_count) == var.remedy_key_count
+    error_message = "remedy_key_count must be a whole number 0..16."
+  }
+  validation {
+    condition     = var.remedy_key_count == 0 || var.signing_keys_enabled
+    error_message = "remedy_key_count > 0 needs signing_keys_enabled: a remedy key is a signing key."
+  }
+}
+
 variable "tags" {
   description = "Tags on every resource."
   type        = map(string)

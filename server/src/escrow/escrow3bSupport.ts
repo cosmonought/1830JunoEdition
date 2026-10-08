@@ -36,8 +36,11 @@ import type { FinancialDeploymentPin } from "./moneyLifecycle";
 export const GAME_A = "g_0000000000000000000000000w";
 export const GAME_B = "g_000000000000000000000000cw";
 export const CHAIN_ID = "uni-7";
-/** The canonical escrow 2.0.0 wasm (ESCROW-JOIN), pinned here independently of `junoConfig.ts`. */
-export const CANONICAL_CHECKSUM = "5ecc302221a2dab4bb4f0f71b632f2beeafe9523ebd7b33bd0e94d017b8d09e8";
+/** The canonical escrow 2.1.0 wasm (the certified Phase 3 artifact, 641,842 B), pinned here independently of
+ *  `junoConfig.ts`. */
+export const CANONICAL_CHECKSUM = "c3bd0618615e0d8688f71860a90f235a796b0152be84e2489ce6639e3a218219";
+/** The escrow 2.0.0 artifact (ESCROW-JOIN; the deployed JX-1 contract): NOT this build's -- configuration refuses it. */
+export const ESCROW_2_0_0_CHECKSUM = "5ecc302221a2dab4bb4f0f71b632f2beeafe9523ebd7b33bd0e94d017b8d09e8";
 /** The historical escrow 1.0.0 artifact (ESCROW-B2): its Join seated any payer; configuration refuses it by name. */
 export const HISTORICAL_1_0_0_CHECKSUM = "b263277aa5d1d63c33e8e238f27ad2b9ee4749c9a66abe82ef3146d51d119296";
 export const T0 = 1_760_000_000_000;

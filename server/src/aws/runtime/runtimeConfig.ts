@@ -58,7 +58,7 @@
 import { isAwsRegion, parseDynamoTableArn, parseSsmParameterArn, type DynamoTableArn, type SsmParameterArn } from "../arns";
 import { primaryPoolProblem } from "../game/routing";
 import { routeEntryProblem, type PoolRouteEntry } from "../../rooms/gameRoutes";
-import type { JunoBackendConfig } from "../../escrow/juno/junoConfig";
+import type { JunoBackendConfig, SignerRef } from "../../escrow/juno/junoConfig";
 import { flagValues, single, STORAGE_ENV, type Env } from "./storageMode";
 
 export const AWS_RUNTIME_CONFIG_FORMAT = "18COSMOS/AWS-RUNTIME/v1";
@@ -250,7 +250,14 @@ export function checkEscrowConfigForAws(config: JunoBackendConfig, runtime: AwsR
   const problems: string[] = [];
   if (config.journal.kind !== "dynamodb") problems.push("the escrow configuration names a FILE signing journal; AWS storage opens only the DynamoDB ledger (journal.kind \"dynamodb\"), and never falls back to a file");
   else if (config.journal.tableArn !== runtime.ledger.arn) problems.push(`the escrow configuration's ledger (${config.journal.tableArn}) is not the runtime's (${runtime.ledger.arn}): one task, one ledger`);
-  for (const [role, ref] of [["relayer", config.relayer.signer], ["settlement_key", config.settlementKey.signer], ["admission_key", config.admissionKey.signer]] as const) {
+  /* Phase 3 escrow 2.1: the dedicated REMEDY key, when configured, is a KMS key too (never a development signer on AWS). */
+  const signers: ReadonlyArray<readonly [string, SignerRef]> = [
+    ["relayer", config.relayer.signer],
+    ["settlement_key", config.settlementKey.signer],
+    ["admission_key", config.admissionKey.signer],
+    ...(config.remedyKey !== null ? [["remedy_key", config.remedyKey.signer] as const] : []),
+  ];
+  for (const [role, ref] of signers) {
     if (ref.kind !== "kms") problems.push(`${role}: AWS storage signs only with KMS keys (a ${ref.kind} signer is refused)`);
   }
   if (config.kmsRegion === null) problems.push("the escrow configuration names no KMS region");

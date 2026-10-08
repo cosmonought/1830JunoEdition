@@ -72,6 +72,33 @@ variable "signing_keys" {
   }
 }
 
+variable "remedy_signing_key" {
+  description = <<-EOT
+    PHASE 3 ESCROW 2.1 (owner decision 2026-10-08): the DEDICATED REMEDY signing key the Juno document's `remedy_key` names,
+    by key ARN -- the app stack's `remedy_signing_key` -- or null (the default: no remedy key, the host policy unchanged).
+    Its own purpose: never the relayer, settlement or admission key. When set, the host role may GetPublicKey and Sign
+    (ECDSA_SHA_256 over a DIGEST) with exactly this key, in its own statements (RemedyKeyPublicKey / RemedyKeySignDigestOnly).
+  EOT
+  type        = string
+  default     = null
+  validation {
+    condition     = var.remedy_signing_key == null || can(regex("^arn:aws:kms:[a-z0-9-]+:[0-9]{12}:key/[0-9a-f-]{36}$", var.remedy_signing_key))
+    error_message = "remedy_signing_key must be a KMS key ARN (never an alias)."
+  }
+  validation {
+    condition     = var.remedy_signing_key == null || (var.signing_keys != null && var.escrow_enabled)
+    error_message = "remedy_signing_key needs signing_keys and escrow_enabled: a remedy key belongs to a configured escrow."
+  }
+  validation {
+    condition     = var.remedy_signing_key == null || var.signing_keys == null ? true : !contains(values(var.signing_keys), var.remedy_signing_key)
+    error_message = "remedy_signing_key must be its OWN key: never the relayer, settlement or admission key."
+  }
+  validation {
+    condition     = var.remedy_signing_key == null || var.signing_keys == null ? true : split(":", var.remedy_signing_key)[3] == split(":", var.signing_keys.relayer)[3]
+    error_message = "remedy_signing_key must be in the signing keys' one region (take it from the app stack's validated remedy_signing_key)."
+  }
+}
+
 variable "escrow_enabled" {
   description = "Whether the runtime document carries escrow (the host role then reads /gs/<environment>/juno-backend)."
   type        = bool

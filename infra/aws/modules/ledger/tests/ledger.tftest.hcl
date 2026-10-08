@@ -642,3 +642,162 @@ run "jx4c_operator_journal_query_is_atti_only_for_the_exact_operator" {
     error_message = "JX-4C: no signing key names the operator (no Sign, no GetPublicKey)."
   }
 }
+
+/* ------------------------------------------------------------------ */
+/* PHASE 3 ESCROW 2.1: the DEDICATED REMEDY keys (`remedy_key_count`)  */
+/* ------------------------------------------------------------------ */
+# Owner decision 2026-10-08: the escrow 2.1.0 REMEDY attestation authority is its OWN signing purpose -- never the relayer,
+# settlement or admission key. One state ("remedy") carried through: an ARN equal to an earlier run's proves the key was
+# neither replaced nor recreated.
+
+run "remedy_baseline_no_remedy_key" {
+  command   = apply
+  state_key = "remedy"
+
+  assert {
+    condition     = toset(keys(aws_kms_key.signing)) == toset(["relayer", "settlement", "admission"]) && length(output.remedy_key_arns) == 0
+    error_message = "Default remedy_key_count = 0: exactly the three L5-8 keys and no remedy key (remedy_key_arns = {}): every existing plan is unchanged."
+  }
+}
+
+run "a_remedy_key_is_its_own_purpose" {
+  command   = apply
+  state_key = "remedy"
+  variables {
+    remedy_key_count = 1
+  }
+
+  assert {
+    condition     = toset(keys(aws_kms_key.signing)) == toset(["relayer", "settlement", "admission", "remedy-r1"])
+    error_message = "remedy_key_count = 1 adds exactly remedy-r1 -- no relayer, settlement or admission key."
+  }
+  assert {
+    condition     = output.signing_key_arns == run.remedy_baseline_no_remedy_key.signing_key_arns && output.relayer_key_arns == run.remedy_baseline_no_remedy_key.relayer_key_arns && length(output.financial_key_arns) == 0
+    error_message = "The original relayer, settlement and admission keys are untouched (same ARNs); signing_key_arns stays exactly the original three."
+  }
+  assert {
+    condition     = join(",", keys(output.remedy_key_arns)) == "r1" && output.remedy_key_arns["r1"] == aws_kms_key.signing["remedy-r1"].arn && !contains(values(output.signing_key_arns), output.remedy_key_arns["r1"])
+    error_message = "remedy_key_arns = { r1 = <the remedy key> }, never one of the signing_key_arns."
+  }
+  assert {
+    condition = (aws_kms_key.signing["remedy-r1"].customer_master_key_spec == "ECC_SECG_P256K1" && aws_kms_key.signing["remedy-r1"].key_usage == "SIGN_VERIFY"
+      && !aws_kms_key.signing["remedy-r1"].multi_region && !aws_kms_key.signing["remedy-r1"].enable_key_rotation && aws_kms_key.signing["remedy-r1"].is_enabled
+    && aws_kms_key.signing["remedy-r1"].deletion_window_in_days == 30)
+    error_message = "The remedy key is a secp256k1 SIGN_VERIFY key: single-region, no rotation, enabled, 30-day deletion window."
+  }
+  assert {
+    condition     = aws_kms_key.signing["remedy-r1"].tags == tomap(merge(local.tags, { Name = "gs-staging-remedy-r1", "gs:signing-purpose" = "remedy", "gs:remedy-key" = "r1" }))
+    error_message = "Tagged by its OWN purpose (remedy) and label (r1); never a relayer, settlement or admission tag, no key set."
+  }
+  assert {
+    condition     = aws_kms_key.signing["remedy-r1"].policy == data.aws_iam_policy_document.signing["remedy-r1"].json && aws_kms_key.signing["remedy-r1"].description == "18Cosmos staging remedy-r1 signing key (secp256k1, digest only; named by key ARN, never an alias)"
+    error_message = "The remedy key carries its own policy document and names itself."
+  }
+  assert {
+    condition = (toset([for s in data.aws_iam_policy_document.signing["remedy-r1"].statement : s.sid]) == toset(["KeyAdministrationWithoutSigning", "AppTaskPublicKey", "AppTaskSignDigestOnly", "BootstrapVerifyReadOnly"])
+      && toset(one([for s in data.aws_iam_policy_document.signing["remedy-r1"].statement : s if s.sid == "AppTaskSignDigestOnly"]).actions) == toset(["kms:Sign"])
+      && toset([for c in one([for s in data.aws_iam_policy_document.signing["remedy-r1"].statement : s if s.sid == "AppTaskSignDigestOnly"]).condition : "${c.test}|${c.variable}|${join(",", c.values)}"]) == toset([
+        "ArnEquals|aws:PrincipalArn|arn:aws:iam::111111111111:role/gs-staging-app-task", "StringEquals|kms:SigningAlgorithm|ECDSA_SHA_256", "StringEquals|kms:MessageType|DIGEST",
+      ])
+      && toset(one([for s in data.aws_iam_policy_document.signing["remedy-r1"].statement : s if s.sid == "BootstrapVerifyReadOnly"]).actions) == toset(["kms:DescribeKey", "kms:GetPublicKey", "kms:ListGrants"])
+    && !contains(one([for s in data.aws_iam_policy_document.signing["remedy-r1"].statement : s if s.sid == "KeyAdministrationWithoutSigning"]).actions, "kms:Sign"))
+    error_message = "Least privilege: only the app task role signs with the remedy key (ECDSA_SHA_256 over a DIGEST), the bootstrap role only reads, the account administers but never signs."
+  }
+  assert {
+    condition     = alltrue(flatten([for s in data.aws_iam_policy_document.signing["remedy-r1"].statement : [for a in s.actions : a != "kms:CreateGrant" && a != "kms:*"]]))
+    error_message = "Nobody may CreateGrant on the remedy key (a grant would hand out Sign without appearing in the policy), and no kms:*."
+  }
+  assert {
+    condition     = data.aws_iam_policy_document.signing["remedy-r1"].statement == data.aws_iam_policy_document.signing["settlement"].statement
+    error_message = "The remedy key's policy is exactly the established signing-key policy (no grant broader than the existing keys')."
+  }
+  assert {
+    condition = alltrue([for k in ["relayer", "settlement", "admission"] :
+    aws_kms_key.signing[k].tags == tomap(merge(local.tags, { Name = "gs-staging-${k}", "gs:signing-purpose" = k })) && aws_kms_key.signing[k].description == "18Cosmos staging ${k} signing key (secp256k1, digest only; named by key ARN, never an alias)"])
+    error_message = "The three L5-8 keys' descriptions and tags are unchanged."
+  }
+  assert {
+    condition     = length([for s in data.aws_iam_policy_document.ledger_resource.statement : s if s.sid == "BootstrapRelayerFenceRead"]) == 0
+    error_message = "A remedy key changes nothing in the ledger table's resource policy."
+  }
+}
+
+run "a_prepared_remedy_rotation_adds_r2_and_keeps_r1" {
+  command   = apply
+  state_key = "remedy"
+  variables {
+    remedy_key_count = 2
+  }
+
+  assert {
+    condition     = toset(keys(aws_kms_key.signing)) == toset(["relayer", "settlement", "admission", "remedy-r1", "remedy-r2"]) && join(",", keys(output.remedy_key_arns)) == "r1,r2"
+    error_message = "remedy_key_count = 2 prepares remedy-r2 beside remedy-r1."
+  }
+  assert {
+    condition     = output.remedy_key_arns["r1"] == run.a_remedy_key_is_its_own_purpose.remedy_key_arns["r1"] && output.signing_key_arns == run.remedy_baseline_no_remedy_key.signing_key_arns
+    error_message = "The current remedy key and the original three are untouched (same ARNs)."
+  }
+  assert {
+    condition     = aws_kms_key.signing["remedy-r2"].tags == tomap(merge(local.tags, { Name = "gs-staging-remedy-r2", "gs:signing-purpose" = "remedy", "gs:remedy-key" = "r2" })) && data.aws_iam_policy_document.signing["remedy-r2"].statement == data.aws_iam_policy_document.signing["remedy-r1"].statement
+    error_message = "The prepared key has the same spec and policy as r1, its own label."
+  }
+}
+
+run "the_remedy_key_can_never_be_dropped_by_the_count" {
+  command   = plan
+  state_key = "remedy"
+  variables {
+    remedy_key_count = -1
+  }
+  expect_failures = [var.remedy_key_count]
+}
+
+run "a_remedy_key_count_is_a_whole_bounded_number" {
+  command = plan
+  variables {
+    remedy_key_count = 17
+  }
+  expect_failures = [var.remedy_key_count]
+}
+
+run "a_remedy_key_needs_the_signing_keys" {
+  command = plan
+  variables {
+    signing_keys_enabled = false
+    remedy_key_count     = 1
+  }
+  expect_failures = [var.remedy_key_count]
+}
+
+run "a_remedy_key_beside_a_financial_set_and_a_rotation" {
+  command = plan
+  variables {
+    relayer_key_count  = 2
+    financial_key_sets = ["jx1"]
+    remedy_key_count   = 1
+  }
+
+  assert {
+    condition     = toset(keys(aws_kms_key.signing)) == toset(["relayer", "relayer-r2", "settlement", "admission", "settlement-jx1", "admission-jx1", "remedy-r1"])
+    error_message = "The purposes compose without collision: a rotation, a financial set and the remedy key each add only their own keys."
+  }
+  assert {
+    condition     = aws_kms_key.signing["remedy-r1"].tags["gs:signing-purpose"] == "remedy" && !contains(keys(aws_kms_key.signing["remedy-r1"].tags), "gs:key-set") && !contains(keys(aws_kms_key.signing["remedy-r1"].tags), "gs:relayer-key")
+    error_message = "The remedy key is never tagged as a relayer key or a financial key set."
+  }
+}
+
+run "a_remedy_key_authorises_the_host_role_like_every_signing_key" {
+  command = plan
+  variables {
+    remedy_key_count         = 1
+    app_runtime_role_arns    = ["arn:aws:iam::111111111111:role/gs-staging-host-app"]
+    ecs_task_role_authorized = false
+  }
+
+  assert {
+    condition = length([for s in data.aws_iam_policy_document.signing["remedy-r1"].statement : s if contains(["AppTaskPublicKey", "AppTaskSignDigestOnly"], s.sid)
+    && toset(flatten([for c in s.condition : c.values if c.variable == "aws:PrincipalArn"])) == toset(["arn:aws:iam::111111111111:role/gs-staging-host-app"])]) == 2
+    error_message = "On the single host, exactly the host's app role may GetPublicKey / Sign with the remedy key -- the same runtime roles as every signing key, nobody else."
+  }
+}

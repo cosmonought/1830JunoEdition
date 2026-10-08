@@ -42,6 +42,15 @@ output "financial_key_arns" {
   value       = var.signing_keys_enabled ? { for label in var.financial_key_sets : label => { settlement = aws_kms_key.signing["settlement-${label}"].arn, admission = aws_kms_key.signing["admission-${label}"].arn } } : {}
 }
 
+output "remedy_key_arns" {
+  description = <<-EOT
+    PHASE 3 ESCROW 2.1: the DEDICATED REMEDY keys by label -- { r1 = <key ARN>, ... } for `remedy_key_count` ({} by
+    default). The app stack names exactly one as `remedy_signing_key` (with its on-chain `escrow.remedy_key`); the
+    single-host stack the same one. Never part of `signing_key_arns` or `financial_key_arns`.
+  EOT
+  value       = var.signing_keys_enabled ? { for label in local.remedy_key_labels : label => aws_kms_key.signing["remedy-${label}"].arn } : {}
+}
+
 output "kms_region" {
   description = "The one KMS region of the Juno configuration (the keys' region)."
   value       = local.region

@@ -10,7 +10,8 @@
 #                     control-plane record (L6-4 moves it), and a Terraform-managed item would later be "corrected" back.
 #   KMS               three ECC_SECG_P256K1 / SIGN_VERIFY keys (relayer, settlement, admission), named by KEY ARN in the
 #                     Juno configuration (never an alias); the task role may GetPublicKey, and Sign only with
-#                     ECDSA_SHA_256 over a DIGEST.
+#                     ECDSA_SHA_256 over a DIGEST. (+ the optional dedicated REMEDY keys, `remedy_key_count`: same spec,
+#                     same key policy.)
 #
 # GRANTS TO THE APP ACCOUNT are made to its account root with an `aws:PrincipalArn` condition naming the exact role
 # (gs-<env>-app-task, gs-<env>-bootstrap). Both halves are required cross-account: this policy AND the role's own IAM policy
@@ -40,7 +41,7 @@ locals {
   # LIVE-6 L6-2: the operator (`gamesDoctor aws`, read only here) and the recovery (`npm run recovery`, L6-4) roles.
   operator_arn    = "arn:${local.partition}:iam::${var.app_account_id}:role/gs-${var.environment}-operator"
   recovery_arn    = "arn:${local.partition}:iam::${var.app_account_id}:role/gs-${var.environment}-recovery"
-  signing_purpose = var.signing_keys_enabled ? toset(concat(["relayer", "settlement", "admission"], [for label in local.relayer_rotation_labels : "relayer-${label}"], local.financial_key_purposes)) : toset([])
+  signing_purpose = var.signing_keys_enabled ? toset(concat(["relayer", "settlement", "admission"], [for label in local.relayer_rotation_labels : "relayer-${label}"], local.financial_key_purposes, local.remedy_key_purposes)) : toset([])
   tags            = merge(var.tags, { "gs:environment" = var.environment, "gs:component" = "ledger", "gs:slice" = "live5-l5-8" })
 }
 
@@ -57,6 +58,14 @@ locals {
   # original settlement and admission keys never move; no relayer key is added. Labels are hyphen-free (validated), so
   # `<purpose>-<label>` splits unambiguously.
   financial_key_purposes = flatten([for label in var.financial_key_sets : ["settlement-${label}", "admission-${label}"]])
+  # PHASE 3 ESCROW 2.1 (owner decision 2026-10-08): the DEDICATED REMEDY keys -- escrow 2.1.0's REMEDY attestation
+  # authority (`InstantiateMsg.remedy_keys` / `AddRemedyKey`), never the relayer, settlement or admission key. `r1` ...
+  # `r<remedy_key_count>` join `signing_purpose` as `remedy-r<N>`: one more instance each of the same resource, same spec,
+  # same least-privilege key policy (the app runtime roles GetPublicKey + Sign ECDSA_SHA_256 over a DIGEST; the bootstrap /
+  # verifier role DescribeKey, GetPublicKey, ListGrants; nobody CreateGrant), `prevent_destroy`. Default 0: no remedy key,
+  # every existing plan unchanged. They never join `signing_key_arns` (the original three) or `financial_key_arns`.
+  remedy_key_labels   = [for n in range(1, var.remedy_key_count + 1) : "r${n}"]
+  remedy_key_purposes = [for label in local.remedy_key_labels : "remedy-${label}"]
 }
 
 /* ------------------------------------------------------------------ */
@@ -455,6 +464,14 @@ resource "aws_backup_selection" "ledger" {
 # `settlement-<l>` and `admission-<l>` -- dedicated settlement / admission identities for a separate financial
 # deployment (e.g. JX-1), same spec and key policy as every key here. Removing a label would destroy its keys:
 # `prevent_destroy` refuses that plan. They are not relayer keys and never join `signing_key_arns`.
+#
+# PHASE 3 ESCROW 2.1 REMEDY KEYS (owner decision 2026-10-08: a DEDICATED REMEDY signing purpose). `remedy_key_count`
+# (default 0: unchanged) is APPEND-ONLY: `remedy-r1` ... `remedy-r<N>`, each the same spec and the same key policy as
+# every key here (only the app runtime roles sign, digest-only; the bootstrap role reads; no grant). The contract registers
+# its public key at instantiation (`remedy_keys`) or by `AddRemedyKey`; WHICH key the deployment signs with is the app
+# stack's `remedy_signing_key` (by key ARN), never this module's -- a prepared next key signs nothing until it is named
+# there AND registered on chain. Lowering the count would destroy the newest key: `prevent_destroy` refuses that plan.
+# Retiring one is a separate, reviewed change (on chain `RetireRemedyKey`, then a `removed` block), never a variable.
 
 data "aws_iam_policy_document" "signing" {
   for_each = local.signing_purpose
@@ -551,11 +568,13 @@ resource "aws_kms_key" "signing" {
 
   # The original three keep their L5-8 tags exactly; a rotation key's purpose is `relayer`, its label says which one. A
   # financial key set's keys: purpose `settlement` / `admission`, `gs:key-set` = the set's label.
+  # A REMEDY key's purpose is `remedy`, its label (`gs:remedy-key`) says which one.
   tags = merge(
     local.tags,
     { Name = "gs-${var.environment}-${each.key}", "gs:signing-purpose" = split("-", each.key)[0] },
     startswith(each.key, "relayer-") ? { "gs:relayer-key" = trimprefix(each.key, "relayer-") } : {},
     contains(local.financial_key_purposes, each.key) ? { "gs:key-set" = split("-", each.key)[1] } : {},
+    contains(local.remedy_key_purposes, each.key) ? { "gs:remedy-key" = trimprefix(each.key, "remedy-") } : {},
   )
 
   lifecycle {

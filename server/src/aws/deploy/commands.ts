@@ -32,7 +32,7 @@
 //       `--part ledger` with the LEDGER account's credentials checks them (and APPGEN); `--part all` does both halves with
 //       credentials that reach both (the single-account form). Exit 0 only if every check passed.
 //
-//   signer-keys --relayer <key ARN> --settlement <key ARN> --admission <key ARN>
+//   signer-keys --relayer <key ARN> --settlement <key ARN> --admission <key ARN> [--remedy <key ARN>]  (Phase 3 escrow 2.1: the dedicated REMEDY key)
 //       Read-only: each key's metadata and its compressed public key (and the relayer's juno address), derived exactly as
 //       the server derives them -- the values the app stack's `escrow` variable needs. Public material only.
 //
@@ -349,7 +349,12 @@ export async function hostExpectations(options: VerifyOptions, startup: AwsStart
   const { config } = startup;
   const table = (name: string) => `arn:aws:dynamodb:${config.region}:${parameter.account}:table/${name}`;
   const escrow = startup.escrowConfig;
-  const keys = escrow === null ? null : [escrow.relayer.signer, escrow.settlementKey.signer, escrow.admissionKey.signer].map((s) => (s.kind === "kms" ? s.key_ref : `${s.kind}:(not a KMS key)`));
+  /* Phase 3 escrow 2.1: the dedicated REMEDY key (when the Juno configuration names one) is one of the keys the host role
+     must -- and may only -- sign with, beside the three. */
+  const keys =
+    escrow === null
+      ? null
+      : [escrow.relayer.signer, escrow.settlementKey.signer, escrow.admissionKey.signer, ...(escrow.remedyKey !== null ? [escrow.remedyKey.signer] : [])].map((s) => (s.kind === "kms" ? s.key_ref : `${s.kind}:(not a KMS key)`));
   let relayer: HostExpect["relayer"] = null;
   if (escrow !== null) {
     const queue = await relayQueueState(clients.app, clients.game, escrow.relayer.address);
@@ -922,16 +927,20 @@ export async function setOperatorPlanCommand(argv: readonly string[], deps: Depl
 /* ------------------------------------------------------------------ */
 
 export async function signerKeysCommand(argv: readonly string[], deps: DeployDeps): Promise<number> {
-  const flags = parseFlags(argv, ["--relayer", "--settlement", "--admission"], []);
-  const arns = { relayer: need(flags, "--relayer"), settlement: need(flags, "--settlement"), admission: need(flags, "--admission") };
+  const flags = parseFlags(argv, ["--relayer", "--settlement", "--admission", "--remedy"], []);
+  /* Phase 3 escrow 2.1 (owner decision 2026-10-08): `--remedy <the ledger stack's remedy_key_arns.<label>>` -- OPTIONAL,
+     the DEDICATED REMEDY key: its own purpose, never one of the three. Without it the output is exactly as before. */
+  const remedyArn = flags.get("--remedy");
+  const arns: Record<string, string> = { relayer: need(flags, "--relayer"), settlement: need(flags, "--settlement"), admission: need(flags, "--admission"), ...(remedyArn !== undefined ? { remedy: String(remedyArn) } : {}) };
   const regions = new Set<string>();
   for (const [purpose, arn] of Object.entries(arns)) {
     const parsed = parseKmsKeyArn(arn);
     if ("problem" in parsed) throw new UsageError(`--${purpose}: ${parsed.problem}`);
     regions.add(parsed.region);
   }
-  if (regions.size !== 1) throw new UsageError("the three keys must be in one region (the Juno configuration's KMS region)");
-  if (new Set(Object.values(arns)).size !== 3) throw new UsageError("the three keys must be three different keys");
+  const count = Object.keys(arns).length;
+  if (regions.size !== 1) throw new UsageError(`the ${count === 3 ? "three" : "four"} keys must be in one region (the Juno configuration's KMS region)`);
+  if (new Set(Object.values(arns)).size !== count) throw new UsageError(count === 3 ? "the three keys must be three different keys" : "the remedy key must be its own key: four different keys (never the relayer, settlement or admission key)");
   const kms = deps.kms([...regions][0]);
   const reader = kmsKeyReader(kms.sdk, kms.digest);
   const result: Record<string, Record<string, string>> = {};
@@ -950,6 +959,16 @@ export async function signerKeysCommand(argv: readonly string[], deps: DeployDep
   if (failed) return EXIT_FAILED;
   deps.out(JSON.stringify(result, null, 2));
   deps.out("For the app stack's `escrow`: relayer_address = relayer.address; settlement_key.public_key_hex; admission_key.public_key_hex. (Public material only.)");
+  if (result.remedy !== undefined) {
+    /* The public keys are compared AFTER derivation too: two KMS keys never share a secp256k1 key, but a wrong ARN copied
+       twice under different names is refused here, before it reaches the contract's `remedy_keys`. */
+    const others = ["relayer", "settlement", "admission"].map((p) => result[p]?.public_key_hex);
+    if (others.includes(result.remedy.public_key_hex)) {
+      deps.out("FAIL  the remedy key's public key equals another signing key's: it must be its own key");
+      return EXIT_FAILED;
+    }
+    deps.out("For the 2.1 instantiate: `remedy_keys: [remedy.public_key_hex]` (its id is 1, the first remedy key); then the app stack's remedy_signing_key = remedy.key_arn and escrow.remedy_key = { remedy_key_id = 1, public_key_hex = remedy.public_key_hex }.");
+  }
   return EXIT_OK;
 }
 
@@ -967,7 +986,7 @@ export const USAGE = [
   "                   --alarm-actions <arn,...>|none [--allow-eip <eipalloc-...>] [--legacy-vpc <vpc-...>] [--legacy-pools <p,...>] [--max-evidence-age-minutes 30]",
   "                   [--game-generations 1,2] [--record <file>] [--report <dir>]   (COST-2A; exit 0 PASS, 1 FAIL, 3 NOT EVALUATED)",
   "  awsDeploy verify --part ledger --ledger-table-arn <ARN> --environment <env> --generation <N> [--record <file> --run-id <run>]",
-  "  awsDeploy signer-keys --relayer <key ARN> --settlement <key ARN> --admission <key ARN>",
+  "  awsDeploy signer-keys --relayer <key ARN> --settlement <key ARN> --admission <key ARN> [--remedy <key ARN>]",
   "  awsDeploy generation-gate --runtime-parameter <serving SSM ARN> --environment <env> --generation <N+1> --restore-id <id> [--record <file>]",
   "  awsDeploy relayer-rotation-gate --runtime-parameter <SSM ARN> --environment <env> --from-relayer <old> --to-relayer <new> --evidence <dir> [--record <file>]",
   "  awsDeploy set-operator-plan --runtime-parameter <SSM ARN> --environment <env> --to-relayer <new> [--to-relayer-key <key ARN>]   (read-only: the admin's set_operator, never signed here)",

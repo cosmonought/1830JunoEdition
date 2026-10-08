@@ -38,6 +38,7 @@ import {
   ADMISSION_PUBKEY,
   ADMISSION_SECRET,
   CANONICAL_CHECKSUM,
+  ESCROW_2_0_0_CHECKSUM,
   HISTORICAL_1_0_0_CHECKSUM,
   CHAIN_ID,
   CONTRACT,
@@ -797,6 +798,56 @@ describe("§20 configuration safety and §23 the operator view", () => {
     assert.equal((await verifyJunoDeployment(trusted, world.chain)).kind, "verified");
     world.chain.unavailable = true;
     assert.equal((await verifyJunoDeployment(trusted, world.chain)).kind, "unavailable");
+  });
+
+  test("Phase 3 escrow 2.1 release readiness: the source pins the CERTIFIED 2.1.0 checksum, and still verifies no real deployment -- a 2.0.0 document is refused, the 2.0.0 contract is a mismatch", async () => {
+    /* The pin: exactly the certified artifact (owner-machine gate, 2026-10-07; e2a67c3; 641,842 B). */
+    assert.deepEqual(CANONICAL_JUNO_ESCROW_CHECKSUMS, ["c3bd0618615e0d8688f71860a90f235a796b0152be84e2489ce6639e3a218219"]);
+    assert.deepEqual(CANONICAL_JUNO_ESCROW_CHECKSUMS, [CANONICAL_CHECKSUM], "the test support pins it independently");
+    assert.ok(!CANONICAL_JUNO_ESCROW_CHECKSUMS.includes(ESCROW_2_0_0_CHECKSUM));
+    /* STATIC: a Juno document still naming escrow 2.0.0's checksum (today's deployed JX-1 document) is refused -- in
+       production the server does not start on it (`a problem refuses the start in production`), in development the
+       backend stays off. Never a financial mode against the 2.0.0 contract. */
+    for (const serverMode of ["production", "development"] as const) {
+      let refused: string | null = null;
+      try {
+        parseJunoBackendConfig(good({ code_checksum: ESCROW_2_0_0_CHECKSUM }), { serverMode, dataDir: "/data" });
+      } catch (error) {
+        assert.ok(error instanceof JunoConfigError);
+        refused = (error as JunoConfigError).problems.join(" | ");
+      }
+      assert.ok(refused !== null && /canonical escrow wasm/.test(refused), `${serverMode}: ${String(refused)}`);
+    }
+    /* A configuration cannot WIDEN the set back to 2.0.0 either (both checksums named): refused the same way. */
+    assert.throws(() => parseJunoBackendConfig(good({ code_checksum: undefined, code_checksums: [CANONICAL_CHECKSUM, ESCROW_2_0_0_CHECKSUM] }), { serverMode: "development", dataDir: "/data" }), JunoConfigError);
+    /* ONLINE: a 2.1-pinned configuration pointed at the 2.0.0 contract (its code id resolves to 5ecc3022…, cw2 2.0.0) is a
+       MISMATCH: financial mode stays off. Either fact alone is enough. */
+    const world = makeWorld();
+    const config = parseJunoBackendConfig(good({ trust: { operators: [RELAYER_ADDRESS], resolvers: [RELAYER_ADDRESS], min_challenge_window_secs: "60", min_liveness_window_secs: "60", min_resolver_timeout_secs: "60" } }), { serverMode: "development", dataDir: "/data" });
+    const trusted = { ...config, trust: { ...config.trust, resolvers: ["juno1resolver"] } };
+    assert.equal((await verifyJunoDeployment(trusted, world.chain)).kind, "verified", "the fake chain's 2.1.0 code at the certified checksum verifies");
+    world.chain.reportedChecksum = ESCROW_2_0_0_CHECKSUM;
+    world.chain.reportedContractVersion = "2.0.0";
+    const deployed20 = await verifyJunoDeployment(trusted, world.chain);
+    assert.equal(deployed20.kind, "mismatch");
+    assert.match((deployed20 as unknown as { problems: string[] }).problems.join(" "), /canonical|checksum/i);
+    world.chain.reportedContractVersion = null;
+    assert.equal((await verifyJunoDeployment(trusted, world.chain)).kind, "mismatch", "the 2.0.0 code alone");
+    world.chain.reportedChecksum = null;
+    world.chain.reportedContractVersion = "2.0.0";
+    assert.equal((await verifyJunoDeployment(trusted, world.chain)).kind, "mismatch", "a 2.0.0 contract version alone");
+    /* A real 2.0.0 contract has no `remedy_keys` query (an RPC error): the verdict is still MISMATCH (decided before it),
+       never "unavailable" retried forever. */
+    world.chain.reportedChecksum = ESCROW_2_0_0_CHECKSUM;
+    const realSmart = world.chain.smart.bind(world.chain);
+    world.chain.smart = async (contract: string, queryJson: string) => {
+      if (queryJson.includes("remedy_keys")) throw new JunoRpcError("unavailable", "unknown variant `remedy_keys`");
+      return realSmart(contract, queryJson);
+    };
+    const real20 = await verifyJunoDeployment(trusted, world.chain);
+    assert.equal(real20.kind, "mismatch", JSON.stringify(real20));
+    world.chain.reportedChecksum = null;
+    assert.equal((await verifyJunoDeployment(trusted, world.chain)).kind, "mismatch", "a 2.0.0 version with no remedy query");
   });
 
   test("gamesDoctor money: the binding, the continuation, the chain progress and each intent's evidence, from the files", async () => {

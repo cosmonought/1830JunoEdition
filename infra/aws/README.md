@@ -470,6 +470,54 @@ stacks/single-host (COST-1): the same signing_keys pair; the host role signs wit
 - **Labels:** `^[a-z][a-z0-9]{1,15}$` (no hyphen), unique, never `r<N>`; requires `signing_keys_enabled`. Default `[]`
   leaves an existing deployment's plan unchanged.
 
+## The dedicated REMEDY key (Phase 3 escrow 2.1; owner decision 2026-10-08)
+
+Escrow 2.1.0's REMEDY attestations (the clock's timed outcomes: timeout annulment, foreclosure, third-strike foreclosure)
+are signed by a key of their OWN purpose -- never the relayer, settlement or admission key. The server already refuses to
+run timed money without it (fail closed); this is how the infrastructure provides it. Nothing here creates a key until an
+owner-authorized `terraform apply`.
+
+```
+stacks/ledger:      remedy_key_count = 1                                       plan, then apply (BEFORE the 2.1 instantiate)
+  -> exactly one new key, remedy-r1 (aws_kms_key.signing["remedy-r1"]): same ECC_SECG_P256K1 / SIGN_VERIFY spec,
+     single-region, the same least-privilege key policy as every signing key (the app runtime roles GetPublicKey + Sign
+     ECDSA_SHA_256 over a DIGEST; bootstrap DescribeKey / GetPublicKey / ListGrants; the account administers, never signs;
+     nobody CreateGrant), prevent_destroy. Tags: gs:signing-purpose = remedy, gs:remedy-key = r1.
+  output remedy_key_arns = { r1 = <key ARN> }            (never part of signing_key_arns / financial_key_arns)
+awsDeploy signer-keys --relayer <arn> --settlement <arn> --admission <arn> --remedy <remedy_key_arns.r1>
+  -> remedy.public_key_hex: the instantiate message's remedy_keys = [it] (remedy key id 1)
+stacks/app:         remedy_signing_key = remedy_key_arns.r1
+                    escrow.remedy_key  = { remedy_key_id = 1, public_key_hex = <remedy.public_key_hex> }   (both or neither)
+  -> the Juno document's remedy_key { remedy_key_id, public_key_hex, signer { kind kms, key_ref } };
+     task role: RemedyKeyPublicKey + RemedyKeySignDigestOnly on exactly that key (its OWN statements; the three-key
+     statements are unchanged); bootstrap role: RemedyKeyReadOnly (DescribeKey / GetPublicKey / ListGrants)
+stacks/single-host: remedy_signing_key = the same ARN -> the host role's own RemedyKeyPublicKey / RemedyKeySignDigestOnly
+migration guard:    host-create(-complete) ... --remedy-key <the same ARN>   (an operator fact: a plan alone never adds one)
+```
+
+- **Validation.** A key ARN (never an alias), in the signing keys' one region, never one of the three configured keys nor a
+  relayer rotation key; `remedy_signing_key` and `escrow.remedy_key` together or not at all; the on-chain id 1..64 and a
+  33-byte compressed public key that is neither the settlement nor the admission key.
+- **Verification.** `awsDeploy verify` reads the remedy key like the others (metadata, no grants, its public key = the
+  configured one); the server's startup identity check and `verifyJunoDeployment` (the contract's REMEDY registry holds
+  exactly this key, active; any other active remedy key refuses the deployment); after instantiate,
+  `contracts/escrow/scripts/verify_escrow21_deployment.py verify` (read-only).
+- **Rotation.** Append-only like the relayer keys: `remedy_key_count = 2` PREPARES `remedy-r2` beside `r1` (nothing signs with
+  it until the app stack names it AND the contract registers it by `AddRemedyKey`); retiring a key is on chain
+  (`RetireRemedyKey`) then a reviewed `removed` block, never a lower count (`prevent_destroy` refuses).
+- **Budget.** The 2.1 release is 4 keys (the three + remedy-r1), within `max_kms_keys` = 6. With the LIVE-6 -> JX-1 transition
+  keys (relayer-r2 + a financial pair) still present it would be 7: an owner budget decision (`cost1SingleHost.test.ts`).
+- **Default `remedy_key_count = 0` / `remedy_signing_key = null`:** every existing plan, policy and document is unchanged.
+- **The 2.1 cutover changes the image and the Juno document TOGETHER, and rolls them back together.** The Juno document is
+  ONE SSM parameter per environment (`/gs/<env>/juno-backend`, read at every task / host start), and each build refuses a
+  document naming another escrow checksum at startup: a pre-2.1 image refuses a `c3bd0618…` document and a 2.1 image refuses
+  a `5ecc3022…` one. So (review, release MEDIUM): one owner-authorized apply moves `escrow.code_checksum` /
+  `contract_address` / the remedy values AND the image (`build_id` / task definition; on the single host the release digest)
+  in the same window, with the pools drained and no open 2.0 money game; ECS automatic rollback to the previous task
+  definition must be OFF for that deploy (it would start the old image against the new document and refuse to start); a
+  rollback is the Terraform revert of BOTH, never of one. Money stays safe either way -- a mismatch never verifies -- this is
+  about availability.
+
 ## Generation switch after a restore (L6-4 §12.1, wired by L6-2)
 
 Strictly in this order; Terraform/SSM never race ahead of the adoption (the staging drill's full workflow, with its
@@ -644,8 +692,13 @@ in staging; one ARN is never in both). The full table and thresholds: the L6-5B 
   per close); with no data it is OK. **Never
   suppressed:** exit 3 / 4 (A1, A3), refused starts and generation / adoption / identity-restore refusals (A4, A4g, A4i),
   generation loss (R1), journal-ahead (R2), unverified restored games (R3), the money sweep (A5*), escrow (A7), KMS
-  (A8-A10), the relayer page (A15). A restore/adoption is not a flip: no restore alarm is suppressible, so an overlapping
+  (A8-A10), the relayer page (A15), a timed money table frozen at minute 30 (C1). A restore/adoption is not a flip: no restore alarm is suppressible, so an overlapping
   flip window never masks one.
+- **C1 (Phase 3 escrow 2.1): a frozen timed money table.** `ClockFinalityHeldTables` -- the primary's count of Live money
+  tables at a minute 30 that is due but undecided because the approvers' consent keys cannot be read on chain -- `Minimum`
+  >= 1 for 3 minutes pages, on every pool (only the primary emits it). Every move and vote at such a table is refused until
+  a read succeeds (fail closed). Which games: the `clock.finality-keys-unread` audit lines. The single host counts it in
+  `HostHealthProblems` (its existing health alarm pages after 3 minutes).
 - **A13 and a skipped flag move.** A13 counts the `Primary` gauge, which only the identity-writer's task reports: if the
   Terraform `primary` flag is not moved after a flip, A13 still watches the demoted pool, finds no sample and PAGES once
   the window ends -- a stale attachment is loud, never silent.
@@ -909,8 +962,8 @@ Terraform state holds only non-secret values: the documents, ARNs and names. KMS
 ## Tests (no AWS)
 
 ```
-cd infra/aws/modules/ledger && terraform init -backend=false && terraform test        # 34 runs (ledger 33 + operator_evidence_policy 1; LIVE-6 relayer rotation: +6; COST-1 host role: +7; JX-1K financial key sets: +11; P5-INT-1: +2; JX-4C operator journal: +2)
-cd infra/aws/modules/app    && terraform init -backend=false && terraform test        # 69 runs (app 45 + alarms 16 + compute_none 7 + operator_evidence_policy 1; Terraform >= 1.10)
+cd infra/aws/modules/ledger && terraform init -backend=false && terraform test        # 42 runs (ledger 41 + operator_evidence_policy 1; LIVE-6 relayer rotation: +6; COST-1 host role: +7; JX-1K financial key sets: +11; P5-INT-1: +2; JX-4C operator journal: +2; Phase 3 escrow 2.1 remedy key: +8)
+cd infra/aws/modules/app    && terraform init -backend=false && terraform test        # 84 runs (app 59 + alarms 17 + compute_none 7 + operator_evidence_policy 1; Phase 3 escrow 2.1: remedy key +12, C1 +1; Terraform >= 1.11 for the test state keys)
 cd infra/aws/stacks/app     && terraform init -backend=false && terraform validate    # (and stacks/ledger)
 cd server && npm run build && node --test dist/server/src/aws/deploy/l5_8Deploy.test.js dist/server/src/aws/awsClients.test.js
 node --test dist/server/src/aws/operator/l6_2Flip.test.js dist/server/src/persistence/conformance/l6_5bAlarms.test.js dist/server/src/aws/runtime/l6_5aObservability.test.js
@@ -921,7 +974,7 @@ GS_DYNAMODB_LOCAL_ENDPOINT=http://127.0.0.1:8000 node --test dist/server/src/per
 # LIVE-6 restore-drill tooling: the restore alarms, the suppression-overlap test, the old-generation fencing probe, the flip
 # alarm drill (offline; the scripts against a stub AWS CLI where bash / PowerShell exist)
 node --test dist/server/src/aws/deploy/staging/restoreAlarmDrill.test.js dist/server/src/aws/deploy/staging/restoreFencing.test.js dist/server/src/aws/runtime/restoreFenceProbe.test.js dist/server/src/aws/operator/suppressionOverlap.test.js dist/server/src/persistence/conformance/l6RestoreDrill.test.js dist/server/src/aws/deploy/staging/flipAlarmDrill.test.js
-# COST-1 / COST-2A: the single host -- the module (20 runs), its scripts, the host verifier (and its capture scripts
+# COST-1 / COST-2A: the single host -- the module (28 runs; Phase 3 escrow 2.1 remedy key +5), its scripts, the host verifier (and its capture scripts
 # against a stub AWS CLI where bash / PowerShell exist). The host scripts need a Linux userspace (flock, python3): on
 # Windows the owner gate (run-cost2c-owner-gate.ps1) runs them in a pinned Amazon Linux 2023 container, never Git Bash.
 cd infra/aws/modules/single-host && terraform init -backend=false && terraform test && bash tests/host-scripts.test.sh

@@ -65,7 +65,7 @@ variables {
     network_class    = "testnet"
     rest_endpoints   = ["https://juno-testnet-rest.example.net"]
     contract_address = "juno1qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qursaq28r5"
-    code_checksum    = "5ecc302221a2dab4bb4f0f71b632f2beeafe9523ebd7b33bd0e94d017b8d09e8"
+    code_checksum    = "c3bd0618615e0d8688f71860a90f235a796b0152be84e2489ce6639e3a218219"
     wasm_admin       = null
     denom            = "ujunox"
     asset_symbol     = "JUNOX"
@@ -137,7 +137,7 @@ run "every_contract_alarm_exists_with_stable_names_before_the_services" {
       "a1-unexpected-task-loss", "a3-store-uncertain", "a3-store-restart-loop", "a4-startup-refused", "a4g-generation-refused", "a4i-identity-restore-refused",
       "a5c-money-sweep-passes-failing", "a6b-relayer-takeover-not-taken", "a8-kms-refused", "a9-kms-invalid-answer", "a10-signer-unavailable", "r1-generation-lost", "r2-money-journal-ahead",
       "p1/a2-writer-epoch-conflict", "p1/a5-money-sweep-stale", "p1/a5b-money-sweep-games-failing", "p1/a11-readiness-flapping", "p1/a12-prolonged-unready", "p1/a12b-pool-writer-unconfirmed",
-      "p1/a14-task-status-write-failures", "p1/a15-relayer-paging", "p1/r3-restore-unverified",
+      "p1/a14-task-status-write-failures", "p1/a15-relayer-paging", "p1/r3-restore-unverified", "p1/c1-clock-finality-held",
       "primary/a6-relayer-unusable", "primary/a7-escrow-inactive",
     ])
     error_message = "The contract's alarms, by scope; the heartbeat (A13, missing = breaching) only once the services run."
@@ -175,8 +175,8 @@ run "dimensions_are_environment_and_pool_only_and_no_alarm_is_per_task" {
     error_message = "Dimension values are the environment label and a pool id -- never a task id, a build or an ARN."
   }
   assert {
-    condition     = length(aws_cloudwatch_metric_alarm.gs) == 13 + 3 * 9 + 3 && length(aws_cloudwatch_metric_alarm.flip_window) == 3 && length(aws_cloudwatch_composite_alarm.notify) == 3 * 3 + 2
-    error_message = "Per environment 13, per pool 9 (a drained pool too: it simply has no data), 3 for the primary, one suppressor per pool: nothing per task."
+    condition     = length(aws_cloudwatch_metric_alarm.gs) == 13 + 3 * 10 + 3 && length(aws_cloudwatch_metric_alarm.flip_window) == 3 && length(aws_cloudwatch_composite_alarm.notify) == 3 * 3 + 2
+    error_message = "Per environment 13, per pool 10 (a drained pool too: it simply has no data), 3 for the primary, one suppressor per pool: nothing per task."
   }
   assert {
     condition     = alltrue([for k, a in aws_cloudwatch_metric_alarm.gs : a.threshold >= 0 && a.evaluation_periods >= 1 && a.datapoints_to_alarm <= a.evaluation_periods])
@@ -295,7 +295,7 @@ run "no_escrow_no_escrow_alarms" {
   }
 
   assert {
-    condition     = length([for k, a in aws_cloudwatch_metric_alarm.gs : k if length(regexall("a6-|a6b-|a7-|a8-|a9-|a10-|a15-|r2-|r3-", k)) > 0]) == 0
+    condition     = length([for k, a in aws_cloudwatch_metric_alarm.gs : k if length(regexall("a6-|a6b-|a7-|a8-|a9-|a10-|a15-|r2-|r3-|c1-", k)) > 0]) == 0
     error_message = "Without escrow there is no relayer, KMS or money alarm (nothing would ever emit their metrics)."
   }
   assert {
@@ -336,7 +336,7 @@ run "page_and_ticket_classes_are_wired_to_their_own_lists" {
     error_message = "A composite notifies its alarm's class."
   }
   assert {
-    condition = alltrue([for id in ["a1-unexpected-task-loss", "a3-store-restart-loop", "a4-startup-refused", "a4g-generation-refused", "a4i-identity-restore-refused", "r1-generation-lost", "r2-money-journal-ahead", "a8-kms-refused", "a9-kms-invalid-answer", "a10-signer-unavailable", "p1/a15-relayer-paging", "p1/r3-restore-unverified", "p1/a5-money-sweep-stale", "p1/a2-writer-epoch-conflict", "primary/a7-escrow-inactive"] :
+    condition = alltrue([for id in ["a1-unexpected-task-loss", "a3-store-restart-loop", "a4-startup-refused", "a4g-generation-refused", "a4i-identity-restore-refused", "r1-generation-lost", "r2-money-journal-ahead", "a8-kms-refused", "a9-kms-invalid-answer", "a10-signer-unavailable", "p1/a15-relayer-paging", "p1/r3-restore-unverified", "p1/c1-clock-finality-held", "p1/a5-money-sweep-stale", "p1/a2-writer-epoch-conflict", "primary/a7-escrow-inactive"] :
     aws_cloudwatch_metric_alarm.gs[id].tags["gs:alarm-class"] == "page"])
     error_message = "The PAGE class: losses, restart loops, refusals, generation / restore failures, KMS, the relayer's page, the sweep, the escrow."
   }
@@ -455,5 +455,36 @@ run "operator_may_publish_only_the_flip_window_and_the_verifier_may_describe_ala
   assert {
     condition     = one([for s in data.aws_iam_policy_document.bootstrap.statement : s if s.sid == "VerifierAlarms"]).actions == toset(["cloudwatch:DescribeAlarms"])
     error_message = "The verifier's capture reads the alarms (describe only)."
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* PHASE 3 ESCROW 2.1 RELEASE READINESS: C1, the minute-30 hold          */
+/* ------------------------------------------------------------------ */
+
+run "c1_a_frozen_timed_money_table_pages_on_every_pool" {
+  command = plan
+
+  variables {
+    page_alarm_action_arns   = ["arn:aws:sns:us-east-1:111111111111:gs-staging-page"]
+    ticket_alarm_action_arns = ["arn:aws:sns:us-east-1:111111111111:gs-staging-ticket"]
+  }
+
+  assert {
+    condition = (one(one(aws_cloudwatch_metric_alarm.gs["p1/c1-clock-finality-held"].metric_query).metric).metric_name == "ClockFinalityHeldTables"
+      && one(one(aws_cloudwatch_metric_alarm.gs["p1/c1-clock-finality-held"].metric_query).metric).stat == "Minimum"
+      && one(one(aws_cloudwatch_metric_alarm.gs["p1/c1-clock-finality-held"].metric_query).metric).namespace == "18Cosmos/GameServer"
+    && one(one(aws_cloudwatch_metric_alarm.gs["p1/c1-clock-finality-held"].metric_query).metric).dimensions == tomap({ Environment = "staging", Pool = "p1" }))
+    error_message = "C1 reads the ClockFinalityHeldTables gauge (Minimum: held through the whole minute) under [Environment, Pool] only -- never a game, task or key dimension."
+  }
+  assert {
+    condition = (aws_cloudwatch_metric_alarm.gs["p1/c1-clock-finality-held"].evaluation_periods == 3 && aws_cloudwatch_metric_alarm.gs["p1/c1-clock-finality-held"].datapoints_to_alarm == 3
+      && aws_cloudwatch_metric_alarm.gs["p1/c1-clock-finality-held"].comparison_operator == "GreaterThanOrEqualToThreshold" && aws_cloudwatch_metric_alarm.gs["p1/c1-clock-finality-held"].threshold == 1
+    && aws_cloudwatch_metric_alarm.gs["p1/c1-clock-finality-held"].treat_missing_data == "notBreaching")
+    error_message = "C1: a table held 3 consecutive minutes pages; a pool with no data (drained, or not the primary) is OK."
+  }
+  assert {
+    condition     = aws_cloudwatch_metric_alarm.gs["p1/c1-clock-finality-held"].alarm_actions == toset(["arn:aws:sns:us-east-1:111111111111:gs-staging-page"]) && !contains(keys(aws_cloudwatch_composite_alarm.notify), "p1/c1-clock-finality-held")
+    error_message = "C1 pages directly: never suppressible by a flip window (a frozen money table is never an expected flip effect)."
   }
 }

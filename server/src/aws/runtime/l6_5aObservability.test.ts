@@ -21,6 +21,7 @@
 //                guard: nothing in the server reads it
 //   boundary     PROCESS mode never reaches this code; no frontend, protocol or rules file is touched
 
+import { createMemoryClockStore } from "../../rooms/clock/clockStore";
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import * as fs from "fs";
@@ -212,6 +213,8 @@ interface HarnessOptions {
   readonly identityRestoreIncomplete?: "load" | "takeover";
   /** L6-5B: wrap the opened Juno backend (to script its relayer's status or its restore view). */
   readonly wrapBackend?: (backend: JunoBackend) => JunoBackend;
+  /** Phase 3 escrow 2.1: give the game server a (memory) table clock store, as the AWS substrate always does. */
+  readonly clock?: boolean;
 }
 
 interface Harness {
@@ -371,6 +374,7 @@ function harness(options: HarnessOptions = {}): Harness {
         tickets: createMemoryWalletTicketStore(),
         intents: relayQueue === null ? null : intents,
         relayerIntents: relayQueue === null || relayerRole === null ? null : intents,
+        ...(options.clock === true ? { clock: createMemoryClockStore() } : {}),
       };
     },
     ownership(_w, { onClaimed }) {
@@ -1672,6 +1676,35 @@ describe("L6-5B generation and restore signals", () => {
       assert.ok(!h.metricLines.join("\n").includes(GAME_A), "the game stays in the audit line");
     } finally {
       await runtime.shutdown();
+    }
+  });
+
+  test("Phase 3 escrow 2.1: ClockFinalityHeldTables -- the primary's count of timed money tables frozen at an undecided minute 30 -- rides every status tick with escrow, as a count under [Environment, Pool] only", async () => {
+    const h = harness({ escrow: true, clock: true });
+    const runtime = await h.start();
+    try {
+      await until(() => runtime.backend?.state() === "active", "the backend active");
+      runtime.statusTick();
+      const status = h.byEvent("task-status").at(-1)!;
+      assert.equal(status.ClockFinalityHeldTables, 0, "a healthy primary reports 0 (the gauge exists, so its alarm can see it)");
+      assert.ok(!("ClockFinalityKeysUnread" in status), "no inconclusive read: no counter");
+      const line = h.metricLines.find((l) => JSON.parse(l).event === "task-status" && "ClockFinalityHeldTables" in JSON.parse(l))!;
+      const directives = (JSON.parse(line) as { _aws: { CloudWatchMetrics: Array<{ Dimensions: string[][]; Metrics: Array<{ Name: string; Unit: string }> }> } })._aws.CloudWatchMetrics;
+      const carrying = directives.filter((d) => d.Metrics.some((m) => m.Name === "ClockFinalityHeldTables" && m.Unit === "Count"));
+      assert.equal(carrying.length, 1, "extracted once");
+      assert.deepEqual(carrying[0].Dimensions, [["Environment", "Pool"]], "never a game, task, key or wallet dimension");
+      assert.ok(!line.includes("g_"), "no game id in a metric line");
+    } finally {
+      await runtime.shutdown();
+    }
+    const noEscrow = harness({ clock: true });
+    const n = await noEscrow.start();
+    try {
+      n.statusTick();
+      const status = noEscrow.byEvent("task-status").at(-1)!;
+      assert.ok(!("ClockFinalityHeldTables" in status), "no escrow: no money table, no minute-30 hold to count");
+    } finally {
+      await n.shutdown();
     }
   });
 

@@ -38,6 +38,12 @@ variable "financial_key_sets" {
   default = []
 }
 
+# PHASE 3 ESCROW 2.1 (modules/ledger: append-only; owner decision 2026-10-08): the DEDICATED REMEDY keys (0 = none).
+variable "remedy_key_count" {
+  type    = number
+  default = 0
+}
+
 variable "tags" {
   type    = map(string)
   default = {}

@@ -864,3 +864,139 @@ describe("L5-8 §5: the bootstrap's plan and the command's refusals", () => {
     assert.ok(!lines.some((l) => l.includes("not-allowed")), "a document's values are never echoed");
   });
 });
+
+/* ------------------------------------------------------------------ */
+/* PHASE 3 ESCROW 2.1: the DEDICATED REMEDY key (owner decision 2026-10-08) */
+/* ------------------------------------------------------------------ */
+
+describe("Phase 3 escrow 2.1: the dedicated REMEDY key through the IaC's documents, the verifier and signer-keys", () => {
+  const REMEDY_ARN = "arn:aws:kms:us-east-1:222222222222:key/77777777-7777-4777-8777-777777777777";
+  const REMEDY_PUB = "0238194abfc289cc915ccc280e22ab5959c87e379a2039e494433e70f29c3c1a6b";
+  const PUBLIC: Record<string, string> = {
+    "arn:aws:kms:us-east-1:222222222222:key/11111111-1111-4111-8111-111111111111": "03774ae7f858a9411e5ef4246b70c65aac5649980be5c17891bbec17895da008cb",
+    "arn:aws:kms:us-east-1:222222222222:key/22222222-2222-4222-8222-222222222222": "03d01115d548e7561b15c38f004d734633687cf4419620095bc5b0f47070afe85a",
+    "arn:aws:kms:us-east-1:222222222222:key/33333333-3333-4333-8333-333333333333": "03f28773c2d975288bc7d1d205c3748651b075fbc6610e58cddeeddf8f19405aa8",
+    [REMEDY_ARN]: REMEDY_PUB,
+  };
+  const spkiOf = (compressedHex: string): Uint8Array => {
+    const { x, y } = decompressPublicKey(Buffer.from(compressedHex, "hex"));
+    return Buffer.concat([Buffer.from("3056301006072a8648ce3d020106052b8104000a034200", "hex"), Buffer.from([4]), bigIntTo32(x), bigIntTo32(y)]);
+  };
+  const withRemedy = () => parseJunoBackendConfig(JSON.parse(fixture("juno-backend-staging-remedy.json")), { serverMode: "production", dataDir: "/nonexistent" });
+  const reader = (overrides: { publicKey?: (arn: string) => string; grants?: (arn: string) => number; describe?: (arn: string) => Partial<KeyDescription> } = {}) => {
+    const seen: string[] = [];
+    return {
+      seen,
+      async describe(arn: string): Promise<KeyDescription> {
+        seen.push(arn);
+        return { Arn: arn, KeyState: "Enabled", KeySpec: "ECC_SECG_P256K1", KeyUsage: "SIGN_VERIFY", KeyManager: "CUSTOMER", MultiRegion: false, SigningAlgorithms: ["ECDSA_SHA_256"], ...(overrides.describe?.(arn) ?? {}) };
+      },
+      async grantCount(arn: string): Promise<number> {
+        return overrides.grants?.(arn) ?? 0;
+      },
+      digest: {
+        async getPublicKey(arn: string) {
+          return spkiOf(overrides.publicKey?.(arn) ?? PUBLIC[arn]);
+        },
+        async signDigest(): Promise<Uint8Array> {
+          throw new Error("the verifier never signs");
+        },
+      },
+    };
+  };
+
+  test("the rendered document WITH a remedy key parses in production and may run on AWS: the remedy key is a KMS key of its own", () => {
+    const juno = withRemedy();
+    assert.deepEqual(juno.remedyKey, { remedyKeyId: 1, publicKeyHex: REMEDY_PUB, signer: { kind: "kms", key_ref: REMEDY_ARN } });
+    assert.equal(juno.kmsRegion, "us-east-1");
+    assert.deepEqual(checkEscrowConfigForAws(juno, parseAwsRuntimeConfigText(fixture("runtime-staging-p1.json"))), []);
+    /* The base document stays the no-remedy configuration (the server then refuses timed money: fail closed). */
+    assert.equal(parseJunoBackendConfig(JSON.parse(fixture("juno-backend-staging.json")), { serverMode: "production", dataDir: "/nonexistent" }).remedyKey, null);
+    const base = JSON.parse(fixture("juno-backend-staging.json")) as Record<string, unknown>;
+    const remedy = JSON.parse(fixture("juno-backend-staging-remedy.json")) as Record<string, unknown>;
+    const { remedy_key: _added, ...rest } = remedy;
+    assert.deepEqual(rest, base, "the remedy fixture is the base document plus remedy_key, nothing else");
+  });
+
+  test("AWS storage refuses a non-KMS remedy signer (as for every other signer)", () => {
+    const juno = withRemedy();
+    const dev = { ...juno, remedyKey: { ...(juno.remedyKey as NonNullable<typeof juno.remedyKey>), signer: { kind: "development" as const, key_file: "/keys/remedy.hex" } } };
+    const problems = checkEscrowConfigForAws(dev, parseAwsRuntimeConfigText(fixture("runtime-staging-p1.json")));
+    assert.ok(problems.some((p) => /^remedy_key: AWS storage signs only with KMS keys/.test(p)), problems.join("; "));
+  });
+
+  test("the parser refuses the remedy key as another signer's key, and a development remedy signer in production", () => {
+    const doc = JSON.parse(fixture("juno-backend-staging-remedy.json")) as Record<string, any>;
+    const reuse = (purpose: "relayer" | "settlement_key" | "admission_key") => ({ ...doc, remedy_key: { ...doc.remedy_key, signer: doc[purpose].signer } });
+    for (const purpose of ["relayer", "settlement_key", "admission_key"] as const) {
+      assert.throws(() => parseJunoBackendConfig(reuse(purpose), { serverMode: "production", dataDir: "/nonexistent" }), /the remedy key and the (relayer|settlement|admission) key must be different keys/, purpose);
+    }
+    assert.throws(() => parseJunoBackendConfig({ ...doc, remedy_key: { ...doc.remedy_key, signer: { kind: "development", key_file: "/keys/remedy.hex" } } }, { serverMode: "production", dataDir: "/nonexistent" }), /remedy_key: a development signer is refused in production/);
+  });
+
+  test("awsDeploy verify's key check reads the remedy key too: metadata, no grants, its public key the configured one", async () => {
+    const r = reader();
+    const checks = await checkSigningKeys(withRemedy(), r);
+    assertAllPass(checks);
+    assert.ok(r.seen.includes(REMEDY_ARN), "the remedy key was described");
+    assert.ok(checks.some((c) => /KMS remedy key: no grants/.test(c.name)));
+    const failed = async (o: Parameters<typeof reader>[0], pattern: RegExp, why: string) => {
+      const out = await checkSigningKeys(withRemedy(), reader(o));
+      assert.ok(failures(out).some((c) => pattern.test(`${c.name}: ${c.detail}`)), `${why}: ${JSON.stringify(failures(out))}`);
+    };
+    await failed({ grants: (arn) => (arn === REMEDY_ARN ? 1 : 0) }, /remedy key: no grants/, "a grant on the remedy key hands out Sign");
+    await failed({ describe: (arn) => (arn === REMEDY_ARN ? { KeyState: "Disabled" } : {}) }, /remedy key: metadata/, "a disabled remedy key");
+    await failed({ publicKey: (arn) => (arn === REMEDY_ARN ? PUBLIC["arn:aws:kms:us-east-1:222222222222:key/22222222-2222-4222-8222-222222222222"] : PUBLIC[arn]) }, /public keys = the configuration's/, "the remedy key answering the settlement key's public key");
+    /* Without a remedy key: exactly the three keys are read, as before. */
+    const three = reader();
+    const base = await checkSigningKeys(parseJunoBackendConfig(JSON.parse(fixture("juno-backend-staging.json")), { serverMode: "production", dataDir: "/nonexistent" }), three);
+    assertAllPass(base);
+    assert.equal(new Set(three.seen).size, 3);
+    assert.ok(!three.seen.includes(REMEDY_ARN));
+  });
+
+  test("signer-keys --remedy derives the remedy public key; without it the output is the three keys exactly as before", async () => {
+    const sdk = {
+      async send(command: { input: { KeyId: string } }) {
+        return { KeyMetadata: { Arn: command.input.KeyId, KeyState: "Enabled", KeySpec: "ECC_SECG_P256K1", KeyUsage: "SIGN_VERIFY", MultiRegion: false } };
+      },
+    };
+    const digest = {
+      async getPublicKey(arn: string) {
+        return spkiOf(PUBLIC[arn]);
+      },
+      async signDigest(): Promise<Uint8Array> {
+        throw new Error("signer-keys never signs");
+      },
+    };
+    const run = async (argv: string[]) => {
+      const lines: string[] = [];
+      const code = await runDeployCommand(argv, {
+        parameters: fixtureParameters({}),
+        dynamo: () => {
+          throw new Error("no DynamoDB call");
+        },
+        kms: () => ({ sdk: sdk as unknown as never, digest: digest as unknown as never }),
+        now: () => 0,
+        out: (line) => lines.push(line),
+      });
+      return { code, lines };
+    };
+    const three = ["signer-keys", "--relayer", Object.keys(PUBLIC)[0], "--settlement", Object.keys(PUBLIC)[1], "--admission", Object.keys(PUBLIC)[2]];
+    const before = await run(three);
+    assert.equal(before.code, 0, before.lines.join("\n"));
+    const parsedBefore = JSON.parse(before.lines[0]) as Record<string, Record<string, string>>;
+    assert.deepEqual(Object.keys(parsedBefore).sort(), ["admission", "relayer", "settlement"]);
+    assert.ok(!before.lines.some((l) => /remedy/i.test(l)), "no remedy line without --remedy");
+    const after = await run([...three, "--remedy", REMEDY_ARN]);
+    assert.equal(after.code, 0, after.lines.join("\n"));
+    const parsed = JSON.parse(after.lines[0]) as Record<string, Record<string, string>>;
+    assert.deepEqual(parsed.remedy, { key_arn: REMEDY_ARN, public_key_hex: REMEDY_PUB });
+    assert.deepEqual({ relayer: parsed.relayer, settlement: parsed.settlement, admission: parsed.admission }, parsedBefore, "the three keys' output is unchanged");
+    assert.ok(after.lines.some((l) => /remedy_keys: \[remedy\.public_key_hex\]/.test(l)));
+    /* Refusals: the remedy key may not be one of the three, nor in another region, nor an alias. */
+    assert.equal((await run([...three, "--remedy", Object.keys(PUBLIC)[1]])).code, EXIT_USAGE);
+    assert.equal((await run([...three, "--remedy", REMEDY_ARN.replace("us-east-1", "us-west-2")])).code, EXIT_USAGE);
+    assert.equal((await run([...three, "--remedy", "arn:aws:kms:us-east-1:222222222222:alias/remedy"])).code, EXIT_USAGE);
+  });
+});

@@ -2045,18 +2045,25 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
     /** LUDUM (Lane A, read-only): the pinned escrow deployment and one chain game, for `ludum/wiring.ts`'s `LudumPorts`.
      *  A quorum read (two or more endpoints agreeing) is `chain-confirmed`; one endpoint's answer is `chain-observed`, with
      *  the height it read at. `null`: the chain has no such game (the id is at or past the contract's `next_chain_game_id`).
-     *  Any other failure throws -- never guessed. */
+     *  Any other failure throws -- never guessed.
+     *  LUDUM INTEGRATION: `game` is the contract's RAW `GameResponse` JSON, accepted only after `parseGameResponse` validated
+     *  it (a malformed answer throws). It is never the parser's output: the parser drops `state.rs` fields the history
+     *  ledger needs (`Seat.subsidy_paid`, `DisputeRecord.{disputed_at, resolution, resolved_at}`,
+     *  `Outcome.{bond_returned, bond_to_pool}`), and the case handler parses the raw answer itself. */
     ludumChain: {
       pin: (): { readonly contract: string; readonly chainId: string; readonly denom: string } => ({ contract, chainId: deps.pin.chain_id, denom: deps.pin.denom }),
-      async game(chainGameId: string): Promise<{ readonly game: JunoGameResponse; readonly provenance: "chain-confirmed" | "chain-observed"; readonly height?: string; readonly observedAt: string } | null> {
+      async game(chainGameId: string): Promise<{ readonly game: unknown; readonly provenance: "chain-confirmed" | "chain-observed"; readonly height?: string; readonly observedAt: string } | null> {
         const query = QUERY.game(chainGameId);
         const observedAt = new Date(deps.now()).toISOString();
         try {
           if (deps.rest.smartQuorum !== undefined && (deps.rest.endpointCount ?? 1) >= 2) {
-            return { game: parseGameResponse(await deps.rest.smartQuorum(contract, query)), provenance: "chain-confirmed", observedAt };
+            const data = await deps.rest.smartQuorum(contract, query);
+            parseGameResponse(data);
+            return { game: data, provenance: "chain-confirmed", observedAt };
           }
           const read = await deps.rest.smartAt(contract, query);
-          return { game: parseGameResponse(read.data), provenance: "chain-observed", ...(read.height !== null ? { height: read.height } : {}), observedAt };
+          parseGameResponse(read.data);
+          return { game: read.data, provenance: "chain-observed", ...(read.height !== null ? { height: read.height } : {}), observedAt };
         } catch (error) {
           const next = parseConfigResponse(await quorumSmart(QUERY.config())).next_chain_game_id;
           if (next !== null && BigInt(chainGameId) >= BigInt(next)) return null;

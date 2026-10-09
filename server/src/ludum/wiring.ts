@@ -35,9 +35,19 @@ export const productKeyOf = (name: string): string =>
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
 
+/** INTEGRATION (archived-history gap, docs/ludum/LUDUM_PLATFORM_ARCHITECTURE.md §12): `records()` is the room host's
+ *  in-memory index, which is complete only after startup discovery listed every record without a store fault. While it is
+ *  not, `records()` THROWS this (the ingress answers 503 `unavailable`) -- a partial index is never served as an
+ *  account's whole history. */
+export class LudumIndexIncomplete extends Error {}
+
+export type LudumIndexState = { readonly complete: true } | { readonly complete: false; readonly reason: string };
+
 export interface LudumWiringDeps {
   /** `RoomHost.records`. */
   readonly records: () => readonly GameRecord[];
+  /** Whether `records` is the whole durable record set (absent: assumed complete -- tests and tools only). */
+  readonly index?: () => LudumIndexState;
   /** The money layer, or null when this server has none (every money port then answers null). */
   readonly money: () => MoneyTables | null;
   readonly now: () => number;
@@ -55,8 +65,14 @@ export function createLudumPorts(deps: LudumWiringDeps): LudumPorts {
   };
   const chainIdOf = (record: FinancialGameRecord | null): string | null => record?.binding?.escrow?.chain_game_id ?? null;
 
+  const records = (): readonly GameRecord[] => {
+    const state = deps.index?.() ?? { complete: true as const };
+    if (!state.complete) throw new LudumIndexIncomplete(state.reason);
+    return deps.records();
+  };
+
   return {
-    records: () => deps.records(),
+    records,
     seatOf: (record, principalId) => seatOf(record, principalId),
     financial,
     async financialByChainGameId(chainGameId) {
@@ -67,7 +83,7 @@ export function createLudumPorts(deps: LudumWiringDeps): LudumPorts {
         if (chainIdOf(record) === chainGameId) return record;
         byChain.delete(chainGameId);
       }
-      for (const game of deps.records()) {
+      for (const game of records()) {
         if (game.money === null) continue;
         const record = await financial(game.game_id);
         const bound = chainIdOf(record);

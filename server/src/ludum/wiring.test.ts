@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 
 import { hostCreates, linkWallet, moneyServer, openMoneyTable, player, testConsentKey, testWallet } from "../escrow/escrow4Support";
 import { quietConsole } from "../rooms/testSupport";
-import { createLudumPorts, productKeyOf } from "./wiring";
+import { createLudumPorts, LudumIndexIncomplete, productKeyOf } from "./wiring";
 
 quietConsole();
 
@@ -44,7 +44,12 @@ describe("LUDUM wiring: the production ports", () => {
 
       const chain = await ports.chainGame(chainGameId);
       assert.ok(chain);
-      assert.equal((chain.game as { game: { chain_game_id: string } }).game.chain_game_id, chainGameId);
+      assert.equal(String((chain.game as { game: { chain_game_id: unknown } }).game.chain_game_id), chainGameId);
+      /* Integration: the RAW contract answer (lowercase state, the fields the parser drops), never the parser's output. */
+      const rawGame = (chain.game as { game: { state: unknown; seats: Array<Record<string, unknown>> } }).game;
+      assert.equal(typeof rawGame.state, "string");
+      assert.equal(rawGame.state, (rawGame.state as string).toLowerCase(), "a raw contract state");
+      for (const seat of rawGame.seats) assert.ok("subsidy_paid" in seat, "the raw seat keeps subsidy_paid");
       assert.equal(chain.provenance, "chain-observed", "one endpoint: an observation, never labelled a quorum");
       assert.equal(chain.observedAt, new Date(world.clock.now).toISOString());
       assert.equal(await ports.chainGame("4242"), null, "past next_chain_game_id: the chain has no such game");
@@ -80,5 +85,15 @@ describe("LUDUM wiring: the production ports", () => {
     assert.equal(ports.escrowPin(), null, "only ujunox is a Junox pin");
     assert.equal((await ports.chainGame("1"))?.provenance, "chain-confirmed");
     assert.equal(productKeyOf("20 Cosmos"), "20-cosmos");
+  });
+});
+
+describe("LUDUM wiring (integration): an incomplete game index is never served as a whole history", () => {
+  test("records() throws while the index is incomplete, and so does the chain-game lookup that scans it", async () => {
+    const ports = createLudumPorts({ records: () => [], index: () => ({ complete: false, reason: "startup discovery has not finished" }), money: () => ({ financialRecord: async () => null }) as never, now: () => 0 });
+    assert.throws(() => [...ports.records()], LudumIndexIncomplete);
+    await assert.rejects(ports.financialByChainGameId("1"), LudumIndexIncomplete);
+    const ready = createLudumPorts({ records: () => [], index: () => ({ complete: true }), money: () => null, now: () => 0 });
+    assert.deepEqual([...ready.records()], []);
   });
 });

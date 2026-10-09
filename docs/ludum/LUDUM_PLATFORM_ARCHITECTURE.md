@@ -347,17 +347,19 @@ appears on the wire.
 
 **Per-seat money ledger.** `entries[]`, each `{ kind, amount: Junox, fact provenance }`. The kinds are:
 
-| Kind | Meaning |
+| Kind | Direction and meaning |
 |---|---|
-| `ante_gross` | negative: what the seat deposited |
+| `ante_gross` | out (debit): what the seat deposited |
 | `subsidy` | informational: the part of `ante_gross` taken at deposit, `= Seat.subsidy_paid` |
-| `bond_posted` | negative, challenger only |
-| `bond_returned` | positive |
+| `bond_posted` | out (debit), challenger only |
+| `bond_returned` | in (credit) |
 | `bond_forfeited` | informational |
-| `payout` | positive: `outcome.amounts[chainSeatIndex]` |
-| `refund` | positive: cancel, withdraw or annul refund, per the contract's actual route |
+| `payout` | in (credit): `outcome.amounts[chainSeatIndex]` |
+| `refund` | in (credit): cancel, withdraw or annul refund, per the contract's actual route |
 
-- `net = Σ` of the signed entries.
+- **Sign convention (codified at integration, `server/src/ludum/integration.test.ts`):** every entry `amount` is a
+  **non-negative magnitude**; the entry **kind alone** gives the direction. `net = Σ credits − Σ debits`, and `net` is the
+  only value that may be negative.
 - `subsidy` and `bond_forfeited` are informational and are not added again, because they are already inside `ante_gross` /
   `bond_posted`.
 - Network gas is **excluded**, and is labelled "network fees not included".
@@ -573,7 +575,7 @@ export interface LudumPorts {
   financial(gameId: string): Promise<FinancialGameRecord | null>;
   financialByChainGameId(chainGameId: string): Promise<FinancialGameRecord | null>;
   terminalEvidence(gameId: string): Promise<TerminalSettlementEvidence | null>;
-  chainGame(chainGameId: string): Promise<{ game: unknown /* parseGameResponse */; provenance: "chain-confirmed" | "chain-observed"; height?: string; observedAt: string } | null>;
+  chainGame(chainGameId: string): Promise<{ game: unknown /* the RAW contract GameResponse, already validated by parseGameResponse */; provenance: "chain-confirmed" | "chain-observed"; height?: string; observedAt: string } | null>;
   escrowPin(): { contract: string; chainId: string; denom: "ujunox" } | null;
   product(): Product;
   now(): number;
@@ -676,3 +678,57 @@ checkout holds the owner's uncommitted Phase-3 edits; the `ludum` checkout is us
   worktree; the server's `tsconfig` borrows `../frontend/node_modules/@types`.
 - If the Cowork work changes a file a lane reads (for example `ludum.css`), the lane rebases its own branch onto the new
   `main`. It never edits that file.
+
+---
+
+## 12. Source integration record (coordinator, 2026-10-09)
+
+**Branches.** `ludum/integration` in 1830Juno, and `platform/integration` in `cosmonought/ludum`. Neither is merged to `main`
+or pushed; nothing is deployed.
+
+**Lanes integrated:**
+
+| Lane | Commit | Repo |
+|---|---|---|
+| A | `17e77b8e` | 1830Juno |
+| A | `e6cb643` | ludum |
+| C | `d36e0582` | 1830Juno |
+| C | `692bf23` | ludum |
+| B2 | `05b6bb45` | 1830Juno |
+| B1 | `28c57fb`, `4b63b75` | ludum |
+
+Each lane was merged with `--no-ff`, which kept its own commits. There were no textual conflicts.
+
+**Integration defects found and fixed:**
+1. **Chain port form.** Lane A's `MoneyTables.ludumChain.game` returned `parseGameResponse`'s *output*, which broke two
+   handlers:
+   - B2's `case` handler re-parses `read.game` and refused it.
+   - Lane C lost `subsidy_paid`, `disputed_at`, `resolution`, `resolved_at`, `bond_returned` and `bond_to_pool`.
+
+   The port now returns the **raw contract `GameResponse`, after `parseGameResponse` has validated it** (§9 comment
+   amended). `server/src/ludum/integration.test.ts` proves the seam through the real wiring, and fails against the old
+   form.
+2. **Registry test.** It asserted the step-0 placeholders (503). It now asserts the integrated contract:
+   - profiled routes answer 401 `signed-out` to a signed-out caller, both at handler level and through the ingress;
+   - signed in, they answer from the ports;
+   - `case` is public.
+3. **Ledger sign convention.** §4 now states it: entry amounts are non-negative magnitudes, the kind gives the direction,
+   and only `net` may be negative. Tests codify it.
+4. **Incomplete game index.** `LudumPorts.records()` now refuses (the ingress answers 503 `unavailable`) while startup
+   discovery has not finished, has failed, or reported store faults. A partial index is never served as a whole history.
+
+**Archived-history status:**
+- **Production (AWS) storage is complete.** It lists every game ever written (the `DIR#<yyyymm>` directory). Nothing moves
+  archived records, and discovery loads archived records into the index.
+- **Remaining gaps, recorded as release items:**
+  - **Unreadable records.** A game whose record cannot be read or parsed (`discovery` record `null`) cannot be attributed
+    to any account, and is absent from that account's history without notice.
+  - **File storage only.** `gamesDoctor gc` moves archived games older than 90 days into `archive/<id>/`, which the
+    record store does not list. Their history is unavailable in file mode. Production does not use file mode.
+  - **No-money outcomes.** These remain `unavailable` ("replay required"), as designed.
+
+**Conduct boundary.** No module under `server/src/ludum` reads the conduct store, the trust facts or the reviewer
+configuration, and a test enforces this. The governance pages grant nothing to site moderators.
+
+**Navigation.** Governance stays provisionally in the footer. Links from the existing pages to `/me/`, `/disputes/` and
+`/governance/` are the design work's hand-off.

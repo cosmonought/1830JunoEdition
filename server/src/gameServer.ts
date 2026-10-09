@@ -1739,7 +1739,18 @@ export function createGameServer(options: GameServerOptions): {
     identity,
     limiter: identityLimiter,
     ipBudget: createLudumIpBudget(identityNow, limits.identity),
-    ports: createLudumPorts({ records: () => host.records(), money: () => options.money?.() ?? null, now: identityNow }),
+    ports: createLudumPorts({
+      records: () => host.records(),
+      /* INTEGRATION: the index is the whole record set only once startup discovery finished without a store fault. */
+      index: () => {
+        const found = host.discovery();
+        if (found === null) return { complete: false, reason: "the game index is not ready (startup discovery has not finished, or failed)" };
+        if (found.storeErrors.length > 0) return { complete: false, reason: `the game index is incomplete: ${found.storeErrors.length} store fault(s) at startup` };
+        return { complete: true };
+      },
+      money: () => options.money?.() ?? null,
+      now: identityNow,
+    }),
     now: identityNow,
     onError: (what: string, error: unknown) => {
       const ref = errorRef();

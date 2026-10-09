@@ -16,7 +16,7 @@ export interface LudumPorts {
   financial(gameId: string): Promise<FinancialGameRecord | null>;
   financialByChainGameId(chainGameId: string): Promise<FinancialGameRecord | null>;
   terminalEvidence(gameId: string): Promise<TerminalSettlementEvidence | null>;
-  chainGame(chainGameId: string): Promise<{ game: unknown /* parseGameResponse */; provenance: "chain-confirmed" | "chain-observed"; height?: string; observedAt: string } | null>;
+  chainGame(chainGameId: string): Promise<{ game: unknown /* the RAW contract GameResponse, already validated by parseGameResponse */; provenance: "chain-confirmed" | "chain-observed"; height?: string; observedAt: string } | null>;
   escrowPin(): { contract: string; chainId: string; denom: "ujunox" } | null;
   product(): Product;
   now(): number;

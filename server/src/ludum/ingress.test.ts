@@ -463,4 +463,30 @@ describe("LUDUM ingress: every other route is unchanged (§2.1, §10.3)", () => 
       await stopServer(server);
     }
   });
+  /* INTEGRATION (coordinator): the real route table behind the real ingress, after Lanes C and B2 replaced the stubs. */
+  test("integrated routes: signed out, games/game are 401 and case is public; signed in, games is the account's (empty) list", async () => {
+    const { server, port } = await ludumServer();
+    try {
+      for (const [route, body] of [["games", {}], ["game", { gameId: "g_00000000000000000000000000" }]] as const) {
+        const out = await ludum(port, route, { body });
+        assert.equal(out.status, 401, route);
+        assert.equal(out.body?.error, "signed-out", route);
+        assertCors(out, LUDUM, route);
+        assertNoCookie(out, route);
+      }
+      const publicCase = await ludum(port, "case", { body: { chainGameId: "1" } });
+      assert.notEqual(publicCase.status, 401, "case is public");
+      assertCors(publicCase, LUDUM, "case");
+      const browser = await profiledBrowser(port, "Ada Ludum", PROD_ORIGIN);
+      const list = await ludum(port, "games", { cookie: browser.cookie, body: {} });
+      assert.equal(list.status, 200, list.text);
+      assert.deepEqual(list.body?.games, []);
+      assert.equal(list.body?.nextCursor, null);
+      assertNoCookie(list, "games");
+      const notHeld = await ludum(port, "game", { cookie: browser.cookie, body: { gameId: "g_00000000000000000000000000" } });
+      assert.equal(notHeld.status, 404);
+    } finally {
+      await stopServer(server);
+    }
+  });
 });

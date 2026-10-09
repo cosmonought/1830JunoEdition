@@ -12,3 +12,7 @@ node_modules/
 .DS_Store
 # Owner-gate logs and summaries (infra/aws/single-host/run-cost2c-owner-gate.ps1): never committed
 /evidence/
+
+# Python bytecode / caches (e.g. from contracts/escrow/scripts/test_verify_escrow21_deployment.py): generated, never committed
+__pycache__/
+*.py[cod]

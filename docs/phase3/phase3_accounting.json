@@ -6617,7 +6617,8 @@
    "escrow 2.1 NOT deployed (no StoreCode / instantiate)",
    "server / frontend NOT deployed",
    "Keplr official asset integration outstanding",
-   "W3-F outstanding"
+   "W3-F outstanding",
+   "Create Appeal Proposal workflow (Ludum governance, 2026-10-09) NOT STARTED"
   ],
   "residuals": [
    "CLOSED 2026-10-08 (remedy_staging_probe below): the LIVE-6 staging KMS probe (kmsProbe, judged by certify and hostRoleProbe) now covers the REMEDY key as a fourth signing purpose whenever configured",
@@ -6673,6 +6674,27 @@
     "future": "7 keys only if relayer r2 and the JX-1 pair are later created -- above the cap, an owner decision first",
     "not_done": "no KMS key created or changed; no Terraform change; no AWS contact"
    }
+  },
+  "ludum_governance": {
+   "date": "2026-10-09",
+   "status": "RECORDED (source / docs / tests only; owner-approved decisions); NOT deployed; no chain transaction",
+   "record": "contracts/escrow/scripts/escrow21-uni7-governance.json (pinned by server/src/escrow/juno/uni7LudumGovernance.test.ts)",
+   "chain": "uni-7 (Juno testnet) ONLY; no mainnet Ludum DAO address is decided",
+   "ludum_dao_core": "juno1fccq3dcjjn35fgt8u8jfz5kvcajfk604lhl85w25k6pr32q9r7psk6wrpu",
+   "ludum_dao_creation": "tx F197D5466BCD4FEF6003C1DE489B6D746402863953964C31E21D77AC99FC064F at height 18686976; DAO core code id 28",
+   "escrow21_instantiate": "treasury = resolver = the Ludum DAO core; subsidy_bps 250; resolver_timeout_secs 2592000 (30 days)",
+   "server_trust": "the Juno document's trust.resolvers must list the Ludum DAO core (verifyJunoDeployment refuses an untrusted contract resolver; checkEscrowTrust refuses a game under one); 2592000 s >= every configured min_resolver_timeout_secs (staging documents 3600) and within the contract's MAX_DURATION_SECS",
+   "appeals": "Challenge -> DISPUTED; the escrow / backend NEVER creates a DAO proposal because of a challenge; a Ludum DAO member submits and signs an appeal proposal carrying the escrow Resolve; the DAO votes; if passed, the DAO core executes Resolve; the relayer is never a DAO member",
+   "daodao_indexer": "DAO DAO has no indexer for Juno testnet (testnet.daodao.zone: `No indexer for chain`): game governance must not depend on DAO DAO's hosted indexer / frontend",
+   "remaining": [
+    "Create Appeal Proposal workflow for Ludum governors (DISPUTED game -> prefilled dispute / game context + the escrow Resolve message for the DAO core; member-submitted; direct chain queries, no DAO DAO indexer) -- NOT STARTED, a Phase-3 implementation item before W3-F"
+   ],
+   "not_done": [
+    "no StoreCode / instantiate",
+    "no JUNO / JUNOX transaction",
+    "no SSM / Terraform / AWS change",
+    "the live Juno document's trust.resolvers is not edited by this repository (an owner release step)"
+   ]
   }
  }
 }

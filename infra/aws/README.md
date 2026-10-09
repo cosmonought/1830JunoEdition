@@ -511,6 +511,12 @@ migration guard:    host-create(-complete) ... --remedy-key <the same ARN>   (an
   So adding remedy-r1 gives **4 total**, no key retirement is needed for the 2.1 release. FUTURE capacity scenario only: if
   relayer-r2 and the jx1 financial pair are ever created beside the remedy key it would be 7 > 6 -- sequence or retire then,
   an owner budget decision (`cost1SingleHost.test.ts`). Record: Project `claude/PHASE3_KMS_PRERELEASE_INVENTORY_2026-10-08.md`.
+- **Governance (uni-7, owner 2026-10-09).** The 2.1 instantiate on uni-7 uses `treasury` = `resolver` = the Ludum DAO core
+  `juno1fccq3dcjjn35fgt8u8jfz5kvcajfk604lhl85w25k6pr32q9r7psk6wrpu`, `subsidy_bps` 250 and `resolver_timeout_secs` 2592000 (30 days)
+  (`contracts/escrow/scripts/escrow21-uni7-governance.json`; testnet only -- no mainnet Ludum DAO address is decided). The
+  staging Juno document's `escrow.trust.resolvers` must list that address, or the server refuses the deployment
+  (`verifyJunoDeployment`: an untrusted contract resolver). Appeals are DAO proposals a Ludum member submits (never the
+  relayer, never automatic on `Challenge`); DAO DAO has no Juno-testnet indexer, so nothing here depends on it.
 - **Default `remedy_key_count = 0` / `remedy_signing_key = null`:** every existing plan, policy and document is unchanged.
 - **The 2.1 cutover changes the image and the Juno document TOGETHER, and rolls them back together.** The Juno document is
   ONE SSM parameter per environment (`/gs/<env>/juno-backend`, read at every task / host start), and each build refuses a

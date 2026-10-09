@@ -1,5 +1,5 @@
 {
- "_note": "EXAMPLE ONLY (synthetic addresses and keys; no real deployment). Copy, fill in the real code id, admin, operator (= the relayer), resolver, treasury and the KMS-derived public keys (`awsDeploy signer-keys ... --remedy <arn>`), then run `verify`.",
+ "_note": "EXAMPLE ONLY (synthetic addresses and keys; no real deployment). Copy, fill in the real code id, admin, operator (= the relayer), resolver, treasury and the KMS-derived public keys (`awsDeploy signer-keys ... --remedy <arn>`), then run `verify`. For uni-7, treasury, resolver, subsidy_bps and resolver_timeout_secs are the owner-approved values in ../escrow21-uni7-governance.json (the Ludum DAO core).",
  "chain_id": "uni-7",
  "code_id": 4242,
  "wasm_admin": null,

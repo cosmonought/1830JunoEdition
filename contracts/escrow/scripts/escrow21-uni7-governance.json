@@ -1,0 +1,32 @@
+{
+ "format": "18COSMOS/ESCROW21-GOVERNANCE/v1",
+ "_note": "OWNER-APPROVED (2026-10-09) governance values for the Escrow 2.1 deployment on uni-7 (Juno TESTNET) ONLY. Source record, not a deployment: nothing here was sent to any chain by this repository. Copy treasury, resolver and params into the 2.1 instantiate message and the verifier's --expect file (escrow21-expect.example.json); the server's Juno document must list the resolver in trust.resolvers. There is NO decided mainnet Ludum DAO address: never reuse this testnet address on juno-1.",
+ "chain_id": "uni-7",
+ "network_class": "testnet",
+ "ludum_dao": {
+  "core_address": "juno1fccq3dcjjn35fgt8u8jfz5kvcajfk604lhl85w25k6pr32q9r7psk6wrpu",
+  "core_code_id": 28,
+  "creation_tx": "F197D5466BCD4FEF6003C1DE489B6D746402863953964C31E21D77AC99FC064F",
+  "creation_height": 18686976,
+  "daodao_indexer": "none: testnet.daodao.zone shows `No indexer for chain` for Juno testnet indexed data, so the game's appeal workflow must not depend on DAO DAO's hosted indexer or frontend"
+ },
+ "escrow21": {
+  "treasury": "juno1fccq3dcjjn35fgt8u8jfz5kvcajfk604lhl85w25k6pr32q9r7psk6wrpu",
+  "resolver": "juno1fccq3dcjjn35fgt8u8jfz5kvcajfk604lhl85w25k6pr32q9r7psk6wrpu",
+  "params": {
+   "subsidy_bps": 250,
+   "resolver_timeout_secs": 2592000
+  }
+ },
+ "server_trust": {
+  "resolvers_include": ["juno1fccq3dcjjn35fgt8u8jfz5kvcajfk604lhl85w25k6pr32q9r7psk6wrpu"]
+ },
+ "appeals": {
+  "challenge": "a player's Challenge moves the escrow game to DISPUTED; the escrow and the backend NEVER create a DAO proposal because a challenge occurred",
+  "proposal": "Ludum governors are offered a Create Appeal Proposal workflow for a DISPUTED game: prefilled dispute / game context and the escrow `Resolve { chain_game_id, outcome }` message for the Ludum DAO core to execute",
+  "submission": "a Ludum DAO member submits and signs the proposal with their own wallet; the DAO votes; if it passes, the Ludum DAO core executes the escrow `Resolve`",
+  "relayer": "the relayer is NOT a Ludum DAO member and never submits proposals",
+  "status": "workflow NOT implemented yet: a Phase-3 remaining-work item (ROADMAP_3_2_REMAINING_WORK.md; docs/phase3/phase3_accounting.json escrow21_release_readiness.ludum_governance)"
+ },
+ "mainnet": null
+}

@@ -40,6 +40,18 @@ consolidated FINAL pre-playtest integration (2026-10-07, `phase3/consolidated-fi
   NOT created, Terraform is NOT applied, the server / frontend are NOT deployed (each an owner-authorized release step,
   `PROJECT_CANONICAL_CONTEXT.md` §D.3a). Live staging KMS (read-only inventory 2026-10-08): 3 project keys now (relayer r1,
   settlement, admission; no r2, no jx1 pair), 4 after REMEDY, cap 6 -- no retirement needed for the 2.1 release;
+- the **uni-7 Ludum DAO governance** for escrow 2.1 (owner decisions 2026-10-09) -- **RECORDED** (source / docs / tests only;
+  `contracts/escrow/scripts/escrow21-uni7-governance.json`): treasury = resolver = the Ludum DAO core `juno1fccq3dcjjn35fgt8u8jfz5kvcajfk604lhl85w25k6pr32q9r7psk6wrpu`
+  (uni-7 TESTNET only; no mainnet address decided), `subsidy_bps` 250, `resolver_timeout_secs` 2592000 (30 days); the server's
+  `trust.resolvers` must list it. Appeals: a `Challenge` makes the game DISPUTED and NEVER creates a DAO proposal by itself;
+- the **Create Appeal Proposal workflow** (P3, Ludum governance; NOT STARTED, owner-decided 2026-10-09): for a DISPUTED escrow
+  game, offer Ludum governors a prefilled proposal -- the dispute / game context (chain game id, table, seats, the challenger,
+  `evidence_hash`, the disputed settlement / checkpoint, the resolver deadline) plus the escrow `Resolve { chain_game_id,
+  outcome }` message addressed to the escrow contract, executed by the Ludum DAO core -- that a Ludum DAO MEMBER submits and signs
+  with their own wallet; the DAO votes; if it passes, the core executes `Resolve`. The relayer is never a DAO member and never
+  submits. It must not depend on DAO DAO's hosted indexer / frontend (`testnet.daodao.zone`: `No indexer for chain` on Juno
+  testnet): read the DAO core and its proposal module directly over the chain's REST / smart queries. The 30-day resolver window
+  must cover the DAO's proposal + voting + execution time;
 - then **W3-F**, the final Phase-3 closure (the Phase-4 checklist and baseline, the broad owner gate) -- NOT STARTED.
 
 **Not before Phase 4:** the official Keplr logo (ASSET PENDING); the substantive Terms copy (owner-authored; a Phase-7 / mainnet gate);

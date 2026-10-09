@@ -23,6 +23,12 @@
 > the server source pins `c3bd0618…` (`junoConfig.ts`), the dedicated REMEDY KMS
 > key's infrastructure and tooling exist (none created), and
 > `scripts/verify_escrow21_deployment.py` verifies a 2.1 instantiate read-only.
+> uni-7 governance (owner, 2026-10-09; `scripts/escrow21-uni7-governance.json`):
+> `treasury` = `resolver` = the **Ludum DAO** core `juno1fccq3dcjjn35fgt8u8jfz5kvcajfk604lhl85w25k6pr32q9r7psk6wrpu`
+> (testnet only; no mainnet address decided), `subsidy_bps` 250, `resolver_timeout_secs`
+> 2592000 (30 days). A `Challenge` makes a game DISPUTED; nothing creates a DAO
+> proposal automatically -- a Ludum DAO member submits an appeal proposal whose
+> passing makes the DAO core execute `Resolve` (the relayer is no DAO member).
 
 A CosmWasm 1.5 settlement escrow for Juno money rooms. It is a vault, a deposit
 holder, a roster record, a secp256k1 signature verifier, a settlement/challenge

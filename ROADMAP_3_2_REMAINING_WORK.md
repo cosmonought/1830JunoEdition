@@ -33,7 +33,8 @@ consolidated FINAL pre-playtest integration (2026-10-07, `phase3/consolidated-fi
 - the **escrow 2.1 release-readiness source fixes** (2026-10-08, `phase3/escrow21-release-readiness`, from `8c4dca9`; committed
   locally, NOT pushed / merged) -- the predeployment audit's source blockers ADDRESSED: the owner-decided DEDICATED REMEDY KMS key
   (IaC, IAM, rendered `remedy_key`, tooling), the `finalityKeysUnread` metric + alarm C1, the source pin of the certified 2.1.0
-  checksum `c3bd0618…8219`, the 2.1 on-chain verifier, and the input-verification script's Git < 2.40 false PASS. The certified
+  checksum `c3bd0618…8219`, the 2.1 on-chain verifier, and the input-verification script's Git < 2.40 false PASS; and (follow-up)
+  the staging KMS probe's REMEDY coverage (the remedy key probed as a fourth signing purpose whenever configured). The certified
   Wasm inputs stay IDENTICAL. **Escrow 2.1 remains NOT DEPLOYED**: the Junox StoreCode simulation is NOT run, the KMS remedy key is
   NOT created, Terraform is NOT applied, the server / frontend are NOT deployed (each an owner-authorized release step,
   `PROJECT_CANONICAL_CONTEXT.md` §D.3a);

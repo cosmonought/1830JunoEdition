@@ -762,8 +762,9 @@ step 2), drain (replacement), IAM / LeadingKeys inside transactions as the task 
 (conditions, TransactionConflict, same-token resend), proxy hops (exactly two appended X-Forwarded-For entries), ALL query
 strings (`cp`, `cr`, `cb` and unrelated ones, through the diagnostic `/gs/diag/edge`, mounted only by
 `edge_diagnostic_staging` / `GS_EDGE_DIAGNOSTIC=staging`, refused on mainnet and in `prod*`), the WebSocket announcement and
-idle path (longer than every idle bound plus two server pings), KMS Sign latency below 3 s with the configured keys (a
-disposable digest; no chain, no ledger), both Terraform plans (nothing destroyed, replaced or de-protected except
+idle path (longer than every idle bound plus two server pings), KMS Sign latency below 3 s with the configured keys (the
+relayer, settlement and admission keys, plus the dedicated REMEDY key whenever the configuration names one; a disposable
+digest; no chain, no ledger), both Terraform plans (nothing destroyed, replaced or de-protected except
 skip_destroy task-definition revisions; services gated on the routing read), and the evidence package (no secret; the commit
 is the checkout's HEAD). **L6-4 contract:** `SYSTEM/GENERATION` strict and bound by APPGEN's adoption (never the number
 alone), the identity table serving-safe with its `TABLE#identity` binding, no open `REVIEW#`, L6-4 in the image of EVERY pool's automatic rollback target -- the circuit breaker's

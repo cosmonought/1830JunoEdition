@@ -6620,10 +6620,28 @@
    "W3-F outstanding"
   ],
   "residuals": [
-   "the LIVE-6 staging certification probes (kmsProbe, certify, hostRoleProbe, rotationProof) still exercise the three original keys only; the remedy key is verified by the server's own startup identity check and awsDeploy verify",
+   "CLOSED 2026-10-08 (remedy_staging_probe below): the LIVE-6 staging KMS probe (kmsProbe, judged by certify and hostRoleProbe) now covers the REMEDY key as a fourth signing purpose whenever configured",
+   "rotationProof (a relayer rotation's configuration-identity comparison against the gate record; no KMS call) still compares the settlement and admission keys only: a remedy key moved during a relayer rotation is caught by the server's startup identity check and verifyJunoDeployment's REMEDY registry check, not by the rotation proof; adding it changes the gate record format (out of this follow-up's scope)",
    "budget: the 2.1 release keys (3 + 1 remedy) fit max_kms_keys = 6; a remedy key beside the full LIVE-6 -> JX-1 transition keys (r2 + jx1) would be 7 -- an owner budget decision if both are ever present",
    "a production server built from this source refuses to start on a 2.0.0 Juno document: the document and the image change together at the cutover (and roll back together)"
   ],
-  "record": "Project claude/PHASE3_ESCROW21_RELEASE_READINESS_SOURCE_FIXES_2026-10-08.md; audit claude/PHASE3_ESCROW21_PREDEPLOYMENT_READINESS_8c4dca9_2026-10-08.md"
+  "record": "Project claude/PHASE3_ESCROW21_RELEASE_READINESS_SOURCE_FIXES_2026-10-08.md; audit claude/PHASE3_ESCROW21_PREDEPLOYMENT_READINESS_8c4dca9_2026-10-08.md",
+  "remedy_staging_probe": {
+   "date": "2026-10-08",
+   "base": "50e2bc64d8df5f54525df811da8fd72f732ccb12",
+   "status": "SOURCE / TESTS / DOCS committed on phase3/escrow21-release-readiness; the feature branch alone pushed; NOT merged; NOT deployed. Phase 3 is NOT closed.",
+   "closed": "the staging KMS probe REMEDY gap: kmsProbe.ts probes the dedicated REMEDY key as a first-class fourth signing purpose whenever the configuration names one (GetPublicKey, checkSignerIdentities with the remedy key, disposable digest-only Signs verified against the CONFIGURED remedy public key and timed below 3 s); the record always states remedy_configured and its purposes",
+   "fail_closed": "absent REMEDY: the three keys exactly as before (timed money unavailable); a remedy key that is not KMS, names another purpose's KMS key, will not open, answers a wrong public key or signs wrongly FAILS, named REMEDY (each key is verified against its own configured identity, so the healthy keys are not blamed); a record without remedy_configured, a configured remedy key with no remedy entry, a remedy entry nobody configured, or a remedy entry that is another purpose's key FAILS; stage-cert certify holds the record to the verified configuration's remedy key (by fingerprint)",
+   "profiles": "one probe for both: the ECS task role (stage-probe task-role -> stage-cert certify, held to the verified configuration's remedy key) and the single host (gs-host role-probe -> stage-probe host-role F5, held to the operator's REQUIRED --remedy-key <ARN>|none; the verdict keeps its fingerprint only); measurements gain remedy when probed; a record that predates remedy_configured is refused (re-probe)",
+   "iam": "unchanged: the app and single-host roles' existing RemedyKeyPublicKey / RemedyKeySignDigestOnly statements (exactly the named key; no wildcard); no Terraform change",
+   "tests": "l6_6StagingCert.test.ts §8b (legacy, healthy, unresolvable, wrong public key / signature, Sign denied, no substitution, purposes consistency, the certify gate against the verified configuration); hostRoleProbe.test.ts (single-host F5 REMEDY against the operator's --remedy-key; the command's required flag; the hand-built legacy KMS section gains remedy_configured: false deliberately)",
+   "review": "independent review: no AWS mutation, no IAM / wildcard change, no no-remedy regression; MEDIUM (the offline F5 judge took the record's own coverage) RESOLVED by the required --remedy-key operator fact; LOWs resolved (purposes judged, settlement message, REMEDY Sign-denied test, runbook note); rotationProof residual agreed LOW",
+   "not_done": [
+    "no real AWS probe run",
+    "KMS remedy key NOT created",
+    "Terraform NOT applied",
+    "escrow 2.1 NOT deployed"
+   ]
+  }
  }
 }

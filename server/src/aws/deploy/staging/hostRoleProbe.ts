@@ -12,7 +12,10 @@
 //   the principal   the IAM probe's AccessDenied answers name the caller: AWS itself must say
 //                   `assumed-role/gs-<env>-host-app` for every forbidden shape (judgeIamProbe, the host role in the task
 //                   role's place) -- and the wrapper's IMDS facts (that role's name, this instance) agree;
-//   F5 (kms)        judgeKmsProbe: the three keys opened through the production digest-only ECDSA_SHA_256 binding, their
+//   F5 (kms)        judgeKmsProbe: the three keys -- and the dedicated REMEDY key whenever the serving configuration names
+//                   one (the record's required remedy_configured, held to the operator's `--remedy-key <ARN>|none`;
+//                   Phase 3 escrow 2.1) -- opened through the production
+//                   digest-only ECDSA_SHA_256 binding, their
 //                   public keys = the configuration's (checkSignerIdentities), every disposable Sign verified against the
 //                   CONFIGURED key and below the runtime's 3 000 ms bound; the transaction section NOT run (F5 writes
 //                   nothing);
@@ -33,7 +36,7 @@ import { createHash } from "crypto";
 import type { Check } from "../deployVerify";
 import { arr, checkEnvelope, disposablePartition, num, obj, PROBE_FORMAT, recordFromLog, secretFindings, stableStringify, str } from "./evidence";
 import { IAM_PROBE_IDS, judgeIamProbe } from "./iamProbe";
-import { judgeKmsProbe } from "./kmsProbe";
+import { BASE_KMS_PURPOSES, judgeKmsProbe } from "./kmsProbe";
 import { judgeTransactionProbe } from "./transactionProbe";
 
 export const HOST_ROLE_PROBE_BEGIN = "GS-HOST-ROLE-PROBE BEGIN";
@@ -70,6 +73,10 @@ export interface HostRoleExpect {
   readonly build: string;
   /** The repository's wrapper SHA-256 (LF); null when it could not be read (that check is then NOT EVALUATED). */
   readonly wrapperSha256: string | null;
+  /** F5 only (Phase 3 escrow 2.1): the operator's fact of the serving configuration's dedicated REMEDY key -- its 12-hex
+   *  fingerprint (from `--remedy-key <ARN>`), or null (`--remedy-key none`: no remedy key, timed money unavailable). The
+   *  record's own coverage is held to it, so a record cannot skip REMEDY by saying none is configured. Absent on F5: FAIL. */
+  readonly remedyKey?: string | null;
 }
 
 export interface HostRoleJudgement {
@@ -193,11 +200,13 @@ export function judgeHostRoleCapture(text: string, expect: HostRoleExpect): Host
     checks.push(judge(`${L}: AWS names the host role as the caller`, denials.length >= 1 && principals.length === 1 && principals[0] === role, `${denials.length} AccessDenied answer(s), each for assumed-role/${role}`, denials.length === 0 ? "no AccessDenied answer names a caller" : `the denials name [${principals.join(", ")}], not ${role}`));
     measurements.iam_probes = arr(iam.results).length;
     if (expect.probe === "kms") {
-      checks.push(...judgeKmsProbe(sections.kms).map((c) => ({ ...c, name: `${L}: ${c.name}` })));
+      if (expect.remedyKey === undefined) checks.push(fail(`${L}: the operator's remedy-key fact`, "not given (--remedy-key <the remedy key ARN> | none): F5 never takes the record's own word for whether REMEDY was due"));
+      const expected = expect.remedyKey === undefined ? undefined : { remedy: expect.remedyKey === null ? null : { key: expect.remedyKey } };
+      checks.push(...judgeKmsProbe(sections.kms, expected).map((c) => ({ ...c, name: `${L}: ${c.name}` })));
       const t = obj(sections.transactions);
       checks.push(judge(`${L}: F5 wrote nothing`, t.status === "not-run" && t.partition === undefined, "the transaction probe did not run (no --disposable-writes)", `the transaction section is ${String(t.status)}${t.partition !== undefined ? ` on ${String(t.partition)}` : ""}`));
       const keys = obj(obj(obj(sections.kms).results).keys);
-      for (const purpose of ["relayer", "settlement", "admission"]) {
+      for (const purpose of [...BASE_KMS_PURPOSES, ...("remedy" in keys ? ["remedy"] : [])]) {
         const ms = arr(obj(keys[purpose]).samples).map((x) => num(obj(x).ms)).filter((x): x is number => x !== null);
         measurements[`kms_${purpose}`] = ms.length === 0 ? null : { max_ms: Math.max(...ms), samples: ms.length, key: str(obj(keys[purpose]).key) };
       }
@@ -229,6 +238,7 @@ export function hostRoleVerdictRecord(expect: HostRoleExpect, judged: HostRoleJu
     digest: expect.digest,
     build: expect.build,
     wrapper_sha256: expect.wrapperSha256,
+    ...(expect.probe === "kms" ? { remedy_key: expect.remedyKey ?? null } : {}),
     capture_sha256: extra.captureSha256,
     at: new Date(extra.at).toISOString(),
     verdict: judged.verdict,

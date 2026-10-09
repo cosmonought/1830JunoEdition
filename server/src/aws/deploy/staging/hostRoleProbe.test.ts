@@ -70,9 +70,22 @@ function enforcingDynamo(role: string) {
   };
 }
 
-const kmsSection = (over: { ms?: number; verified?: boolean; identities?: boolean } = {}) => {
-  const key = (k: string) => ({ opened: true, key: k, samples: Array.from({ length: 5 }, () => ({ ms: over.ms ?? 142, verified: over.verified ?? true, signature_bytes: 64 })) });
-  return { status: "ran", results: { bound_ms: KMS_LATENCY_BOUND_MS, samples_per_key: 5, identities: { ok: over.identities ?? true, detail: "the relayer key controls the configured address; the settlement and admission keys are the configured public keys" }, keys: { relayer: key("a1b2c3d4e5f6"), settlement: key("b1b2c3d4e5f6"), admission: key("c1b2c3d4e5f6") } } };
+const kmsSection = (over: { ms?: number; verified?: boolean; identities?: boolean; remedy?: { ms?: number; opened?: boolean; key?: string } } = {}) => {
+  const key = (k: string, ms = over.ms ?? 142) => ({ opened: true, key: k, samples: Array.from({ length: 5 }, () => ({ ms, verified: over.verified ?? true, signature_bytes: 64 })) });
+  /* Phase 3 escrow 2.1: the probe always records whether a remedy key is configured (default: none, the legacy shape). */
+  const remedy = over.remedy;
+  const remedyEntry = remedy === undefined ? {} : { remedy: remedy.opened === false ? { opened: false, key: remedy.key ?? "d1b2c3d4e5f6", error: "the remedy key: SignerError/unavailable: KMS GetPublicKey failed for <key>" } : key(remedy.key ?? "d1b2c3d4e5f6", remedy.ms ?? 142) };
+  return {
+    status: "ran",
+    results: {
+      bound_ms: KMS_LATENCY_BOUND_MS,
+      samples_per_key: 5,
+      remedy_configured: remedy !== undefined,
+      purposes: ["relayer", "settlement", "admission", ...(remedy !== undefined ? ["remedy"] : [])],
+      identities: { ok: over.identities ?? true, detail: "the relayer key controls the configured address; the settlement and admission keys are the configured public keys" },
+      keys: { relayer: key("a1b2c3d4e5f6"), settlement: key("b1b2c3d4e5f6"), admission: key("c1b2c3d4e5f6"), ...remedyEntry },
+    },
+  };
 };
 
 const transactionsSection = (over: { remaining?: number; partition?: string } = {}) => ({
@@ -180,7 +193,8 @@ function capture(record: unknown, options: { probe?: HostRoleProbe; facts?: Reco
   return `${out.join("\n")}\n`;
 }
 
-const expect = (probe: HostRoleProbe = "kms", over: Partial<HostRoleExpect> = {}): HostRoleExpect => ({ probe, run: RUN, environment: "staging", generation: 1, pool: "p1", instanceId: INSTANCE, digest: DIGEST, build: BUILD, wrapperSha256: wrapperSha256(fs.readFileSync(WRAPPER, "utf8")), ...over });
+/* F5 carries the operator's remedy-key fact (Phase 3 escrow 2.1): default `none`, the legacy configuration. */
+const expect = (probe: HostRoleProbe = "kms", over: Partial<HostRoleExpect> = {}): HostRoleExpect => ({ probe, run: RUN, environment: "staging", generation: 1, pool: "p1", instanceId: INSTANCE, digest: DIGEST, build: BUILD, wrapperSha256: wrapperSha256(fs.readFileSync(WRAPPER, "utf8")), ...(probe === "kms" ? { remedyKey: null } : {}), ...over });
 const failed = (j: { checks: ReadonlyArray<{ name: string; status: string; detail: string }> }) => j.checks.filter((c) => c.status !== "pass").map((c) => `${c.status} ${c.name}: ${c.detail}`).join("\n");
 
 /* ------------------------------------------------------------------ */
@@ -265,6 +279,36 @@ describe("PHASE 1 REMAINDER F5 / F6: the host-role probe's judge", () => {
     assert.match(failed(j), /the host ran the probe: refused: the game server is not active/);
   });
 
+  test("Phase 3 escrow 2.1 -- F5 covers the dedicated REMEDY key on the single host, held to the operator's --remedy-key fact", async () => {
+    const R = "d1b2c3d4e5f6";
+    /* No remedy key (--remedy-key none): the three keys, as before (no kms_remedy measurement). */
+    const legacy = judgeHostRoleCapture(capture(await taskRoleRecord()), expect("kms"));
+    assert.equal(legacy.verdict, "PASS");
+    assert.ok(!("kms_remedy" in legacy.measurements));
+    assert.ok(legacy.checks.some((c) => /KMS remedy: coverage/.test(c.name) && /no remedy key is configured/.test(c.detail)));
+    /* A healthy remedy key, the one the operator names: probed, judged, measured. */
+    const healthy = judgeHostRoleCapture(capture(await taskRoleRecord({ kms: kmsSection({ remedy: {} }) })), expect("kms", { remedyKey: R }));
+    assert.equal(healthy.verdict, "PASS", failed(healthy));
+    assert.deepEqual(healthy.measurements.kms_remedy, { max_ms: 142, samples: 5, key: R });
+    /* The record cannot decide for itself: a three-key record against a named remedy key FAILS (REMEDY not probed);
+       a remedy record against `none` FAILS; a remedy entry for another key FAILS; no fact at all FAILS. */
+    assert.match(failed(judgeHostRoleCapture(capture(await taskRoleRecord()), expect("kms", { remedyKey: R }))), /the configuration names a remedy key but the probe recorded none: REMEDY was not probed/);
+    assert.match(failed(judgeHostRoleCapture(capture(await taskRoleRecord({ kms: kmsSection({ remedy: {} }) })), expect("kms"))), /the probe recorded a remedy key the configuration does not name/);
+    assert.match(failed(judgeHostRoleCapture(capture(await taskRoleRecord({ kms: kmsSection({ remedy: {} }) })), expect("kms", { remedyKey: "0123456789ab" }))), /the remedy entry is key d1b2c3d4e5f6, not the configured remedy key 0123456789ab/);
+    assert.match(failed(judgeHostRoleCapture(capture(await taskRoleRecord()), expect("kms", { remedyKey: undefined }))), /the operator's remedy-key fact: not given/);
+    /* Configured but unusable / slow / substituted / skipped / unstated: each FAILS, named REMEDY. */
+    const withR = expect("kms", { remedyKey: R });
+    assert.match(failed(judgeHostRoleCapture(capture(await taskRoleRecord({ kms: kmsSection({ remedy: { opened: false } }) })), withR)), /KMS remedy: the remedy key did not open: the remedy key: SignerError/);
+    assert.match(failed(judgeHostRoleCapture(capture(await taskRoleRecord({ kms: kmsSection({ remedy: { ms: 3000 } }) })), withR)), /KMS remedy: Sign latency below 3000 ms: max 3000 ms/);
+    assert.match(failed(judgeHostRoleCapture(capture(await taskRoleRecord({ kms: kmsSection({ remedy: { key: "b1b2c3d4e5f6" } }) })), expect("kms", { remedyKey: "b1b2c3d4e5f6" }))), /the remedy entry is the settlement key \(never substituted for REMEDY\)/);
+    const skipped = kmsSection({ remedy: {} }) as { results: { keys: Record<string, unknown> } };
+    delete skipped.results.keys.remedy;
+    assert.match(failed(judgeHostRoleCapture(capture(await taskRoleRecord({ kms: skipped })), withR)), /REMEDY was skipped/);
+    const unstated = kmsSection() as { results: Record<string, unknown> };
+    delete unstated.results.remedy_configured;
+    assert.match(failed(judgeHostRoleCapture(capture(await taskRoleRecord({ kms: unstated })), expect("kms"))), /does not say whether a remedy key is configured/);
+  });
+
   test("F5 and F6 each prove their own thing: a slow / unverified Sign, wrong identities, F5 that wrote, F6 on another partition or leaving items FAILS", async () => {
     const slow = judgeHostRoleCapture(capture(await taskRoleRecord({ kms: kmsSection({ ms: 3000 }) })), expect("kms"));
     assert.match(failed(slow), /KMS relayer: Sign latency below 3000 ms: max 3000 ms/);
@@ -293,7 +337,7 @@ describe("PHASE 1 REMAINDER F5 / F6: `stage-probe host-role` writes the evidence
     const out: string[] = [];
     const deps = { now: () => Date.parse("2026-10-03T12:00:00Z"), out: (l: string) => out.push(l) } as unknown as DeployDeps;
     const staging = { env: {}, monotonic: () => 0, edge: {} as never, repository: REPO } as StagingDeps;
-    const argv = ["host-role", "--probe", probe, "--run-id", RUN, "--evidence", dir, "--capture", captureFile, "--environment", "staging", "--generation", "1", "--pool", "p1", "--instance-id", INSTANCE, "--digest", DIGEST, "--build", BUILD, ...extra];
+    const argv = ["host-role", "--probe", probe, "--run-id", RUN, "--evidence", dir, "--capture", captureFile, "--environment", "staging", "--generation", "1", "--pool", "p1", "--instance-id", INSTANCE, "--digest", DIGEST, "--build", BUILD, ...(probe === "kms" && !extra.includes("--remedy-key") ? ["--remedy-key", "none"] : []), ...extra];
     const code = await stageProbeCommand(argv, deps, staging).catch((e: Error) => e.message);
     return { code, out };
   };
@@ -313,6 +357,33 @@ describe("PHASE 1 REMAINDER F5 / F6: `stage-probe host-role` writes the evidence
     const record = JSON.parse(fs.readFileSync(path.join(dir, HOST_ROLE_FILES.record("kms", RUN)), "utf8"));
     assert.equal(record.probe, "task-role");
     assert.match(String((await run(dir, file)).code), /already exists .* a verdict is never overwritten/);
+  });
+
+  test("Phase 3 escrow 2.1: F5 requires --remedy-key <ARN>|none, holds the record to it, and records only its fingerprint", async () => {
+    const REMEDY_ARN = "arn:aws:kms:us-east-1:222222222222:key/77777777-7777-4777-8777-777777777777";
+    const legacyFile = path.join(tmp(), "f5.txt");
+    fs.writeFileSync(legacyFile, capture(await taskRoleRecord()));
+    /* No fact on F5: refused before anything is judged or written. A malformed key, or a key on F6: refused. */
+    const bare = tmp();
+    const deps = { now: () => Date.parse("2026-10-03T12:00:00Z"), out: () => undefined } as unknown as DeployDeps;
+    const staging = { env: {}, monotonic: () => 0, edge: {} as never, repository: REPO } as StagingDeps;
+    const base = ["host-role", "--probe", "kms", "--run-id", RUN, "--evidence", bare, "--capture", legacyFile, "--environment", "staging", "--generation", "1", "--pool", "p1", "--instance-id", INSTANCE, "--digest", DIGEST, "--build", BUILD];
+    assert.match(String(await stageProbeCommand(base, deps, staging).catch((e: Error) => e.message)), /--probe kms needs --remedy-key/);
+    assert.deepEqual(fs.readdirSync(bare), [], "nothing written");
+    assert.match(String((await run(tmp(), legacyFile, "kms", ["--remedy-key", "alias/gs-remedy"])).code), /--remedy-key is a KMS key ARN \(never an alias\) or none/);
+    assert.match(String((await run(tmp(), legacyFile, "transactions", ["--remedy-key", "none"])).code), /--remedy-key belongs to --probe kms/);
+    /* A three-key record against the named remedy key: FAIL (exit 1), REMEDY named; the verdict holds the fingerprint, never the ARN. */
+    const dir = tmp();
+    const named = await run(dir, legacyFile, "kms", ["--remedy-key", REMEDY_ARN]);
+    assert.equal(named.code, 1, named.out.join("\n"));
+    assert.match(named.out.join("\n"), /REMEDY was not probed/);
+    const verdictText = fs.readFileSync(path.join(dir, HOST_ROLE_FILES.verdict("kms", RUN)), "utf8");
+    assert.equal(JSON.parse(verdictText).remedy_key, sha256Hex(REMEDY_ARN).slice(0, 12));
+    assert.ok(!verdictText.includes(REMEDY_ARN));
+    /* --remedy-key none with the legacy record: PASS, recorded as null. */
+    const none = tmp();
+    assert.equal((await run(none, legacyFile, "kms", ["--remedy-key", "none"])).code, 0);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(none, HOST_ROLE_FILES.verdict("kms", RUN)), "utf8")).remedy_key, null);
   });
 
   test("FAIL exits 1 and NOT EVALUATED exits 3; the arguments are validated", async () => {

@@ -67,7 +67,7 @@ import {
   writeRecord,
 } from "./evidence";
 import { IAM_PROBE_IDS, judgeIamProbe } from "./iamProbe";
-import { judgeKmsProbe } from "./kmsProbe";
+import { BASE_KMS_PURPOSES, judgeKmsProbe, kmsProbeExpectationOf, type KmsProbeExpectation } from "./kmsProbe";
 import { accountOf, judgeAlarmsGate, judgeFlipAlarmDrill, judgeFlipDrill, judgeGenerationGateRecord, judgeRestoreAlarmDrill, judgeRotationDrill, flipRecordOf, flipWindowOf } from "./drills";
 import { adoptionOf, certifierImage, generationMeasurement, judgeGeneration, judgeIdentityRecovery, judgeReviews, judgeRestoreFencing, judgeRestoreQuiet, judgeRollback, NOT_INTEGRATED, type GenerationEvidence, type HeartbeatEvidence } from "./recovery";
 import { buildIdOf, checkClusterTasks, checkRunningTasks, checkServicesSettled, checkTargetHealth, readClusterListing } from "./prerequisite";
@@ -460,10 +460,14 @@ export const STAGING_GATES: readonly StagingGate[] = Object.freeze([
     required: () => true,
     evaluate: (ctx, records) => {
       const { checks, section } = taskRoleSection(ctx, records, "kms");
-      checks.push(...judgeKmsProbe(section));
+      /* Phase 3 escrow 2.1: the verified configuration says whether a REMEDY key must be in the record (and which). With no
+         escrow configuration the prerequisite already fails; the record's own coverage field is then still required. */
+      const escrow = ctx.prerequisite.startup.escrowConfig;
+      const expected: KmsProbeExpectation | undefined = escrow === null ? undefined : kmsProbeExpectationOf(escrow);
+      checks.push(...judgeKmsProbe(section, expected));
       const keys = obj(obj(obj(section).results).keys);
       const measurements: Record<string, unknown> = {};
-      for (const purpose of ["relayer", "settlement", "admission"]) {
+      for (const purpose of [...BASE_KMS_PURPOSES, ...(expected?.remedy != null || "remedy" in keys ? ["remedy"] : [])]) {
         const ms = arr(obj(keys[purpose]).samples).map((x) => num(obj(x).ms)).filter((x): x is number => x !== null);
         measurements[purpose] = ms.length === 0 ? null : { max_ms: Math.max(...ms), samples: ms.length };
       }

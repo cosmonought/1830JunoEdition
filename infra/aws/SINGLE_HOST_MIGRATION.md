@@ -427,7 +427,7 @@ writer and relayer held by the host pool's current task.
 | F2 | Identity writer | `gamesDoctor aws status`: the identity-writer holder is the host's task (its `t-…` id is in the startup banner) and it is current. |
 | F3 | Relayer | `gamesDoctor aws status`: the relayer mirror epoch = the ledger fence epoch, held by the host's task. The task-status line shows `relayer_state: usable`. Then (OPER, read-only) `node dist/server/src/tools/awsDeploy.js set-operator-plan --runtime-parameter <runtime p1 ARN> --environment staging --to-relayer <the ACTIVE relayer: the Juno document's relayer address>` (`--to-relayer` is required): it must print `The contract's operator is ALREADY <that address>` and end `READY: set-operator-plan --to-relayer <address> (operator already set; active-relayer readiness)`. NOT READY, or an admin `set_operator` transaction printed instead (the contract's operator is another address), is a STOP: no rotation belongs in this migration. |
 | F4 | Money sweep | `money-sweep` records every 60 s; `MoneySweepSecondsSinceSuccess` < 180; `HostHealthProblems` = 0. |
-| F5 | KMS | The startup's signer identities verified. Then the L6-6 `kms` probe ON THE HOST, as the instance role, from the SERVING release by digest (PHASE 1 REMAINDER; below): `gs-host role-probe ... -Probe kms`, judged `stage-probe host-role --probe kms` PASS -- AWS names `gs-staging-host-app` as the caller, the three signing identities = the configuration's, every disposable digest-only `ECDSA_SHA_256` Sign verified and < 3 s. |
+| F5 | KMS | The startup's signer identities verified. Then the L6-6 `kms` probe ON THE HOST, as the instance role, from the SERVING release by digest (PHASE 1 REMAINDER; below): `gs-host role-probe ... -Probe kms`, judged `stage-probe host-role --probe kms` PASS -- AWS names `gs-staging-host-app` as the caller, the three signing identities = the configuration's (and, when the configuration names one, the dedicated REMEDY key's: a fourth signing purpose, required in the record -- Phase 3 escrow 2.1), every disposable digest-only `ECDSA_SHA_256` Sign verified and < 3 s. |
 | F6 | DynamoDB | The L6-6 `transactions` probe the same way (`-Probe transactions`, judged `--probe transactions`): the IAM-in-transaction shapes for the host role, T1-T4 on the disposable `L6CERT#<run>` partition only, read back empty; no money or game item is written. |
 | F7 | SIGTERM (MUTATING, staging) | **`awsDeploy host-cert graceful-stop`** (COST-2C, below): gs-stop -> readiness 503 first -> exit 0 -> no HOLD, no restart; the same digest redeployed serves; generation / pool unchanged. |
 | F8 | Restart safety (MUTATING, staging) | **`awsDeploy host-cert crash-restart`**: `docker kill --signal KILL gs-server` -> a non-fence exit, no HOLD, exactly one automatic restart, a **strictly newer POOL#p1 epoch**, identity writer and relayer moved consistently. **`awsDeploy host-cert reboot-restart`**: the host reboots and the service returns by itself, newer epochs, no HOLD. |
@@ -448,13 +448,19 @@ probe run; each takes about 1-3 minutes and may briefly raise the host-pressure 
 .\infra\aws\single-host\gs-host.ps1 -Command role-probe -InstanceId <i-...> -Region <r> -Digest <the serving sha256> -RunId <run-f5> -Probe kms -Generation 1 -Pool p1 6>&1 | Tee-Object <D>\host-role\f5.txt
 .\infra\aws\single-host\gs-host.ps1 -Command role-probe -InstanceId <i-...> -Region <r> -Digest <the serving sha256> -RunId <run-f6> -Probe transactions -Generation 1 -Pool p1 6>&1 | Tee-Object <D>\host-role\f6.txt
 cd server
-node dist/server/src/tools/awsDeploy.js stage-probe host-role --probe kms --run-id <run-f5> --evidence <D>\host-role --capture <D>\host-role\f5.txt --environment staging --generation 1 --pool p1 --instance-id <i-...> --digest <the serving sha256> --build <its build>
+node dist/server/src/tools/awsDeploy.js stage-probe host-role --probe kms --run-id <run-f5> --evidence <D>\host-role --capture <D>\host-role\f5.txt --environment staging --generation 1 --pool p1 --instance-id <i-...> --digest <the serving sha256> --build <its build> --remedy-key <the serving remedy key ARN, or none>
 node dist/server/src/tools/awsDeploy.js stage-probe host-role --probe transactions --run-id <run-f6> --evidence <D>\host-role --capture <D>\host-role\f6.txt --environment staging --generation 1 --pool p1 --instance-id <i-...> --digest <the serving sha256> --build <its build>
 ```
 (bash: `infra/aws/single-host/gs-host.sh role-probe <i-...> <sha256> <run> kms|transactions 1 p1 [region] | tee ...`.) The
 judge is offline (no AWS) and uses L6-6's own judges; each must end `HOST-ROLE PROBE F5 KMS: PASS` /
 `HOST-ROLE PROBE F6 DYNAMODB: PASS` (exit 0). FAIL (1) or NOT EVALUATED (3: a truncated or unframed capture) is a STOP;
-the verdict file is create-once, so a re-run uses a new run id (its files land beside the earlier ones). The evidence keeps
+the verdict file is create-once, so a re-run uses a new run id (its files land beside the earlier ones). F5's
+`--remedy-key` (Phase 3 escrow 2.1, required) is the operator's fact of the serving configuration's dedicated REMEDY key
+(its ledger `remedy_key_arns` entry, as rendered into the host's Juno document) or `none` when no remedy key is configured
+(timed money unavailable), copied verbatim from the host document's `remedy_key.signer.key_ref` (the fingerprint is of the exact
+string): the record must then probe exactly that key, or none; the verdict keeps only its fingerprint.
+A record made by an image that predates the REMEDY purpose (no `remedy_configured`) is refused: re-probe with the serving
+release. The evidence keeps
 the capture, the reassembled probe record (`probe-host-role-<probe>-<run>.json`) and the verdict
 (`host-role-<probe>-<run>-verdict.json`) -- no key material, no credential: the record holds latencies, fingerprints and
 booleans, and is refused if anything in it looks secret. The wrapper also refuses while any earlier `gs-role-probe-*`

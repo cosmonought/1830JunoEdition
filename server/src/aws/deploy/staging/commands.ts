@@ -53,7 +53,7 @@ import { EXIT_NOT_YET as EXIT_RESTORE_NOT_YET, RESTORE_CASES, restoreProbeOverri
 import { restoreFencingCommand } from "./restoreFencing";
 import { MAINNET_CHAIN_IDS, type KmsClient } from "../../../escrow/juno/signer";
 import type { JunoBackendConfig } from "../../../escrow/juno/junoConfig";
-import { arr, disposablePartition, EVIDENCE, isoOf, obj, PROBE_FORMAT, readEvidence, recordFromLog, recordLines, runIdProblem, scrub, secretFindings, sha256Hex, stableStringify, writeRecord } from "./evidence";
+import { arr, disposablePartition, EVIDENCE, fingerprint, isoOf, obj, PROBE_FORMAT, readEvidence, recordFromLog, recordLines, runIdProblem, scrub, secretFindings, sha256Hex, stableStringify, writeRecord } from "./evidence";
 
 export { recordFromLog, recordLines } from "./evidence";
 import { newProbeNonce, runIamProbe } from "./iamProbe";
@@ -601,13 +601,14 @@ async function singleHostEdgeProbe(
 
 /**
  * PHASE 1 REMAINDER (F5 / F6): `stage-probe host-role --probe kms|transactions --run-id R --evidence <dir> --capture <file>
- * --environment <env> --generation <N> --pool <pool> --instance-id <i-...> --digest sha256:<hex> --build <id>` -- OFFLINE: judges the output saved from `gs-host role-probe` (hostRoleProbe.ts) and writes
+ * --environment <env> --generation <N> --pool <pool> --instance-id <i-...> --digest sha256:<hex> --build <id>
+ * [--remedy-key <ARN>|none (F5: required)]` -- OFFLINE: judges the output saved from `gs-host role-probe` (hostRoleProbe.ts) and writes
  * the probe's record and the verdict into the evidence directory. Exit 0 PASS, 1 FAIL, 3 NOT EVALUATED. Create-once: a
  * verdict for this probe and run is never overwritten (a retry is a new run id, written beside it). The wrapper it compares
  * against is THIS build's checkout's (no override).
  */
 function hostRoleProbeCommand(argv: readonly string[], deps: DeployDeps, staging: StagingDeps): number {
-  const flags = parseFlags(argv, ["--probe", "--run-id", "--evidence", "--capture", "--environment", "--generation", "--pool", "--instance-id", "--digest", "--build"], []);
+  const flags = parseFlags(argv, ["--probe", "--run-id", "--evidence", "--capture", "--environment", "--generation", "--pool", "--instance-id", "--digest", "--build", "--remedy-key"], []);
   const probe = need(flags, "--probe");
   if (!(HOST_ROLE_PROBES as readonly string[]).includes(probe)) throw new UsageError("--probe is kms (F5) or transactions (F6)");
   const run = runOf(flags);
@@ -622,6 +623,16 @@ function hostRoleProbeCommand(argv: readonly string[], deps: DeployDeps, staging
   if (!/^sha256:[0-9a-f]{64}$/.test(digest)) throw new UsageError("--digest is the SERVING release's sha256:<64 hex>");
   const build = need(flags, "--build");
   if (!/^[A-Za-z0-9._-]{1,128}$/.test(build)) throw new UsageError("--build is the serving release's build id");
+  /* Phase 3 escrow 2.1: F5 needs the operator's fact of the serving configuration's REMEDY key (the ledger stack's
+     remedy_key_arns entry the host runs with), or `none`; the record's coverage is held to it. F6 takes no key. */
+  const remedyFlag = flags.get("--remedy-key");
+  let remedyKey: string | null | undefined;
+  if (probe === "kms") {
+    if (remedyFlag === undefined) throw new UsageError("--probe kms needs --remedy-key <the serving configuration's remedy key ARN> or --remedy-key none (no remedy key: timed money unavailable)");
+    if (remedyFlag === "none") remedyKey = null;
+    else if (/^arn:aws:kms:[a-z0-9-]+:[0-9]{12}:key\/[0-9a-f-]{36}$/.test(remedyFlag)) remedyKey = fingerprint(remedyFlag);
+    else throw new UsageError("--remedy-key is a KMS key ARN (never an alias) or none");
+  } else if (remedyFlag !== undefined) throw new UsageError("--remedy-key belongs to --probe kms (F5), not transactions");
   const kind = probe as HostRoleProbe;
   const verdictFile = HOST_ROLE_FILES.verdict(kind, run);
   if (fs.existsSync(path.join(dir, verdictFile))) throw new UsageError(`${verdictFile} already exists in ${dir}: a verdict is never overwritten (run the probe again under a NEW run id)`);
@@ -637,7 +648,7 @@ function hostRoleProbeCommand(argv: readonly string[], deps: DeployDeps, staging
   } catch {
     wrapper = null;
   }
-  const expect = { probe: kind, run, environment, generation, pool, instanceId, digest, build, wrapperSha256: wrapper };
+  const expect = { probe: kind, run, environment, generation, pool, instanceId, digest, build, wrapperSha256: wrapper, ...(remedyKey !== undefined ? { remedyKey } : {}) };
   const judged = judgeHostRoleCapture(decodeCapture(raw), expect);
   let checks = judged.checks;
   let verdict = judged.verdict;

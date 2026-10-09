@@ -50,14 +50,14 @@ import { POOL_EVIDENCE_FILES } from "../../controlPlane/evidence";
 import { certify, CERTIFIER_STORAGE_OVERRIDE, certificationText, clearCertification, judgeCertifierTask, prerequisiteChecks, prerequisiteRecord, repositoryHead, VERDICT_LINE, writeCertification, type CertContext } from "./certify";
 import { stageCertCommand, stageProbeCommand, recordFromLog, recordLines, type StagingDeps } from "./commands";
 import { closedBy, judgeQueryProbe, judgeWsAnnouncement, judgeWsIdle, LOBBY_SUBSCRIPTION, nodeEdgeTransport, probeQuery, requiredIdleMs, runEdgeProbe, type EdgeTransport, type SocketEvent, type SocketObservation } from "./edgeProbe";
-import { CERTIFICATION_FORMAT, EVIDENCE, evidenceName, EvidenceRefusedError, manifestOf, obj, readEvidence, secretFindings, stableStringify, writeRecord } from "./evidence";
+import { arr, CERTIFICATION_FORMAT, EVIDENCE, evidenceName, EvidenceRefusedError, fingerprint, manifestOf, obj, readEvidence, secretFindings, stableStringify, writeRecord } from "./evidence";
 import { DRAIN_FILES, drainDir } from "./drain";
 import { deploymentIdentityOf, relayerFunding } from "../junoChain";
 import { collectRotationProof, ROTATION_PROOF_FILE, ROTATION_PROOF_FORMAT, type RotationProofRecord } from "./rotationProof";
 import { fakeJunoChain, healthyRotation, rotationReadersFor } from "./rotationTestSupport";
 import { caseFoldCollisions, readCheckoutText, toPosixPath, withDirectories } from "../../../testSupport/portability";
 import { classifyIamAnswer, IAM_PROBE_IDS, iamProbeSpecs, iamProbeWriteProblem, judgeIamProbe, runIamProbe, type IamAnswer } from "./iamProbe";
-import { judgeKmsProbe, KMS_LATENCY_BOUND_MS, runKmsProbe } from "./kmsProbe";
+import { judgeKmsProbe, KMS_LATENCY_BOUND_MS, kmsProbeExpectationOf, runKmsProbe } from "./kmsProbe";
 import { judgeTerraformStack, AWS_PROVIDER, TERRAFORM_FILES } from "./terraformPlan";
 import { disposableOnly, DisposableGuardError, judgeTransactionProbe, runTransactionProbe } from "./transactionProbe";
 import { checkClusterTasks, CLUSTER_LISTING_WINDOW_MS, CLUSTER_TASKS_FORMAT, DESCRIBE_TASKS_BATCH_MAX, DESCRIBE_TASKS_BATCH, readClusterListing } from "./prerequisite";
@@ -132,9 +132,11 @@ const SECRETS: Record<string, Buffer> = {
   "arn:aws:kms:us-east-1:222222222222:key/11111111-1111-4111-8111-111111111111": Buffer.alloc(32, 0x11),
   "arn:aws:kms:us-east-1:222222222222:key/22222222-2222-4222-8222-222222222222": Buffer.alloc(32, 0x12),
   "arn:aws:kms:us-east-1:222222222222:key/33333333-3333-4333-8333-333333333333": Buffer.alloc(32, 0x13),
+  /* Phase 3 escrow 2.1: the dedicated REMEDY key (the remedy fixture's key ref). Used only by the remedy configuration. */
+  "arn:aws:kms:us-east-1:222222222222:key/77777777-7777-4777-8777-777777777777": Buffer.alloc(32, 0x17),
 };
 const pub = (arn: string) => publicKeyOf(SECRETS[arn]);
-const [RELAYER_KEY, SETTLEMENT_KEY, ADMISSION_KEY] = Object.keys(SECRETS);
+const [RELAYER_KEY, SETTLEMENT_KEY, ADMISSION_KEY, REMEDY_KEY] = Object.keys(SECRETS);
 
 /** The staging Juno configuration, re-keyed to the keys above. */
 function junoText(): string {
@@ -146,6 +148,12 @@ function junoText(): string {
   return JSON.stringify(doc);
 }
 const junoConfig = () => parseJunoBackendConfig(JSON.parse(junoText()), { serverMode: "production", dataDir: "/nonexistent" });
+/** The same configuration with the dedicated REMEDY key (Phase 3 escrow 2.1), keyed to REMEDY_KEY. */
+const junoRemedyConfig = () => {
+  const doc = JSON.parse(junoText()) as Record<string, any>;
+  doc.remedy_key = { remedy_key_id: 1, public_key_hex: pub(REMEDY_KEY).toString("hex"), signer: { kind: "kms", key_ref: REMEDY_KEY } };
+  return parseJunoBackendConfig(doc, { serverMode: "production", dataDir: "/nonexistent" });
+};
 
 const SPKI_PREFIX = Buffer.from("3056301006072a8648ce3d020106052b8104000a034200", "hex");
 const spkiOf = (compressed: Buffer): Uint8Array => {
@@ -613,10 +621,10 @@ const appPlan = (overrides: { start?: boolean; routing?: unknown; extra?: unknow
 
 const LEDGER_RECORD = { format: "18COSMOS/L5-8-VERIFY/v1", run_id: RUN, part: "ledger", environment: "staging", generation: 1, at: "2026-09-30T09:59:00.000Z", verdict: "PASS", checks: [{ name: "ledger table: PITR", status: "pass", detail: "ENABLED" }] };
 
-async function taskRoleRecord(overrides: { kms?: unknown; iam?: unknown; transactions?: unknown; runner?: Record<string, unknown>; identity?: ReaderScript | null } = {}) {
+async function taskRoleRecord(overrides: { kms?: unknown; iam?: unknown; transactions?: unknown; runner?: Record<string, unknown>; identity?: ReaderScript | null; remedy?: boolean } = {}) {
   const iam = await runIamProbe({ game: iamDynamo({ enforce: true }).client, ledger: iamDynamo({ enforce: true }).client }, { run: RUN, gameTable: "gs-staging-game-g1", ledgerTable: "arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger", nonce: "n0nce" });
   const clock = { now: 0 };
-  const kms = await runKmsProbe(junoConfig(), { kms: fakeKms({ clock }).client, clock: () => clock.now }, { run: RUN, samples: 3 });
+  const kms = await runKmsProbe(overrides.remedy === true ? junoRemedyConfig() : junoConfig(), { kms: fakeKms({ clock }).client, clock: () => clock.now }, { run: RUN, samples: 3 });
   return {
     format: "18COSMOS/L6-6-PROBE/v1",
     probe: "task-role",
@@ -1405,6 +1413,185 @@ describe("L6-6 §8: KMS latency -- below 3 s passes, at or above fails, an inval
     assert.ok(failures(judgeKmsProbe({ status: "ran", results: { bound_ms: 10_000, samples_per_key: 1, identities: { ok: true }, keys: {} } })).some((c) => /the runtime's/.test(c.name)));
     assert.ok(failures(judgeKmsProbe({ status: "ran", results: { bound_ms: 3_000, samples_per_key: 3, identities: { ok: true }, keys: { relayer: { opened: true, key: "x", samples: [{ ms: 10, verified: true }] } } } })).length >= 3);
     assert.match(failures(judgeKmsProbe({ status: "not-run", reason: "escrow is null" }))[0].detail, /required/);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* §8b KMS: the dedicated REMEDY key (Phase 3 escrow 2.1)               */
+/* ------------------------------------------------------------------ */
+
+describe("Phase 3 escrow 2.1 §8b: the KMS probe covers the dedicated REMEDY key as a fourth signing purpose", () => {
+  type Kms = ReturnType<typeof fakeKms>["client"];
+  const probe = async (config: ReturnType<typeof junoConfig>, wrap: (kms: Kms) => Kms = (k) => k, samples = 3) => {
+    const clock = { now: 0 };
+    const kms = fakeKms({ clock });
+    const results = await runKmsProbe(config, { kms: wrap(kms.client), clock: () => clock.now }, { run: RUN, samples });
+    return { results, calls: kms.calls };
+  };
+  const names = (checks: readonly Check[]) => checks.map((c) => c.name);
+  const failing = (checks: readonly Check[]) => failures(checks).map((c) => `${c.name}: ${c.detail}`).join("\n");
+  const notFound = () => Object.assign(new Error("Key 'arn:aws:kms:us-east-1:222222222222:key/77777777-7777-4777-8777-777777777777' does not exist"), { name: "NotFoundException" });
+
+  test("1. legacy / default (no remedy key): exactly the three keys, as before; absent REMEDY is valid (timed-money release unavailable)", async () => {
+    const config = junoConfig();
+    assert.equal(config.remedyKey, null);
+    const { results, calls } = await probe(config);
+    const r = obj(results);
+    assert.equal(r.remedy_configured, false);
+    assert.deepEqual(r.purposes, ["relayer", "settlement", "admission"]);
+    assert.deepEqual(Object.keys(obj(r.keys)), ["relayer", "settlement", "admission"]);
+    assert.equal(calls.filter((c) => c.startsWith("Sign")).length, 9, "3 keys x 3 samples, as before");
+    assert.ok(!calls.some((c) => c.includes(REMEDY_KEY)), "the remedy key is never touched when none is configured");
+    assert.equal(obj(r.identities).detail, "the relayer key controls the configured address; the settlement and admission keys are the configured public keys", "the legacy identity detail, unchanged");
+    for (const expected of [undefined, kmsProbeExpectationOf(config)]) {
+      const checks = judgeKmsProbe({ status: "ran", results }, expected);
+      assert.deepEqual(failures(checks), []);
+      /* Deliberate count: the bound, the identities, the REMEDY coverage line (new: "none configured"), and 2 per key x 3. */
+      assert.equal(checks.length, 9);
+      assert.deepEqual(names(checks).filter((n) => /remedy/i.test(n)), ["KMS remedy: coverage"]);
+      assert.match(checks.find((c) => c.name === "KMS remedy: coverage")?.detail ?? "", /no remedy key is configured \(timed-money release unavailable: fail closed\)/);
+    }
+  });
+
+  test("2. a configured, healthy REMEDY key is opened, checked, signed with, verified, timed -- and passes", async () => {
+    const config = junoRemedyConfig();
+    const { results, calls } = await probe(config);
+    const r = obj(results);
+    assert.equal(r.remedy_configured, true);
+    assert.deepEqual(r.purposes, ["relayer", "settlement", "admission", "remedy"]);
+    const remedy = obj(obj(r.keys).remedy);
+    assert.equal(remedy.opened, true);
+    assert.equal(remedy.key, fingerprint(REMEDY_KEY));
+    assert.equal(arr(remedy.samples).length, 3);
+    assert.ok(arr(remedy.samples).every((x) => obj(x).verified === true && obj(x).signature_bytes === 64));
+    assert.equal(calls.filter((c) => c === `GetPublicKey ${REMEDY_KEY}`).length, 1);
+    assert.equal(calls.filter((c) => c === `Sign ${REMEDY_KEY}`).length, 3);
+    assert.equal(calls.filter((c) => c.startsWith("Sign")).length, 12, "4 keys x 3 samples");
+    assert.ok(calls.every((c) => /^(GetPublicKey|Sign) arn:aws:kms:/.test(c)), "only GetPublicKey and Sign: least privilege, no other KMS call");
+    assert.ok(!/arn:aws:kms/.test(JSON.stringify(results)), "the remedy key too is named by fingerprint, never by ARN");
+    assert.match(String(obj(r.identities).detail), /the dedicated remedy key is the configured remedy public key/);
+    for (const expected of [undefined, kmsProbeExpectationOf(config)]) {
+      const checks = judgeKmsProbe({ status: "ran", results }, expected);
+      assert.deepEqual(failures(checks), []);
+      /* Deliberate count: bound, identities, coverage, the remedy key's identity line, and 2 per key x 4. */
+      assert.equal(checks.length, 12);
+      assert.ok(names(checks).includes(`KMS remedy (${fingerprint(REMEDY_KEY)}): Sign verified`));
+      assert.ok(names(checks).includes("KMS remedy: Sign latency below 3000 ms"));
+    }
+    /* A slow REMEDY Sign fails, named as REMEDY. */
+    const slowClock = { now: 0 };
+    const slow = await runKmsProbe(config, { kms: fakeKms({ clock: slowClock, latencyMs: (arn) => (arn === REMEDY_KEY ? 3_000 : 100) }).client, clock: () => slowClock.now }, { run: RUN, samples: 2 });
+    assert.deepEqual(failures(judgeKmsProbe({ status: "ran", results: slow }, kmsProbeExpectationOf(config))).map((c) => c.name), ["KMS remedy: Sign latency below 3000 ms"]);
+  });
+
+  test("3. a configured but missing / unresolvable REMEDY key FAILS closed, and the diagnostic names REMEDY", async () => {
+    const config = junoRemedyConfig();
+    const { results, calls } = await probe(config, (k) => ({ ...k, getPublicKey: async (arn: string) => (arn === REMEDY_KEY ? Promise.reject(notFound()) : k.getPublicKey(arn)) }));
+    assert.ok(!calls.includes(`Sign ${REMEDY_KEY}`), "nothing is signed with a key that did not open");
+    const remedy = obj(obj(obj(results).keys).remedy);
+    assert.equal(remedy.opened, false);
+    assert.match(String(remedy.error), /^the remedy key: SignerError\/unavailable: KMS GetPublicKey failed .*does not exist/);
+    assert.ok(!/arn:aws:kms/.test(String(remedy.error)), "the ARN is scrubbed from the diagnostic");
+    const checks = judgeKmsProbe({ status: "ran", results }, kmsProbeExpectationOf(config));
+    const text = failing(checks);
+    assert.match(text, /^KMS remedy: the remedy key did not open: the remedy key: SignerError\/unavailable: KMS GetPublicKey failed/m);
+    assert.match(text, /KMS: public keys = the configuration's: not every key could be opened \(remedy\)/);
+    assert.ok(!/KMS (relayer|settlement|admission)/.test(text), "the three healthy keys are not blamed");
+    /* A remedy key that is not a KMS key (never valid on AWS) fails the same way, named. */
+    const devRemedy = { ...config, remedyKey: { ...(config.remedyKey as NonNullable<typeof config.remedyKey>), signer: { kind: "dev", seed_file: "/nonexistent" } as never } };
+    const dev = await probe(devRemedy);
+    assert.match(failing(judgeKmsProbe({ status: "ran", results: dev.results })), /KMS remedy: the remedy key did not open: the remedy key is a dev signer \(AWS storage signs only with KMS keys\)/);
+  });
+
+  test("4. a configured REMEDY key whose public key or signatures are wrong FAILS", async () => {
+    const config = junoRemedyConfig();
+    /* KMS answers ANOTHER key's public key for the remedy ARN: not the configured remedy public key. */
+    const stranger = await probe(config, (k) => ({ ...k, getPublicKey: async (arn: string) => (arn === REMEDY_KEY ? spkiOf(publicKeyOf(Buffer.alloc(32, 0x42))) : k.getPublicKey(arn)) }));
+    const strangerText = failing(judgeKmsProbe({ status: "ran", results: stranger.results }, kmsProbeExpectationOf(config)));
+    assert.match(strangerText, /KMS: public keys = the configuration's: .*the remedy key is not the configured remedy public key/);
+    assert.match(strangerText, /KMS remedy .*Sign verified: 3 of 3 not verified/, "nothing verifies without the configured identity");
+    /* KMS answers the SETTLEMENT key's public key for the remedy ARN. */
+    const twin = await probe(config, (k) => ({ ...k, getPublicKey: async (arn: string) => (arn === REMEDY_KEY ? spkiOf(pub(SETTLEMENT_KEY)) : k.getPublicKey(arn)) }));
+    assert.match(failing(judgeKmsProbe({ status: "ran", results: twin.results }, kmsProbeExpectationOf(config))), /the remedy key is not the configured remedy public key; the remedy key is the same key as the relayer, settlement or admission key/);
+    /* The remedy key's Signs come back made by another key: each fails verification against the CONFIGURED remedy key. */
+    const clock = { now: 0 };
+    const forged = await runKmsProbe(config, { kms: fakeKms({ clock, tamper: (arn, der) => (arn === REMEDY_KEY ? derOf(signDigest(Buffer.alloc(32, 0x42), Buffer.alloc(32, 1))) : der) }).client, clock: () => clock.now }, { run: RUN, samples: 2 });
+    assert.ok(failures(judgeKmsProbe({ status: "ran", results: forged }, kmsProbeExpectationOf(config))).some((c) => /^KMS remedy .*Sign verified$/.test(c.name)));
+  });
+
+  test("4b. a configured REMEDY key the role may not sign with (AccessDenied on Sign) FAILS, named REMEDY; the other keys pass", async () => {
+    const config = junoRemedyConfig();
+    const denied = () => Object.assign(new Error("User: arn:aws:sts::111111111111:assumed-role/gs-staging-app-task/t is not authorized to perform: kms:Sign on resource: arn:aws:kms:us-east-1:222222222222:key/77777777-7777-4777-8777-777777777777"), { name: "AccessDeniedException" });
+    const { results } = await probe(config, (k) => ({ ...k, signDigest: async (arn: string, digest: Uint8Array) => (arn === REMEDY_KEY ? Promise.reject(denied()) : k.signDigest(arn, digest)) }));
+    const bad = failures(judgeKmsProbe({ status: "ran", results }, kmsProbeExpectationOf(config)));
+    assert.ok(bad.length >= 1);
+    assert.ok(bad.every((c) => /^KMS remedy/.test(c.name)), bad.map((c) => c.name).join(", "));
+    assert.ok(bad.some((c) => /Sign verified$/.test(c.name) && /not authorized to perform: kms:Sign/.test(c.detail) && !/arn:aws:kms/.test(c.detail)));
+    /* The record's purposes must match its coverage. */
+    const inconsistent = JSON.parse(JSON.stringify(results));
+    inconsistent.purposes = ["relayer", "settlement", "admission"];
+    assert.match(failing(judgeKmsProbe({ status: "ran", results: inconsistent }, kmsProbeExpectationOf(config))), /the record's probed purposes .* are not/);
+  });
+
+  test("5. no other signing key is ever substituted for REMEDY -- in the probe, or in the record", async () => {
+    const config = junoRemedyConfig();
+    /* A configuration object whose remedy signer names the SETTLEMENT key (the parser refuses this; the probe refuses it again). */
+    const substituted = { ...config, remedyKey: { ...(config.remedyKey as NonNullable<typeof config.remedyKey>), signer: { kind: "kms", key_ref: SETTLEMENT_KEY } as typeof config.relayer.signer } };
+    const { results, calls } = await probe(substituted);
+    assert.equal(calls.filter((c) => c === `Sign ${SETTLEMENT_KEY}`).length, 3, "the settlement key signs for settlement only -- never again for REMEDY");
+    const remedy = obj(obj(obj(results).keys).remedy);
+    assert.equal(remedy.opened, false);
+    assert.match(String(remedy.error), /the remedy key names the same KMS key as the settlement key \(never substituted for REMEDY\)/);
+    assert.match(failing(judgeKmsProbe({ status: "ran", results }, kmsProbeExpectationOf(config))), /KMS remedy: the remedy key did not open: the remedy key names the same KMS key as the settlement key/);
+
+    const good = (await probe(config)).results;
+    const clone = (): Record<string, any> => JSON.parse(JSON.stringify(good));
+    const expected = kmsProbeExpectationOf(config);
+    /* A record whose remedy entry is another purpose's key. */
+    const relabelled = clone();
+    relabelled.keys.remedy = { ...relabelled.keys.admission };
+    assert.match(failing(judgeKmsProbe({ status: "ran", results: relabelled }, expected)), /the remedy entry is the admission key \(never substituted for REMEDY\)/);
+    assert.match(failing(judgeKmsProbe({ status: "ran", results: relabelled })), /the remedy entry is the admission key/, "caught by the offline judge too");
+    /* A record whose remedy entry is some key other than the configured one. */
+    const foreign = clone();
+    foreign.keys.remedy.key = "0123456789ab";
+    assert.match(failing(judgeKmsProbe({ status: "ran", results: foreign }, expected)), /the remedy entry is key 0123456789ab, not the configured remedy key/);
+    /* A probe that silently skipped REMEDY: the entry dropped, or the coverage misreported. */
+    const dropped = clone();
+    delete dropped.keys.remedy;
+    assert.match(failing(judgeKmsProbe({ status: "ran", results: dropped }, expected)), /a remedy key is configured but the record holds no remedy key entry: REMEDY was skipped/);
+    assert.match(failing(judgeKmsProbe({ status: "ran", results: dropped }, expected)), /KMS remedy: the remedy key did not open: not in the record/);
+    const legacyRecord = (await probe(junoConfig())).results;
+    assert.match(failing(judgeKmsProbe({ status: "ran", results: legacyRecord }, expected)), /the configuration names a remedy key but the probe recorded none: REMEDY was not probed/);
+    /* A record that does not say (an image predating REMEDY) is not evidence -- with or without the configuration. */
+    const silent = clone();
+    delete silent.remedy_configured;
+    delete silent.keys.remedy;
+    assert.match(failing(judgeKmsProbe({ status: "ran", results: silent })), /does not say whether a remedy key is configured/);
+    assert.match(failing(judgeKmsProbe({ status: "ran", results: silent }, kmsProbeExpectationOf(junoConfig()))), /does not say whether a remedy key is configured/);
+    /* And the reverse: a remedy key nobody configured. */
+    assert.match(failing(judgeKmsProbe({ status: "ran", results: good }, kmsProbeExpectationOf(junoConfig()))), /the probe recorded a remedy key the configuration does not name; the record holds a remedy key entry but no remedy key is configured/);
+  });
+
+  test("6. the certification's kms gate holds the record to the VERIFIED configuration's remedy key", async () => {
+    const legacyBuilt = await buildPackage();
+    const remedyBuilt = await buildPackage({ taskRole: await taskRoleRecord({ remedy: true }) });
+    const withRemedy = async (built: Built) => {
+      const base = await built.ctx();
+      return certify({ ...base, prerequisite: { ...base.prerequisite, startup: { ...base.prerequisite.startup, escrowConfig: junoRemedyConfig() } } });
+    };
+    /* Legacy configuration, legacy record: as before. */
+    assert.deepEqual(gateFailures((await verdictOf(legacyBuilt)).result, "kms"), []);
+    /* Remedy configuration, remedy record: passes, measured. */
+    const both = await withRemedy(remedyBuilt);
+    assert.deepEqual(gateFailures(both, "kms"), []);
+    const measured = obj(both.gates.find((g) => g.id === "kms")?.measurements);
+    assert.deepEqual(Object.keys(measured), ["relayer", "settlement", "admission", "remedy"]);
+    assert.equal(obj(measured.remedy).samples, 3);
+    /* Remedy configuration, a three-key record: REMEDY not probed -> FAIL. */
+    assert.match(gateFailures(await withRemedy(legacyBuilt), "kms").join("\n"), /REMEDY was not probed/);
+    /* Legacy configuration, a remedy record: a key nobody configured -> FAIL. */
+    assert.match(gateFailures((await verdictOf(remedyBuilt)).result, "kms").join("\n"), /the probe recorded a remedy key the configuration does not name/);
   });
 });
 

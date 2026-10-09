@@ -505,8 +505,12 @@ migration guard:    host-create(-complete) ... --remedy-key <the same ARN>   (an
 - **Rotation.** Append-only like the relayer keys: `remedy_key_count = 2` PREPARES `remedy-r2` beside `r1` (nothing signs with
   it until the app stack names it AND the contract registers it by `AddRemedyKey`); retiring a key is on chain
   (`RetireRemedyKey`) then a reviewed `removed` block, never a lower count (`prevent_destroy` refuses).
-- **Budget.** The 2.1 release is 4 keys (the three + remedy-r1), within `max_kms_keys` = 6. With the LIVE-6 -> JX-1 transition
-  keys (relayer-r2 + a financial pair) still present it would be 7: an owner budget decision (`cost1SingleHost.test.ts`).
+- **Budget.** The 2.1 release is 4 keys (the three + remedy-r1), within `max_kms_keys` = 6. **Live staging (read-only
+  inventory, 2026-10-08): 3 project keys** -- relayer r1, settlement, admission, all Enabled and referenced by the live Juno
+  document; relayer-r2, settlement-jx1 and admission-jx1 do NOT exist (the JX-1K `financial_key_sets` apply never happened).
+  So adding remedy-r1 gives **4 total**, no key retirement is needed for the 2.1 release. FUTURE capacity scenario only: if
+  relayer-r2 and the jx1 financial pair are ever created beside the remedy key it would be 7 > 6 -- sequence or retire then,
+  an owner budget decision (`cost1SingleHost.test.ts`). Record: Project `claude/PHASE3_KMS_PRERELEASE_INVENTORY_2026-10-08.md`.
 - **Default `remedy_key_count = 0` / `remedy_signing_key = null`:** every existing plan, policy and document is unchanged.
 - **The 2.1 cutover changes the image and the Juno document TOGETHER, and rolls them back together.** The Juno document is
   ONE SSM parameter per environment (`/gs/<env>/juno-backend`, read at every task / host start), and each build refuses a

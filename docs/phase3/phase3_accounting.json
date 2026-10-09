@@ -6622,7 +6622,7 @@
   "residuals": [
    "CLOSED 2026-10-08 (remedy_staging_probe below): the LIVE-6 staging KMS probe (kmsProbe, judged by certify and hostRoleProbe) now covers the REMEDY key as a fourth signing purpose whenever configured",
    "rotationProof (a relayer rotation's configuration-identity comparison against the gate record; no KMS call) still compares the settlement and admission keys only: a remedy key moved during a relayer rotation is caught by the server's startup identity check and verifyJunoDeployment's REMEDY registry check, not by the rotation proof; adding it changes the gate record format (out of this follow-up's scope)",
-   "budget: the 2.1 release keys (3 + 1 remedy) fit max_kms_keys = 6; a remedy key beside the full LIVE-6 -> JX-1 transition keys (r2 + jx1) would be 7 -- an owner budget decision if both are ever present",
+   "budget: the 2.1 release keys (3 + 1 remedy) fit max_kms_keys = 6. LIVE (read-only KMS inventory 2026-10-08, Project claude/PHASE3_KMS_PRERELEASE_INVENTORY_2026-10-08.md): 3 current project keys (relayer r1, settlement, admission; all active and referenced); relayer r2, settlement-jx1 and admission-jx1 do not exist; 4 after REMEDY; no retirement required for the 2.1 release. FUTURE capacity scenario only: a remedy key beside r2 + the jx1 pair would be 7 -- an owner budget decision if those keys are ever created",
    "a production server built from this source refuses to start on a 2.0.0 Juno document: the document and the image change together at the cutover (and roll back together)"
   ],
   "record": "Project claude/PHASE3_ESCROW21_RELEASE_READINESS_SOURCE_FIXES_2026-10-08.md; audit claude/PHASE3_ESCROW21_PREDEPLOYMENT_READINESS_8c4dca9_2026-10-08.md",

@@ -22,3 +22,8 @@ infra/aws/modules/single-host/files/** eol=lf
 infra/aws/modules/single-host/templates/** eol=lf
 infra/aws/modules/single-host/tests/*.sh eol=lf
 infra/aws/single-host/*.sh eol=lf
+
+# PHASE 3 ESCROW 2.1 (2026-10-08): the pinned Terraform drift exception is a literal unified diff -- an empty context line is
+# a single space by format, so whitespace checks do not apply, and it stays LF (its SHA-256 is pinned in
+# server/src/aws/deploy/escrow21TerraformWiring.ts; the guard also normalizes CRLF before hashing).
+server/src/aws/deploy/escrow21TerraformWiring.patch -whitespace eol=lf

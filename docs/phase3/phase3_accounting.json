@@ -6642,6 +6642,29 @@
     "Terraform NOT applied",
     "escrow 2.1 NOT deployed"
    ]
+  },
+  "integration": {
+   "date": "2026-10-08",
+   "target": "phase3/consolidated-final-preplaytest-integration (fast-forward from 8c4dca9 through 50e2bc6 -> 04c7bf1); main untouched",
+   "owner_ruling": "OPTION 1: the certified Terraform base stays 083d0668556c05a84eb8b3e5befc4e973544aa9a; the Escrow 2.1 IaC is a second narrowly reviewed, line-pinned exception beside CONDUCT_REVIEWERS_WIRING",
+   "exception": "server/src/aws/deploy/escrow21TerraformWiring.patch (the literal modules + stacks diff of 50e2bc6 + 04c7bf1 plus one KMS-count comment correction), pinned by SHA-256, exact file list, per-file line counts and exact hunk positions (escrow21TerraformWiring.ts); reverse-applied exactly, the remainder judged against 083d066 by the unchanged fresh-host and CONDUCT_REVIEWERS rules (terraformDriftGuard.ts)",
+   "fail_closed": "a missing base (shallow clone, exported tree, no git), an unreadable file or a tampered patch FAILS; the old silent early return is gone",
+   "review": "independent review: HIGH H1 (C-quoted paths) and H2 (++/-- content lines past the conduct rule), MEDIUM M1 (git-ignored files Terraform loads), M2 (appending after the last hunk), M3 (skip-worktree / assume-unchanged) and a re-review MEDIUM (replace refs / clean filters) all RESOLVED with regression tests, each shown to fail with its fix reverted; no IAM wildcard or broadening; 083d066 remains the base",
+   "residuals": [
+    "LOW: CRLF is normalized before comparison (harmless for HCL)",
+    "LOW: the PHASE 1 fresh-host files remain admitted wholesale (pre-existing rule; their scripts are SHA-pinned elsewhere)",
+    "LOW: phase1FreshHost.test.ts / cost1SingleHost.test.ts still report an explicit skip without their own reference commit or git",
+    "LOW: COST_BUDGET.json / docs/hosting-budget.md still budget 3 KMS keys; the 2.1 release runs 4 (+$1 / month) -- an owner budget update",
+    "INFO: shallow clones must fetch 083d066 before the server tests"
+   ],
+   "kms_inventory": "live 3 project keys (relayer r1, settlement, admission); no r2, no jx1 pair; 4 after REMEDY; cap 6; no retirement; 7 only as a future scenario",
+   "not_done": [
+    "no deploy",
+    "no Terraform apply",
+    "no KMS key created or changed",
+    "no SSM / ECS change",
+    "no JUNO / JUNOX contact; no StoreCode / instantiate"
+   ]
   }
  }
 }

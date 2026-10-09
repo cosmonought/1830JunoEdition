@@ -31,7 +31,8 @@ consolidated FINAL pre-playtest integration (2026-10-07, `phase3/consolidated-fi
 - **the final gameplay tutorial pass, LAST** -- **COMPLETE** at `8c4dca9` (W3-D / P3-N036, AUD-13.04: the contextual Play
   tutorial; Project `claude/PHASE3_FINAL_PLAY_TUTORIAL_2026-10-08.md`);
 - the **escrow 2.1 release-readiness source fixes** (2026-10-08, `phase3/escrow21-release-readiness` @ `04c7bf1`, from `8c4dca9`)
-  -- **INTEGRATED** (fast-forward) into `phase3/consolidated-final-preplaytest-integration` (main untouched) -- the predeployment audit's source blockers ADDRESSED: the owner-decided DEDICATED REMEDY KMS key
+  -- **INTEGRATED** (fast-forward) into `phase3/consolidated-final-preplaytest-integration` (main untouched), with its
+  Terraform admitted as a pinned, reviewed exception to the certified base `083d066` (fail-closed drift guards) -- the predeployment audit's source blockers ADDRESSED: the owner-decided DEDICATED REMEDY KMS key
   (IaC, IAM, rendered `remedy_key`, tooling), the `finalityKeysUnread` metric + alarm C1, the source pin of the certified 2.1.0
   checksum `c3bd0618…8219`, the 2.1 on-chain verifier, and the input-verification script's Git < 2.40 false PASS; and (follow-up)
   the staging KMS probe's REMEDY coverage (the remedy key probed as a fourth signing purpose whenever configured). The certified

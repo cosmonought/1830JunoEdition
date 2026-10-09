@@ -2042,6 +2042,28 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
     creationStatus,
     /** P3-ACCT (trust indicators): a table's financial record, read-only (its phase and the chain's outcome route). */
     financialRecord: (gameId: string): Promise<FinancialGameRecord | null> => deps.financial.load(gameId),
+    /** LUDUM (Lane A, read-only): the pinned escrow deployment and one chain game, for `ludum/wiring.ts`'s `LudumPorts`.
+     *  A quorum read (two or more endpoints agreeing) is `chain-confirmed`; one endpoint's answer is `chain-observed`, with
+     *  the height it read at. `null`: the chain has no such game (the id is at or past the contract's `next_chain_game_id`).
+     *  Any other failure throws -- never guessed. */
+    ludumChain: {
+      pin: (): { readonly contract: string; readonly chainId: string; readonly denom: string } => ({ contract, chainId: deps.pin.chain_id, denom: deps.pin.denom }),
+      async game(chainGameId: string): Promise<{ readonly game: JunoGameResponse; readonly provenance: "chain-confirmed" | "chain-observed"; readonly height?: string; readonly observedAt: string } | null> {
+        const query = QUERY.game(chainGameId);
+        const observedAt = new Date(deps.now()).toISOString();
+        try {
+          if (deps.rest.smartQuorum !== undefined && (deps.rest.endpointCount ?? 1) >= 2) {
+            return { game: parseGameResponse(await deps.rest.smartQuorum(contract, query)), provenance: "chain-confirmed", observedAt };
+          }
+          const read = await deps.rest.smartAt(contract, query);
+          return { game: parseGameResponse(read.data), provenance: "chain-observed", ...(read.height !== null ? { height: read.height } : {}), observedAt };
+        } catch (error) {
+          const next = parseConfigResponse(await quorumSmart(QUERY.config())).next_chain_game_id;
+          if (next !== null && BigInt(chainGameId) >= BigInt(next)) return null;
+          throw error;
+        }
+      },
+    },
     /** A create's money terms, checked against this deployment (never a caller's claim about the deployment). */
     async prepareCreate(input: { readonly stake: unknown; readonly exactPlayers: unknown; readonly variants: GameVariants }): Promise<{ readonly ok: true; readonly terms: GameMoneyTerms } | { readonly ok: false; readonly code: string; readonly reason: string }> {
       const status = creationStatus();

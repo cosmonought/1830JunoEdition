@@ -54,12 +54,24 @@
 // send a browser off-site. It is the ONLY source of a route's path; which pool a game is routed to comes from the tables
 // (the game's HEAD, `SYSTEM/ROUTING`), never from here. A v1 document is still accepted, unchanged: it has no route table,
 // so no route destination exists and every "not here" is answered exactly as before L6-1.
+//
+// LUDUM (docs/ludum/LUDUM_PLATFORM_ARCHITECTURE.md §2.1, §8): a v2 document MAY carry ONE optional field,
+//
+//   "ludum_origins": ["https://ludum.netadao.org"]     the Ludum site's exact https origins (credentialed CORS on
+//                                                      `/gs/api/ludum/v1/*` only); absent or [] = none
+//
+// It is the production delivery of `GS_LUDUM_ORIGINS`: the document is read at every start, so a changed value reaches the
+// host with a restart, and the host's `user_data` (which names only this document's ARN) never changes -- no instance is
+// replaced. Each entry is checked exactly as `identity/mode.ts` checks one (no wildcard, no `null`, https, written as an
+// origin); one bad entry refuses the start. In AWS storage mode `GS_LUDUM_ORIGINS` / `--ludum-origins` is refused: the
+// document is the one source.
 
 import { isAwsRegion, parseDynamoTableArn, parseSsmParameterArn, type DynamoTableArn, type SsmParameterArn } from "../arns";
 import { primaryPoolProblem } from "../game/routing";
 import { routeEntryProblem, type PoolRouteEntry } from "../../rooms/gameRoutes";
 import type { JunoBackendConfig, SignerRef } from "../../escrow/juno/junoConfig";
 import { flagValues, single, STORAGE_ENV, type Env } from "./storageMode";
+import { LUDUM_ORIGINS_ENV, ludumOriginProblem } from "../../identity/mode";
 
 export const AWS_RUNTIME_CONFIG_FORMAT = "18COSMOS/AWS-RUNTIME/v1";
 /** LIVE-6 L6-1: v1 plus the trusted route table (`routes`). */
@@ -92,6 +104,8 @@ export interface AwsRuntimeConfig {
   readonly escrow: null | { readonly configParameter: SsmParameterArn };
   /** LIVE-6 L6-1: the trusted route table (v2); empty for a v1 document (no route destination exists). */
   readonly routes: Readonly<Record<string, PoolRouteEntry>>;
+  /** LUDUM: the Ludum site's exact https origins (v2's optional `ludum_origins`); empty when absent. */
+  readonly ludumOrigins: readonly string[];
 }
 
 /* -------------------------------------------------------------------- */
@@ -112,6 +126,9 @@ export function awsStartupReferences(argv: readonly string[], env: Env, serverMo
   if (env.DATA_DIR !== undefined || flagValues(argv, "--data").length > 0) problems.push("DATA_DIR / --data is refused: AWS storage keeps no data directory, and nothing falls back to files");
   if (env.ESCROW_JUNO_CONFIG !== undefined || flagValues(argv, "--escrow-config").length > 0) {
     problems.push("ESCROW_JUNO_CONFIG / --escrow-config is refused: in AWS storage the escrow configuration is the runtime document's escrow.config_parameter_arn");
+  }
+  if (env[LUDUM_ORIGINS_ENV] !== undefined || flagValues(argv, "--ludum-origins").length > 0) {
+    problems.push(`${LUDUM_ORIGINS_ENV} / --ludum-origins is refused: in AWS storage the Ludum origins are the runtime document's ludum_origins`);
   }
   const credentials = REFUSED_CREDENTIAL_ENV.filter((name) => env[name] !== undefined);
   if (credentials.length > 0) problems.push(`${credentials.join(", ")} ${credentials.length === 1 ? "is" : "are"} set: AWS storage takes its credentials only from the task role (the SDK's default chain), never from the environment`);
@@ -157,7 +174,9 @@ export function parseAwsRuntimeConfig(raw: unknown): AwsRuntimeConfig {
   }
   const v2 = raw.format === AWS_RUNTIME_CONFIG_FORMAT_V2;
   const fields: readonly string[] = v2 ? [...FIELDS, "routes"] : FIELDS;
-  for (const name of Object.keys(raw)) if (!fields.includes(name)) problems.push(`unknown field ${name} (a misspelt setting is never ignored)`);
+  /* LUDUM: v2's one OPTIONAL field (never required, so every existing document reads exactly as before). */
+  const optional: readonly string[] = v2 ? ["ludum_origins"] : [];
+  for (const name of Object.keys(raw)) if (!fields.includes(name) && !optional.includes(name)) problems.push(`unknown field ${name} (a misspelt setting is never ignored)`);
   for (const name of fields) if (!(name in raw)) problems.push(`${name} is required`);
 
   const environment = raw.environment;
@@ -226,6 +245,17 @@ export function parseAwsRuntimeConfig(raw: unknown): AwsRuntimeConfig {
       }
     }
   }
+  const ludumOrigins: string[] = [];
+  if (v2 && raw.ludum_origins !== undefined) {
+    if (!Array.isArray(raw.ludum_origins) || raw.ludum_origins.length > 8) problems.push('ludum_origins must be an array of at most 8 exact https origins (["https://ludum.example"])');
+    else {
+      for (const entry of raw.ludum_origins) {
+        const problem = typeof entry === "string" ? ludumOriginProblem(entry, "production") : "every entry must be a string";
+        if (problem !== null) problems.push(`ludum_origins: ${problem}`);
+        else if (!ludumOrigins.includes(entry as string)) ludumOrigins.push(entry as string);
+      }
+    }
+  }
   if (problems.length > 0) throw new AwsRuntimeConfigError(problems);
   return Object.freeze({
     format: v2 ? AWS_RUNTIME_CONFIG_FORMAT_V2 : AWS_RUNTIME_CONFIG_FORMAT,
@@ -238,6 +268,7 @@ export function parseAwsRuntimeConfig(raw: unknown): AwsRuntimeConfig {
     ledger: ledger as DynamoTableArn,
     escrow,
     routes: Object.freeze(routes),
+    ludumOrigins: Object.freeze(ludumOrigins),
   });
 }
 

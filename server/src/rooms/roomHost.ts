@@ -2654,6 +2654,8 @@ export function createRoomHost(deps: RoomHostDeps) {
     /* ESCROW-3A (brief §6): the money games the index knows (never a replay; the coordinator loads them). */
     financialGameIds: (): string[] => [...recordIndex.values()].filter((record) => settlement.retentionOf(record).kind === "financial").map((record) => record.game_id),
     financialRecords: (): GameRecord[] => [...recordIndex.values()].filter((record) => settlement.retentionOf(record).kind === "financial"),
+    /** LUDUM (Lane A, read-only): every record the index knows, as a snapshot (`ludum/wiring.ts`'s `LudumPorts.records`). */
+    records: (): GameRecord[] => [...recordIndex.values()],
   };
 }
 

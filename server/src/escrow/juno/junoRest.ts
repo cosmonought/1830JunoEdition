@@ -180,6 +180,9 @@ export type SimulateResult = { readonly ok: true; readonly gas_used: string } | 
 
 export interface JunoRest {
   readonly chainId: string;
+  /** LUDUM (Lane A, read-only): how many REST endpoints are configured -- 2 or more makes `smartQuorum` a real quorum.
+   *  Optional for test doubles (absent: treated as one, so nothing is labelled a quorum read). */
+  readonly endpointCount?: number;
   nodeChainId(): Promise<string>;
   latestBlock(): Promise<BlockView>;
   syncing(): Promise<boolean>;
@@ -368,6 +371,7 @@ export function createJunoRest(policy: JunoEndpointPolicy, http: HttpTransport =
 
   return {
     chainId: policy.expectedChainId,
+    endpointCount: endpoints.length,
     async nodeChainId() {
       return read("node_info", (base) => nodeInfoOf(base));
     },

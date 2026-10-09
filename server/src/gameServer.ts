@@ -99,6 +99,9 @@ import { createConductService } from "./conduct/conductService";
 import { chainClockHooks, createConductClockFeed } from "./conduct/conductClockFacts";
 import type { ConductCaseStore } from "./conduct/conductStore";
 import { createConductLimiter, handleConductHttp } from "./conduct/conductHttpApi";
+import { createLudumIpBudget, handleLudumHttp } from "./ludum/ingress";
+import { createLudumPorts } from "./ludum/wiring";
+import { ludumOriginProblem } from "./identity/mode";
 import type { MoneyTables } from "./escrow/moneyTables";
 import type { EscrowGameplaySeam } from "./rooms/roomHost";
 import { reconcileLoaded } from "./rooms/reconcile";
@@ -220,6 +223,9 @@ export interface GameServerIdentity {
   mode: GsMode;
   /** Exact origins (LIVE-2 §4.3 step 4). Production: https only, at least one. Development: loopback only. */
   allowedOrigins: readonly string[];
+  /** LUDUM: the Ludum site's exact origins -- credentialed CORS on `/gs/api/ludum/v1/*` ONLY, never added to
+   *  `allowedOrigins`. Production: https only. Development: loopback only. Absent: none. */
+  ludumOrigins?: readonly string[];
   /** LIVE-2 §12.1. Development: 0. */
   trustedProxyHops: number;
   /** Development only, and only as `createDevAuthenticator()` returned it. Refused in production. */
@@ -534,6 +540,11 @@ export function createGameServer(options: GameServerOptions): {
     }
   } else {
     throw new Error("createGameServer: identity.mode must be \"development\" or \"production\"");
+  }
+  const ludumOriginList = [...(identityOptions.ludumOrigins ?? [])];
+  for (const origin of ludumOriginList) {
+    const problem = ludumOriginProblem(origin, mode);
+    if (problem !== null) throw new Error(`createGameServer: ludum origin refused: ${problem}`);
   }
   const identityNow = identityOptions.now ?? (() => Date.now());
   const identity = identityOptions.service ?? IdentityService.fromSnapshot(createMemoryIdentityStore(), { principals: [], sessions: [] });
@@ -1718,6 +1729,25 @@ export function createGameServer(options: GameServerOptions): {
     },
   });
 
+  /* LUDUM v1 (docs/ludum/LUDUM_PLATFORM_ARCHITECTURE.md §2.1, §9): `/gs/api/ludum/v1/*` -- credentialed CORS for the
+     Ludum ∪ Play origins on this prefix only, read-only, never a cookie; the real ports over the record index, the money
+     layer's financial records and its chain reads. Dispatched BEFORE the money handler (below). */
+  const ludumIngress = {
+    corsOrigins: new Set<string>([...ludumOriginList, ...allowedOriginList]) as ReadonlySet<string>,
+    playOrigin: allowedOriginList[0],
+    trustedProxyHops: identityOptions.trustedProxyHops,
+    identity,
+    limiter: identityLimiter,
+    ipBudget: createLudumIpBudget(identityNow, limits.identity),
+    ports: createLudumPorts({ records: () => host.records(), money: () => options.money?.() ?? null, now: identityNow }),
+    now: identityNow,
+    onError: (what: string, error: unknown) => {
+      const ref = errorRef();
+      // eslint-disable-next-line no-console
+      console.error(`  ludum: ${what} failed (ref ${ref}) -- ${excerpt(error instanceof Error ? error.message : String(error), 300)}`);
+      return ref;
+    },
+  };
   /* ESCROW-4: `/gs/api/money/*` (its own per-session budget; the same ingress rules as the identity routes). */
   const moneyLimiter = createMoneyLimiter(identityNow);
   /* P3-ACCT: `/gs/api/trust/*` -- factual trust indicators, derived from the durable records (`rooms/trustFacts.ts`). */
@@ -1752,6 +1782,8 @@ export function createGameServer(options: GameServerOptions): {
     if (options.readiness !== undefined && handleReadiness(req, res, options.readiness)) return;
     /* LIVE-6 L6-6: the staging edge mirror (mounted only by the AWS runtime's staging switch): no body, no identity. */
     if (options.edgeDiagnostic !== undefined && handleEdgeDiagnostic(req, res, options.edgeDiagnostic)) return;
+    /* LUDUM v1: its own prefix, before every other `/gs/api/*` handler. */
+    if (handleLudumHttp(req, res, ludumIngress)) return;
     if (
       handleMoneyHttp(
         req,

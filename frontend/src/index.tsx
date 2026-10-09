@@ -21,6 +21,7 @@ import { ClientUpdateNotice } from "./components/ClientUpdateNotice";
 import { GAME_SERVER_URL } from "./config";
 import { createAppSessionPort, installSessionPort } from "./utils/sessionBootstrap";
 import { createBrowserClientUpdatePort, installClientUpdatePort } from "./utils/clientUpdate";
+import { handleLudumSignIn } from "./utils/ludumReturn";
 
 /* LIVE-2B (LIVE-2 §4.3): before any link opens a socket, the session is bootstrapped (`POST /gs/api/session`) -- the
    links ask this port first. A development-identity build (and a build with no game server) needs no bootstrap.
@@ -31,6 +32,9 @@ installSessionPort(createAppSessionPort(GAME_SERVER_URL));
 /* LIVE-4 (L4-3): the page's one answer to a server that says this bundle cannot play what it asked for -- reload once
    (keeping the table), follow a checked route, or ask; never a loop (`utils/clientUpdate.ts`). */
 installClientUpdatePort(createBrowserClientUpdatePort());
+/* LUDUM (§2.1): `?ludum=signin&return=<path>` -- the account dialog, then back to https://ludum.netadao.org<path> (at once
+   when already signed in). Only a path matching `^/[a-z0-9/_-]{0,128}$`; anything else stays on Play. */
+handleLudumSignIn({ search: window.location.search, navigate: (url) => window.location.assign(url) });
 
 const ROOT_ELEMENT_ID = "root";
 

@@ -222,20 +222,54 @@ describe("certified Terraform drift guard: the base, the two reviewed exceptions
   };
 
   test("review H1: a file git would C-quote (non-ASCII, quote, backslash, tab) is refused, tracked or untracked -- never read as absent", () => {
-    for (const name of ["x/\u00e9.tf", 'x/a"b.tf', "x/a\\b.tf", "x/a\tb.tf", "x/a b.tf"]) {
-      const untracked = scratch({ [name]: 'resource "aws_iam_policy" "p" {}\n' });
+    /* PORTABLE (Windows): the guard learns names ONLY from git's NUL-separated listings, never from the filesystem. So the
+       adversarial names reach it the way git reports them on every platform:
+         - TRACKED: the exact name is put in the index by `update-index --cacheinfo` (no file on disk is needed, so
+           Windows -- which cannot create `a"b.tf`, a tab, or a backslash inside a name -- builds the same tree) and
+           committed: `ls-files` / `diff` / `ls-tree` then name it exactly as on Linux;
+         - UNTRACKED: the exact `ls-files -z --others` answer git gives for such a file is laid over the real scratch
+           repository's DriftIo (only that one listing; every other git call is real) -- and, wherever the OS can hold the
+           exact name, the real file is created as well and judged the same way.
+       Either way the name must be REFUSED by name ("refuses to judge"), never read as an absent file. */
+    const BODY = 'resource "aws_iam_policy" "p" {}\n';
+    const untrackedListing = (io: ReturnType<typeof terraformDriftIo>, name: string): ReturnType<typeof terraformDriftIo> => ({
+      ...io,
+      git: (args) => {
+        const r = io.git(args);
+        const others = args.includes("ls-files") && args.includes("--others") && !args.includes("--ignored");
+        return others && r.status === 0 ? { status: 0, stdout: `${r.stdout}${name}\0` } : r;
+      },
+    });
+    const exactlyCreatable = (dir: string, name: string): boolean => {
       try {
-        const p = untracked.problems();
-        assert.ok(p.some((m) => /refuses to judge/.test(m)), `${JSON.stringify(name)}: ${JSON.stringify(p)}`);
+        fs.writeFileSync(path.join(dir, ...name.split("/")), BODY, { flag: "wx" });
+      } catch {
+        return false;
+      }
+      return fs.readdirSync(path.join(dir, "x")).includes(name.slice("x/".length));
+    };
+    for (const name of ["x/é.tf", 'x/a"b.tf', "x/a\\b.tf", "x/a\tb.tf", "x/a b.tf"]) {
+      const untracked = scratch({});
+      try {
+        const listed = terraformDriftProblems(untrackedListing(terraformDriftIo(untracked.dir), name), { scope: ["x"], patchText: PATCH, ludumPatchText: LUDUM, base: untracked.baseSha });
+        assert.ok(listed.some((m) => /refuses to judge/.test(m)), `untracked (as git lists it) ${JSON.stringify(name)}: ${JSON.stringify(listed)}`);
+        if (exactlyCreatable(untracked.dir, name)) {
+          const p = untracked.problems();
+          assert.ok(p.some((m) => /refuses to judge/.test(m)), `untracked (on disk) ${JSON.stringify(name)}: ${JSON.stringify(p)}`);
+        }
       } finally {
         untracked.done();
       }
-      const committed = scratch({ [name]: 'resource "aws_iam_policy" "p" {}\n' }, (git) => {
-        git("add", "-A");
+      const committed = scratch({}, (git, dir) => {
+        const blob = spawnSync("git", ["hash-object", "-w", "--stdin"], { cwd: dir, input: BODY, encoding: "utf8" }).stdout.trim();
+        assert.match(blob, /^[0-9a-f]{40,64}$/);
+        git("-c", "core.protectNTFS=false", "update-index", "--add", "--cacheinfo", `100644,${blob},${name}`);
+        /* No pathspec: Git for Windows reads a backslash in a pathspec as a separator. The full listing names it exactly. */
+        assert.ok(git("-c", "core.quotePath=false", "ls-files", "-z").split("\0").includes(name), `the index holds exactly ${JSON.stringify(name)}`);
         git("commit", "-q", "-m", "drift");
       });
       try {
-        assert.ok(committed.problems().some((m) => /refuses to judge/.test(m)), JSON.stringify(name));
+        assert.ok(committed.problems().some((m) => /refuses to judge/.test(m)), `tracked ${JSON.stringify(name)}: ${JSON.stringify(committed.problems())}`);
       } finally {
         committed.done();
       }
@@ -243,6 +277,7 @@ describe("certified Terraform drift guard: the base, the two reviewed exceptions
     const control = scratch({});
     try {
       assert.deepEqual(control.problems(), [], "the scratch base alone is clean");
+      assert.deepEqual(terraformDriftProblems(untrackedListing(terraformDriftIo(control.dir), "x/plain.tf"), { scope: ["x"], patchText: PATCH, ludumPatchText: LUDUM, base: control.baseSha }).filter((m) => /refuses to judge/.test(m)), [], "a safe name is never refused");
     } finally {
       control.done();
     }

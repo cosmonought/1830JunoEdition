@@ -276,3 +276,141 @@ run "none_refuses_a_routing_naming_another_pool" {
   }
   expect_failures = [aws_ssm_parameter.runtime]
 }
+
+# ------------------------------------------------------------------------------------------------------------------
+# LUDUM (docs/ludum/LUDUM_PLATFORM_ARCHITECTURE.md §2.1, §8, §13): the runtime document's optional `ludum_origins`, on
+# today's staging topology (compute = none, p1 only). The document as the parser reads it, field for field.
+# ------------------------------------------------------------------------------------------------------------------
+
+run "ludum_default_writes_no_field" {
+  command = plan
+  variables {
+    compute = "none"
+    pools   = { p1 = { primary = true } }
+  }
+  assert {
+    condition = jsondecode(aws_ssm_parameter.runtime["p1"].insecure_value) == {
+      format           = "18COSMOS/AWS-RUNTIME/v2"
+      environment      = "staging"
+      region           = "us-east-1"
+      pool             = "p1"
+      generation       = 1
+      game_table       = "gs-staging-game-g1"
+      identity_table   = "gs-staging-identity"
+      ledger_table_arn = "arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger"
+      escrow           = { config_parameter_arn = "arn:aws:ssm:us-east-1:111111111111:parameter/gs/staging/juno-backend" }
+      routes           = { p1 = { ws_path = "/gs/p/p1" } }
+    }
+    error_message = "Default ludum_origins = []: the document is exactly the pre-Ludum v2 document -- no ludum_origins key at all."
+  }
+  assert {
+    condition     = !strcontains(aws_ssm_parameter.runtime["p1"].insecure_value, "ludum")
+    error_message = "The default can never authorize a Ludum origin."
+  }
+}
+
+run "ludum_one_origin_appears_exactly" {
+  command = plan
+  variables {
+    compute       = "none"
+    pools         = { p1 = { primary = true } }
+    ludum_origins = ["https://ludum.example.com"]
+  }
+  assert {
+    condition     = jsondecode(aws_ssm_parameter.runtime["p1"].insecure_value).ludum_origins == ["https://ludum.example.com"]
+    error_message = "The approved origin appears exactly, once."
+  }
+  assert {
+    condition = { for k, v in jsondecode(aws_ssm_parameter.runtime["p1"].insecure_value) : k => v if k != "ludum_origins" } == {
+      format           = "18COSMOS/AWS-RUNTIME/v2"
+      environment      = "staging"
+      region           = "us-east-1"
+      pool             = "p1"
+      generation       = 1
+      game_table       = "gs-staging-game-g1"
+      identity_table   = "gs-staging-identity"
+      ledger_table_arn = "arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger"
+      escrow           = { config_parameter_arn = "arn:aws:ssm:us-east-1:111111111111:parameter/gs/staging/juno-backend" }
+      routes           = { p1 = { ws_path = "/gs/p/p1" } }
+    }
+    error_message = "Every unrelated field is identical to the default document."
+  }
+  assert {
+    condition     = aws_ssm_parameter.runtime["p1"].type == "String" && aws_ssm_parameter.runtime["p1"].name == "/gs/staging/runtime/p1" && length(aws_ssm_parameter.runtime) == 1
+    error_message = "The same one plain String parameter, same name: only its value changes."
+  }
+  assert {
+    condition     = jsondecode(aws_ssm_parameter.juno_backend[0].insecure_value) == jsondecode(file("${path.module}/../../fixtures/juno-backend-staging.json"))
+    error_message = "The Juno document is untouched by ludum_origins."
+  }
+}
+
+run "ludum_rejects_http" {
+  command = plan
+  variables {
+    compute       = "none"
+    pools         = { p1 = { primary = true } }
+    ludum_origins = ["http://ludum.example.com"]
+  }
+  expect_failures = [var.ludum_origins]
+}
+
+run "ludum_rejects_wildcard" {
+  command = plan
+  variables {
+    compute       = "none"
+    pools         = { p1 = { primary = true } }
+    ludum_origins = ["https://*.example.com"]
+  }
+  expect_failures = [var.ludum_origins]
+}
+
+run "ludum_rejects_trailing_slash_path_port_and_case" {
+  command = plan
+  variables {
+    compute       = "none"
+    pools         = { p1 = { primary = true } }
+    ludum_origins = ["https://ludum.example.com/", "https://ludum.example.com/x", "https://ludum.example.com:8443", "https://LUDUM.example.com"]
+  }
+  expect_failures = [var.ludum_origins]
+}
+
+run "ludum_rejects_null_and_bare_hosts" {
+  command = plan
+  variables {
+    compute       = "none"
+    pools         = { p1 = { primary = true } }
+    ludum_origins = ["null", "ludum.example.com", "https://localhost"]
+  }
+  expect_failures = [var.ludum_origins]
+}
+
+run "ludum_rejects_duplicates" {
+  command = plan
+  variables {
+    compute       = "none"
+    pools         = { p1 = { primary = true } }
+    ludum_origins = ["https://a.example.com", "https://a.example.com"]
+  }
+  expect_failures = [var.ludum_origins]
+}
+
+run "ludum_rejects_more_than_eight" {
+  command = plan
+  variables {
+    compute       = "none"
+    pools         = { p1 = { primary = true } }
+    ludum_origins = [for i in range(9) : "https://l${i}.example.com"]
+  }
+  expect_failures = [var.ludum_origins]
+}
+
+run "ludum_never_repeats_a_play_origin" {
+  command = plan
+  variables {
+    compute       = "none"
+    pools         = { p1 = { primary = true } }
+    ludum_origins = ["https://play.example.com"]
+  }
+  expect_failures = [var.ludum_origins]
+}

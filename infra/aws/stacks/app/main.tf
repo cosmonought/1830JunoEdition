@@ -45,6 +45,7 @@ module "app" {
   build_id                          = var.build_id
   container_port                    = var.container_port
   allowed_origins                   = var.allowed_origins
+  ludum_origins                     = var.ludum_origins
   trusted_proxy_hops                = var.trusted_proxy_hops
   pools                             = var.pools
   start_services                    = var.start_services

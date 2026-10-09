@@ -838,3 +838,36 @@ unchanged data-plane checks (and the COST-2B guard records); `--topology ecs` (t
 untouched, for the ECS era until step I. See infra/aws/README.md "The single host". Still procedural: the DNS record of
 `origin_hostname` (the owner's provider), the browser smoke (§H 17), the money-game smoke, and the billing review (§J 25).
 The edge probe (§H 16) and the host-role probes (§F5 / F6) are tooled and judged (PHASE 1 REMAINDER).
+
+## After compute-none: the Ludum origin (LUDUM; `migration-guard ludum-origins`)
+
+Not a migration step. This is the one reviewed way the Ludum site's origin reaches the serving pool's runtime document
+(`ludum_origins`, docs/ludum/LUDUM_PLATFORM_ARCHITECTURE.md §2.1, §13). The authoritative procedure and the release order
+are in that document's §13.
+
+**When it is allowed:** only on an app stack that has completed compute-none (step 20). Staging completed compute-none
+on 2026-10-04 (P1-R3 T3), so its app state holds no ECS-era object. On a stack that still carries the desired-count drift
+(§0.2), the guard FAILS: its prior state still has ECS-era objects, and its plan has ECS changes.
+
+**What the guard accepts.** The plan is UNTARGETED, made from a clean, reviewed checkout with the environment's app
+tfvars plus `ludum_origins`. It may change exactly one thing: an in-place update of
+`aws_ssm_parameter.runtime["p1"]` whose only difference is `ludum_origins`, set to exactly the
+`--ludum-origins` the operator names (`none`: the field is removed, for the rollback). Every other field must be
+byte-equal. It must contain:
+- no ECS change;
+- no table, key, IAM, edge, ECR or Juno-document change;
+- `compute = "none"`;
+- break-glass off;
+- no Ludum origin that is also an `allowed_origins` (Play) origin.
+
+The single host's `user_data`, its environment and the instance itself are untouched, so it is never replaced.
+
+**The commands.** Capture the plan and judge it:
+
+```
+infra\aws\scripts\plan-evidence.ps1 -Stack app -Out <D> -Run <run id> -KeepPlan -PlanArgs @("-var-file=<app tfvars with ludum_origins>")
+npm run awsDeploy -- migration-guard ludum-origins --plan-evidence <D>\terraform\app --environment staging --app-account <id> --ludum-origins https://ludum.netadao.org --commit <reviewed sha> --record <D>\guard-ludum-origins.json
+```
+
+Apply that saved `stack.tfplan` and nothing else, with the owner's GO, then restart the host (`gs-host stop`, then
+`gs-host deploy` of the SAME digest) so it reads the document.

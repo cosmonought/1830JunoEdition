@@ -64,8 +64,10 @@ locals {
 
   # 18COSMOS/AWS-RUNTIME/v2 (LIVE-6 L6-2; L6-1's format: v1 + `routes`) -- every field of `runtimeConfig.ts`, nothing else
   # (the parser refuses unknown fields). v1 stays readable by the application; new LIVE-6 configuration is v2.
+  # LUDUM: v2's ONE optional field `ludum_origins`, written only when var.ludum_origins is non-empty -- with [] the
+  # document is exactly what it was (no key at all; a server image older than Lane A would refuse an unknown key).
   runtime_document = {
-    for id, _ in var.pools : id => jsonencode({
+    for id, _ in var.pools : id => jsonencode(merge({
       format           = "18COSMOS/AWS-RUNTIME/v2"
       environment      = var.environment
       region           = local.region
@@ -76,7 +78,7 @@ locals {
       ledger_table_arn = var.ledger_table_arn
       escrow           = local.escrow_enabled ? { config_parameter_arn = local.juno_parameter_arn } : null
       routes           = local.pool_route
-    })
+    }, length(var.ludum_origins) > 0 ? { ludum_origins = var.ludum_origins } : {}))
   }
 
   # 18COSMOS/JUNO-BACKEND/v3 -- `junoConfig.ts`'s fields. Optional fields the operator left null are OMITTED (a JSON null

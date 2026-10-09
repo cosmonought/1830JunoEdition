@@ -16,16 +16,30 @@ import * as path from "path";
 import { CONDUCT_REVIEWERS_WIRING } from "./conductReviewersWiring";
 import { ESCROW21_TERRAFORM_FILES, ESCROW21_TERRAFORM_LINE_COUNTS, ESCROW21_TERRAFORM_PATCH, ESCROW21_TERRAFORM_PATCH_SHA256, normalizeLf, parsePinnedPatch, reverseApplyPinnedHunks, sha256Hex } from "./escrow21TerraformWiring";
 import { CERTIFIED_TERRAFORM_BASE, terraformDriftProblems } from "./terraformDriftGuard";
+import { LUDUM_TERRAFORM_FILES, LUDUM_TERRAFORM_LINE_COUNTS, LUDUM_TERRAFORM_PATCH, LUDUM_TERRAFORM_PATCH_SHA256 } from "./ludumOriginsTerraformWiring";
 import { terraformDriftIo } from "../../testSupport/terraformDriftIo";
 
 const REPO = path.resolve(__dirname, "../../../../../.."); // dist/server/src/aws/deploy -> the repository
 const PATCH = fs.readFileSync(path.join(REPO, ESCROW21_TERRAFORM_PATCH), "utf8");
+const LUDUM = fs.readFileSync(path.join(REPO, LUDUM_TERRAFORM_PATCH), "utf8");
 const io = terraformDriftIo(REPO);
 const ALL = ["infra/aws/modules", "infra/aws/stacks"];
 const read = (rel: string) => normalizeLf(fs.readFileSync(path.join(REPO, rel), "utf8"));
+/** LUDUM ORIGINS (the third exception, applied after Escrow 2.1): a file's text as the Escrow 2.1 delta left it -- the
+ *  Ludum hunks reversed exactly, as the guard itself does first. Files the Ludum patch does not name are read as-is. */
+const LUDUM_PARSED = parsePinnedPatch(LUDUM);
+const escrowText = (rel: string): string => {
+  const hunks = LUDUM_PARSED.ok ? LUDUM_PARSED.files.get(rel) : undefined;
+  if (hunks === undefined) return read(rel);
+  const r = reverseApplyPinnedHunks(read(rel), hunks, LUDUM_TERRAFORM_LINE_COUNTS.get(rel));
+  assert.ok(r.ok, `${rel}: the Ludum hunks reverse exactly`);
+  return r.text;
+};
+/** A mutation in a file both pins name is caught by whichever pin comes off first (Ludum): either names the file. */
+const PINNED_CHANGE = /pinned (Escrow 2\.1|Ludum-origins) change/;
 
-const check = (overlay?: ReadonlyMap<string, string | null>, scope: readonly string[] = ALL, extra: { base?: string; patchText?: string } = {}) =>
-  terraformDriftProblems(io, { scope, patchText: extra.patchText ?? PATCH, overlay, base: extra.base });
+const check = (overlay?: ReadonlyMap<string, string | null>, scope: readonly string[] = ALL, extra: { base?: string; patchText?: string; ludumPatchText?: string } = {}) =>
+  terraformDriftProblems(io, { scope, patchText: extra.patchText ?? PATCH, ludumPatchText: extra.ludumPatchText ?? LUDUM, overlay, base: extra.base });
 
 /** An overlay changing one file; `edit` must change it (a mutation that matched nothing would prove nothing). */
 const mutate = (file: string, edit: (text: string) => string): Map<string, string | null> => {
@@ -80,7 +94,7 @@ describe("certified Terraform drift guard: the base, the two reviewed exceptions
     assert.deepEqual([...parsed.files.keys()].sort(), [...ESCROW21_TERRAFORM_FILES].sort());
     assert.ok([...ESCROW21_TERRAFORM_FILES].every((f) => f.startsWith("infra/aws/modules/") || f.startsWith("infra/aws/stacks/")));
     for (const [file, hunks] of parsed.files) {
-      const reversed = reverseApplyPinnedHunks(read(file), hunks);
+      const reversed = reverseApplyPinnedHunks(escrowText(file), hunks);
       assert.ok(reversed.ok, file);
       const base = io.git(["cat-file", "blob", `${CERTIFIED_TERRAFORM_BASE}:${file}`]);
       assert.equal(base.status, 0, file);
@@ -109,7 +123,7 @@ describe("certified Terraform drift guard: the base, the two reviewed exceptions
     const hostIam = "infra/aws/modules/single-host/iam.tf";
     failsNaming(check(mutate(hostIam, after('Sid      = "RemedyKeyPublicKey"', "\n", '\n        Extra    = "x"\n'))), hostIam, /pinned Escrow 2\.1 change/);
     const stack = "infra/aws/stacks/app/main.tf";
-    failsNaming(check(mutate(stack, after("remedy_signing_key                = var.remedy_signing_key", "\n", "\n  unrelated = true\n"))), stack, /pinned Escrow 2\.1 change/);
+    failsNaming(check(mutate(stack, after("remedy_signing_key                = var.remedy_signing_key", "\n", "\n  unrelated = true\n"))), stack, PINNED_CHANGE);
   });
 
   test("6. deleting, altering, moving or reverting a required pinned line fails", () => {
@@ -133,13 +147,13 @@ describe("certified Terraform drift guard: the base, the two reviewed exceptions
     assert.match(gone[0], /certified Terraform base 0123456789abcdef0123456789abcdef01234567 is not available in this checkout .* FAILS rather than skip/);
     const exported = fs.mkdtempSync(path.join(os.tmpdir(), "tf-exported-"));
     try {
-      const r = terraformDriftProblems(terraformDriftIo(exported), { scope: ALL, patchText: PATCH });
+      const r = terraformDriftProblems(terraformDriftIo(exported), { scope: ALL, patchText: PATCH, ludumPatchText: LUDUM });
       assert.equal(r.length, 1);
       assert.match(r[0], /083d0668556c05a84eb8b3e5befc4e973544aa9a is not available .* FAILS rather than skip/);
     } finally {
       fs.rmSync(exported, { recursive: true, force: true });
     }
-    assert.match(terraformDriftProblems(terraformDriftIo(path.join(os.tmpdir(), "tf-no-such-dir-x7")), { scope: ALL, patchText: PATCH })[0], /FAILS rather than skip/);
+    assert.match(terraformDriftProblems(terraformDriftIo(path.join(os.tmpdir(), "tf-no-such-dir-x7")), { scope: ALL, patchText: PATCH, ludumPatchText: LUDUM })[0], /FAILS rather than skip/);
     assert.match(check(undefined, ALL, { patchText: PATCH.replace("+variable \"remedy_signing_key\" {", "+variable \"remedy_signing_keys\" {") })[0], /does not match its pinned SHA-256/);
   });
 
@@ -166,7 +180,7 @@ describe("certified Terraform drift guard: the base, the two reviewed exceptions
   test("review I1: the patch's SHA-256 is pinned here too, and every pinned file's line count is recorded", () => {
     assert.equal(ESCROW21_TERRAFORM_PATCH_SHA256, "e2bd4914b03f1034bdf592fae3896580cf8bd85d3245f99f5b92f02965a64fb7");
     assert.deepEqual([...ESCROW21_TERRAFORM_LINE_COUNTS.keys()].sort(), [...ESCROW21_TERRAFORM_FILES].sort());
-    for (const [file, count] of ESCROW21_TERRAFORM_LINE_COUNTS) assert.equal(read(file).split("\n").length - 1, count, file);
+    for (const [file, count] of ESCROW21_TERRAFORM_LINE_COUNTS) assert.equal(escrowText(file).split("\n").length - 1, count, file);
   });
 
   test("review H2: a content line beginning with ++ or -- is judged like any other (no header look-alike slips through)", () => {
@@ -180,8 +194,8 @@ describe("certified Terraform drift guard: the base, the two reviewed exceptions
 
   test("review M2: nothing can be appended after a file's last pinned hunk -- not even in the tftest files the conduct rule admits runs to", () => {
     for (const file of ["infra/aws/modules/app/tests/app.tftest.hcl", "infra/aws/modules/single-host/tests/single-host.tftest.hcl"]) {
-      failsNaming(check(mutate(file, (t) => `${t}\nrun "evil" {\n  command = plan\n  # conduct_reviewers\n}\n`)), file, /pinned Escrow 2\.1 change/);
-      failsNaming(check(mutate(file, (t) => `${t}override_data {\n  target = data.aws_iam_policy_document.task\n  values = {}\n}\n`)), file, /pinned Escrow 2\.1 change/);
+      failsNaming(check(mutate(file, (t) => `${t}\nrun "evil" {\n  command = plan\n  # conduct_reviewers\n}\n`)), file, PINNED_CHANGE);
+      failsNaming(check(mutate(file, (t) => `${t}override_data {\n  target = data.aws_iam_policy_document.task\n  values = {}\n}\n`)), file, PINNED_CHANGE);
     }
   });
 
@@ -204,7 +218,7 @@ describe("certified Terraform drift guard: the base, the two reviewed exceptions
       fs.writeFileSync(path.join(dir, rel), text);
     }
     after?.(git, dir);
-    return { dir, baseSha, problems: () => terraformDriftProblems(terraformDriftIo(dir), { scope: ["x"], patchText: PATCH, base: baseSha }), done: () => fs.rmSync(dir, { recursive: true, force: true }) };
+    return { dir, baseSha, problems: () => terraformDriftProblems(terraformDriftIo(dir), { scope: ["x"], patchText: PATCH, ludumPatchText: LUDUM, base: baseSha }), done: () => fs.rmSync(dir, { recursive: true, force: true }) };
   };
 
   test("review H1: a file git would C-quote (non-ASCII, quote, backslash, tab) is refused, tracked or untracked -- never read as absent", () => {
@@ -316,5 +330,39 @@ describe("certified Terraform drift guard: the base, the two reviewed exceptions
       "diff --git a/x.tf b/y.tf\n--- a/x.tf\n+++ b/y.tf\n@@ -1 +1 @@\n-a\n+b\n",
     ])
       assert.equal(parsePinnedPatch(bad).ok, false, bad);
+  });
+});
+
+/* LUDUM ORIGINS: the THIRD exception -- a pinned patch, required and exact, reverse-applied BEFORE the Escrow 2.1 hunks. */
+describe("LUDUM: the pinned Ludum-origins Terraform delta", () => {
+  const NL = "\n";
+  test("the patch is pinned: its SHA-256, its files, each file's line count, and it parses", () => {
+    assert.equal(sha256Hex(normalizeLf(LUDUM)), LUDUM_TERRAFORM_PATCH_SHA256);
+    const parsed = parsePinnedPatch(LUDUM);
+    assert.ok(parsed.ok, parsed.ok ? "" : parsed.problem);
+    assert.deepEqual([...parsed.files.keys()].sort(), [...LUDUM_TERRAFORM_FILES].sort());
+    for (const file of LUDUM_TERRAFORM_FILES) assert.equal(read(file).split(NL).length - 1, LUDUM_TERRAFORM_LINE_COUNTS.get(file), file);
+    for (const file of LUDUM_TERRAFORM_FILES) assert.ok(!file.startsWith("infra/aws/modules/single-host") && !file.startsWith("infra/aws/stacks/single-host"), `${file}: never the host's user_data / environment`);
+  });
+  test("the tree passes: the base plus exactly the four reviewed exceptions", () => {
+    assert.deepEqual(check(), []);
+  });
+  test("a tampered or empty Ludum patch FAILS (never a skip)", () => {
+    const tampered = LUDUM.replace('+  default     = []', '+  default     = ["https://x.example.org"]');
+    assert.notEqual(tampered, LUDUM, "the tamper matched");
+    assert.match(check(undefined, ALL, { ludumPatchText: tampered })[0], /Ludum-origins Terraform patch does not match its pinned SHA-256/);
+    assert.match(check(undefined, ALL, { ludumPatchText: "" })[0], /does not match its pinned SHA-256/);
+  });
+  test("a line beside the Ludum change, an altered Ludum line, or the change removed: FAIL by name", () => {
+    const beside = check(mutate("infra/aws/modules/app/locals.tf", after("length(var.ludum_origins) > 0", "}))", `}))${NL}  # beside`)));
+    assert.ok(beside.some((p) => /locals\.tf: the pinned Ludum-origins change is missing, altered, moved or has a line beside it/.test(p)), beside.join(NL));
+    const altered = check(mutate("infra/aws/modules/app/variables.tf", (t) => t.replace("length(var.ludum_origins) <= 8", "length(var.ludum_origins) <= 80")));
+    assert.ok(altered.some((p) => /variables\.tf: the pinned Ludum-origins change/.test(p)), altered.join(NL));
+    const gone = check(mutate("infra/aws/stacks/app/main.tf", (t) => t.replace(`  ludum_origins                     = var.ludum_origins${NL}`, "")));
+    assert.ok(gone.some((p) => /main\.tf: the pinned Ludum-origins change/.test(p)), gone.join(NL));
+  });
+  test("a Ludum origin anywhere in the single-host module is unadmitted drift (the host's user_data never carries it)", () => {
+    const host = check(mutate("infra/aws/modules/single-host/templates/server.env.tftpl", (t) => `${t}GS_LUDUM_ORIGINS=https://ludum.example.org${NL}`));
+    assert.ok(host.some((p) => /server\.env\.tftpl/.test(p)), host.join(NL));
   });
 });

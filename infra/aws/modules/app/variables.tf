@@ -337,6 +337,26 @@ variable "allowed_origins" {
   }
 }
 
+variable "ludum_origins" {
+  description = <<-EOT
+    LUDUM (docs/ludum/LUDUM_PLATFORM_ARCHITECTURE.md §2.1, §8): the Ludum site's exact https origin(s), written into every
+    pool's runtime document as `ludum_origins` (`runtimeConfig.ts`: v2's one optional field). They get credentialed CORS
+    on `/gs/api/ludum/v1/*` ONLY -- never the account, money, conduct or trust routes (those stay `allowed_origins`').
+    The document is the ONE production source: the server refuses GS_LUDUM_ORIGINS in AWS mode, and nothing here touches
+    the single host's environment or user_data. [] (the default) writes NO field: the document is byte-identical to before.
+  EOT
+  type        = list(string)
+  default     = []
+  validation {
+    condition     = length(var.ludum_origins) <= 8 && length(distinct(var.ludum_origins)) == length(var.ludum_origins) && alltrue([for o in var.ludum_origins : can(regex("^https://[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$", o))])
+    error_message = "ludum_origins: at most 8 distinct exact https origins, lower-case host, no port, path, query, wildcard or trailing slash (e.g. \"https://ludum.netadao.org\")."
+  }
+  validation {
+    condition     = length(setintersection(toset(var.ludum_origins), toset(var.allowed_origins))) == 0
+    error_message = "ludum_origins must not repeat an allowed_origins (Play) origin: a Ludum origin is never granted Play's account / money routes, and Play needs no CORS."
+  }
+}
+
 variable "trusted_proxy_hops" {
   description = "GS_TRUSTED_PROXY_HOPS: CloudFront + ALB = 2 (verify with a header capture in staging)."
   type        = number

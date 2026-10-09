@@ -21,6 +21,10 @@
 //   EXISTING host policy in the prior state against them). Every check prints PASS, FAIL or NOT EVALUATED (never a
 //   bare SKIP for a check that could not be judged); the verdict is PASS only when EVERY check passed.
 //
+//   LUDUM (docs/ludum/LUDUM_PLATFORM_ARCHITECTURE.md §13): ludum-origins judges an UNTARGETED stacks/app plan made AFTER
+//   compute-none and needs --ludum-origins <comma-separated https origins | none>: the exact list the serving pool's
+//   runtime document must carry after the plan (none: the field is removed -- the rollback). Never taken from the plan.
+//
 //   migration-guard nat --evidence <dir> [--min-quiet-hours 24] [--record <file>]
 //       <dir> is `infra/aws/scripts/capture-nat-evidence`'s output (`natEvidence.ts`). PASS is evidence for the owner's
 //       manual NAT deletion decision (step 23), never a deletion.
@@ -50,6 +54,7 @@ export const MIGRATION_USAGE = [
   "      host-create-complete (STEP 9 ACME HOTFIX) judges ONLY the recovery of an interrupted step 9: the state every reviewed step-9 object but acme_http01, the plan creating exactly that rule and nothing else.",
   "      edge-cutover (the default --direction cutover) ALSO needs --arm64-live-smoke <saved gs-host arm64-smoke output> --release-digest <sha256:...> --instance-id <i-...>: the live ARM64 smoke must PASS; --direction rollback (back to the ALB) needs --cutover-record <the forward PASS record> instead.",
   "      app-read-authorize (step 7a, a TARGETED app plan) needs --region and --ledger-table-arn; ledger-operator-journal (step 7b) needs --ledger-table-arn.",
+  "      ludum-origins (after compute-none) needs --ludum-origins <https origins, comma-separated | none>: the runtime document's exact ludum_origins after the plan.",
   "  awsDeploy migration-guard nat --evidence <dir> [--min-quiet-hours 24] [--record <file>]",
 ].join("\n");
 
@@ -61,7 +66,7 @@ const TERRAFORM_MIN = [1, 9, 0];
 const AWS_PROVIDER = "registry.terraform.io/hashicorp/aws";
 const AWS_PROVIDER_VERSION = "6.66.0";
 
-const FLAGS_WITH_VALUES = new Set(["--plan-evidence", "--environment", "--app-account", "--origin-domain", "--generation", "--pool", "--retired-pools", "--record", "--evidence", "--min-quiet-hours", "--region", "--ledger-table-arn", "--signing-keys", "--remedy-key", "--commit", "--arm64-live-smoke", "--release-digest", "--instance-id", "--direction", "--cutover-record"]);
+const FLAGS_WITH_VALUES = new Set(["--ludum-origins", "--plan-evidence", "--environment", "--app-account", "--origin-domain", "--generation", "--pool", "--retired-pools", "--record", "--evidence", "--min-quiet-hours", "--region", "--ledger-table-arn", "--signing-keys", "--remedy-key", "--commit", "--arm64-live-smoke", "--release-digest", "--instance-id", "--direction", "--cutover-record"]);
 
 function parseFlags(argv: readonly string[]): Map<string, string> {
   const out = new Map<string, string>();
@@ -335,6 +340,21 @@ export async function migrationGuardCommand(argv: readonly string[], out: (line:
       return EXIT_USAGE;
     }
   }
+  /* LUDUM: --ludum-origins is the ludum-origins gate's operator fact only (refused elsewhere, never silently carried). */
+  if (flags.has("--ludum-origins") && gate !== "ludum-origins") {
+    out(`REFUSED: --ludum-origins belongs to ludum-origins, not ${gate}`);
+    return EXIT_USAGE;
+  }
+  if (gate === "ludum-origins" && !flags.has("--ludum-origins")) {
+    out("REFUSED: ludum-origins needs --ludum-origins <the exact https origins the runtime document must carry, comma-separated | none (remove the field)> -- never taken from the plan");
+    return EXIT_USAGE;
+  }
+  const ludumRaw = flags.get("--ludum-origins");
+  const ludumOrigins = ludumRaw === undefined ? undefined : ludumRaw === "none" ? [] : ludumRaw.split(",");
+  if (ludumOrigins !== undefined && ludumOrigins.some((o) => o === "" || o !== o.trim())) {
+    out("REFUSED: --ludum-origins is a comma-separated list of origins with no empty or padded entry (or none)");
+    return EXIT_USAGE;
+  }
   const signingKeyArns = flags.has("--signing-keys") ? String(flags.get("--signing-keys")).split(",").filter((k) => k !== "") : undefined;
   /* Phase 3 escrow 2.1: --remedy-key is an operator fact of the host gates only (refused elsewhere, never silently carried). */
   if (flags.has("--remedy-key") && gate !== "host-create" && gate !== "host-create-complete") {
@@ -371,7 +391,7 @@ export async function migrationGuardCommand(argv: readonly string[], out: (line:
       return EXIT_USAGE;
     }
   }
-  const ctx: MigrationContext = { environment, appAccountId, servingGeneration: generation, pool, retiredPools, originDomain: flags.get("--origin-domain"), minEcrKeepImages: STAGING_DEFAULTS.minEcrKeepImages, region: flags.get("--region"), ledgerTableArn: flags.get("--ledger-table-arn"), signingKeyArns, remedyKeyArn: flags.get("--remedy-key") ?? null };
+  const ctx: MigrationContext = { environment, appAccountId, servingGeneration: generation, pool, retiredPools, originDomain: flags.get("--origin-domain"), minEcrKeepImages: STAGING_DEFAULTS.minEcrKeepImages, region: flags.get("--region"), ledgerTableArn: flags.get("--ledger-table-arn"), signingKeyArns, remedyKeyArn: flags.get("--remedy-key") ?? null, ...(ludumOrigins !== undefined ? { ludumOrigins } : {}) };
 
   const expectCommit = flags.get("--commit");
   /* STEP 9 ACME HOTFIX (review): the recovery is judged only against the reviewed hotfix commit, never "any clean one". */

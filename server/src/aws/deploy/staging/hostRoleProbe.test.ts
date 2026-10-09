@@ -30,6 +30,7 @@ import { HOST_ROLE_FILES, HOST_ROLE_PROBE_FORMAT, HOST_ROLE_WRAPPER, hostRoleNam
 import { runIamProbe } from "./iamProbe";
 import { KMS_LATENCY_BOUND_MS } from "./kmsProbe";
 import { ESCROW21_TERRAFORM_PATCH } from "../escrow21TerraformWiring";
+import { LUDUM_TERRAFORM_PATCH } from "../ludumOriginsTerraformWiring";
 import { terraformDriftProblems } from "../terraformDriftGuard";
 import { terraformDriftIo } from "../../../testSupport/terraformDriftIo";
 
@@ -637,7 +638,7 @@ describe("PHASE 1 REMAINDER F5 / F6: the operator wrappers (static)", () => {
        key variable and host-role statements, the C1 comment, their tftest runs: escrow21TerraformWiring.patch, exact).
        One shared comparison (terraformDriftGuard.ts). FAIL CLOSED: without the base in the checkout this FAILS -- it never
        returns early (owner ruling 2026-10-08). */
-    const problems = terraformDriftProblems(terraformDriftIo(REPO), { scope: ["infra/aws/modules/single-host"], patchText: fs.readFileSync(path.join(REPO, ESCROW21_TERRAFORM_PATCH), "utf8") });
+    const problems = terraformDriftProblems(terraformDriftIo(REPO), { scope: ["infra/aws/modules/single-host"], patchText: fs.readFileSync(path.join(REPO, ESCROW21_TERRAFORM_PATCH), "utf8"), ludumPatchText: fs.readFileSync(path.join(REPO, LUDUM_TERRAFORM_PATCH), "utf8") });
     assert.deepEqual(problems, []);
     assert.ok(!fs.existsSync(path.join(REPO, "infra/aws/modules/single-host/files/bin/host-role-probe.sh")), "the wrapper is never one of the host's installed files");
     assert.doesNotMatch(fs.readFileSync(path.join(REPO, "infra/aws/modules/single-host/locals.tf"), "utf8"), /host-role-probe/, "cloud-init never installs the wrapper");

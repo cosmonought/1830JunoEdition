@@ -1,0 +1,1450 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.8",
+  "variables": {
+    "region": {
+      "value": "us-east-1"
+    },
+    "app_account_id": {
+      "value": "111111111111"
+    },
+    "environment": {
+      "value": "staging"
+    },
+    "generation": {
+      "value": 1
+    },
+    "game_generations": {
+      "value": []
+    },
+    "generation_adoption": {
+      "value": null
+    },
+    "compute": {
+      "value": "none"
+    },
+    "ledger_table_arn": {
+      "value": "arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger"
+    },
+    "signing_keys": {
+      "value": {
+        "relayer": "arn:aws:kms:us-east-1:222222222222:key/11111111-1111-4111-8111-111111111111",
+        "settlement": "arn:aws:kms:us-east-1:222222222222:key/22222222-2222-4222-8222-222222222222",
+        "admission": "arn:aws:kms:us-east-1:222222222222:key/33333333-3333-4333-8333-333333333333"
+      }
+    },
+    "relayer_rotation_key_arns": {
+      "value": []
+    },
+    "money_tables_nonmainnet": {
+      "value": true
+    },
+    "edge_diagnostic_staging": {
+      "value": true
+    },
+    "build_id": {
+      "value": "c14186d"
+    },
+    "pools": {
+      "value": {
+        "p1": {
+          "primary": true,
+          "desired_count": 1
+        }
+      }
+    },
+    "start_services": {
+      "value": true
+    },
+    "recovery_trusted_principal_arns": {
+      "value": []
+    },
+    "recovery_break_glass": {
+      "value": false
+    },
+    "operator_trusted_principal_arns": {
+      "value": [
+        "arn:aws:iam::111111111111:user/owner"
+      ]
+    },
+    "edge": {
+      "value": {
+        "create_distribution": true,
+        "aliases": [
+          "play.example.org"
+        ],
+        "alb_origin_domain_name": "gs-origin-host.example.org",
+        "site_origin_domain_name": "site.example.org"
+      }
+    },
+    "allowed_origins": {
+      "value": [
+        "https://play.example.org"
+      ]
+    },
+    "ludum_origins": {
+      "value": [
+        "https://ludum.example.org"
+      ]
+    }
+  },
+  "planned_values": {
+    "root_module": {}
+  },
+  "resource_changes": [
+    {
+      "address": "module.app.aws_dynamodb_table.game[\"1\"]",
+      "module_address": "module.app",
+      "mode": "managed",
+      "type": "aws_dynamodb_table",
+      "name": "game",
+      "index": "1",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": [
+          "no-op"
+        ],
+        "before": {
+          "name": "gs-staging-game-g1",
+          "arn": "arn:aws:dynamodb:us-east-1:111111111111:table/gs-staging-game-g1",
+          "deletion_protection_enabled": true,
+          "point_in_time_recovery": [
+            {
+              "enabled": true,
+              "recovery_period_in_days": 35
+            }
+          ],
+          "ttl": [
+            {
+              "enabled": true,
+              "attribute_name": "ttl"
+            }
+          ],
+          "tags": {
+            "gs:environment": "staging",
+            "gs:slice": "live5-l5-8",
+            "Name": "gs-staging-game-g1",
+            "gs:component": "game",
+            "gs:generation": "1",
+            "gs:serving": "true"
+          }
+        },
+        "after": {
+          "name": "gs-staging-game-g1",
+          "arn": "arn:aws:dynamodb:us-east-1:111111111111:table/gs-staging-game-g1",
+          "deletion_protection_enabled": true,
+          "point_in_time_recovery": [
+            {
+              "enabled": true,
+              "recovery_period_in_days": 35
+            }
+          ],
+          "ttl": [
+            {
+              "enabled": true,
+              "attribute_name": "ttl"
+            }
+          ],
+          "tags": {
+            "gs:environment": "staging",
+            "gs:slice": "live5-l5-8",
+            "Name": "gs-staging-game-g1",
+            "gs:component": "game",
+            "gs:generation": "1",
+            "gs:serving": "true"
+          }
+        },
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": {}
+      }
+    },
+    {
+      "address": "module.app.aws_dynamodb_table.identity",
+      "module_address": "module.app",
+      "mode": "managed",
+      "type": "aws_dynamodb_table",
+      "name": "identity",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": [
+          "no-op"
+        ],
+        "before": {
+          "name": "gs-staging-identity",
+          "arn": "arn:aws:dynamodb:us-east-1:111111111111:table/gs-staging-identity",
+          "deletion_protection_enabled": true,
+          "point_in_time_recovery": [
+            {
+              "enabled": true,
+              "recovery_period_in_days": 35
+            }
+          ],
+          "ttl": [
+            {
+              "enabled": true,
+              "attribute_name": "ttl"
+            }
+          ]
+        },
+        "after": {
+          "name": "gs-staging-identity",
+          "arn": "arn:aws:dynamodb:us-east-1:111111111111:table/gs-staging-identity",
+          "deletion_protection_enabled": true,
+          "point_in_time_recovery": [
+            {
+              "enabled": true,
+              "recovery_period_in_days": 35
+            }
+          ],
+          "ttl": [
+            {
+              "enabled": true,
+              "attribute_name": "ttl"
+            }
+          ]
+        },
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": {}
+      }
+    },
+    {
+      "address": "module.app.aws_ssm_parameter.runtime[\"p1\"]",
+      "module_address": "module.app",
+      "mode": "managed",
+      "type": "aws_ssm_parameter",
+      "name": "runtime",
+      "index": "p1",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": [
+          "update"
+        ],
+        "before": {
+          "name": "/gs/staging/runtime/p1",
+          "arn": "arn:aws:ssm:us-east-1:111111111111:parameter/gs/staging/runtime/p1",
+          "type": "String",
+          "data_type": "text",
+          "tier": "Intelligent-Tiering",
+          "insecure_value": "{\"environment\":\"staging\",\"escrow\":{\"config_parameter_arn\":\"arn:aws:ssm:us-east-1:111111111111:parameter/gs/staging/juno-backend\"},\"format\":\"18COSMOS/AWS-RUNTIME/v2\",\"game_table\":\"gs-staging-game-g1\",\"generation\":1,\"identity_table\":\"gs-staging-identity\",\"ledger_table_arn\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"pool\":\"p1\",\"region\":\"us-east-1\",\"routes\":{\"p1\":{\"ws_path\":\"/gs/p/p1\"}}}",
+          "value": null,
+          "version": 3,
+          "has_value_wo": null,
+          "key_id": "",
+          "tags": {
+            "gs:environment": "staging",
+            "gs:slice": "live5-l5-8"
+          },
+          "tags_all": {
+            "gs:environment": "staging",
+            "gs:slice": "live5-l5-8",
+            "gs:managed-by": "terraform",
+            "gs:stack": "app"
+          }
+        },
+        "after": {
+          "name": "/gs/staging/runtime/p1",
+          "arn": "arn:aws:ssm:us-east-1:111111111111:parameter/gs/staging/runtime/p1",
+          "type": "String",
+          "data_type": "text",
+          "tier": "Intelligent-Tiering",
+          "insecure_value": "{\"environment\":\"staging\",\"escrow\":{\"config_parameter_arn\":\"arn:aws:ssm:us-east-1:111111111111:parameter/gs/staging/juno-backend\"},\"format\":\"18COSMOS/AWS-RUNTIME/v2\",\"game_table\":\"gs-staging-game-g1\",\"generation\":1,\"identity_table\":\"gs-staging-identity\",\"ledger_table_arn\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"ludum_origins\":[\"https://ludum.example.org\"],\"pool\":\"p1\",\"region\":\"us-east-1\",\"routes\":{\"p1\":{\"ws_path\":\"/gs/p/p1\"}}}",
+          "value": null,
+          "version": null,
+          "has_value_wo": null,
+          "key_id": "",
+          "tags": {
+            "gs:environment": "staging",
+            "gs:slice": "live5-l5-8"
+          },
+          "tags_all": {
+            "gs:environment": "staging",
+            "gs:slice": "live5-l5-8",
+            "gs:managed-by": "terraform",
+            "gs:stack": "app"
+          }
+        },
+        "after_unknown": {
+          "version": true
+        },
+        "before_sensitive": {},
+        "after_sensitive": {}
+      }
+    },
+    {
+      "address": "module.app.aws_ssm_parameter.juno_backend[0]",
+      "module_address": "module.app",
+      "mode": "managed",
+      "type": "aws_ssm_parameter",
+      "name": "juno_backend",
+      "index": 0,
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": [
+          "no-op"
+        ],
+        "before": {
+          "name": "/gs/staging/juno-backend",
+          "arn": "arn:aws:ssm:us-east-1:111111111111:parameter/gs/staging/juno-backend",
+          "type": "String",
+          "data_type": "text",
+          "tier": "Intelligent-Tiering",
+          "insecure_value": "{\"chain_id\":\"uni-7\",\"format\":\"18COSMOS/JUNO-BACKEND/v3\"}",
+          "value": null,
+          "version": 2,
+          "has_value_wo": null,
+          "key_id": "",
+          "tags": {
+            "gs:environment": "staging",
+            "gs:slice": "live5-l5-8"
+          },
+          "tags_all": {
+            "gs:environment": "staging",
+            "gs:slice": "live5-l5-8",
+            "gs:managed-by": "terraform",
+            "gs:stack": "app"
+          }
+        },
+        "after": {
+          "name": "/gs/staging/juno-backend",
+          "arn": "arn:aws:ssm:us-east-1:111111111111:parameter/gs/staging/juno-backend",
+          "type": "String",
+          "data_type": "text",
+          "tier": "Intelligent-Tiering",
+          "insecure_value": "{\"chain_id\":\"uni-7\",\"format\":\"18COSMOS/JUNO-BACKEND/v3\"}",
+          "value": null,
+          "version": 2,
+          "has_value_wo": null,
+          "key_id": "",
+          "tags": {
+            "gs:environment": "staging",
+            "gs:slice": "live5-l5-8"
+          },
+          "tags_all": {
+            "gs:environment": "staging",
+            "gs:slice": "live5-l5-8",
+            "gs:managed-by": "terraform",
+            "gs:stack": "app"
+          }
+        },
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": {}
+      }
+    },
+    {
+      "address": "module.app.aws_ecr_repository.server",
+      "module_address": "module.app",
+      "mode": "managed",
+      "type": "aws_ecr_repository",
+      "name": "server",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": [
+          "no-op"
+        ],
+        "before": {
+          "name": "gs-staging-server",
+          "image_tag_mutability": "IMMUTABLE",
+          "force_delete": false
+        },
+        "after": {
+          "name": "gs-staging-server",
+          "image_tag_mutability": "IMMUTABLE",
+          "force_delete": false
+        },
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": {}
+      }
+    },
+    {
+      "address": "module.app.aws_cloudfront_origin_request_policy.gs",
+      "module_address": "module.app",
+      "mode": "managed",
+      "type": "aws_cloudfront_origin_request_policy",
+      "name": "gs",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": [
+          "no-op"
+        ],
+        "before": {
+          "name": "gs-staging-gs-all-query-cookies-origin",
+          "id": "orp-gs-all-query-cookies",
+          "query_strings_config": [
+            {
+              "query_string_behavior": "all",
+              "query_strings": []
+            }
+          ]
+        },
+        "after": {
+          "name": "gs-staging-gs-all-query-cookies-origin",
+          "id": "orp-gs-all-query-cookies",
+          "query_strings_config": [
+            {
+              "query_string_behavior": "all",
+              "query_strings": []
+            }
+          ]
+        },
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": {}
+      }
+    },
+    {
+      "address": "module.app.aws_cloudfront_distribution.site[0]",
+      "module_address": "module.app",
+      "mode": "managed",
+      "type": "aws_cloudfront_distribution",
+      "name": "site",
+      "index": 0,
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": [
+          "no-op"
+        ],
+        "before": {
+          "id": "E2EXAMPLE123",
+          "arn": "arn:aws:cloudfront::111111111111:distribution/E2EXAMPLE123",
+          "caller_reference": "terraform-20260930",
+          "domain_name": "d111111abcdef8.cloudfront.net",
+          "hosted_zone_id": "Z2FDTNDATAQYW2",
+          "enabled": true,
+          "is_ipv6_enabled": true,
+          "http_version": "http2and3",
+          "price_class": "PriceClass_100",
+          "aliases": [
+            "play.example.org"
+          ],
+          "comment": "18Cosmos staging: the site and /gs* (the game server)",
+          "default_root_object": "",
+          "web_acl_id": "",
+          "retain_on_delete": false,
+          "wait_for_deployment": true,
+          "staging": false,
+          "continuous_deployment_policy_id": "",
+          "etag": "E1ETAG000001",
+          "last_modified_time": "2026-09-30 12:00:00 +0000 UTC",
+          "status": "Deployed",
+          "in_progress_validation_batches": 0,
+          "trusted_key_groups": [
+            {
+              "enabled": false,
+              "items": []
+            }
+          ],
+          "trusted_signers": [
+            {
+              "enabled": false,
+              "items": []
+            }
+          ],
+          "origin": [
+            {
+              "origin_id": "site",
+              "domain_name": "site.example.org",
+              "origin_path": "",
+              "connection_attempts": 3,
+              "connection_timeout": 10,
+              "origin_access_control_id": "",
+              "custom_header": [],
+              "origin_shield": [],
+              "s3_origin_config": [],
+              "vpc_origin_config": [],
+              "custom_origin_config": [
+                {
+                  "http_port": 80,
+                  "https_port": 443,
+                  "origin_protocol_policy": "https-only",
+                  "origin_ssl_protocols": [
+                    "TLSv1.2"
+                  ],
+                  "origin_keepalive_timeout": 5,
+                  "origin_read_timeout": 30,
+                  "ip_address_type": ""
+                }
+              ]
+            },
+            {
+              "origin_id": "gs-alb",
+              "domain_name": "gs-origin-host.example.org",
+              "origin_path": "",
+              "connection_attempts": 3,
+              "connection_timeout": 10,
+              "origin_access_control_id": "",
+              "custom_header": [],
+              "origin_shield": [],
+              "s3_origin_config": [],
+              "vpc_origin_config": [],
+              "custom_origin_config": [
+                {
+                  "http_port": 80,
+                  "https_port": 443,
+                  "origin_protocol_policy": "https-only",
+                  "origin_ssl_protocols": [
+                    "TLSv1.2"
+                  ],
+                  "origin_keepalive_timeout": 5,
+                  "origin_read_timeout": 60,
+                  "ip_address_type": ""
+                }
+              ]
+            }
+          ],
+          "origin_group": [],
+          "default_cache_behavior": [
+            {
+              "target_origin_id": "site",
+              "viewer_protocol_policy": "redirect-to-https",
+              "allowed_methods": [
+                "GET",
+                "HEAD",
+                "OPTIONS"
+              ],
+              "cached_methods": [
+                "GET",
+                "HEAD"
+              ],
+              "cache_policy_id": "658327ea-f89d-4fab-a63d-7e88639e58f6",
+              "origin_request_policy_id": "",
+              "compress": true
+            }
+          ],
+          "ordered_cache_behavior": [
+            {
+              "path_pattern": "/gs*",
+              "target_origin_id": "gs-alb",
+              "viewer_protocol_policy": "https-only",
+              "allowed_methods": [
+                "DELETE",
+                "GET",
+                "HEAD",
+                "OPTIONS",
+                "PATCH",
+                "POST",
+                "PUT"
+              ],
+              "cached_methods": [
+                "GET",
+                "HEAD"
+              ],
+              "cache_policy_id": "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
+              "origin_request_policy_id": "orp-gs-all-query-cookies",
+              "compress": false
+            }
+          ],
+          "restrictions": [
+            {
+              "geo_restriction": [
+                {
+                  "restriction_type": "none",
+                  "locations": []
+                }
+              ]
+            }
+          ],
+          "viewer_certificate": [
+            {
+              "acm_certificate_arn": "arn:aws:acm:us-east-1:111111111111:certificate/44444444-4444-4444-8444-444444444444",
+              "ssl_support_method": "sni-only",
+              "minimum_protocol_version": "TLSv1.2_2021",
+              "cloudfront_default_certificate": false,
+              "iam_certificate_id": ""
+            }
+          ],
+          "tags": {
+            "gs:environment": "staging",
+            "gs:slice": "live5-l5-8"
+          },
+          "tags_all": {
+            "gs:environment": "staging",
+            "gs:slice": "live5-l5-8",
+            "gs:managed-by": "terraform",
+            "gs:stack": "app"
+          }
+        },
+        "after": {
+          "id": "E2EXAMPLE123",
+          "arn": "arn:aws:cloudfront::111111111111:distribution/E2EXAMPLE123",
+          "caller_reference": "terraform-20260930",
+          "domain_name": "d111111abcdef8.cloudfront.net",
+          "hosted_zone_id": "Z2FDTNDATAQYW2",
+          "enabled": true,
+          "is_ipv6_enabled": true,
+          "http_version": "http2and3",
+          "price_class": "PriceClass_100",
+          "aliases": [
+            "play.example.org"
+          ],
+          "comment": "18Cosmos staging: the site and /gs* (the game server)",
+          "default_root_object": "",
+          "web_acl_id": "",
+          "retain_on_delete": false,
+          "wait_for_deployment": true,
+          "staging": false,
+          "continuous_deployment_policy_id": "",
+          "etag": "E1ETAG000001",
+          "last_modified_time": "2026-09-30 12:00:00 +0000 UTC",
+          "status": "Deployed",
+          "in_progress_validation_batches": 0,
+          "trusted_key_groups": [
+            {
+              "enabled": false,
+              "items": []
+            }
+          ],
+          "trusted_signers": [
+            {
+              "enabled": false,
+              "items": []
+            }
+          ],
+          "origin": [
+            {
+              "origin_id": "site",
+              "domain_name": "site.example.org",
+              "origin_path": "",
+              "connection_attempts": 3,
+              "connection_timeout": 10,
+              "origin_access_control_id": "",
+              "custom_header": [],
+              "origin_shield": [],
+              "s3_origin_config": [],
+              "vpc_origin_config": [],
+              "custom_origin_config": [
+                {
+                  "http_port": 80,
+                  "https_port": 443,
+                  "origin_protocol_policy": "https-only",
+                  "origin_ssl_protocols": [
+                    "TLSv1.2"
+                  ],
+                  "origin_keepalive_timeout": 5,
+                  "origin_read_timeout": 30,
+                  "ip_address_type": ""
+                }
+              ]
+            },
+            {
+              "origin_id": "gs-alb",
+              "domain_name": "gs-origin-host.example.org",
+              "origin_path": "",
+              "connection_attempts": 3,
+              "connection_timeout": 10,
+              "origin_access_control_id": "",
+              "custom_header": [],
+              "origin_shield": [],
+              "s3_origin_config": [],
+              "vpc_origin_config": [],
+              "custom_origin_config": [
+                {
+                  "http_port": 80,
+                  "https_port": 443,
+                  "origin_protocol_policy": "https-only",
+                  "origin_ssl_protocols": [
+                    "TLSv1.2"
+                  ],
+                  "origin_keepalive_timeout": 5,
+                  "origin_read_timeout": 60,
+                  "ip_address_type": ""
+                }
+              ]
+            }
+          ],
+          "origin_group": [],
+          "default_cache_behavior": [
+            {
+              "target_origin_id": "site",
+              "viewer_protocol_policy": "redirect-to-https",
+              "allowed_methods": [
+                "GET",
+                "HEAD",
+                "OPTIONS"
+              ],
+              "cached_methods": [
+                "GET",
+                "HEAD"
+              ],
+              "cache_policy_id": "658327ea-f89d-4fab-a63d-7e88639e58f6",
+              "origin_request_policy_id": "",
+              "compress": true
+            }
+          ],
+          "ordered_cache_behavior": [
+            {
+              "path_pattern": "/gs*",
+              "target_origin_id": "gs-alb",
+              "viewer_protocol_policy": "https-only",
+              "allowed_methods": [
+                "DELETE",
+                "GET",
+                "HEAD",
+                "OPTIONS",
+                "PATCH",
+                "POST",
+                "PUT"
+              ],
+              "cached_methods": [
+                "GET",
+                "HEAD"
+              ],
+              "cache_policy_id": "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
+              "origin_request_policy_id": "orp-gs-all-query-cookies",
+              "compress": false
+            }
+          ],
+          "restrictions": [
+            {
+              "geo_restriction": [
+                {
+                  "restriction_type": "none",
+                  "locations": []
+                }
+              ]
+            }
+          ],
+          "viewer_certificate": [
+            {
+              "acm_certificate_arn": "arn:aws:acm:us-east-1:111111111111:certificate/44444444-4444-4444-8444-444444444444",
+              "ssl_support_method": "sni-only",
+              "minimum_protocol_version": "TLSv1.2_2021",
+              "cloudfront_default_certificate": false,
+              "iam_certificate_id": ""
+            }
+          ],
+          "tags": {
+            "gs:environment": "staging",
+            "gs:slice": "live5-l5-8"
+          },
+          "tags_all": {
+            "gs:environment": "staging",
+            "gs:slice": "live5-l5-8",
+            "gs:managed-by": "terraform",
+            "gs:stack": "app"
+          }
+        },
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": {}
+      }
+    },
+    {
+      "address": "module.app.aws_iam_role.bootstrap",
+      "module_address": "module.app",
+      "mode": "managed",
+      "type": "aws_iam_role",
+      "name": "bootstrap",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": [
+          "no-op"
+        ],
+        "before": {
+          "name": "gs-staging-bootstrap",
+          "arn": "arn:aws:iam::111111111111:role/gs-staging-bootstrap"
+        },
+        "after": {
+          "name": "gs-staging-bootstrap",
+          "arn": "arn:aws:iam::111111111111:role/gs-staging-bootstrap"
+        },
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": {}
+      }
+    },
+    {
+      "address": "module.app.aws_iam_role_policy.bootstrap",
+      "module_address": "module.app",
+      "mode": "managed",
+      "type": "aws_iam_role_policy",
+      "name": "bootstrap",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": [
+          "no-op"
+        ],
+        "before": {
+          "name": "gs-bootstrap",
+          "role": "gs-staging-bootstrap",
+          "policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Sid\":\"RoutingItemOnly\",\"Effect\":\"Allow\",\"Action\":[\"dynamodb:GetItem\",\"dynamodb:PutItem\"],\"Resource\":\"arn:aws:dynamodb:us-east-1:111111111111:table/gs-staging-game-g1\",\"Condition\":{\"ForAllValues:StringEquals\":{\"dynamodb:LeadingKeys\":\"SYSTEM\"}}},{\"Sid\":\"DescribeTables\",\"Effect\":\"Allow\",\"Action\":[\"dynamodb:DescribeContinuousBackups\",\"dynamodb:DescribeTable\",\"dynamodb:DescribeTimeToLive\"],\"Resource\":[\"arn:aws:dynamodb:us-east-1:111111111111:table/gs-staging-game-g1\",\"arn:aws:dynamodb:us-east-1:111111111111:table/gs-staging-identity\",\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\"]},{\"Sid\":\"ReadConfiguration\",\"Effect\":\"Allow\",\"Action\":\"ssm:GetParameter\",\"Resource\":[\"arn:aws:ssm:us-east-1:111111111111:parameter/gs/staging/runtime/p1\",\"arn:aws:ssm:us-east-1:111111111111:parameter/gs/staging/juno-backend\"]},{\"Sid\":\"SigningKeysReadOnly\",\"Effect\":\"Allow\",\"Action\":[\"kms:DescribeKey\",\"kms:GetPublicKey\",\"kms:ListGrants\"],\"Resource\":[\"arn:aws:kms:us-east-1:222222222222:key/33333333-3333-4333-8333-333333333333\",\"arn:aws:kms:us-east-1:222222222222:key/11111111-1111-4111-8111-111111111111\",\"arn:aws:kms:us-east-1:222222222222:key/22222222-2222-4222-8222-222222222222\"]},{\"Sid\":\"VerifierDescribeServices\",\"Effect\":\"Allow\",\"Action\":\"ecs:DescribeServices\",\"Resource\":\"arn:aws:ecs:us-east-1:111111111111:service/gs-staging/*\"},{\"Sid\":\"HostVerifierDescribeUnscopable\",\"Effect\":\"Allow\",\"Action\":[\"ec2:DescribeInstances\",\"ec2:DescribeInstanceAttribute\",\"ec2:DescribeInstanceCreditSpecifications\",\"ec2:DescribeVolumes\",\"ec2:DescribeImages\",\"ec2:DescribeNetworkInterfaces\",\"ec2:DescribeAddresses\",\"ec2:DescribeNatGateways\",\"ec2:DescribeVpcEndpoints\",\"ec2:DescribeManagedPrefixLists\",\"ssm:DescribeInstanceInformation\",\"logs:DescribeLogGroups\"],\"Resource\":\"*\"},{\"Sid\":\"HostVerifierEcsEra\",\"Effect\":\"Allow\",\"Action\":[\"ecs:DescribeClusters\",\"ecs:ListServices\"],\"Resource\":\"*\"},{\"Sid\":\"HostVerifierHostRole\",\"Effect\":\"Allow\",\"Action\":[\"iam:GetInstanceProfile\",\"iam:GetRole\",\"iam:GetRolePolicy\",\"iam:ListAttachedRolePolicies\",\"iam:ListRolePolicies\"],\"Resource\":[\"arn:aws:iam::111111111111:instance-profile/gs-staging-host-app\",\"arn:aws:iam::111111111111:role/gs-staging-host-app\"]},{\"Sid\":\"HostVerifierBudgets\",\"Effect\":\"Allow\",\"Action\":\"budgets:ViewBudget\",\"Resource\":\"arn:aws:budgets::111111111111:budget/*\"}]}"
+        },
+        "after": {
+          "name": "gs-bootstrap",
+          "role": "gs-staging-bootstrap",
+          "policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Sid\":\"RoutingItemOnly\",\"Effect\":\"Allow\",\"Action\":[\"dynamodb:GetItem\",\"dynamodb:PutItem\"],\"Resource\":\"arn:aws:dynamodb:us-east-1:111111111111:table/gs-staging-game-g1\",\"Condition\":{\"ForAllValues:StringEquals\":{\"dynamodb:LeadingKeys\":\"SYSTEM\"}}},{\"Sid\":\"DescribeTables\",\"Effect\":\"Allow\",\"Action\":[\"dynamodb:DescribeContinuousBackups\",\"dynamodb:DescribeTable\",\"dynamodb:DescribeTimeToLive\"],\"Resource\":[\"arn:aws:dynamodb:us-east-1:111111111111:table/gs-staging-game-g1\",\"arn:aws:dynamodb:us-east-1:111111111111:table/gs-staging-identity\",\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\"]},{\"Sid\":\"ReadConfiguration\",\"Effect\":\"Allow\",\"Action\":\"ssm:GetParameter\",\"Resource\":[\"arn:aws:ssm:us-east-1:111111111111:parameter/gs/staging/runtime/p1\",\"arn:aws:ssm:us-east-1:111111111111:parameter/gs/staging/juno-backend\"]},{\"Sid\":\"SigningKeysReadOnly\",\"Effect\":\"Allow\",\"Action\":[\"kms:DescribeKey\",\"kms:GetPublicKey\",\"kms:ListGrants\"],\"Resource\":[\"arn:aws:kms:us-east-1:222222222222:key/33333333-3333-4333-8333-333333333333\",\"arn:aws:kms:us-east-1:222222222222:key/11111111-1111-4111-8111-111111111111\",\"arn:aws:kms:us-east-1:222222222222:key/22222222-2222-4222-8222-222222222222\"]},{\"Sid\":\"VerifierDescribeServices\",\"Effect\":\"Allow\",\"Action\":\"ecs:DescribeServices\",\"Resource\":\"arn:aws:ecs:us-east-1:111111111111:service/gs-staging/*\"},{\"Sid\":\"HostVerifierDescribeUnscopable\",\"Effect\":\"Allow\",\"Action\":[\"ec2:DescribeInstances\",\"ec2:DescribeInstanceAttribute\",\"ec2:DescribeInstanceCreditSpecifications\",\"ec2:DescribeVolumes\",\"ec2:DescribeImages\",\"ec2:DescribeNetworkInterfaces\",\"ec2:DescribeAddresses\",\"ec2:DescribeNatGateways\",\"ec2:DescribeVpcEndpoints\",\"ec2:DescribeManagedPrefixLists\",\"ssm:DescribeInstanceInformation\",\"logs:DescribeLogGroups\"],\"Resource\":\"*\"},{\"Sid\":\"HostVerifierEcsEra\",\"Effect\":\"Allow\",\"Action\":[\"ecs:DescribeClusters\",\"ecs:ListServices\"],\"Resource\":\"*\"},{\"Sid\":\"HostVerifierHostRole\",\"Effect\":\"Allow\",\"Action\":[\"iam:GetInstanceProfile\",\"iam:GetRole\",\"iam:GetRolePolicy\",\"iam:ListAttachedRolePolicies\",\"iam:ListRolePolicies\"],\"Resource\":[\"arn:aws:iam::111111111111:instance-profile/gs-staging-host-app\",\"arn:aws:iam::111111111111:role/gs-staging-host-app\"]},{\"Sid\":\"HostVerifierBudgets\",\"Effect\":\"Allow\",\"Action\":\"budgets:ViewBudget\",\"Resource\":\"arn:aws:budgets::111111111111:budget/*\"}]}"
+        },
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": {}
+      }
+    },
+    {
+      "address": "module.app.aws_iam_role.operator[0]",
+      "module_address": "module.app",
+      "mode": "managed",
+      "type": "aws_iam_role",
+      "name": "operator",
+      "index": 0,
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": [
+          "no-op"
+        ],
+        "before": {
+          "name": "gs-staging-operator",
+          "arn": "arn:aws:iam::111111111111:role/gs-staging-operator"
+        },
+        "after": {
+          "name": "gs-staging-operator",
+          "arn": "arn:aws:iam::111111111111:role/gs-staging-operator"
+        },
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": {}
+      }
+    },
+    {
+      "address": "module.app.aws_iam_role_policy.operator[0]",
+      "module_address": "module.app",
+      "mode": "managed",
+      "type": "aws_iam_role_policy",
+      "name": "operator",
+      "index": 0,
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": [
+          "no-op"
+        ],
+        "before": {
+          "name": "gs-operator",
+          "role": "gs-staging-operator",
+          "policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Sid\":\"GameTableRead\",\"Effect\":\"Allow\",\"Action\":[\"dynamodb:GetItem\",\"dynamodb:Query\",\"dynamodb:Scan\"],\"Resource\":\"arn:aws:dynamodb:us-east-1:111111111111:table/gs-staging-game-g1\"},{\"Sid\":\"IdentityEvidenceRead\",\"Effect\":\"Allow\",\"Action\":\"dynamodb:GetItem\",\"Resource\":\"arn:aws:dynamodb:us-east-1:111111111111:table/gs-staging-identity\",\"Condition\":{\"ForAllValues:StringLike\":{\"dynamodb:LeadingKeys\":[\"FAM#*\",\"PRIN#*\",\"PROF#*\"]},\"Null\":{\"dynamodb:LeadingKeys\":\"false\"}}},{\"Sid\":\"LedgerRead\",\"Effect\":\"Allow\",\"Action\":[\"dynamodb:GetItem\",\"dynamodb:Scan\"],\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\"},{\"Sid\":\"LedgerJournalQuery\",\"Effect\":\"Allow\",\"Action\":\"dynamodb:Query\",\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Condition\":{\"ForAllValues:StringLike\":{\"dynamodb:LeadingKeys\":\"ATTI#*\"},\"Null\":{\"dynamodb:LeadingKeys\":\"false\"}}},{\"Sid\":\"ReadConfiguration\",\"Effect\":\"Allow\",\"Action\":\"ssm:GetParameter\",\"Resource\":[\"arn:aws:ssm:us-east-1:111111111111:parameter/gs/staging/runtime/p1\",\"arn:aws:ssm:us-east-1:111111111111:parameter/gs/staging/juno-backend\"]},{\"Sid\":\"FlipWindowMetricsOnly\",\"Effect\":\"Allow\",\"Action\":\"cloudwatch:PutMetricData\",\"Resource\":\"*\",\"Condition\":{\"StringEquals\":{\"cloudwatch:namespace\":\"18Cosmos/Operator\"}}}]}"
+        },
+        "after": {
+          "name": "gs-operator",
+          "role": "gs-staging-operator",
+          "policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Sid\":\"GameTableRead\",\"Effect\":\"Allow\",\"Action\":[\"dynamodb:GetItem\",\"dynamodb:Query\",\"dynamodb:Scan\"],\"Resource\":\"arn:aws:dynamodb:us-east-1:111111111111:table/gs-staging-game-g1\"},{\"Sid\":\"IdentityEvidenceRead\",\"Effect\":\"Allow\",\"Action\":\"dynamodb:GetItem\",\"Resource\":\"arn:aws:dynamodb:us-east-1:111111111111:table/gs-staging-identity\",\"Condition\":{\"ForAllValues:StringLike\":{\"dynamodb:LeadingKeys\":[\"FAM#*\",\"PRIN#*\",\"PROF#*\"]},\"Null\":{\"dynamodb:LeadingKeys\":\"false\"}}},{\"Sid\":\"LedgerRead\",\"Effect\":\"Allow\",\"Action\":[\"dynamodb:GetItem\",\"dynamodb:Scan\"],\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\"},{\"Sid\":\"LedgerJournalQuery\",\"Effect\":\"Allow\",\"Action\":\"dynamodb:Query\",\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Condition\":{\"ForAllValues:StringLike\":{\"dynamodb:LeadingKeys\":\"ATTI#*\"},\"Null\":{\"dynamodb:LeadingKeys\":\"false\"}}},{\"Sid\":\"ReadConfiguration\",\"Effect\":\"Allow\",\"Action\":\"ssm:GetParameter\",\"Resource\":[\"arn:aws:ssm:us-east-1:111111111111:parameter/gs/staging/runtime/p1\",\"arn:aws:ssm:us-east-1:111111111111:parameter/gs/staging/juno-backend\"]},{\"Sid\":\"FlipWindowMetricsOnly\",\"Effect\":\"Allow\",\"Action\":\"cloudwatch:PutMetricData\",\"Resource\":\"*\",\"Condition\":{\"StringEquals\":{\"cloudwatch:namespace\":\"18Cosmos/Operator\"}}}]}"
+        },
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": {}
+      }
+    }
+  ],
+  "prior_state": {
+    "format_version": "1.0",
+    "terraform_version": "1.9.8",
+    "values": {
+      "root_module": {
+        "child_modules": [
+          {
+            "address": "module.app",
+            "resources": [
+              {
+                "address": "module.app.aws_dynamodb_table.game[\"1\"]",
+                "mode": "managed",
+                "type": "aws_dynamodb_table",
+                "name": "game",
+                "index": "1",
+                "provider_name": "registry.terraform.io/hashicorp/aws",
+                "schema_version": 0,
+                "values": {
+                  "name": "gs-staging-game-g1",
+                  "arn": "arn:aws:dynamodb:us-east-1:111111111111:table/gs-staging-game-g1",
+                  "deletion_protection_enabled": true,
+                  "point_in_time_recovery": [
+                    {
+                      "enabled": true,
+                      "recovery_period_in_days": 35
+                    }
+                  ],
+                  "ttl": [
+                    {
+                      "enabled": true,
+                      "attribute_name": "ttl"
+                    }
+                  ],
+                  "tags": {
+                    "gs:environment": "staging",
+                    "gs:slice": "live5-l5-8",
+                    "Name": "gs-staging-game-g1",
+                    "gs:component": "game",
+                    "gs:generation": "1",
+                    "gs:serving": "true"
+                  }
+                }
+              },
+              {
+                "address": "module.app.aws_dynamodb_table.identity",
+                "mode": "managed",
+                "type": "aws_dynamodb_table",
+                "name": "identity",
+                "provider_name": "registry.terraform.io/hashicorp/aws",
+                "schema_version": 0,
+                "values": {
+                  "name": "gs-staging-identity",
+                  "arn": "arn:aws:dynamodb:us-east-1:111111111111:table/gs-staging-identity",
+                  "deletion_protection_enabled": true,
+                  "point_in_time_recovery": [
+                    {
+                      "enabled": true,
+                      "recovery_period_in_days": 35
+                    }
+                  ],
+                  "ttl": [
+                    {
+                      "enabled": true,
+                      "attribute_name": "ttl"
+                    }
+                  ]
+                }
+              },
+              {
+                "address": "module.app.aws_ssm_parameter.runtime[\"p1\"]",
+                "mode": "managed",
+                "type": "aws_ssm_parameter",
+                "name": "runtime",
+                "index": "p1",
+                "provider_name": "registry.terraform.io/hashicorp/aws",
+                "schema_version": 0,
+                "values": {
+                  "name": "/gs/staging/runtime/p1",
+                  "arn": "arn:aws:ssm:us-east-1:111111111111:parameter/gs/staging/runtime/p1",
+                  "type": "String",
+                  "data_type": "text",
+                  "tier": "Intelligent-Tiering",
+                  "insecure_value": "{\"environment\":\"staging\",\"escrow\":{\"config_parameter_arn\":\"arn:aws:ssm:us-east-1:111111111111:parameter/gs/staging/juno-backend\"},\"format\":\"18COSMOS/AWS-RUNTIME/v2\",\"game_table\":\"gs-staging-game-g1\",\"generation\":1,\"identity_table\":\"gs-staging-identity\",\"ledger_table_arn\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"pool\":\"p1\",\"region\":\"us-east-1\",\"routes\":{\"p1\":{\"ws_path\":\"/gs/p/p1\"}}}",
+                  "value": null,
+                  "version": 3,
+                  "has_value_wo": null,
+                  "key_id": "",
+                  "tags": {
+                    "gs:environment": "staging",
+                    "gs:slice": "live5-l5-8"
+                  },
+                  "tags_all": {
+                    "gs:environment": "staging",
+                    "gs:slice": "live5-l5-8",
+                    "gs:managed-by": "terraform",
+                    "gs:stack": "app"
+                  }
+                }
+              },
+              {
+                "address": "module.app.aws_ssm_parameter.juno_backend[0]",
+                "mode": "managed",
+                "type": "aws_ssm_parameter",
+                "name": "juno_backend",
+                "index": 0,
+                "provider_name": "registry.terraform.io/hashicorp/aws",
+                "schema_version": 0,
+                "values": {
+                  "name": "/gs/staging/juno-backend",
+                  "arn": "arn:aws:ssm:us-east-1:111111111111:parameter/gs/staging/juno-backend",
+                  "type": "String",
+                  "data_type": "text",
+                  "tier": "Intelligent-Tiering",
+                  "insecure_value": "{\"chain_id\":\"uni-7\",\"format\":\"18COSMOS/JUNO-BACKEND/v3\"}",
+                  "value": null,
+                  "version": 2,
+                  "has_value_wo": null,
+                  "key_id": "",
+                  "tags": {
+                    "gs:environment": "staging",
+                    "gs:slice": "live5-l5-8"
+                  },
+                  "tags_all": {
+                    "gs:environment": "staging",
+                    "gs:slice": "live5-l5-8",
+                    "gs:managed-by": "terraform",
+                    "gs:stack": "app"
+                  }
+                }
+              },
+              {
+                "address": "module.app.aws_ecr_repository.server",
+                "mode": "managed",
+                "type": "aws_ecr_repository",
+                "name": "server",
+                "provider_name": "registry.terraform.io/hashicorp/aws",
+                "schema_version": 0,
+                "values": {
+                  "name": "gs-staging-server",
+                  "image_tag_mutability": "IMMUTABLE",
+                  "force_delete": false
+                }
+              },
+              {
+                "address": "module.app.aws_cloudfront_origin_request_policy.gs",
+                "mode": "managed",
+                "type": "aws_cloudfront_origin_request_policy",
+                "name": "gs",
+                "provider_name": "registry.terraform.io/hashicorp/aws",
+                "schema_version": 0,
+                "values": {
+                  "name": "gs-staging-gs-all-query-cookies-origin",
+                  "id": "orp-gs-all-query-cookies",
+                  "query_strings_config": [
+                    {
+                      "query_string_behavior": "all",
+                      "query_strings": []
+                    }
+                  ]
+                }
+              },
+              {
+                "address": "module.app.aws_cloudfront_distribution.site[0]",
+                "mode": "managed",
+                "type": "aws_cloudfront_distribution",
+                "name": "site",
+                "index": 0,
+                "provider_name": "registry.terraform.io/hashicorp/aws",
+                "schema_version": 0,
+                "values": {
+                  "id": "E2EXAMPLE123",
+                  "arn": "arn:aws:cloudfront::111111111111:distribution/E2EXAMPLE123",
+                  "caller_reference": "terraform-20260930",
+                  "domain_name": "d111111abcdef8.cloudfront.net",
+                  "hosted_zone_id": "Z2FDTNDATAQYW2",
+                  "enabled": true,
+                  "is_ipv6_enabled": true,
+                  "http_version": "http2and3",
+                  "price_class": "PriceClass_100",
+                  "aliases": [
+                    "play.example.org"
+                  ],
+                  "comment": "18Cosmos staging: the site and /gs* (the game server)",
+                  "default_root_object": "",
+                  "web_acl_id": "",
+                  "retain_on_delete": false,
+                  "wait_for_deployment": true,
+                  "staging": false,
+                  "continuous_deployment_policy_id": "",
+                  "etag": "E1ETAG000001",
+                  "last_modified_time": "2026-09-30 12:00:00 +0000 UTC",
+                  "status": "Deployed",
+                  "in_progress_validation_batches": 0,
+                  "trusted_key_groups": [
+                    {
+                      "enabled": false,
+                      "items": []
+                    }
+                  ],
+                  "trusted_signers": [
+                    {
+                      "enabled": false,
+                      "items": []
+                    }
+                  ],
+                  "origin": [
+                    {
+                      "origin_id": "site",
+                      "domain_name": "site.example.org",
+                      "origin_path": "",
+                      "connection_attempts": 3,
+                      "connection_timeout": 10,
+                      "origin_access_control_id": "",
+                      "custom_header": [],
+                      "origin_shield": [],
+                      "s3_origin_config": [],
+                      "vpc_origin_config": [],
+                      "custom_origin_config": [
+                        {
+                          "http_port": 80,
+                          "https_port": 443,
+                          "origin_protocol_policy": "https-only",
+                          "origin_ssl_protocols": [
+                            "TLSv1.2"
+                          ],
+                          "origin_keepalive_timeout": 5,
+                          "origin_read_timeout": 30,
+                          "ip_address_type": ""
+                        }
+                      ]
+                    },
+                    {
+                      "origin_id": "gs-alb",
+                      "domain_name": "gs-origin-host.example.org",
+                      "origin_path": "",
+                      "connection_attempts": 3,
+                      "connection_timeout": 10,
+                      "origin_access_control_id": "",
+                      "custom_header": [],
+                      "origin_shield": [],
+                      "s3_origin_config": [],
+                      "vpc_origin_config": [],
+                      "custom_origin_config": [
+                        {
+                          "http_port": 80,
+                          "https_port": 443,
+                          "origin_protocol_policy": "https-only",
+                          "origin_ssl_protocols": [
+                            "TLSv1.2"
+                          ],
+                          "origin_keepalive_timeout": 5,
+                          "origin_read_timeout": 60,
+                          "ip_address_type": ""
+                        }
+                      ]
+                    }
+                  ],
+                  "origin_group": [],
+                  "default_cache_behavior": [
+                    {
+                      "target_origin_id": "site",
+                      "viewer_protocol_policy": "redirect-to-https",
+                      "allowed_methods": [
+                        "GET",
+                        "HEAD",
+                        "OPTIONS"
+                      ],
+                      "cached_methods": [
+                        "GET",
+                        "HEAD"
+                      ],
+                      "cache_policy_id": "658327ea-f89d-4fab-a63d-7e88639e58f6",
+                      "origin_request_policy_id": "",
+                      "compress": true
+                    }
+                  ],
+                  "ordered_cache_behavior": [
+                    {
+                      "path_pattern": "/gs*",
+                      "target_origin_id": "gs-alb",
+                      "viewer_protocol_policy": "https-only",
+                      "allowed_methods": [
+                        "DELETE",
+                        "GET",
+                        "HEAD",
+                        "OPTIONS",
+                        "PATCH",
+                        "POST",
+                        "PUT"
+                      ],
+                      "cached_methods": [
+                        "GET",
+                        "HEAD"
+                      ],
+                      "cache_policy_id": "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
+                      "origin_request_policy_id": "orp-gs-all-query-cookies",
+                      "compress": false
+                    }
+                  ],
+                  "restrictions": [
+                    {
+                      "geo_restriction": [
+                        {
+                          "restriction_type": "none",
+                          "locations": []
+                        }
+                      ]
+                    }
+                  ],
+                  "viewer_certificate": [
+                    {
+                      "acm_certificate_arn": "arn:aws:acm:us-east-1:111111111111:certificate/44444444-4444-4444-8444-444444444444",
+                      "ssl_support_method": "sni-only",
+                      "minimum_protocol_version": "TLSv1.2_2021",
+                      "cloudfront_default_certificate": false,
+                      "iam_certificate_id": ""
+                    }
+                  ],
+                  "tags": {
+                    "gs:environment": "staging",
+                    "gs:slice": "live5-l5-8"
+                  },
+                  "tags_all": {
+                    "gs:environment": "staging",
+                    "gs:slice": "live5-l5-8",
+                    "gs:managed-by": "terraform",
+                    "gs:stack": "app"
+                  }
+                }
+              },
+              {
+                "address": "module.app.aws_iam_role.bootstrap",
+                "mode": "managed",
+                "type": "aws_iam_role",
+                "name": "bootstrap",
+                "provider_name": "registry.terraform.io/hashicorp/aws",
+                "schema_version": 0,
+                "values": {
+                  "name": "gs-staging-bootstrap",
+                  "arn": "arn:aws:iam::111111111111:role/gs-staging-bootstrap"
+                }
+              },
+              {
+                "address": "module.app.aws_iam_role_policy.bootstrap",
+                "mode": "managed",
+                "type": "aws_iam_role_policy",
+                "name": "bootstrap",
+                "provider_name": "registry.terraform.io/hashicorp/aws",
+                "schema_version": 0,
+                "values": {
+                  "name": "gs-bootstrap",
+                  "role": "gs-staging-bootstrap",
+                  "policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Sid\":\"RoutingItemOnly\",\"Effect\":\"Allow\",\"Action\":[\"dynamodb:GetItem\",\"dynamodb:PutItem\"],\"Resource\":\"arn:aws:dynamodb:us-east-1:111111111111:table/gs-staging-game-g1\",\"Condition\":{\"ForAllValues:StringEquals\":{\"dynamodb:LeadingKeys\":\"SYSTEM\"}}},{\"Sid\":\"DescribeTables\",\"Effect\":\"Allow\",\"Action\":[\"dynamodb:DescribeContinuousBackups\",\"dynamodb:DescribeTable\",\"dynamodb:DescribeTimeToLive\"],\"Resource\":[\"arn:aws:dynamodb:us-east-1:111111111111:table/gs-staging-game-g1\",\"arn:aws:dynamodb:us-east-1:111111111111:table/gs-staging-identity\",\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\"]},{\"Sid\":\"ReadConfiguration\",\"Effect\":\"Allow\",\"Action\":\"ssm:GetParameter\",\"Resource\":[\"arn:aws:ssm:us-east-1:111111111111:parameter/gs/staging/runtime/p1\",\"arn:aws:ssm:us-east-1:111111111111:parameter/gs/staging/juno-backend\"]},{\"Sid\":\"SigningKeysReadOnly\",\"Effect\":\"Allow\",\"Action\":[\"kms:DescribeKey\",\"kms:GetPublicKey\",\"kms:ListGrants\"],\"Resource\":[\"arn:aws:kms:us-east-1:222222222222:key/33333333-3333-4333-8333-333333333333\",\"arn:aws:kms:us-east-1:222222222222:key/11111111-1111-4111-8111-111111111111\",\"arn:aws:kms:us-east-1:222222222222:key/22222222-2222-4222-8222-222222222222\"]},{\"Sid\":\"VerifierDescribeServices\",\"Effect\":\"Allow\",\"Action\":\"ecs:DescribeServices\",\"Resource\":\"arn:aws:ecs:us-east-1:111111111111:service/gs-staging/*\"},{\"Sid\":\"HostVerifierDescribeUnscopable\",\"Effect\":\"Allow\",\"Action\":[\"ec2:DescribeInstances\",\"ec2:DescribeInstanceAttribute\",\"ec2:DescribeInstanceCreditSpecifications\",\"ec2:DescribeVolumes\",\"ec2:DescribeImages\",\"ec2:DescribeNetworkInterfaces\",\"ec2:DescribeAddresses\",\"ec2:DescribeNatGateways\",\"ec2:DescribeVpcEndpoints\",\"ec2:DescribeManagedPrefixLists\",\"ssm:DescribeInstanceInformation\",\"logs:DescribeLogGroups\"],\"Resource\":\"*\"},{\"Sid\":\"HostVerifierEcsEra\",\"Effect\":\"Allow\",\"Action\":[\"ecs:DescribeClusters\",\"ecs:ListServices\"],\"Resource\":\"*\"},{\"Sid\":\"HostVerifierHostRole\",\"Effect\":\"Allow\",\"Action\":[\"iam:GetInstanceProfile\",\"iam:GetRole\",\"iam:GetRolePolicy\",\"iam:ListAttachedRolePolicies\",\"iam:ListRolePolicies\"],\"Resource\":[\"arn:aws:iam::111111111111:instance-profile/gs-staging-host-app\",\"arn:aws:iam::111111111111:role/gs-staging-host-app\"]},{\"Sid\":\"HostVerifierBudgets\",\"Effect\":\"Allow\",\"Action\":\"budgets:ViewBudget\",\"Resource\":\"arn:aws:budgets::111111111111:budget/*\"}]}"
+                }
+              },
+              {
+                "address": "module.app.aws_iam_role.operator[0]",
+                "mode": "managed",
+                "type": "aws_iam_role",
+                "name": "operator",
+                "index": 0,
+                "provider_name": "registry.terraform.io/hashicorp/aws",
+                "schema_version": 0,
+                "values": {
+                  "name": "gs-staging-operator",
+                  "arn": "arn:aws:iam::111111111111:role/gs-staging-operator"
+                }
+              },
+              {
+                "address": "module.app.aws_iam_role_policy.operator[0]",
+                "mode": "managed",
+                "type": "aws_iam_role_policy",
+                "name": "operator",
+                "index": 0,
+                "provider_name": "registry.terraform.io/hashicorp/aws",
+                "schema_version": 0,
+                "values": {
+                  "name": "gs-operator",
+                  "role": "gs-staging-operator",
+                  "policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Sid\":\"GameTableRead\",\"Effect\":\"Allow\",\"Action\":[\"dynamodb:GetItem\",\"dynamodb:Query\",\"dynamodb:Scan\"],\"Resource\":\"arn:aws:dynamodb:us-east-1:111111111111:table/gs-staging-game-g1\"},{\"Sid\":\"IdentityEvidenceRead\",\"Effect\":\"Allow\",\"Action\":\"dynamodb:GetItem\",\"Resource\":\"arn:aws:dynamodb:us-east-1:111111111111:table/gs-staging-identity\",\"Condition\":{\"ForAllValues:StringLike\":{\"dynamodb:LeadingKeys\":[\"FAM#*\",\"PRIN#*\",\"PROF#*\"]},\"Null\":{\"dynamodb:LeadingKeys\":\"false\"}}},{\"Sid\":\"LedgerRead\",\"Effect\":\"Allow\",\"Action\":[\"dynamodb:GetItem\",\"dynamodb:Scan\"],\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\"},{\"Sid\":\"LedgerJournalQuery\",\"Effect\":\"Allow\",\"Action\":\"dynamodb:Query\",\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Condition\":{\"ForAllValues:StringLike\":{\"dynamodb:LeadingKeys\":\"ATTI#*\"},\"Null\":{\"dynamodb:LeadingKeys\":\"false\"}}},{\"Sid\":\"ReadConfiguration\",\"Effect\":\"Allow\",\"Action\":\"ssm:GetParameter\",\"Resource\":[\"arn:aws:ssm:us-east-1:111111111111:parameter/gs/staging/runtime/p1\",\"arn:aws:ssm:us-east-1:111111111111:parameter/gs/staging/juno-backend\"]},{\"Sid\":\"FlipWindowMetricsOnly\",\"Effect\":\"Allow\",\"Action\":\"cloudwatch:PutMetricData\",\"Resource\":\"*\",\"Condition\":{\"StringEquals\":{\"cloudwatch:namespace\":\"18Cosmos/Operator\"}}}]}"
+                }
+              },
+              {
+                "address": "module.app.data.aws_dynamodb_table_item.routing[0]",
+                "mode": "data",
+                "type": "aws_dynamodb_table_item",
+                "name": "routing",
+                "index": 0,
+                "provider_name": "registry.terraform.io/hashicorp/aws",
+                "schema_version": 0,
+                "values": {
+                  "table_name": "gs-staging-game-g1",
+                  "key": "",
+                  "item": "{\"pk\":{\"S\":\"SYSTEM\"},\"sk\":{\"S\":\"ROUTING\"},\"fmt\":{\"N\":\"1\"},\"primary_pool\":{\"S\":\"p1\"},\"routing_version\":{\"N\":\"3\"}}"
+                }
+              },
+              {
+                "address": "module.app.data.aws_dynamodb_table_item.generation[0]",
+                "mode": "data",
+                "type": "aws_dynamodb_table_item",
+                "name": "generation",
+                "index": 0,
+                "provider_name": "registry.terraform.io/hashicorp/aws",
+                "schema_version": 0,
+                "values": {
+                  "table_name": "gs-staging-game-g1",
+                  "key": "",
+                  "item": "{\"pk\":{\"S\":\"SYSTEM\"},\"sk\":{\"S\":\"GENERATION\"},\"fmt\":{\"N\":\"1\"},\"generation\":{\"N\":\"1\"},\"game_table\":{\"S\":\"gs-staging-game-g1\"},\"origin\":{\"S\":\"bootstrap\"},\"restore_id\":{\"NULL\":true}}"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "configuration": {
+    "provider_config": {
+      "aws": {
+        "name": "aws",
+        "full_name": "registry.terraform.io/hashicorp/aws",
+        "version_constraint": "6.66.0"
+      }
+    },
+    "root_module": {
+      "module_calls": {
+        "app": {
+          "source": "../../modules/app",
+          "expressions": {},
+          "module": {
+            "resources": [
+              {
+                "address": "aws_dynamodb_table.game",
+                "mode": "managed",
+                "type": "aws_dynamodb_table",
+                "name": "game",
+                "provider_config_key": "aws",
+                "expressions": {},
+                "schema_version": 0
+              },
+              {
+                "address": "aws_dynamodb_table.identity",
+                "mode": "managed",
+                "type": "aws_dynamodb_table",
+                "name": "identity",
+                "provider_config_key": "aws",
+                "expressions": {},
+                "schema_version": 0
+              },
+              {
+                "address": "aws_ssm_parameter.runtime",
+                "mode": "managed",
+                "type": "aws_ssm_parameter",
+                "name": "runtime",
+                "provider_config_key": "aws",
+                "expressions": {},
+                "schema_version": 0
+              },
+              {
+                "address": "aws_ssm_parameter.juno_backend",
+                "mode": "managed",
+                "type": "aws_ssm_parameter",
+                "name": "juno_backend",
+                "provider_config_key": "aws",
+                "expressions": {},
+                "schema_version": 0
+              },
+              {
+                "address": "aws_ecr_repository.server",
+                "mode": "managed",
+                "type": "aws_ecr_repository",
+                "name": "server",
+                "provider_config_key": "aws",
+                "expressions": {},
+                "schema_version": 0
+              },
+              {
+                "address": "aws_cloudfront_origin_request_policy.gs",
+                "mode": "managed",
+                "type": "aws_cloudfront_origin_request_policy",
+                "name": "gs",
+                "provider_config_key": "aws",
+                "expressions": {},
+                "schema_version": 0
+              },
+              {
+                "address": "aws_cloudfront_distribution.site",
+                "mode": "managed",
+                "type": "aws_cloudfront_distribution",
+                "name": "site",
+                "provider_config_key": "aws",
+                "expressions": {},
+                "schema_version": 0
+              },
+              {
+                "address": "aws_iam_role.bootstrap",
+                "mode": "managed",
+                "type": "aws_iam_role",
+                "name": "bootstrap",
+                "provider_config_key": "aws",
+                "expressions": {},
+                "schema_version": 0
+              },
+              {
+                "address": "aws_iam_role_policy.bootstrap",
+                "mode": "managed",
+                "type": "aws_iam_role_policy",
+                "name": "bootstrap",
+                "provider_config_key": "aws",
+                "expressions": {},
+                "schema_version": 0
+              },
+              {
+                "address": "aws_iam_role.operator",
+                "mode": "managed",
+                "type": "aws_iam_role",
+                "name": "operator",
+                "provider_config_key": "aws",
+                "expressions": {},
+                "schema_version": 0
+              },
+              {
+                "address": "aws_iam_role_policy.operator",
+                "mode": "managed",
+                "type": "aws_iam_role_policy",
+                "name": "operator",
+                "provider_config_key": "aws",
+                "expressions": {},
+                "schema_version": 0
+              },
+              {
+                "address": "data.aws_partition.current",
+                "mode": "data",
+                "type": "aws_partition",
+                "name": "current",
+                "provider_config_key": "aws",
+                "expressions": {},
+                "schema_version": 0
+              },
+              {
+                "address": "data.aws_caller_identity.current",
+                "mode": "data",
+                "type": "aws_caller_identity",
+                "name": "current",
+                "provider_config_key": "aws",
+                "expressions": {},
+                "schema_version": 0
+              },
+              {
+                "address": "data.aws_region.current",
+                "mode": "data",
+                "type": "aws_region",
+                "name": "current",
+                "provider_config_key": "aws",
+                "expressions": {},
+                "schema_version": 0
+              },
+              {
+                "address": "data.aws_ec2_managed_prefix_list.cloudfront_origin_facing",
+                "mode": "data",
+                "type": "aws_ec2_managed_prefix_list",
+                "name": "cloudfront_origin_facing",
+                "provider_config_key": "aws",
+                "expressions": {},
+                "schema_version": 0
+              },
+              {
+                "address": "data.aws_iam_policy_document.bootstrap",
+                "mode": "data",
+                "type": "aws_iam_policy_document",
+                "name": "bootstrap",
+                "provider_config_key": "aws",
+                "expressions": {},
+                "schema_version": 0
+              },
+              {
+                "address": "data.aws_iam_policy_document.operator",
+                "mode": "data",
+                "type": "aws_iam_policy_document",
+                "name": "operator",
+                "provider_config_key": "aws",
+                "expressions": {},
+                "schema_version": 0
+              },
+              {
+                "address": "data.aws_dynamodb_table_item.routing",
+                "mode": "data",
+                "type": "aws_dynamodb_table_item",
+                "name": "routing",
+                "provider_config_key": "aws",
+                "expressions": {},
+                "schema_version": 0
+              },
+              {
+                "address": "data.aws_dynamodb_table_item.generation",
+                "mode": "data",
+                "type": "aws_dynamodb_table_item",
+                "name": "generation",
+                "provider_config_key": "aws",
+                "expressions": {},
+                "schema_version": 0
+              }
+            ]
+          }
+        }
+      }
+    }
+  },
+  "timestamp": "2026-10-02T20:00:00Z",
+  "applyable": true,
+  "complete": true,
+  "errored": false
+}

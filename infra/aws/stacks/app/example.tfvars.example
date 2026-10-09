@@ -38,6 +38,9 @@ network = {
 
 build_id        = "2026-09-30-da317f0"
 allowed_origins = ["https://play.example.com"]
+# LUDUM: the Ludum site's origin(s) -> the runtime document's `ludum_origins` (omit / [] = no field). Deliver ONLY after
+# the server image that understands the field is live (docs/ludum/LUDUM_PLATFORM_ARCHITECTURE.md §13).
+# ludum_origins = ["https://ludum.example.com"]
 
 # LIVE-6 L6-2: every pool gets its own target group and exact /gs/p/<pool> rule; `primary` follows SYSTEM/ROUTING
 # (move it only after `gamesDoctor aws flip ... --apply`). desired_count 0: a drained / retired pool (never the primary).

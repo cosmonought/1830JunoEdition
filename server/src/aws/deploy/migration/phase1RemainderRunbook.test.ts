@@ -18,6 +18,7 @@ import assert from "node:assert/strict";
 import * as fs from "fs";
 import * as path from "path";
 import { ESCROW21_TERRAFORM_PATCH } from "../escrow21TerraformWiring";
+import { LUDUM_TERRAFORM_PATCH } from "../ludumOriginsTerraformWiring";
 import { terraformDriftProblems } from "../terraformDriftGuard";
 import { terraformDriftIo } from "../../../testSupport/terraformDriftIo";
 
@@ -136,7 +137,7 @@ describe("PHASE 1 REMAINDER: the migration runbook's corrections", () => {
     for (const item of [/interrupted drill/i, /Step 13's READY/, /-TeardownAppliedAt/, /F10 \(replacement\)/, /Alarm notifications/]) assert.match(known, item);
   });
 
-  test("no Terraform module or stack differs from the certified base 083d066 but by the reviewed exceptions (fresh-host scripts, CONDUCT_REVIEWERS_WIRING, the pinned Escrow 2.1 delta)", () => {
+  test("no Terraform module or stack differs from the certified base 083d066 but by the reviewed exceptions (fresh-host scripts, CONDUCT_REVIEWERS_WIRING, the pinned Escrow 2.1 delta, the pinned Ludum-origins delta)", () => {
     /* PHASE 1 FRESH-HOST HARDENING changed three HOST SCRIPTS (and the module's bash tests and README) -- no .tf,
        template, unit or stack. The scripts are embedded in the instance's user data, so a stacks/single-host plan from that commit REPLACES
        the instance: the live host takes them by the reviewed one-file install (runbook 13r), and step 22b is planned from
@@ -147,7 +148,7 @@ describe("PHASE 1 REMAINDER: the migration runbook's corrections", () => {
        the 2.1.0 checksum in the module tests and the stack plumbing -- the pinned patch escrow21TerraformWiring.patch,
        required and exact. All three are judged by the one comparison in terraformDriftGuard.ts; the base is NOT moved.
        FAIL CLOSED: without the base in the checkout this FAILS -- it never returns early. */
-    const problems = terraformDriftProblems(terraformDriftIo(REPO), { scope: ["infra/aws/modules", "infra/aws/stacks"], patchText: fs.readFileSync(path.join(REPO, ESCROW21_TERRAFORM_PATCH), "utf8") });
+    const problems = terraformDriftProblems(terraformDriftIo(REPO), { scope: ["infra/aws/modules", "infra/aws/stacks"], patchText: fs.readFileSync(path.join(REPO, ESCROW21_TERRAFORM_PATCH), "utf8"), ludumPatchText: fs.readFileSync(path.join(REPO, LUDUM_TERRAFORM_PATCH), "utf8") });
     assert.deepEqual(problems, []);
   });
 });

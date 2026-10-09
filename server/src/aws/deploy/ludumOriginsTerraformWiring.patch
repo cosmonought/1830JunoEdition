@@ -1,0 +1,281 @@
+# LUDUM ORIGINS -- the THIRD reviewed exception to the certified Terraform base 083d0668556c05a84eb8b3e5befc4e973544aa9a,
+# beside CONDUCT_REVIEWERS_WIRING and the pinned Escrow 2.1 delta (never instead of them; the base is not moved).
+#
+# EXACTLY the infra/aws/modules/app + infra/aws/stacks/app change that delivers the Ludum site's origin(s) through the
+# serving pool's runtime document (docs/ludum/LUDUM_PLATFORM_ARCHITECTURE.md §2.1, §13): `var.ludum_origins` (default [],
+# validated: <= 8 distinct lower-case https origins, no port / path / wildcard, never an allowed_origins one), the
+# document's ONE conditional field `ludum_origins` (absent with [] -- the document byte-identical to before), the stack
+# plumbing and example, and the module tests that pin both. Nothing in the single-host module (its user_data /
+# server.env), ECS environment, IAM, edge or ECR. Context: the tree after the Escrow 2.1 delta (ludum/integration 04d9a0c1).
+#
+# The drift guards (terraformDriftGuard.ts) REVERSE-APPLY these hunks to the working tree EXACTLY -- FIRST, before the
+# Escrow 2.1 hunks -- and then judge the result by the older rules. Any line added, removed or changed in or beside a hunk,
+# a hunk moved or missing, or a file whose line count is not the pinned one, fails. Changing this file changes its SHA-256
+# in ludumOriginsTerraformWiring.ts in the same reviewed commit.
+diff --git a/infra/aws/modules/app/locals.tf b/infra/aws/modules/app/locals.tf
+--- a/infra/aws/modules/app/locals.tf
++++ b/infra/aws/modules/app/locals.tf
+@@ -64,8 +64,10 @@ locals {
+ 
+   # 18COSMOS/AWS-RUNTIME/v2 (LIVE-6 L6-2; L6-1's format: v1 + `routes`) -- every field of `runtimeConfig.ts`, nothing else
+   # (the parser refuses unknown fields). v1 stays readable by the application; new LIVE-6 configuration is v2.
++  # LUDUM: v2's ONE optional field `ludum_origins`, written only when var.ludum_origins is non-empty -- with [] the
++  # document is exactly what it was (no key at all; a server image older than Lane A would refuse an unknown key).
+   runtime_document = {
+-    for id, _ in var.pools : id => jsonencode({
++    for id, _ in var.pools : id => jsonencode(merge({
+       format           = "18COSMOS/AWS-RUNTIME/v2"
+       environment      = var.environment
+       region           = local.region
+@@ -76,7 +78,7 @@ locals {
+       ledger_table_arn = var.ledger_table_arn
+       escrow           = local.escrow_enabled ? { config_parameter_arn = local.juno_parameter_arn } : null
+       routes           = local.pool_route
+-    })
++    }, length(var.ludum_origins) > 0 ? { ludum_origins = var.ludum_origins } : {}))
+   }
+ 
+   # 18COSMOS/JUNO-BACKEND/v3 -- `junoConfig.ts`'s fields. Optional fields the operator left null are OMITTED (a JSON null
+diff --git a/infra/aws/modules/app/tests/app.tftest.hcl b/infra/aws/modules/app/tests/app.tftest.hcl
+--- a/infra/aws/modules/app/tests/app.tftest.hcl
++++ b/infra/aws/modules/app/tests/app.tftest.hcl
+@@ -1255,3 +1255,24 @@ run "refuses_the_settlement_public_key_as_the_remedy_public_key" {
+   }
+   expect_failures = [var.escrow]
+ }
++
++# LUDUM: the Ludum origin is a runtime-document field ONLY -- never Play's GS_ALLOWED_ORIGINS (the account / money routes),
++# never a second environment source (GS_LUDUM_ORIGINS is refused in AWS mode), on the ECS topology too.
++run "ludum_origins_never_reach_the_task_environment" {
++  command = apply
++  variables {
++    ludum_origins = ["https://ludum.example.com"]
++  }
++  assert {
++    condition     = { for e in jsondecode(aws_ecs_task_definition.pool["p1"].container_definitions)[0].environment : e.name => e.value }["GS_ALLOWED_ORIGINS"] == "https://play.example.com"
++    error_message = "GS_ALLOWED_ORIGINS stays exactly Play's origin."
++  }
++  assert {
++    condition     = !strcontains(aws_ecs_task_definition.pool["p1"].container_definitions, "ludum") && !strcontains(aws_ecs_task_definition.pool["p1"].container_definitions, "LUDUM")
++    error_message = "No Ludum origin or GS_LUDUM_ORIGINS in the task environment."
++  }
++  assert {
++    condition     = alltrue([for id, p in aws_ssm_parameter.runtime : jsondecode(p.insecure_value).ludum_origins == ["https://ludum.example.com"]])
++    error_message = "Every pool's document carries the same field (like routes)."
++  }
++}
+diff --git a/infra/aws/modules/app/tests/compute_none.tftest.hcl b/infra/aws/modules/app/tests/compute_none.tftest.hcl
+--- a/infra/aws/modules/app/tests/compute_none.tftest.hcl
++++ b/infra/aws/modules/app/tests/compute_none.tftest.hcl
+@@ -276,3 +276,141 @@ run "none_refuses_a_routing_naming_another_pool" {
+   }
+   expect_failures = [aws_ssm_parameter.runtime]
+ }
++
++# ------------------------------------------------------------------------------------------------------------------
++# LUDUM (docs/ludum/LUDUM_PLATFORM_ARCHITECTURE.md §2.1, §8, §13): the runtime document's optional `ludum_origins`, on
++# today's staging topology (compute = none, p1 only). The document as the parser reads it, field for field.
++# ------------------------------------------------------------------------------------------------------------------
++
++run "ludum_default_writes_no_field" {
++  command = plan
++  variables {
++    compute = "none"
++    pools   = { p1 = { primary = true } }
++  }
++  assert {
++    condition = jsondecode(aws_ssm_parameter.runtime["p1"].insecure_value) == {
++      format           = "18COSMOS/AWS-RUNTIME/v2"
++      environment      = "staging"
++      region           = "us-east-1"
++      pool             = "p1"
++      generation       = 1
++      game_table       = "gs-staging-game-g1"
++      identity_table   = "gs-staging-identity"
++      ledger_table_arn = "arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger"
++      escrow           = { config_parameter_arn = "arn:aws:ssm:us-east-1:111111111111:parameter/gs/staging/juno-backend" }
++      routes           = { p1 = { ws_path = "/gs/p/p1" } }
++    }
++    error_message = "Default ludum_origins = []: the document is exactly the pre-Ludum v2 document -- no ludum_origins key at all."
++  }
++  assert {
++    condition     = !strcontains(aws_ssm_parameter.runtime["p1"].insecure_value, "ludum")
++    error_message = "The default can never authorize a Ludum origin."
++  }
++}
++
++run "ludum_one_origin_appears_exactly" {
++  command = plan
++  variables {
++    compute       = "none"
++    pools         = { p1 = { primary = true } }
++    ludum_origins = ["https://ludum.example.com"]
++  }
++  assert {
++    condition     = jsondecode(aws_ssm_parameter.runtime["p1"].insecure_value).ludum_origins == ["https://ludum.example.com"]
++    error_message = "The approved origin appears exactly, once."
++  }
++  assert {
++    condition = { for k, v in jsondecode(aws_ssm_parameter.runtime["p1"].insecure_value) : k => v if k != "ludum_origins" } == {
++      format           = "18COSMOS/AWS-RUNTIME/v2"
++      environment      = "staging"
++      region           = "us-east-1"
++      pool             = "p1"
++      generation       = 1
++      game_table       = "gs-staging-game-g1"
++      identity_table   = "gs-staging-identity"
++      ledger_table_arn = "arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger"
++      escrow           = { config_parameter_arn = "arn:aws:ssm:us-east-1:111111111111:parameter/gs/staging/juno-backend" }
++      routes           = { p1 = { ws_path = "/gs/p/p1" } }
++    }
++    error_message = "Every unrelated field is identical to the default document."
++  }
++  assert {
++    condition     = aws_ssm_parameter.runtime["p1"].type == "String" && aws_ssm_parameter.runtime["p1"].name == "/gs/staging/runtime/p1" && length(aws_ssm_parameter.runtime) == 1
++    error_message = "The same one plain String parameter, same name: only its value changes."
++  }
++  assert {
++    condition     = jsondecode(aws_ssm_parameter.juno_backend[0].insecure_value) == jsondecode(file("${path.module}/../../fixtures/juno-backend-staging.json"))
++    error_message = "The Juno document is untouched by ludum_origins."
++  }
++}
++
++run "ludum_rejects_http" {
++  command = plan
++  variables {
++    compute       = "none"
++    pools         = { p1 = { primary = true } }
++    ludum_origins = ["http://ludum.example.com"]
++  }
++  expect_failures = [var.ludum_origins]
++}
++
++run "ludum_rejects_wildcard" {
++  command = plan
++  variables {
++    compute       = "none"
++    pools         = { p1 = { primary = true } }
++    ludum_origins = ["https://*.example.com"]
++  }
++  expect_failures = [var.ludum_origins]
++}
++
++run "ludum_rejects_trailing_slash_path_port_and_case" {
++  command = plan
++  variables {
++    compute       = "none"
++    pools         = { p1 = { primary = true } }
++    ludum_origins = ["https://ludum.example.com/", "https://ludum.example.com/x", "https://ludum.example.com:8443", "https://LUDUM.example.com"]
++  }
++  expect_failures = [var.ludum_origins]
++}
++
++run "ludum_rejects_null_and_bare_hosts" {
++  command = plan
++  variables {
++    compute       = "none"
++    pools         = { p1 = { primary = true } }
++    ludum_origins = ["null", "ludum.example.com", "https://localhost"]
++  }
++  expect_failures = [var.ludum_origins]
++}
++
++run "ludum_rejects_duplicates" {
++  command = plan
++  variables {
++    compute       = "none"
++    pools         = { p1 = { primary = true } }
++    ludum_origins = ["https://a.example.com", "https://a.example.com"]
++  }
++  expect_failures = [var.ludum_origins]
++}
++
++run "ludum_rejects_more_than_eight" {
++  command = plan
++  variables {
++    compute       = "none"
++    pools         = { p1 = { primary = true } }
++    ludum_origins = [for i in range(9) : "https://l${i}.example.com"]
++  }
++  expect_failures = [var.ludum_origins]
++}
++
++run "ludum_never_repeats_a_play_origin" {
++  command = plan
++  variables {
++    compute       = "none"
++    pools         = { p1 = { primary = true } }
++    ludum_origins = ["https://play.example.com"]
++  }
++  expect_failures = [var.ludum_origins]
++}
+diff --git a/infra/aws/modules/app/variables.tf b/infra/aws/modules/app/variables.tf
+--- a/infra/aws/modules/app/variables.tf
++++ b/infra/aws/modules/app/variables.tf
+@@ -337,6 +337,26 @@ variable "allowed_origins" {
+   }
+ }
+ 
++variable "ludum_origins" {
++  description = <<-EOT
++    LUDUM (docs/ludum/LUDUM_PLATFORM_ARCHITECTURE.md §2.1, §8): the Ludum site's exact https origin(s), written into every
++    pool's runtime document as `ludum_origins` (`runtimeConfig.ts`: v2's one optional field). They get credentialed CORS
++    on `/gs/api/ludum/v1/*` ONLY -- never the account, money, conduct or trust routes (those stay `allowed_origins`').
++    The document is the ONE production source: the server refuses GS_LUDUM_ORIGINS in AWS mode, and nothing here touches
++    the single host's environment or user_data. [] (the default) writes NO field: the document is byte-identical to before.
++  EOT
++  type        = list(string)
++  default     = []
++  validation {
++    condition     = length(var.ludum_origins) <= 8 && length(distinct(var.ludum_origins)) == length(var.ludum_origins) && alltrue([for o in var.ludum_origins : can(regex("^https://[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$", o))])
++    error_message = "ludum_origins: at most 8 distinct exact https origins, lower-case host, no port, path, query, wildcard or trailing slash (e.g. \"https://ludum.netadao.org\")."
++  }
++  validation {
++    condition     = length(setintersection(toset(var.ludum_origins), toset(var.allowed_origins))) == 0
++    error_message = "ludum_origins must not repeat an allowed_origins (Play) origin: a Ludum origin is never granted Play's account / money routes, and Play needs no CORS."
++  }
++}
++
+ variable "trusted_proxy_hops" {
+   description = "GS_TRUSTED_PROXY_HOPS: CloudFront + ALB = 2 (verify with a header capture in staging)."
+   type        = number
+diff --git a/infra/aws/stacks/app/example.tfvars.example b/infra/aws/stacks/app/example.tfvars.example
+--- a/infra/aws/stacks/app/example.tfvars.example
++++ b/infra/aws/stacks/app/example.tfvars.example
+@@ -38,6 +38,9 @@ network = {
+ 
+ build_id        = "2026-09-30-da317f0"
+ allowed_origins = ["https://play.example.com"]
++# LUDUM: the Ludum site's origin(s) -> the runtime document's `ludum_origins` (omit / [] = no field). Deliver ONLY after
++# the server image that understands the field is live (docs/ludum/LUDUM_PLATFORM_ARCHITECTURE.md §13).
++# ludum_origins = ["https://ludum.example.com"]
+ 
+ # LIVE-6 L6-2: every pool gets its own target group and exact /gs/p/<pool> rule; `primary` follows SYSTEM/ROUTING
+ # (move it only after `gamesDoctor aws flip ... --apply`). desired_count 0: a drained / retired pool (never the primary).
+diff --git a/infra/aws/stacks/app/main.tf b/infra/aws/stacks/app/main.tf
+--- a/infra/aws/stacks/app/main.tf
++++ b/infra/aws/stacks/app/main.tf
+@@ -45,6 +45,7 @@ module "app" {
+   build_id                          = var.build_id
+   container_port                    = var.container_port
+   allowed_origins                   = var.allowed_origins
++  ludum_origins                     = var.ludum_origins
+   trusted_proxy_hops                = var.trusted_proxy_hops
+   pools                             = var.pools
+   start_services                    = var.start_services
+diff --git a/infra/aws/stacks/app/variables.tf b/infra/aws/stacks/app/variables.tf
+--- a/infra/aws/stacks/app/variables.tf
++++ b/infra/aws/stacks/app/variables.tf
+@@ -76,6 +76,12 @@ variable "allowed_origins" {
+   type = list(string)
+ }
+ 
++variable "ludum_origins" {
++  description = "The Ludum site's exact https origin(s) for the runtime document (modules/app validates). Default [] = no field."
++  type        = list(string)
++  default     = []
++}
++
+ variable "trusted_proxy_hops" {
+   type    = number
+   default = 2

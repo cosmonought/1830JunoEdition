@@ -732,3 +732,77 @@ configuration, and a test enforces this. The governance pages grant nothing to s
 
 **Navigation.** Governance stays provisionally in the footer. Links from the existing pages to `/me/`, `/disputes/` and
 `/governance/` are the design work's hand-off.
+
+---
+
+## 13. Delivering `ludum_origins` to staging (source ready; NOT performed)
+
+**Source.** The source changes are:
+- `modules/app` `var.ludum_origins` (default `[]`), validated:
+  - at most 8 distinct origins;
+  - each a lower-case `https://host`, with no port, path, query, wildcard or trailing slash;
+  - never also an `allowed_origins` (Play) origin.
+- The runtime document gains `ludum_origins` ONLY when that list is non-empty. With `[]`, the document is byte-identical
+  to before (pinned by the existing fixture test and the new runs).
+- `stacks/app` passes `ludum_origins` through to the module.
+- Nothing changes in the single-host module, its `user_data` or `server.env.tftpl`. Nothing changes in ECS env, IAM,
+  edge or ECR.
+- The server keeps refusing `GS_LUDUM_ORIGINS` in AWS mode, so the document is the one source.
+
+**Drift guard.**
+- The certified-Terraform drift guard (base `083d066`) admits this delta ONLY as a third pinned exception:
+  `server/src/aws/deploy/ludumOriginsTerraformWiring.patch`.
+- Like Escrow 2.1's, it is pinned by its SHA-256, its exact files, its exact line counts and its exact hunks.
+- The guard reverse-applies it BEFORE the Escrow 2.1 hunks.
+- Any extra, altered, moved or missing line fails. A Ludum origin anywhere in the single-host module is unadmitted drift.
+
+**The new gate.** `migration-guard ludum-origins` judges the delivery plan (`planGuards.ts`; tests in
+`ludumOriginsGate.test.ts`).
+
+**Staging input.**
+- The ops repository holds a NEW app tfvars: the current staging inputs (`compute = "none"`, `allowed_origins =
+  ["https://play.netadao.org"]`) plus `ludum_origins = ["https://ludum.netadao.org"]`.
+- The current file is not edited.
+- The file name and sha256 are recorded in the integration report.
+
+**Why the app stack is no longer frozen.**
+- §0.2 of `SINGLE_HOST_MIGRATION.md` froze it because of the ECS desired-count drift. Staging destroyed the ECS era on
+  2026-10-04 (compute-none: 71 destroyed; the app state is 11 objects, none ECS-era).
+- On 2026-10-09 the escrow 2.1 cutover planned the app stack untargeted (0/2/0), and the follow-up plan showed "no
+  changes".
+- Even so, this delivery goes through the guard `migration-guard ludum-origins`. It fails closed on any ECS-era object or
+  any change other than this one field. It needs no ordinary apply exception.
+
+**Release order.** An older server refuses an unknown runtime-document field, so the order is fixed:
+1. **Server image first.** Build and deploy the image that contains Lane A (`ludum/integration` or later) with the
+   existing single-host release procedure (`build-image`, `gs-host deploy`).
+   - That server reads the current document, which has no field, and serves `/gs/api/ludum/v1/*` to Play's origin only.
+   - Verify with `gs-host status`, and record the digest.
+2. **The document.**
+   - From a clean checkout of the reviewed commit, run `plan-evidence -Stack app -KeepPlan` with the new tfvars.
+   - The plan must be 0/1/0: `aws_ssm_parameter.runtime["p1"]` updated in place, nothing else.
+   - Run `migration-guard ludum-origins --ludum-origins https://ludum.netadao.org --commit <sha>`, which must PASS.
+   - With the owner's GO, apply EXACTLY that `stack.tfplan`.
+   - A post-apply plan must show no changes.
+3. **Restart.** `gs-host stop`, then `gs-host deploy` of the SAME digest. The server reads the latest document at startup.
+4. **Verify acceptance.**
+   - The startup log prints the runtime document, with `ludum_origins` present.
+   - `gs-host status` shows READY.
+5. **Verify origins.** From outside:
+   - `curl -X OPTIONS -H "Origin: https://ludum.netadao.org" https://play.netadao.org/gs/api/ludum/v1/session` gives 204
+     with the §2.1 headers.
+   - The same with `Origin: https://evil.example` gives 403 and no `Access-Control-*` header.
+   - `POST /gs/api/account/me` and `/gs/api/money/config` with the Ludum origin give 403.
+   - Finally, from the browser at `https://ludum.netadao.org/me/`: signed out, then signed in on Play, then signed out
+     again.
+
+**Rollback.**
+- To remove the field: run the same guarded procedure with the tfvars `ludum_origins = []` and `--ludum-origins none`,
+  then restart.
+- To roll back the image to a pre-Lane-A build, the document must lose the field FIRST, because the older parser would
+  refuse to start.
+- Escrow 2.1's `target/escrow21-cutover/rollback/ROLLBACK.md` (old image `df981e83`) is therefore only valid while the
+  document carries no `ludum_origins`.
+
+**Not done here:** none of these steps has been performed. There was no image build, no plan against AWS, no apply and no
+restart.

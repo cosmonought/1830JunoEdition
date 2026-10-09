@@ -76,6 +76,12 @@ variable "allowed_origins" {
   type = list(string)
 }
 
+variable "ludum_origins" {
+  description = "The Ludum site's exact https origin(s) for the runtime document (modules/app validates). Default [] = no field."
+  type        = list(string)
+  default     = []
+}
+
 variable "trusted_proxy_hops" {
   type    = number
   default = 2

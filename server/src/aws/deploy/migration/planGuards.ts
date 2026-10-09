@@ -58,6 +58,12 @@
 //   ledger-task-deauthorize  (step 22, stacks/ledger) the mirror of the first gate: the task role leaves exactly the
 //                            runtime statements, the host role stays.
 //   ecr-lifecycle            (step 22b, stacks/single-host) attaches the lifecycle policy, keeping >= 20 images.
+//   ludum-origins            (LUDUM, stacks/app, AFTER compute-none; docs/ludum/LUDUM_PLATFORM_ARCHITECTURE.md §13) the
+//                            serving pool's runtime document gains (or loses) EXACTLY the operator-named `ludum_origins`
+//                            -- every other field byte-equal; the ONLY mutation in the plan; no ECS-era object in the prior
+//                            state (a stack still carrying the desired-count drift is never this gate's); no table, key,
+//                            IAM, edge, ECR or Juno-document change; compute = none. Not targeted: after compute-none an
+//                            ordinary app plan carries no drift, and the allowlist proves the plan is this one change.
 //
 // THE LEGACY DESIRED-COUNT DRIFT (COST-2B): the app stack's state and configuration expect running services (the primary
 // pool's `desired_count` must be 1 -- a variable validation), while live staging is deliberately drained 0/0/0. An ordinary
@@ -71,6 +77,7 @@
 // Pure: no I/O. The command (`migrationCommands.ts`) reads the plan-evidence files.
 
 import type { Check } from "../deployVerify";
+import { ludumOriginProblem } from "../../../identity/mode";
 
 type Json = unknown;
 type Obj = Record<string, Json>;
@@ -96,6 +103,7 @@ export const GATES = Object.freeze({
   "compute-none": { stack: "app", step: "I 20" },
   "ledger-task-deauthorize": { stack: "ledger", step: "I 22" },
   "ecr-lifecycle": { stack: "single-host", step: "I 22b" },
+  "ludum-origins": { stack: "app", step: "LUDUM §13 (after compute-none)" },
 } as const);
 export type GateName = keyof typeof GATES;
 
@@ -198,6 +206,9 @@ export interface MigrationContext {
   /** Phase 3 escrow 2.1: the DEDICATED REMEDY key's ARN (the ledger stack's `remedy_key_arns.<label>`), or absent / null:
    *  no remedy key. The host policy's remedy statements must name exactly this -- a plan alone never adds one. */
   readonly remedyKeyArn?: string | null;
+  /** ludum-origins: the EXACT `ludum_origins` the serving pool's runtime document must carry after this plan, in order
+   *  (empty: the field must be ABSENT -- the delivery's rollback). Given by the operator, never taken from the plan. */
+  readonly ludumOrigins?: readonly string[];
 }
 
 /** The accepted post-abandonment staging facts the gates assume unless told otherwise. */
@@ -1614,6 +1625,88 @@ export function retiredPoolNarrowingProblem(beforeText: Json, afterText: Json, c
   return narrowed === 0 ? "the update narrows nothing" : null;
 }
 
+/* ------------------------------------------------------------------ */
+/* Gate L: ludum-origins (docs/ludum/LUDUM_PLATFORM_ARCHITECTURE.md §13) */
+/* ------------------------------------------------------------------ */
+
+/** The Terraform validation's origin form (modules/app/variables.tf `ludum_origins`): a strict subset of the server's. */
+export const LUDUM_ORIGIN_FORM = /^https:\/\/[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/;
+
+/** The operator-named origins themselves: null, or why they can never be delivered. */
+export function ludumOriginsProblem(origins: readonly string[] | undefined): string | null {
+  if (origins === undefined) return "--ludum-origins <comma-separated https origins | none> is required";
+  if (origins.length > 8) return "at most 8 origins";
+  if (new Set(origins).size !== origins.length) return "an origin is repeated";
+  for (const o of origins) {
+    const server = ludumOriginProblem(o, "production");
+    if (server !== null) return server;
+    if (!LUDUM_ORIGIN_FORM.test(o)) return `"${o}" is not a lower-case https origin without a port`;
+  }
+  return null;
+}
+
+/** The serving pool's runtime document, before -> after: null when ONLY `ludum_origins` moved to exactly ctx's list. */
+export function ludumDocumentProblem(beforeText: Json, afterText: Json, ctx: MigrationContext): string | null {
+  const pb = strictParse(beforeText);
+  const pa = strictParse(afterText);
+  if (pb === undefined || pa === undefined) return "the runtime document is unknown at plan time, unreadable or ambiguous (a duplicate key)";
+  const b = obj(pb);
+  const a = obj(pa);
+  if (b.format !== "18COSMOS/AWS-RUNTIME/v2" || a.format !== "18COSMOS/AWS-RUNTIME/v2") return "ludum_origins exists only in a v2 runtime document (before and after)";
+  const { ludum_origins: lb, ...restB } = b;
+  const { ludum_origins: la, ...restA } = a;
+  if (!same(restA, restB)) return "the document changes more than ludum_origins";
+  if (a.pool !== ctx.pool || Number(a.generation) !== ctx.servingGeneration || a.game_table !== gameTableName(ctx, ctx.servingGeneration)) return `the document must stay pool ${ctx.pool}, generation ${ctx.servingGeneration}, ${gameTableName(ctx, ctx.servingGeneration)}`;
+  const want = ctx.ludumOrigins ?? [];
+  if (want.length === 0) {
+    if (la !== undefined) return `ludum_origins must be ABSENT (--ludum-origins none), not ${canonical(la)}`;
+  } else if (!same(la, [...want])) return `ludum_origins must become exactly ${canonical([...want])} (got ${la === undefined ? "no field" : canonical(la)})`;
+  if (same(la ?? null, lb ?? null)) return "ludum_origins does not change: nothing for this step to apply";
+  return null;
+}
+
+function ludumOriginsGate(plan: Json, changes: readonly PlannedChange[], ctx: MigrationContext): Check[] {
+  const m = STACK_MODULE.app;
+  const checks: Check[] = [];
+  const named = ludumOriginsProblem(ctx.ludumOrigins);
+  checks.push(judge("the Ludum origins are named", named === null, ctx.ludumOrigins !== undefined && ctx.ludumOrigins.length === 0 ? "--ludum-origins none: the field is removed" : `--ludum-origins ${(ctx.ludumOrigins ?? []).join(",")}`, String(named)));
+  const DOC = `${m}.aws_ssm_parameter.runtime["${ctx.pool}"]`;
+  const docRule: AllowRule = (c) => {
+    if (c.address !== DOC) return { matched: false };
+    if (c.kind !== "update") return { matched: true, problem: `the ${ctx.pool} runtime document is ${c.kind === "delete" || c.kind === "replace" ? "DESTROYED / REPLACED -- absolutely forbidden" : c.kind}` };
+    const attrs = onlyAttributes(c, ["insecure_value"], ["version", "value", "has_value_wo"]);
+    if (attrs !== null) return { matched: true, problem: attrs };
+    if (named !== null) return { matched: true, problem: "the Ludum origins are not named" };
+    const p = ludumDocumentProblem(c.before.insecure_value, c.after.insecure_value, ctx);
+    return p === null ? { matched: true } : { matched: true, problem: p };
+  };
+  checks.push(allowlistCheck(changes, [docRule], `only the ${ctx.pool} runtime document's ludum_origins`));
+  const doc = changes.find((c) => c.address === DOC);
+  checks.push(judge(`the ${ctx.pool} runtime document is updated in place`, doc?.kind === "update", `aws_ssm_parameter.runtime["${ctx.pool}"]: update in place (the host reads it at its next start)`, doc === undefined ? `the plan does not contain the ${ctx.pool} runtime document` : `the document is ${doc.kind}`));
+  checks.push(ecsUntouchedCheck(plan, changes, "the Ludum delivery only after compute-none (SINGLE_HOST_MIGRATION.md §0.2; docs/ludum §13)"));
+  const ecsEra = [...priorResources(plan).entries()].filter(([, r]) => r.mode === "managed" && teardownClassOf(r.type, r.name) !== null).map(([a]) => a);
+  checks.push(judge("compute-none is complete: no ECS-era object in the prior state", ecsEra.length === 0, "the app stack holds no ECS-era resource (no desired-count drift to reactivate)", `${ecsEra.slice(0, 6).join(", ")}${ecsEra.length > 6 ? ", ..." : ""} -- the app stack is still FROZEN (the desired-count drift): deliver nothing through it before compute-none`));
+  checks.push(
+    namedForbidden(
+      "no table, key, IAM, edge, ECR or other document change",
+      changes,
+      (c) => AUTHORITY_TYPES.includes(c.type) || isKms(c) || c.type.startsWith(IAM_PREFIX) || c.type.startsWith("aws_cloudfront_") || c.type.startsWith("aws_ecr_") || (c.type === "aws_ssm_parameter" && c.address !== DOC),
+      "tables, keys, roles, policies, the distribution and its request policy, ECR and the Juno document unchanged",
+      "the Ludum delivery changes one document field only",
+    ),
+  );
+  const vars: string[] = [];
+  if (variable(plan, "compute") !== "none") vars.push(`compute = ${JSON.stringify(variable(plan, "compute"))} (none: only after compute-none)`);
+  if (variable(plan, "recovery_break_glass") !== false) vars.push(`recovery_break_glass = ${JSON.stringify(variable(plan, "recovery_break_glass"))}`);
+  const planned = variable(plan, "ludum_origins");
+  if (!same(planned, [...(ctx.ludumOrigins ?? [])])) vars.push(`ludum_origins = ${JSON.stringify(planned)} (not --ludum-origins ${(ctx.ludumOrigins ?? []).join(",") || "none"})`);
+  const play = arr(variable(plan, "allowed_origins")).map(String);
+  const overlap = (ctx.ludumOrigins ?? []).filter((o) => play.includes(o));
+  if (overlap.length > 0) vars.push(`a Ludum origin is also a Play (allowed_origins) origin: ${overlap.join(", ")}`);
+  checks.push(judge("variables: compute = none, break-glass off, ludum_origins as named, never a Play origin", vars.length === 0, `compute = none, recovery_break_glass = false, ludum_origins = ${canonical([...(ctx.ludumOrigins ?? [])])}, disjoint from allowed_origins`, vars.join("; ")));
+  return checks;
+}
+
 function computeNoneGate(plan: Json, changes: readonly PlannedChange[], ctx: MigrationContext): Check[] {
   const m = STACK_MODULE.app;
   const checks: Check[] = [];
@@ -2184,6 +2277,9 @@ export function judgeMigrationPlan(gate: GateName, plan: Json, ctx: MigrationCon
       break;
     case "ecr-lifecycle":
       checks.push(...ecrLifecycleGate(plan, changes, ctx));
+      break;
+    case "ludum-origins":
+      checks.push(...ludumOriginsGate(plan, changes, ctx));
       break;
   }
   return {

@@ -30,7 +30,7 @@ const read = (rel: string): string => readCheckoutText(path.join(REPO, rel));
 type Obj = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
 const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
 
-const CTX: MigrationContext = { environment: FIXTURE.environment, appAccountId: FIXTURE.appAccountId, servingGeneration: 1, pool: "p1", retiredPools: ["p2"], originDomain: FIXTURE.hostOrigin, minEcrKeepImages: 20, region: FIXTURE.region, ledgerTableArn: FIXTURE.ledgerTableArn, signingKeyArns: FIXTURE.signingKeyArns };
+const CTX: MigrationContext = { environment: FIXTURE.environment, appAccountId: FIXTURE.appAccountId, servingGeneration: 1, pool: "p1", retiredPools: ["p2"], originDomain: FIXTURE.hostOrigin, minEcrKeepImages: 20, region: FIXTURE.region, ledgerTableArn: FIXTURE.ledgerTableArn, signingKeyArns: FIXTURE.signingKeyArns, ludumOrigins: [FIXTURE.ludumOrigin] };
 const PLANS = validPlans();
 const plan = (gate: GateName): Obj => clone(PLANS[gate]) as Obj;
 const rc = (p: Obj, address: string): Obj => {
@@ -1055,6 +1055,7 @@ describe("COST-2B: the command and its evidence binding", () => {
     ...(gate === "host-create-complete" ? ["--commit", COMMIT] : []),
     ...(gate === "app-read-authorize" ? ["--region", FIXTURE.region, "--ledger-table-arn", FIXTURE.ledgerTableArn] : []),
     ...(gate === "ledger-operator-journal" ? ["--ledger-table-arn", FIXTURE.ledgerTableArn] : []),
+    ...(gate === "ludum-origins" ? ["--ludum-origins", FIXTURE.ludumOrigin] : []),
   ];
 
   test("every valid capture PASSES (exit 0), a PowerShell BOM tolerated, and the record is create-once", async () => {

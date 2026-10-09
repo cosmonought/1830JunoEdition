@@ -27,3 +27,5 @@ infra/aws/single-host/*.sh eol=lf
 # a single space by format, so whitespace checks do not apply, and it stays LF (its SHA-256 is pinned in
 # server/src/aws/deploy/escrow21TerraformWiring.ts; the guard also normalizes CRLF before hashing).
 server/src/aws/deploy/escrow21TerraformWiring.patch -whitespace eol=lf
+# LUDUM: the pinned Ludum-origins Terraform patch (ludumOriginsTerraformWiring.ts) -- byte-exact like the Escrow 2.1 one.
+server/src/aws/deploy/ludumOriginsTerraformWiring.patch -whitespace eol=lf

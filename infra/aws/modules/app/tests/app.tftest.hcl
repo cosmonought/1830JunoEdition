@@ -1255,3 +1255,24 @@ run "refuses_the_settlement_public_key_as_the_remedy_public_key" {
   }
   expect_failures = [var.escrow]
 }
+
+# LUDUM: the Ludum origin is a runtime-document field ONLY -- never Play's GS_ALLOWED_ORIGINS (the account / money routes),
+# never a second environment source (GS_LUDUM_ORIGINS is refused in AWS mode), on the ECS topology too.
+run "ludum_origins_never_reach_the_task_environment" {
+  command = apply
+  variables {
+    ludum_origins = ["https://ludum.example.com"]
+  }
+  assert {
+    condition     = { for e in jsondecode(aws_ecs_task_definition.pool["p1"].container_definitions)[0].environment : e.name => e.value }["GS_ALLOWED_ORIGINS"] == "https://play.example.com"
+    error_message = "GS_ALLOWED_ORIGINS stays exactly Play's origin."
+  }
+  assert {
+    condition     = !strcontains(aws_ecs_task_definition.pool["p1"].container_definitions, "ludum") && !strcontains(aws_ecs_task_definition.pool["p1"].container_definitions, "LUDUM")
+    error_message = "No Ludum origin or GS_LUDUM_ORIGINS in the task environment."
+  }
+  assert {
+    condition     = alltrue([for id, p in aws_ssm_parameter.runtime : jsondecode(p.insecure_value).ludum_origins == ["https://ludum.example.com"]])
+    error_message = "Every pool's document carries the same field (like routes)."
+  }
+}

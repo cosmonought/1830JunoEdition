@@ -5,9 +5,11 @@
 // 2026-10-08, OPTION 1); what may differ from it is exactly:
 //   1. the PHASE 1 FRESH-HOST HARDENING host scripts (and their bash tests / README) -- unchanged rule;
 //   2. CONDUCT_REVIEWERS_WIRING -- unchanged rule (`conductReviewersWiring.ts`);
-//   3. the Escrow 2.1 release-readiness delta -- the pinned patch (`escrow21TerraformWiring.ts`), REQUIRED and exact.
-// For each changed file (and every file the Escrow 2.1 patch names, so a removed change is caught too) the guard removes
-// the pinned Escrow 2.1 hunks exactly, then judges what is left against 083d066 by rules 1 and 2. Anything else fails.
+//   3. the Escrow 2.1 release-readiness delta -- the pinned patch (`escrow21TerraformWiring.ts`), REQUIRED and exact;
+//   4. LUDUM ORIGINS -- the pinned patch (`ludumOriginsTerraformWiring.ts`), REQUIRED and exact, applied after 3.
+// For each changed file (and every file either patch names, so a removed change is caught too) the guard removes the pinned
+// Ludum hunks exactly, then the pinned Escrow 2.1 hunks exactly, then judges what is left against 083d066 by rules 1 and 2.
+// Anything else fails.
 //
 // HARDENED after independent review (2026-10-08): paths listed NUL-separated and never C-quoted, unsafe names refused (H1);
 // the conduct rule reads hunk bodies by position (H2); git-ignored files Terraform loads are refused (M1); each pinned
@@ -23,6 +25,7 @@
 
 import { CONDUCT_REVIEWERS_FILES, conductReviewersWiringProblems } from "./conductReviewersWiring";
 import { ESCROW21_TERRAFORM_FILES, ESCROW21_TERRAFORM_LINE_COUNTS, ESCROW21_TERRAFORM_PATCH_SHA256, normalizeLf, parsePinnedPatch, reverseApplyPinnedHunks, sha256Hex } from "./escrow21TerraformWiring";
+import { LUDUM_TERRAFORM_FILES, LUDUM_TERRAFORM_LINE_COUNTS, LUDUM_TERRAFORM_PATCH_SHA256 } from "./ludumOriginsTerraformWiring";
 
 /** The certified Terraform base. Never moved by an exception: exceptions are pinned deltas FROM it. */
 export const CERTIFIED_TERRAFORM_BASE = "083d0668556c05a84eb8b3e5befc4e973544aa9a";
@@ -51,6 +54,8 @@ export interface DriftOptions {
   readonly scope: readonly string[];
   /** The pinned patch's text (read by the caller from ESCROW21_TERRAFORM_PATCH). */
   readonly patchText: string;
+  /** The pinned Ludum-origins patch's text (read by the caller from LUDUM_TERRAFORM_PATCH). Required: never skipped. */
+  readonly ludumPatchText: string;
   /** Regression tests only: a different base, to prove a missing one fails. The guards never pass it. */
   readonly base?: string;
   /** Regression tests only: file texts (null: deleted) laid over the working tree. */
@@ -82,8 +87,13 @@ export function terraformDriftProblems(io: DriftIo, options: DriftOptions): stri
   if (sha256Hex(normalizeLf(options.patchText)) !== ESCROW21_TERRAFORM_PATCH_SHA256) return ["the Escrow 2.1 Terraform patch does not match its pinned SHA-256 (escrow21TerraformWiring.ts): a reviewed edit changes both"];
   const patch = parsePinnedPatch(options.patchText);
   if (!patch.ok) return [`the Escrow 2.1 Terraform patch is refused: ${patch.problem}`];
-  const patched = [...patch.files.keys()];
-  if (JSON.stringify([...patched].sort()) !== JSON.stringify([...ESCROW21_TERRAFORM_FILES].sort())) return [`the Escrow 2.1 Terraform patch names other files than ESCROW21_TERRAFORM_FILES: ${JSON.stringify(patched)}`];
+  const escrowPatched = [...patch.files.keys()];
+  if (JSON.stringify([...escrowPatched].sort()) !== JSON.stringify([...ESCROW21_TERRAFORM_FILES].sort())) return [`the Escrow 2.1 Terraform patch names other files than ESCROW21_TERRAFORM_FILES: ${JSON.stringify(escrowPatched)}`];
+  if (typeof options.ludumPatchText !== "string" || sha256Hex(normalizeLf(options.ludumPatchText)) !== LUDUM_TERRAFORM_PATCH_SHA256) return ["the Ludum-origins Terraform patch does not match its pinned SHA-256 (ludumOriginsTerraformWiring.ts): a reviewed edit changes both"];
+  const ludum = parsePinnedPatch(options.ludumPatchText);
+  if (!ludum.ok) return [`the Ludum-origins Terraform patch is refused: ${ludum.problem}`];
+  if (JSON.stringify([...ludum.files.keys()].sort()) !== JSON.stringify([...LUDUM_TERRAFORM_FILES].sort())) return [`the Ludum-origins Terraform patch names other files than LUDUM_TERRAFORM_FILES: ${JSON.stringify([...ludum.files.keys()])}`];
+  const patched = [...new Set([...escrowPatched, ...ludum.files.keys()])];
 
   /* NUL-separated, never C-quoted (review H1). */
   const q = ["-c", "core.quotePath=false"];
@@ -145,6 +155,16 @@ export function terraformDriftProblems(io: DriftIo, options: DriftOptions): stri
     if (before === null && now === null) {
       problems.push(`${file}: git lists it as changed, yet it exists neither in ${base} nor in the working tree`);
       continue;
+    }
+    /* LUDUM first: it was applied after the Escrow 2.1 delta, so it comes off first, leaving exactly the 2.1 text. */
+    const ludumHunks = ludum.files.get(file);
+    if (ludumHunks !== undefined) {
+      const reversed = reverseApplyPinnedHunks(now, ludumHunks, LUDUM_TERRAFORM_LINE_COUNTS.get(file));
+      if (!reversed.ok) {
+        problems.push(`${file}: the pinned Ludum-origins change is missing, altered, moved or has a line beside it -- ${reversed.problem}`);
+        continue;
+      }
+      now = reversed.text;
     }
     const hunks = patch.files.get(file);
     if (hunks !== undefined) {

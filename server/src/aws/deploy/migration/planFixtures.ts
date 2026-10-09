@@ -32,6 +32,9 @@ export const FIXTURE = Object.freeze({
   signingKeyArns: Object.freeze(["arn:aws:kms:us-east-1:222222222222:key/11111111-1111-4111-8111-111111111111", "arn:aws:kms:us-east-1:222222222222:key/22222222-2222-4222-8222-222222222222", "arn:aws:kms:us-east-1:222222222222:key/33333333-3333-4333-8333-333333333333"]),
   hostOrigin: "gs-origin-host.example.org",
   albOrigin: "gs-origin-alb.example.org",
+  /** LUDUM §13: the site's origin the runtime document gains, and Play's (allowed_origins) -- never the same. */
+  ludumOrigin: "https://ludum.example.org",
+  playOrigin: "https://play.example.org",
 });
 const E = FIXTURE.environment;
 const APP = FIXTURE.appAccountId;
@@ -479,8 +482,9 @@ function ecrLifecyclePlan(): Obj {
 const AM = "module.app";
 const appTags = { "gs:environment": E, "gs:slice": "live5-l5-8" };
 
-export function runtimeDocument(pools: readonly string[], pool = "p1"): string {
+export function runtimeDocument(pools: readonly string[], pool = "p1", ludumOrigins?: readonly string[]): string {
   return jsonencode({
+    ...(ludumOrigins === undefined ? {} : { ludum_origins: [...ludumOrigins] }),
     format: "18COSMOS/AWS-RUNTIME/v2",
     environment: E,
     region: R,
@@ -725,6 +729,35 @@ function computeNonePlan(): Obj {
   return planEnvelope(appVariables({ compute: "none", pools: { p1: { primary: true, desired_count: 1 } }, edge: { create_distribution: true, aliases: ["play.example.org"], alb_origin_domain_name: FIXTURE.hostOrigin, site_origin_domain_name: "site.example.org" } }), rcs, appPrior(), [drift("p1"), drift("p2")]);
 }
 
+/** LUDUM §13: AFTER compute-none -- the app stack's eleven objects, no ECS era, no drift -- an UNTARGETED plan whose one
+ *  change is p1's runtime document gaining `ludum_origins` (every other object a no-op). */
+function ludumOriginsPlan(): Obj {
+  const kept: Rc[] = appState()
+    .filter((x) => !x.ecs && x.p2doc !== true)
+    .map(({ rc }) => {
+      const at = (values: Obj): Rc => ({ ...rc, before: values, after: values });
+      if (rc.type === "aws_ssm_parameter" && rc.index === "p1") return at({ ...rc.before, insecure_value: runtimeDocument(["p1"]) });
+      if (rc.type === "aws_iam_role_policy" && rc.name === "bootstrap") return at({ ...rc.before, policy: bootstrapPolicy(["p1"]) });
+      if (rc.type === "aws_iam_role_policy" && rc.name === "operator") return at({ ...rc.before, policy: operatorPolicy(["p1"]) });
+      if (rc.type === "aws_cloudfront_distribution") return at(distributionValues(FIXTURE.hostOrigin));
+      return rc;
+    });
+  const rcs: Rc[] = kept.map((rc) =>
+    rc.type === "aws_ssm_parameter" && rc.index === "p1" ? { ...rc, actions: ["update"], after: { ...rc.before, insecure_value: runtimeDocument(["p1"], "p1", [FIXTURE.ludumOrigin]), version: null }, afterUnknown: { version: true } } : rc,
+  );
+  return planEnvelope(
+    appVariables({
+      compute: "none",
+      pools: { p1: { primary: true, desired_count: 1 } },
+      allowed_origins: [FIXTURE.playOrigin],
+      ludum_origins: [FIXTURE.ludumOrigin],
+      edge: { create_distribution: true, aliases: ["play.example.org"], alb_origin_domain_name: FIXTURE.hostOrigin, site_origin_domain_name: "site.example.org" },
+    }),
+    rcs,
+    priorState(AM, kept, [ROUTING_ITEM, GENERATION_ITEM]),
+  );
+}
+
 /** RECON-1A step 7a: a TARGETED plan (-target=module.app.aws_iam_role_policy.bootstrap
  *  -target=module.app.aws_iam_role_policy.operator[0]): the two policies gain their read statements; their roles are the
  *  plan's only other entries (no-ops). Nothing of ECS is in a targeted plan: the drift stays drift. */
@@ -773,6 +806,7 @@ export function validPlans(): Readonly<Record<GateName, Obj>> {
     "compute-none": computeNonePlan(),
     "ledger-task-deauthorize": ledgerPlan([TASK_ROLE, HOST_ROLE], [HOST_ROLE], false),
     "ecr-lifecycle": ecrLifecyclePlan(),
+    "ludum-origins": ludumOriginsPlan(),
   };
 }
 

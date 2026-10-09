@@ -1,13 +1,13 @@
 {
   "format": "18COSMOS/COST-BUDGET/v1",
   "decision_record": "docs/hosting-budget.md",
-  "owner_decision": "COST-0 / COST-1 (2026-10-02): the whole recurring infrastructure stays at or below the hard ceiling; the expected steady state stays at or below the target. Changing either, or any allow-list below, is an OWNER decision recorded in docs/hosting-budget.md together with this file and its guard test.",
+  "owner_decision": "COST-0 / COST-1 (2026-10-02): the whole recurring infrastructure stays at or below the hard ceiling; the expected steady state stays at or below the target. Changing either, or any allow-list below, is an OWNER decision recorded in docs/hosting-budget.md together with this file and its guard test. PHASE 3 ESCROW 2.1 (owner, 2026-10-08): the steady state is 4 KMS keys (the three + the dedicated REMEDY key), +$1/month; max_kms_keys stays 6.",
   "currency": "USD",
   "pricing_basis": "AWS us-east-1 list prices (AWS Price List API offer files published 2026-09; 730 hours per month). NOMINAL prices only: no Free Tier, no sign-up credits, no promotion is counted.",
   "hard_maximum_monthly": 30,
   "expected_target_monthly": 20,
-  "expected_monthly": 18.61,
-  "expected_configuration": "one t4g.small covered by a 1-year EC2 Instance Savings Plan (bought only after the memory measurement plan), 3 KMS keys, ordinary testnet use",
+  "expected_monthly": 19.61,
+  "expected_configuration": "one t4g.small covered by a 1-year EC2 Instance Savings Plan (bought only after the memory measurement plan), 4 KMS keys (relayer, settlement, admission + the Escrow 2.1 REMEDY key), ordinary testnet use",
   "items": [
     { "service": "EC2 t4g.small (1 host)", "monthly": 7.67, "basis": "$0.0105/h, 1-year EC2 Instance Savings Plan, no upfront (on-demand $0.0168/h = $12.26)" },
     { "service": "EBS gp3 root volume 12 GB", "monthly": 0.96, "basis": "$0.08/GB-month" },
@@ -15,7 +15,7 @@
     { "service": "DynamoDB requests (existing tables)", "monthly": 1.0, "basis": "~6M RRU ($0.125/M) + ~0.4M WRU ($0.625/M): the 2 s pool-writer self-check, 5 s routing read, 30 s status write, light play" },
     { "service": "DynamoDB storage + PITR (game, identity, ledger)", "monthly": 0.23, "basis": "~0.5 GB x ($0.25 + $0.20)/GB-month" },
     { "service": "AWS Backup (ledger, locked vault)", "monthly": 0.18, "basis": "35 daily recovery points x ~0.05 GB x $0.10/GB-month" },
-    { "service": "KMS signing keys (3) + Sign requests", "monthly": 3.03, "basis": "$1/key-month; asymmetric requests $0.15/10k (no free tier for them)" },
+    { "service": "KMS signing keys (4) + Sign requests", "monthly": 4.03, "basis": "$1/key-month: relayer r1, settlement, admission and the Escrow 2.1 REMEDY key (owner, 2026-10-08: +$1 over the three; live inventory 2026-10-08 held exactly the three); asymmetric requests $0.15/10k (no free tier for them)" },
     { "service": "CloudWatch Logs (1 host log group, 90 days)", "monthly": 0.59, "basis": "~1 GB ingested x $0.50 + ~3 GB stored x $0.03" },
     { "service": "CloudWatch custom metrics (single-host profile)", "monthly": 0.3, "basis": "HostHealthProblems continuously ($0.30); HostCriticalEvents / HostPressure only in incident months" },
     { "service": "CloudWatch alarms (5)", "monthly": 0.5, "basis": "$0.10 per standard alarm" },
@@ -24,12 +24,14 @@
     { "service": "S3 (Terraform state)", "monthly": 0.05, "basis": "a few MB plus requests" }
   ],
   "other_configurations": {
-    "t4g.small on-demand (before the Savings Plan)": 23.2,
-    "t4g.small 1-year Compute Savings Plan ($0.0121/h)": 19.77,
-    "t4g.micro on-demand (only after the measurement plan)": 17.07,
-    "t3.small on-demand (x86 fallback)": 26.12,
-    "LIVE-6 -> JX-1 transition: up to 6 KMS keys": "+3.00",
+    "t4g.small on-demand (before the Savings Plan)": 24.2,
+    "t4g.small 1-year Compute Savings Plan ($0.0121/h)": 20.77,
+    "t4g.micro on-demand (only after the measurement plan)": 18.07,
+    "t3.small on-demand (x86 fallback)": 27.12,
     "Route 53 hosted zone, if the owner's DNS lives there": "+0.50"
+  },
+  "future_scenarios": {
+    "LIVE-6 -> JX-1 transition beside the REMEDY key (relayer r2 + the jx1 financial pair): 7 KMS keys": "+3.00 -- NOT an allowed configuration: 7 exceeds max_kms_keys (6). None of these keys exists (live inventory 2026-10-08); creating them needs an owner budget decision first (a reviewed retirement, or a new cap)."
   },
   "allowed_fixed_services": [
     "ec2-instance: exactly 1, of allowed_instance_types, CPU credits standard",
@@ -135,6 +137,6 @@
     "CloudFront carries testnet-scale traffic (a few GB, a few million requests); WAF is not used on pay-as-you-go.",
     "Juno REST endpoints are free public ones (a paid RPC provider is outside this budget).",
     "The static site stays on Vercel Hobby while non-commercial; before real money it moves to S3 behind the same distribution (Vercel Pro would cost $20 per seat).",
-    "The Savings Plan is an owner billing action after the >= 2-week memory measurement; until then the host is on-demand (~$23.20)."
+    "The Savings Plan is an owner billing action after the >= 2-week memory measurement; until then the host is on-demand (~$24.20)."
   ]
 }

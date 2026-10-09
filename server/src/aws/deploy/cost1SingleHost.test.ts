@@ -14,10 +14,12 @@
 //              list, 80 (ACME), and 22 only through the emergency variable -- never the server port; IMDSv2 required
 //   secrets    no credential literal anywhere in the single-host files; no AWS credential env in the server's env
 //   gate       stacks/app's compute = "none" gates every ECS-era fixed-cost resource (COST_BUDGET.json lists them)
-//   kms        (P5-INT-1) the ledger's signing-key count -- the original three, the relayer rotation keys and JX-1K's
-//              financial key sets -- is 3 by default (the budget's expected configuration) and 6 for the documented
-//              LIVE-6 -> JX-1 transition (r2 + one financial pair), exactly max_kms_keys; no other key family exists. Keys
-//              are prevent_destroy: getting back to 3 is a reviewed retirement (README "Relayer rotation"), never a tfvars edit
+//   kms        (P5-INT-1) the ledger's signing-key count -- the original three, the relayer rotation keys, JX-1K's
+//              financial key sets and (Phase 3 escrow 2.1) the dedicated REMEDY keys -- is 3 by the module defaults and 4
+//              for the Escrow 2.1 release (the three + remedy_key_count = 1): the budget's expected configuration (owner,
+//              2026-10-08), within max_kms_keys (6). The LIVE-6 -> JX-1 transition (r2 + one financial pair) beside the
+//              REMEDY key would be 7: a FUTURE scenario above the cap, not an allowed configuration. Keys are
+//              prevent_destroy: getting back down is a reviewed retirement (README "Relayer rotation"), never a tfvars edit
 
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
@@ -46,6 +48,7 @@ interface Budget {
   expected_monthly: number;
   items: Array<{ service: string; monthly: number; basis: string }>;
   other_configurations: Record<string, number | string>;
+  future_scenarios?: Record<string, string>;
   allowed_instance_types: string[];
   default_instance_type: string;
   max_instances: number;
@@ -321,22 +324,36 @@ describe("P5-INT-1: the ledger's signing keys under max_kms_keys (COST-1 x JX-1K
     assert.equal([...ledgerMain.matchAll(/resource\s+"aws_kms_key"/g)].length, 1, "one aws_kms_key resource (aws_kms_key.signing) in the ledger");
   });
 
-  test("the defaults are the budget's expected configuration: three keys (after JX-1 the extra keys stay -- prevent_destroy -- until a reviewed retirement)", () => {
+  test("the budget's expected configuration is the Escrow 2.1 release: the module defaults (three keys) + the one documented REMEDY key = 4", () => {
     assert.match(ledgerVars, /variable "relayer_key_count" \{[\s\S]*?default\s+=\s+1\s/);
     assert.match(ledgerVars, /variable "financial_key_sets" \{[\s\S]*?default\s+=\s+\[\]/);
-    assert.match(ledgerVars, /variable "remedy_key_count" \{[\s\S]*?default\s+=\s+0\s/, "Phase 3 escrow 2.1: no remedy key by default (the budget's three keys)");
-    const kms = BUDGET.items.find((item) => /^KMS signing keys \(3\)/.test(item.service));
-    assert.ok(kms, "the expected cost counts exactly 3 KMS keys");
+    assert.match(ledgerVars, /variable "remedy_key_count" \{[\s\S]*?default\s+=\s+0\s/, "Phase 3 escrow 2.1: no remedy key by default -- the release step sets remedy_key_count = 1");
+    const remedy = /^#\s*remedy_key_count\s*=\s*(\d+)\s*$/m.exec(example);
+    assert.ok(remedy, "stacks/ledger/example.tfvars.example documents the release's remedy key");
+    const release = keyCount(1, [], Number(remedy[1]));
+    assert.equal(release, 4, "the three + one REMEDY key (owner budget decision 2026-10-08)");
+    const kms = BUDGET.items.filter((item) => /^KMS signing keys \((\d+)\)/.test(item.service));
+    assert.equal(kms.length, 1, "one KMS line in the expected cost");
+    assert.equal(Number(/^KMS signing keys \((\d+)\)/.exec(kms[0].service)![1]), release, "the expected cost counts exactly the release's keys");
+    assert.ok(kms[0].monthly >= release && kms[0].monthly < release + 1, `$1 per key-month plus Sign requests: ${kms[0].monthly}`);
+    assert.ok(release <= BUDGET.max_kms_keys, "the release fits max_kms_keys");
+    assert.equal(BUDGET.max_kms_keys, 6, "the cap is unchanged");
   });
 
-  test("the documented LIVE-6 -> JX-1 transition (r2 + the jx1 pair) is exactly max_kms_keys, priced as listed", () => {
+  test("the documented LIVE-6 -> JX-1 transition (r2 + the jx1 pair) is 6 keys alone and 7 beside the REMEDY key: a FUTURE scenario above max_kms_keys, never an allowed configuration", () => {
     const rotation = /^#\s*relayer_key_count\s*=\s*(\d+)\s*$/m.exec(example);
     const sets = /^#\s*financial_key_sets\s*=\s*(\[[^\]]*\])\s*$/m.exec(example);
     assert.ok(rotation && sets, "stacks/ledger/example.tfvars.example documents the rotation and the financial key set");
     const transition = keyCount(Number(rotation[1]), JSON.parse(sets[1]) as string[]);
     assert.equal(transition, 6);
-    assert.equal(transition, BUDGET.max_kms_keys, "the transition fits max_kms_keys -- and uses all of it");
-    assert.equal(BUDGET.other_configurations["LIVE-6 -> JX-1 transition: up to 6 KMS keys"], `+${(BUDGET.max_kms_keys - 3).toFixed(2)}`, "$1 per key-month beyond the three");
+    assert.equal(transition, BUDGET.max_kms_keys, "without a remedy key the transition alone would use the whole cap");
+    /* With the release's REMEDY key (the owner's 4-key steady state) the transition is 7 -- above the cap: it is recorded
+       only as a future scenario (+$1 per key-month over the four), never among the allowed configurations. */
+    const future = Object.entries(BUDGET.future_scenarios ?? {});
+    assert.equal(future.length, 1, "the one recorded future scenario");
+    assert.match(future[0][0], /LIVE-6 -> JX-1 transition beside the REMEDY key \(relayer r2 \+ the jx1 financial pair\): 7 KMS keys/);
+    assert.ok(future[0][1].startsWith(`+${(7 - 4).toFixed(2)} -- NOT an allowed configuration`), future[0][1]);
+    assert.ok(!Object.keys(BUDGET.other_configurations).some((name) => /KMS|JX-1/.test(name)), "no KMS scenario among the allowed configurations");
     assert.ok(keyCount(Number(rotation[1]), [...(JSON.parse(sets[1]) as string[]), "jx2"]) > BUDGET.max_kms_keys, "a second financial key set during the transition needs an owner budget decision");
     assert.ok(keyCount(Number(rotation[1]) + 1, JSON.parse(sets[1]) as string[]) > BUDGET.max_kms_keys, "a further rotation during the transition needs an owner budget decision");
     /* Phase 3 escrow 2.1: the dedicated remedy key. The release configuration (the three + one remedy key) fits the

@@ -103,27 +103,28 @@ The **single host keeps every one of them**. It runs the certified AWS-mode runt
 | DynamoDB requests | 1.00 | ≈ 6M RRU × $0.125/M + ≈ 0.4M WRU × $0.625/M |
 | DynamoDB storage + PITR | 0.23 | ≈ 0.5 GB × ($0.25 + $0.20) |
 | AWS Backup (ledger) | 0.18 | 35 recovery points × ≈ 0.05 GB × $0.10 |
-| KMS: 3 keys + Sign | 3.03 | $1/key-month. Asymmetric requests are $0.15/10k and get no free tier. |
+| KMS: 4 keys + Sign | 4.03 | $1/key-month: relayer r1, settlement, admission and the Escrow 2.1 REMEDY key (owner decision 2026-10-08, +$1 over the three). Asymmetric requests are $0.15/10k and get no free tier. |
 | CloudWatch Logs | 0.59 | ≈ 1 GB × $0.50 ingest + ≈ 3 GB × $0.03 stored (90 days) |
 | CloudWatch metrics | 0.30 | One continuous series (`HostHealthProblems`). The others publish only on incidents. |
 | CloudWatch alarms (5) | 0.50 | $0.10 each |
 | ECR (newest 20 images) | 0.15 | ≈ 1.5 GB × $0.10. The arm64 image is ≈ 85 MB compressed and shares base layers across releases. |
 | CloudFront (pay-as-you-go) | 0.30 | testnet scale |
 | S3 (Terraform state) | 0.05 | |
-| **Expected total** | **18.61** | **≤ $20 target, ≤ $30 ceiling** |
+| **Expected total** | **19.61** | **≤ $20 target, ≤ $30 ceiling** |
 
 **Other configurations:**
 
 | Configuration | $/month |
 |---|---:|
-| t4g.small on-demand, before the Savings Plan | **23.20** |
-| t4g.small, 1-year Compute Savings Plan ($0.0121/h) | 19.77 |
-| t4g.micro on-demand (only after the measurement plan) | 17.07 |
-| t3.small on-demand (x86 fallback) | 26.12 |
-| The LIVE-6 → JX-1 transition, up to 6 KMS keys | +3.00 |
+| t4g.small on-demand, before the Savings Plan | **24.20** |
+| t4g.small, 1-year Compute Savings Plan ($0.0121/h) | 20.77 |
+| t4g.micro on-demand (only after the measurement plan) | 18.07 |
+| t3.small on-demand (x86 fallback) | 27.12 |
 | Route 53 hosted zone, if the DNS lives there | +0.50 |
 
-**The $20 target needs the Savings Plan.** It is an owner billing action, taken only after the ≥ 2-week memory measurement confirms t4g.small. Until then the host is on-demand, at ≈ $23.20, within the ceiling.
+**The $20 target needs the Savings Plan.** It is an owner billing action, taken only after the ≥ 2-week memory measurement confirms t4g.small. Until then the host is on-demand, at ≈ $24.20, within the ceiling.
+
+**KMS keys (owner decision 2026-10-08).** The Escrow 2.1 release adds the dedicated REMEDY signing key, so the steady state is **4 KMS keys** (relayer r1, settlement, admission, REMEDY), about **+$1/month**; `max_kms_keys` stays **6**, and no key retirement is needed. The read-only live inventory of 2026-10-08 found exactly the three; relayer r2 and the JX-1 settlement / admission pair do not exist. **Future scenario only:** if relayer r2 and the JX-1 pair were ever created beside the REMEDY key, the count would be **7**, above the cap -- not an allowed configuration (`COST_BUDGET.json` `future_scenarios`), so it needs an owner budget decision (a reviewed retirement, or a new cap) before any of those keys is created.
 
 ## 7. Guards
 

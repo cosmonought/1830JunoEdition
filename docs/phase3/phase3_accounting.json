@@ -6654,7 +6654,7 @@
     "LOW: CRLF is normalized before comparison (harmless for HCL)",
     "LOW: the PHASE 1 fresh-host files remain admitted wholesale (pre-existing rule; their scripts are SHA-pinned elsewhere)",
     "LOW: phase1FreshHost.test.ts / cost1SingleHost.test.ts still report an explicit skip without their own reference commit or git",
-    "LOW: COST_BUDGET.json / docs/hosting-budget.md still budget 3 KMS keys; the 2.1 release runs 4 (+$1 / month) -- an owner budget update",
+    "RESOLVED 2026-10-08 (owner ruling: 4-key budget approved): COST_BUDGET.json and docs/hosting-budget.md budget 4 KMS keys (relayer r1, settlement, admission + REMEDY), +$1/month (expected 19.61 <= the $20 target); max_kms_keys stays 6; the LIVE-6 -> JX-1 transition beside REMEDY (7 keys) is recorded only as a future scenario above the cap (COST_BUDGET.json future_scenarios); cost1SingleHost.test.ts derives the release count from the module composition",
     "INFO: shallow clones must fetch 083d066 before the server tests"
    ],
    "kms_inventory": "live 3 project keys (relayer r1, settlement, admission); no r2, no jx1 pair; 4 after REMEDY; cap 6; no retirement; 7 only as a future scenario",
@@ -6664,7 +6664,15 @@
     "no KMS key created or changed",
     "no SSM / ECS change",
     "no JUNO / JUNOX contact; no StoreCode / instantiate"
-   ]
+   ],
+   "kms_budget": {
+    "date": "2026-10-08",
+    "old": "3 KMS keys, $3.03/month, expected total $18.61",
+    "new": "4 KMS keys (the three + REMEDY), $4.03/month, expected total $19.61 (+$1/month)",
+    "cap": "max_kms_keys = 6 (unchanged)",
+    "future": "7 keys only if relayer r2 and the JX-1 pair are later created -- above the cap, an owner decision first",
+    "not_done": "no KMS key created or changed; no Terraform change; no AWS contact"
+   }
   }
  }
 }

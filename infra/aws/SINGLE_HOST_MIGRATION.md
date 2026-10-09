@@ -676,7 +676,7 @@ recorded; a forward plan called a rollback FAILS); then the ECS rollback of §F 
     - Cost Explorer daily for 5–7 days, grouped by service, with the `gs:cost` tag activated;
     - the budget's $15 / $20 / $25 / $30 alerts active.
 
-    Expect about **$0.75/day** while the host is on-demand. That is about $23 a month; about $18.61 with the 1-year Savings Plan, which is bought only after the memory plan (`docs/hosting-budget.md`).
+    Expect about **$0.80/day** while the host is on-demand. That is about $24 a month; about $19.61 with the 1-year Savings Plan (both with the Escrow 2.1 REMEDY key, 4 KMS keys; $1 a month less before it exists), which is bought only after the memory plan (`docs/hosting-budget.md`).
 
 **Phase-1 closure (the owner's roadmap; PHASE 1 REMAINDER).** The hard ceiling is unchanged: **$30/month** steady state.
 - **Operational Phase-1 migration closure = step 24**: the clean judged inventory (`verify --topology single-host`

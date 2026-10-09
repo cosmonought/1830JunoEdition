@@ -7,8 +7,8 @@
 // alarm C1 over ClockFinalityHeldTables, the certified 2.1.0 checksum in the module tests, the stack plumbing), plus the
 // one comment correction recording the live 2026-10-08 KMS inventory.
 //
-// Pinned three ways, each reviewable: the patch's SHA-256 (below), the exact file list (below), and every hunk's lines and
-// positions (the patch itself). `reverseApplyPinnedHunks` takes a file's CURRENT text and removes its pinned hunks EXACTLY:
+// Pinned four ways, each reviewable: the patch's SHA-256 (below), the exact file list and each file's exact line count
+// (below), and every hunk's lines and positions (the patch itself). `reverseApplyPinnedHunks` takes a file's CURRENT text and removes its pinned hunks EXACTLY:
 // every context and added line must be where the patch says, byte for byte (no fuzz, no offset search); the removed lines
 // come back. The drift guard then compares the result with 083d066 under the older rules (CONDUCT_REVIEWERS_WIRING and the
 // PHASE 1 fresh-host scripts). So a line added inside or beside a hunk, a hunk moved, altered or missing, or any change
@@ -52,6 +52,37 @@ export const ESCROW21_TERRAFORM_FILES: ReadonlySet<string> = new Set([
   "infra/aws/stacks/single-host/example.tfvars.example",
   "infra/aws/stacks/single-host/main.tf",
   "infra/aws/stacks/single-host/variables.tf",
+]);
+
+/** Each pinned file's exact line count after the change (review M2: a unified diff does not anchor the end of a file, so
+ *  without this, lines appended after a file's last hunk -- e.g. a new `run` or a file-level `override_*` in a tftest file
+ *  the CONDUCT_REVIEWERS "test" rule admits additions to -- would survive the reverse application). */
+export const ESCROW21_TERRAFORM_LINE_COUNTS: ReadonlyMap<string, number> = new Map([
+  ["infra/aws/modules/app/alarm-contract.json", 124],
+  ["infra/aws/modules/app/iam.tf", 704],
+  ["infra/aws/modules/app/locals.tf", 159],
+  ["infra/aws/modules/app/tests/alarms.tftest.hcl", 490],
+  ["infra/aws/modules/app/tests/app.tftest.hcl", 1257],
+  ["infra/aws/modules/app/tests/compute_none.tftest.hcl", 278],
+  ["infra/aws/modules/app/variables.tf", 522],
+  ["infra/aws/modules/ledger/main.tf", 584],
+  ["infra/aws/modules/ledger/outputs.tf", 66],
+  ["infra/aws/modules/ledger/tests/ledger.tftest.hcl", 803],
+  ["infra/aws/modules/ledger/variables.tf", 169],
+  ["infra/aws/modules/single-host/iam.tf", 189],
+  ["infra/aws/modules/single-host/observability.tf", 119],
+  ["infra/aws/modules/single-host/tests/single-host.tftest.hcl", 540],
+  ["infra/aws/modules/single-host/variables.tf", 328],
+  ["infra/aws/stacks/app/example.tfvars.example", 68],
+  ["infra/aws/stacks/app/main.tf", 75],
+  ["infra/aws/stacks/app/variables.tf", 173],
+  ["infra/aws/stacks/ledger/example.tfvars.example", 33],
+  ["infra/aws/stacks/ledger/main.tf", 42],
+  ["infra/aws/stacks/ledger/outputs.tf", 34],
+  ["infra/aws/stacks/ledger/variables.tf", 61],
+  ["infra/aws/stacks/single-host/example.tfvars.example", 43],
+  ["infra/aws/stacks/single-host/main.tf", 61],
+  ["infra/aws/stacks/single-host/variables.tf", 146],
 ]);
 
 export interface PinnedHunk {
@@ -115,11 +146,12 @@ export function parsePinnedPatch(rawText: string): ParsedPatch {
 }
 
 /** Remove `hunks` from `current` EXACTLY (see the header). Returns the text before the pinned change, or a problem. */
-export function reverseApplyPinnedHunks(current: string | null, hunks: readonly PinnedHunk[]): { ok: true; text: string } | { ok: false; problem: string } {
+export function reverseApplyPinnedHunks(current: string | null, hunks: readonly PinnedHunk[], expectedLines?: number): { ok: true; text: string } | { ok: false; problem: string } {
   if (current === null) return { ok: false, problem: "the file is missing" };
   const text = normalizeLf(current);
   if (text !== "" && !text.endsWith("\n")) return { ok: false, problem: "the file no longer ends with a newline" };
   const lines = text === "" ? [] : text.slice(0, -1).split("\n");
+  if (expectedLines !== undefined && lines.length !== expectedLines) return { ok: false, problem: `the file has ${lines.length} lines; with the pinned change it has exactly ${expectedLines} (a line added or removed somewhere, e.g. after the last hunk)` };
   const out: string[] = [];
   let cursor = 0;
   for (const [n, hunk] of hunks.entries()) {

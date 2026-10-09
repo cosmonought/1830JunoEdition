@@ -8,12 +8,13 @@
 
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "child_process";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 
 import { CONDUCT_REVIEWERS_WIRING } from "./conductReviewersWiring";
-import { ESCROW21_TERRAFORM_FILES, ESCROW21_TERRAFORM_PATCH, ESCROW21_TERRAFORM_PATCH_SHA256, normalizeLf, parsePinnedPatch, reverseApplyPinnedHunks, sha256Hex } from "./escrow21TerraformWiring";
+import { ESCROW21_TERRAFORM_FILES, ESCROW21_TERRAFORM_LINE_COUNTS, ESCROW21_TERRAFORM_PATCH, ESCROW21_TERRAFORM_PATCH_SHA256, normalizeLf, parsePinnedPatch, reverseApplyPinnedHunks, sha256Hex } from "./escrow21TerraformWiring";
 import { CERTIFIED_TERRAFORM_BASE, terraformDriftProblems } from "./terraformDriftGuard";
 import { terraformDriftIo } from "../../testSupport/terraformDriftIo";
 
@@ -160,6 +161,115 @@ describe("certified Terraform drift guard: the base, the two reviewed exceptions
     failsNaming(check(mutate(ledger, (t) => t.replace("customer_master_key_spec", "customer_master_key_spec "))), ledger);
     const vars = "infra/aws/modules/ledger/variables.tf";
     failsNaming(check(mutate(vars, (t) => t.replace("var.remedy_key_count <= 16", "var.remedy_key_count <= 64"))), vars);
+  });
+
+  test("review I1: the patch's SHA-256 is pinned here too, and every pinned file's line count is recorded", () => {
+    assert.equal(ESCROW21_TERRAFORM_PATCH_SHA256, "e2bd4914b03f1034bdf592fae3896580cf8bd85d3245f99f5b92f02965a64fb7");
+    assert.deepEqual([...ESCROW21_TERRAFORM_LINE_COUNTS.keys()].sort(), [...ESCROW21_TERRAFORM_FILES].sort());
+    for (const [file, count] of ESCROW21_TERRAFORM_LINE_COUNTS) assert.equal(read(file).split("\n").length - 1, count, file);
+  });
+
+  test("review H2: a content line beginning with ++ or -- is judged like any other (no header look-alike slips through)", () => {
+    const env = "infra/aws/modules/single-host/templates/server.env.tftpl";
+    for (const scope of [ALL, ["infra/aws/modules/single-host"]])
+      failsNaming(check(mutate(env, (t) => `${t}++\nGS_AWS_CONFIG_PARAMETER=arn:aws:ssm:us-east-1:999999999999:parameter/attacker\n`), scope), env);
+    const locals = "infra/aws/modules/single-host/locals.tf";
+    failsNaming(check(mutate(locals, (t) => `${t}++ = 1\n`)), locals);
+    failsNaming(check(mutate(locals, (t) => t.replace("\n", "\n-- \n"))), locals);
+  });
+
+  test("review M2: nothing can be appended after a file's last pinned hunk -- not even in the tftest files the conduct rule admits runs to", () => {
+    for (const file of ["infra/aws/modules/app/tests/app.tftest.hcl", "infra/aws/modules/single-host/tests/single-host.tftest.hcl"]) {
+      failsNaming(check(mutate(file, (t) => `${t}\nrun "evil" {\n  command = plan\n  # conduct_reviewers\n}\n`)), file, /pinned Escrow 2\.1 change/);
+      failsNaming(check(mutate(file, (t) => `${t}override_data {\n  target = data.aws_iam_policy_document.task\n  values = {}\n}\n`)), file, /pinned Escrow 2\.1 change/);
+    }
+  });
+
+  /* A throwaway repository (the regression tests below need real git index states; the real tree is never touched). */
+  const scratch = (files: Record<string, string>, after?: (git: (...a: string[]) => void, dir: string) => void) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tf-guard-"));
+    const git = (...args: string[]) => {
+      const r = spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "-c", "core.autocrlf=false", ...args], { cwd: dir, encoding: "utf8" });
+      assert.equal(r.status, 0, `${args.join(" ")}: ${r.stderr}`);
+      return r.stdout;
+    };
+    git("init", "-q");
+    fs.mkdirSync(path.join(dir, "x"));
+    fs.writeFileSync(path.join(dir, "x/main.tf"), "# base\n");
+    git("add", "-A");
+    git("commit", "-q", "-m", "base");
+    const baseSha = git("rev-parse", "HEAD").trim();
+    for (const [rel, text] of Object.entries(files)) {
+      fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+      fs.writeFileSync(path.join(dir, rel), text);
+    }
+    after?.(git, dir);
+    return { dir, baseSha, problems: () => terraformDriftProblems(terraformDriftIo(dir), { scope: ["x"], patchText: PATCH, base: baseSha }), done: () => fs.rmSync(dir, { recursive: true, force: true }) };
+  };
+
+  test("review H1: a file git would C-quote (non-ASCII, quote, backslash, tab) is refused, tracked or untracked -- never read as absent", () => {
+    for (const name of ["x/\u00e9.tf", 'x/a"b.tf', "x/a\\b.tf", "x/a\tb.tf", "x/a b.tf"]) {
+      const untracked = scratch({ [name]: 'resource "aws_iam_policy" "p" {}\n' });
+      try {
+        const p = untracked.problems();
+        assert.ok(p.some((m) => /refuses to judge/.test(m)), `${JSON.stringify(name)}: ${JSON.stringify(p)}`);
+      } finally {
+        untracked.done();
+      }
+      const committed = scratch({ [name]: 'resource "aws_iam_policy" "p" {}\n' }, (git) => {
+        git("add", "-A");
+        git("commit", "-q", "-m", "drift");
+      });
+      try {
+        assert.ok(committed.problems().some((m) => /refuses to judge/.test(m)), JSON.stringify(name));
+      } finally {
+        committed.done();
+      }
+    }
+    const control = scratch({});
+    try {
+      assert.deepEqual(control.problems(), [], "the scratch base alone is clean");
+    } finally {
+      control.done();
+    }
+  });
+
+  test("review M1: git-ignored files Terraform loads (overrides, auto tfvars, any .tf) are refused; named operator tfvars and .terraform/ are not", () => {
+    const ignore = "*.tfvars\n!*.tfvars.example\noverride.tf\n*_override.tf\n*_override.tf.json\n.terraform/\nlocal-*.tf\n";
+    for (const name of ["x/override.tf", "x/iam_override.tf", "x/iam_override.tf.json", "x/a.auto.tfvars", "x/terraform.tfvars", "x/local-extra.tf"]) {
+      const r = scratch({ ".gitignore": ignore, [name]: "# loaded\n" }, (git) => {
+        git("add", ".gitignore");
+        git("commit", "-q", "-m", "ignore");
+      });
+      try {
+        assert.ok(r.problems().some((m) => m.startsWith(`${name}: git-ignored, but Terraform loads it`)), name);
+      } finally {
+        r.done();
+      }
+    }
+    const fine = scratch({ ".gitignore": ignore, "x/staging.tfvars": "a = 1\n", "x/.terraform/providers/p.tf": "# cache\n" }, (git) => {
+      git("add", ".gitignore");
+      git("commit", "-q", "-m", "ignore");
+    });
+    try {
+      assert.deepEqual(fine.problems(), []);
+    } finally {
+      fine.done();
+    }
+  });
+
+  test("review M3: a skip-worktree or assume-unchanged entry is refused (git would hide its edits)", () => {
+    for (const flag of ["--skip-worktree", "--assume-unchanged"]) {
+      const r = scratch({}, (git, dir) => {
+        git("update-index", flag, "x/main.tf");
+        fs.writeFileSync(path.join(dir, "x/main.tf"), 'resource "aws_iam_policy" "p" {}\n');
+      });
+      try {
+        assert.ok(r.problems().some((m) => m.startsWith("x/main.tf: its index entry is flagged")), flag);
+      } finally {
+        r.done();
+      }
+    }
   });
 
   test("the patch parser and the reverse application are strict", () => {

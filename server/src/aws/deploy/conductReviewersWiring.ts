@@ -89,9 +89,17 @@ export function conductReviewersWiringProblems(changed: readonly string[], diffO
       problems.push(`${file}: git diff failed`);
       continue;
     }
+    /* Only hunk BODIES count, found by position (after an `@@` header), never by prefix: a content line `++x` is `+++x` in
+       the diff and a removed `--x` is `---x` -- a prefix filter took them for file headers (review H2, 2026-10-08). */
     const lines = diff.split("\n");
-    const removed = lines.filter((l) => l.startsWith("-") && !l.startsWith("---"));
-    const added = lines.filter((l) => l.startsWith("+") && !l.startsWith("+++")).map((l) => l.slice(1));
+    const body: string[] = [];
+    let inHunk = false;
+    for (const l of lines) {
+      if (l.startsWith("@@ ")) inHunk = true;
+      else if (inHunk) body.push(l);
+    }
+    const removed = body.filter((l) => l.startsWith("-"));
+    const added = body.filter((l) => l.startsWith("+")).map((l) => l.slice(1));
     if (removed.length > 0) problems.push(`${file}: removes or changes ${removed.length} line(s) of the certified base`);
     if (pinned === "test") {
       if (!added.some((l) => l.includes("conduct_reviewers"))) problems.push(`${file}: no reviewer run`);

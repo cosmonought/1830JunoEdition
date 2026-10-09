@@ -26,6 +26,8 @@ backup = {
 # authority, its own purpose (never the relayer, settlement or admission key). APPEND-ONLY (prevent_destroy). Create it
 # BEFORE the 2.1 instantiate: `npm run awsDeploy -- signer-keys ... --remedy <remedy_key_arns.r1>` derives the public key
 # the contract's `remedy_keys` registers. Then the app stack (and, on the COST-1 single host, stacks/single-host) names it
-# as `remedy_signing_key`. COST: +1 key-month ($1); with the LIVE-6 -> JX-1 transition keys above still present the total
-# exceeds max_kms_keys (6) -- an owner budget decision (docs/hosting-budget.md), never a tfvars edit alone.
+# as `remedy_signing_key`. COST: +1 key-month ($1). Live staging (read-only KMS inventory 2026-10-08) holds 3 project keys
+# (relayer r1, settlement, admission; no relayer-r2, no jx1 pair), so the remedy key makes 4 of max_kms_keys (6). FUTURE
+# scenario only: if the LIVE-6 -> JX-1 transition keys above are ever created beside it, the total (7) exceeds 6 -- an owner
+# budget decision (docs/hosting-budget.md), never a tfvars edit alone.
 # remedy_key_count = 1

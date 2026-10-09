@@ -1,7 +1,9 @@
 // server/src/aws/deploy/conductReviewersWiring.ts
 //
-// CONSOLIDATED FINAL PRE-PLAYTEST INTEGRATION: the ONE reviewed change to the certified Terraform (base `083d066`) --
+// CONSOLIDATED FINAL PRE-PLAYTEST INTEGRATION: the FIRST reviewed change to the certified Terraform (base `083d066`) --
 // player reporting's GS_CONDUCT_REVIEWERS input, wired SOURCE ONLY through the single-host and ECS modules and stacks.
+// (The second is the pinned Escrow 2.1 release-readiness delta, `escrow21TerraformWiring.ts`; both are judged by
+// `terraformDriftGuard.ts`, and this wiring's rule is unchanged.)
 // The IaC drift guards (`migration/phase1RemainderRunbook.test.ts`, `staging/hostRoleProbe.test.ts`) admit exactly
 // these files, and in each non-test file exactly these ADDED lines (`git diff -U0 <base>`): no line of the certified
 // base removed or changed, nothing else added. With the default (no reviewer) the rendered server.env (so the user

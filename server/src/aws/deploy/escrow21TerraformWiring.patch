@@ -1,0 +1,1071 @@
+# PHASE 3 ESCROW 2.1 RELEASE READINESS -- the SECOND reviewed exception to the certified Terraform base
+# 083d0668556c05a84eb8b3e5befc4e973544aa9a (owner ruling 2026-10-08, OPTION 1: the base stays; this delta is pinned).
+#
+# EXACTLY the infra/aws/modules + infra/aws/stacks change of 50e2bc6 + 04c7bf1 (the dedicated REMEDY KMS key family and
+# its least-privilege IAM, alarm C1 / ClockFinalityHeldTables, the certified 2.1.0 checksum c3bd0618...8219 in the module
+# tests, and the stack variables / outputs / examples that carry them), plus one comment correction recording the live
+# 2026-10-08 KMS inventory (3 keys now, 4 with REMEDY; "7" only as a future scenario). Context: the tree after the
+# CONDUCT_REVIEWERS_WIRING exception (8c4dca9).
+#
+# The drift guards (terraformDriftGuard.ts) REVERSE-APPLY these hunks to the working tree EXACTLY -- same lines, same
+# positions, 3 lines of context, no fuzz -- and then require the result to differ from 083d066 by nothing but
+# CONDUCT_REVIEWERS_WIRING and the PHASE 1 fresh-host scripts. Any line added, removed or changed in or beside a hunk, a
+# moved hunk, or a hunk missing fails the guard. This file is itself pinned by SHA-256 in escrow21TerraformWiring.ts:
+# editing it is a reviewed change to that constant too. Lines starting with '#' before the first `diff --git` are notes.
+#
+diff --git a/infra/aws/modules/app/alarm-contract.json b/infra/aws/modules/app/alarm-contract.json
+--- a/infra/aws/modules/app/alarm-contract.json
++++ b/infra/aws/modules/app/alarm-contract.json
+@@ -115,6 +115,10 @@
+     { "id": "r3-restore-unverified", "scope": "pool", "class": "page", "suppressible": false, "requires": "escrow",
+       "metrics": [{ "id": "m1", "metric": "RestoreUnverifiedGames", "stat": "Minimum" }], "expression": null,
+       "period": 60, "evaluation_periods": 60, "datapoints_to_alarm": 60, "comparison": "GreaterThanOrEqualToThreshold", "threshold": 1, "missing": "notBreaching",
+-      "description": "R3: on a restored table, money games still read-only (check pending, neither verified nor held) for a whole hour. Ordinary verifications clear long before. Never suppressed." }
++      "description": "R3: on a restored table, money games still read-only (check pending, neither verified nor held) for a whole hour. Ordinary verifications clear long before. Never suppressed." },
++    { "id": "c1-clock-finality-held", "scope": "pool", "class": "page", "suppressible": false, "requires": "escrow",
++      "metrics": [{ "id": "m1", "metric": "ClockFinalityHeldTables", "stat": "Minimum" }], "expression": null,
++      "period": 60, "evaluation_periods": 3, "datapoints_to_alarm": 3, "comparison": "GreaterThanOrEqualToThreshold", "threshold": 1, "missing": "notBreaching",
++      "description": "C1 (Phase 3 escrow 2.1): a timed money table FROZEN for 3 minutes at a Live minute 30 whose approvers' consent keys cannot be read on chain (no quorum, a halted or lagging node): every move and vote refused until a read succeeds (fail closed). On every pool (only the primary emits it). A count only: the games are in the clock.finality-keys-unread audit lines. Never suppressed." }
+   ]
+ }
+diff --git a/infra/aws/modules/app/iam.tf b/infra/aws/modules/app/iam.tf
+--- a/infra/aws/modules/app/iam.tf
++++ b/infra/aws/modules/app/iam.tf
+@@ -5,7 +5,8 @@
+ #   gs-<env>-app-execution  ECS itself: pull the image, write the task's log stream. Nothing of the application.
+ #   gs-<env>-app-task       the application -- the ONLY credential source of a running task (static keys are refused by
+ #                           the runtime). Exactly the DynamoDB actions the L5-2..L5-6 adapters send, per table; KMS
+-#                           GetPublicKey + Sign (ECDSA_SHA_256 over a DIGEST) on the three keys; ssm:GetParameter on the
++#                           GetPublicKey + Sign (ECDSA_SHA_256 over a DIGEST) on the three keys (+ the dedicated REMEDY
++#                           key, in its own statements, when `remedy_signing_key` names one); ssm:GetParameter on the
+ #                           two documents. No Secrets Manager (nothing consumes a secret yet), no logs (the execution
+ #                           role's), no ECS Exec. It never writes SYSTEM/* (the routing) or APPGEN.
+ #   gs-<env>-bootstrap      the deploy pipeline / operator: create-if-absent SYSTEM/ROUTING, SYSTEM/GENERATION (L6-4)
+@@ -198,6 +199,33 @@ data "aws_iam_policy_document" "task" {
+       }
+     }
+   }
++  # --- KMS: the DEDICATED REMEDY key (Phase 3 escrow 2.1; owner decision 2026-10-08), by key ARN, in its OWN statements ---
++  dynamic "statement" {
++    for_each = var.remedy_signing_key == null ? [] : [1]
++    content {
++      sid       = "RemedyKeyPublicKey"
++      actions   = ["kms:GetPublicKey"]
++      resources = [var.remedy_signing_key]
++    }
++  }
++  dynamic "statement" {
++    for_each = var.remedy_signing_key == null ? [] : [1]
++    content {
++      sid       = "RemedyKeySignDigestOnly"
++      actions   = ["kms:Sign"]
++      resources = [var.remedy_signing_key]
++      condition {
++        test     = "StringEquals"
++        variable = "kms:SigningAlgorithm"
++        values   = ["ECDSA_SHA_256"]
++      }
++      condition {
++        test     = "StringEquals"
++        variable = "kms:MessageType"
++        values   = ["DIGEST"]
++      }
++    }
++  }
+ }
+ 
+ resource "aws_iam_role_policy" "task" {
+@@ -302,6 +330,15 @@ data "aws_iam_policy_document" "bootstrap" {
+       resources = concat(values(var.signing_keys), var.relayer_rotation_key_arns)
+     }
+   }
++  dynamic "statement" {
++    for_each = var.remedy_signing_key == null ? [] : [1]
++    content {
++      # PHASE 3 ESCROW 2.1: the dedicated REMEDY key -- read only (`awsDeploy verify` / `signer-keys`), never signed with.
++      sid       = "RemedyKeyReadOnly"
++      actions   = ["kms:DescribeKey", "kms:GetPublicKey", "kms:ListGrants"]
++      resources = [var.remedy_signing_key]
++    }
++  }
+   # LIVE-6 relayer rotation: the staging certification's POST-ROTATION proof (`stage-cert certify --scenario
+   # relayer-rotation-drill`) reads, strongly and read-only, the new relayer's game-table mirror (ROLE#relayer#<address>),
+   # the primary's pool item (POOL#<pool>) and its holder's diagnostic heartbeat (TASK#<task>: evidence, never a lease) on
+diff --git a/infra/aws/modules/app/locals.tf b/infra/aws/modules/app/locals.tf
+--- a/infra/aws/modules/app/locals.tf
++++ b/infra/aws/modules/app/locals.tf
+@@ -112,6 +112,15 @@ locals {
+       trust   = var.escrow.trust
+       journal = { kind = "dynamodb", table_arn = var.ledger_table_arn }
+     },
++    # PHASE 3 ESCROW 2.1: the DEDICATED REMEDY key (`junoConfig.ts` `remedy_key`), only when configured -- absent, the
++    # server signs no remedy and refuses every timed money table (fail closed).
++    try(var.escrow.remedy_key, null) == null || var.remedy_signing_key == null ? {} : {
++      remedy_key = {
++        remedy_key_id  = var.escrow.remedy_key.remedy_key_id
++        public_key_hex = var.escrow.remedy_key.public_key_hex
++        signer         = { kind = "kms", key_ref = var.remedy_signing_key }
++      }
++    },
+     length(local.juno_gas) == 0 ? {} : { gas = local.juno_gas },
+     var.escrow.timeout_blocks == null ? {} : { timeout_blocks = var.escrow.timeout_blocks },
+     var.escrow.request_timeout_ms == null ? {} : { request_timeout_ms = var.escrow.request_timeout_ms },
+diff --git a/infra/aws/modules/app/tests/alarms.tftest.hcl b/infra/aws/modules/app/tests/alarms.tftest.hcl
+--- a/infra/aws/modules/app/tests/alarms.tftest.hcl
++++ b/infra/aws/modules/app/tests/alarms.tftest.hcl
+@@ -65,7 +65,7 @@ variables {
+     network_class    = "testnet"
+     rest_endpoints   = ["https://juno-testnet-rest.example.net"]
+     contract_address = "juno1qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qursaq28r5"
+-    code_checksum    = "5ecc302221a2dab4bb4f0f71b632f2beeafe9523ebd7b33bd0e94d017b8d09e8"
++    code_checksum    = "c3bd0618615e0d8688f71860a90f235a796b0152be84e2489ce6639e3a218219"
+     wasm_admin       = null
+     denom            = "ujunox"
+     asset_symbol     = "JUNOX"
+@@ -137,7 +137,7 @@ run "every_contract_alarm_exists_with_stable_names_before_the_services" {
+       "a1-unexpected-task-loss", "a3-store-uncertain", "a3-store-restart-loop", "a4-startup-refused", "a4g-generation-refused", "a4i-identity-restore-refused",
+       "a5c-money-sweep-passes-failing", "a6b-relayer-takeover-not-taken", "a8-kms-refused", "a9-kms-invalid-answer", "a10-signer-unavailable", "r1-generation-lost", "r2-money-journal-ahead",
+       "p1/a2-writer-epoch-conflict", "p1/a5-money-sweep-stale", "p1/a5b-money-sweep-games-failing", "p1/a11-readiness-flapping", "p1/a12-prolonged-unready", "p1/a12b-pool-writer-unconfirmed",
+-      "p1/a14-task-status-write-failures", "p1/a15-relayer-paging", "p1/r3-restore-unverified",
++      "p1/a14-task-status-write-failures", "p1/a15-relayer-paging", "p1/r3-restore-unverified", "p1/c1-clock-finality-held",
+       "primary/a6-relayer-unusable", "primary/a7-escrow-inactive",
+     ])
+     error_message = "The contract's alarms, by scope; the heartbeat (A13, missing = breaching) only once the services run."
+@@ -175,8 +175,8 @@ run "dimensions_are_environment_and_pool_only_and_no_alarm_is_per_task" {
+     error_message = "Dimension values are the environment label and a pool id -- never a task id, a build or an ARN."
+   }
+   assert {
+-    condition     = length(aws_cloudwatch_metric_alarm.gs) == 13 + 3 * 9 + 3 && length(aws_cloudwatch_metric_alarm.flip_window) == 3 && length(aws_cloudwatch_composite_alarm.notify) == 3 * 3 + 2
+-    error_message = "Per environment 13, per pool 9 (a drained pool too: it simply has no data), 3 for the primary, one suppressor per pool: nothing per task."
++    condition     = length(aws_cloudwatch_metric_alarm.gs) == 13 + 3 * 10 + 3 && length(aws_cloudwatch_metric_alarm.flip_window) == 3 && length(aws_cloudwatch_composite_alarm.notify) == 3 * 3 + 2
++    error_message = "Per environment 13, per pool 10 (a drained pool too: it simply has no data), 3 for the primary, one suppressor per pool: nothing per task."
+   }
+   assert {
+     condition     = alltrue([for k, a in aws_cloudwatch_metric_alarm.gs : a.threshold >= 0 && a.evaluation_periods >= 1 && a.datapoints_to_alarm <= a.evaluation_periods])
+@@ -295,7 +295,7 @@ run "no_escrow_no_escrow_alarms" {
+   }
+ 
+   assert {
+-    condition     = length([for k, a in aws_cloudwatch_metric_alarm.gs : k if length(regexall("a6-|a6b-|a7-|a8-|a9-|a10-|a15-|r2-|r3-", k)) > 0]) == 0
++    condition     = length([for k, a in aws_cloudwatch_metric_alarm.gs : k if length(regexall("a6-|a6b-|a7-|a8-|a9-|a10-|a15-|r2-|r3-|c1-", k)) > 0]) == 0
+     error_message = "Without escrow there is no relayer, KMS or money alarm (nothing would ever emit their metrics)."
+   }
+   assert {
+@@ -336,7 +336,7 @@ run "page_and_ticket_classes_are_wired_to_their_own_lists" {
+     error_message = "A composite notifies its alarm's class."
+   }
+   assert {
+-    condition = alltrue([for id in ["a1-unexpected-task-loss", "a3-store-restart-loop", "a4-startup-refused", "a4g-generation-refused", "a4i-identity-restore-refused", "r1-generation-lost", "r2-money-journal-ahead", "a8-kms-refused", "a9-kms-invalid-answer", "a10-signer-unavailable", "p1/a15-relayer-paging", "p1/r3-restore-unverified", "p1/a5-money-sweep-stale", "p1/a2-writer-epoch-conflict", "primary/a7-escrow-inactive"] :
++    condition = alltrue([for id in ["a1-unexpected-task-loss", "a3-store-restart-loop", "a4-startup-refused", "a4g-generation-refused", "a4i-identity-restore-refused", "r1-generation-lost", "r2-money-journal-ahead", "a8-kms-refused", "a9-kms-invalid-answer", "a10-signer-unavailable", "p1/a15-relayer-paging", "p1/r3-restore-unverified", "p1/c1-clock-finality-held", "p1/a5-money-sweep-stale", "p1/a2-writer-epoch-conflict", "primary/a7-escrow-inactive"] :
+     aws_cloudwatch_metric_alarm.gs[id].tags["gs:alarm-class"] == "page"])
+     error_message = "The PAGE class: losses, restart loops, refusals, generation / restore failures, KMS, the relayer's page, the sweep, the escrow."
+   }
+@@ -457,3 +457,34 @@ run "operator_may_publish_only_the_flip_window_and_the_verifier_may_describe_ala
+     error_message = "The verifier's capture reads the alarms (describe only)."
+   }
+ }
++
++/* ------------------------------------------------------------------ */
++/* PHASE 3 ESCROW 2.1 RELEASE READINESS: C1, the minute-30 hold          */
++/* ------------------------------------------------------------------ */
++
++run "c1_a_frozen_timed_money_table_pages_on_every_pool" {
++  command = plan
++
++  variables {
++    page_alarm_action_arns   = ["arn:aws:sns:us-east-1:111111111111:gs-staging-page"]
++    ticket_alarm_action_arns = ["arn:aws:sns:us-east-1:111111111111:gs-staging-ticket"]
++  }
++
++  assert {
++    condition = (one(one(aws_cloudwatch_metric_alarm.gs["p1/c1-clock-finality-held"].metric_query).metric).metric_name == "ClockFinalityHeldTables"
++      && one(one(aws_cloudwatch_metric_alarm.gs["p1/c1-clock-finality-held"].metric_query).metric).stat == "Minimum"
++      && one(one(aws_cloudwatch_metric_alarm.gs["p1/c1-clock-finality-held"].metric_query).metric).namespace == "18Cosmos/GameServer"
++    && one(one(aws_cloudwatch_metric_alarm.gs["p1/c1-clock-finality-held"].metric_query).metric).dimensions == tomap({ Environment = "staging", Pool = "p1" }))
++    error_message = "C1 reads the ClockFinalityHeldTables gauge (Minimum: held through the whole minute) under [Environment, Pool] only -- never a game, task or key dimension."
++  }
++  assert {
++    condition = (aws_cloudwatch_metric_alarm.gs["p1/c1-clock-finality-held"].evaluation_periods == 3 && aws_cloudwatch_metric_alarm.gs["p1/c1-clock-finality-held"].datapoints_to_alarm == 3
++      && aws_cloudwatch_metric_alarm.gs["p1/c1-clock-finality-held"].comparison_operator == "GreaterThanOrEqualToThreshold" && aws_cloudwatch_metric_alarm.gs["p1/c1-clock-finality-held"].threshold == 1
++    && aws_cloudwatch_metric_alarm.gs["p1/c1-clock-finality-held"].treat_missing_data == "notBreaching")
++    error_message = "C1: a table held 3 consecutive minutes pages; a pool with no data (drained, or not the primary) is OK."
++  }
++  assert {
++    condition     = aws_cloudwatch_metric_alarm.gs["p1/c1-clock-finality-held"].alarm_actions == toset(["arn:aws:sns:us-east-1:111111111111:gs-staging-page"]) && !contains(keys(aws_cloudwatch_composite_alarm.notify), "p1/c1-clock-finality-held")
++    error_message = "C1 pages directly: never suppressible by a flip window (a frozen money table is never an expected flip effect)."
++  }
++}
+diff --git a/infra/aws/modules/app/tests/app.tftest.hcl b/infra/aws/modules/app/tests/app.tftest.hcl
+--- a/infra/aws/modules/app/tests/app.tftest.hcl
++++ b/infra/aws/modules/app/tests/app.tftest.hcl
+@@ -65,7 +65,7 @@ variables {
+     network_class    = "testnet"
+     rest_endpoints   = ["https://juno-testnet-rest.example.net"]
+     contract_address = "juno1qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qursaq28r5"
+-    code_checksum    = "5ecc302221a2dab4bb4f0f71b632f2beeafe9523ebd7b33bd0e94d017b8d09e8"
++    code_checksum    = "c3bd0618615e0d8688f71860a90f235a796b0152be84e2489ce6639e3a218219"
+     wasm_admin       = null
+     denom            = "ujunox"
+     asset_symbol     = "JUNOX"
+@@ -837,7 +837,7 @@ run "refuses_the_edge_diagnostic_beside_mainnet_escrow" {
+       network_class    = "mainnet"
+       rest_endpoints   = ["https://a.example.net", "https://b.example.net"]
+       contract_address = "juno1qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qursaq28r5"
+-      code_checksum    = "5ecc302221a2dab4bb4f0f71b632f2beeafe9523ebd7b33bd0e94d017b8d09e8"
++      code_checksum    = "c3bd0618615e0d8688f71860a90f235a796b0152be84e2489ce6639e3a218219"
+       wasm_admin       = null
+       denom            = "ujuno"
+       asset_symbol     = "JUNO"
+@@ -893,7 +893,7 @@ run "refuses_a_mainnet_money_switch" {
+       network_class    = "mainnet"
+       rest_endpoints   = ["https://a.example.net", "https://b.example.net"]
+       contract_address = "juno1qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qursaq28r5"
+-      code_checksum    = "5ecc302221a2dab4bb4f0f71b632f2beeafe9523ebd7b33bd0e94d017b8d09e8"
++      code_checksum    = "c3bd0618615e0d8688f71860a90f235a796b0152be84e2489ce6639e3a218219"
+       wasm_admin       = null
+       denom            = "ujuno"
+       asset_symbol     = "JUNO"
+@@ -1074,3 +1074,184 @@ run "refuses_a_rotation_without_signing_keys" {
+   }
+   expect_failures = [var.relayer_rotation_key_arns]
+ }
++
++/* ------------------------------------------------------------------ */
++/* PHASE 3 ESCROW 2.1: the DEDICATED REMEDY key (`remedy_signing_key`) */
++/* ------------------------------------------------------------------ */
++# Owner decision 2026-10-08: the REMEDY authority is its own purpose -- its own key, its own IAM statements, its own field of
++# the rendered Juno document. The ledger stack's remedy_key_arns.r1 = 7777... below; the original three are 1111/2222/3333.
++
++run "no_remedy_key_by_default_and_nothing_changes" {
++  command = apply
++
++  assert {
++    condition     = !contains(keys(jsondecode(aws_ssm_parameter.juno_backend[0].insecure_value)), "remedy_key")
++    error_message = "Default (remedy_signing_key = null): the Juno document carries no remedy_key -- the server signs no remedy and refuses timed money (fail closed)."
++  }
++  assert {
++    condition     = length([for s in concat(data.aws_iam_policy_document.task[0].statement, data.aws_iam_policy_document.bootstrap.statement) : s if startswith(s.sid, "RemedyKey")]) == 0
++    error_message = "Default: no remedy statement on any role (every existing policy unchanged)."
++  }
++}
++
++run "a_remedy_key_is_rendered_and_granted_on_its_own" {
++  command = apply
++  variables {
++    remedy_signing_key = "arn:aws:kms:us-east-1:222222222222:key/77777777-7777-4777-8777-777777777777"
++    escrow             = merge(var.escrow, { remedy_key = { remedy_key_id = 1, public_key_hex = "0238194abfc289cc915ccc280e22ab5959c87e379a2039e494433e70f29c3c1a6b" } })
++  }
++
++  assert {
++    condition     = jsondecode(aws_ssm_parameter.juno_backend[0].insecure_value) == jsondecode(file("${path.module}/../../fixtures/juno-backend-staging-remedy.json"))
++    error_message = "The Juno document must equal infra/aws/fixtures/juno-backend-staging-remedy.json (which the server's parser checks): the base document plus remedy_key."
++  }
++  assert {
++    condition = jsondecode(aws_ssm_parameter.juno_backend[0].insecure_value).remedy_key == {
++      remedy_key_id  = 1
++      public_key_hex = "0238194abfc289cc915ccc280e22ab5959c87e379a2039e494433e70f29c3c1a6b"
++      signer         = { kind = "kms", key_ref = "arn:aws:kms:us-east-1:222222222222:key/77777777-7777-4777-8777-777777777777" }
++    }
++    error_message = "remedy_key = { remedy_key_id, public_key_hex, signer: { kind: kms, key_ref: <the remedy key ARN> } } -- junoConfig.ts's field, exactly."
++  }
++  assert {
++    condition = (jsondecode(aws_ssm_parameter.juno_backend[0].insecure_value).relayer.signer.key_ref == "arn:aws:kms:us-east-1:222222222222:key/11111111-1111-4111-8111-111111111111"
++      && jsondecode(aws_ssm_parameter.juno_backend[0].insecure_value).settlement_key.signer.key_ref == "arn:aws:kms:us-east-1:222222222222:key/22222222-2222-4222-8222-222222222222"
++    && jsondecode(aws_ssm_parameter.juno_backend[0].insecure_value).admission_key.signer.key_ref == "arn:aws:kms:us-east-1:222222222222:key/33333333-3333-4333-8333-333333333333")
++    error_message = "The relayer, settlement and admission signers are unchanged: the remedy key never substitutes for one of them."
++  }
++  assert {
++    condition = alltrue([for sid in ["SigningKeysPublicKey", "SigningKeysSignDigestOnly"] : toset(one([for s in data.aws_iam_policy_document.task[0].statement : s if s.sid == sid]).resources) == toset([
++      "arn:aws:kms:us-east-1:222222222222:key/11111111-1111-4111-8111-111111111111",
++      "arn:aws:kms:us-east-1:222222222222:key/22222222-2222-4222-8222-222222222222",
++      "arn:aws:kms:us-east-1:222222222222:key/33333333-3333-4333-8333-333333333333",
++    ])])
++    error_message = "The three-key statements are unchanged (not widened to the remedy key)."
++  }
++  assert {
++    condition = (toset(one([for s in data.aws_iam_policy_document.task[0].statement : s if s.sid == "RemedyKeyPublicKey"]).actions) == toset(["kms:GetPublicKey"])
++      && toset(one([for s in data.aws_iam_policy_document.task[0].statement : s if s.sid == "RemedyKeyPublicKey"]).resources) == toset(["arn:aws:kms:us-east-1:222222222222:key/77777777-7777-4777-8777-777777777777"])
++      && toset(one([for s in data.aws_iam_policy_document.task[0].statement : s if s.sid == "RemedyKeySignDigestOnly"]).actions) == toset(["kms:Sign"])
++    && toset(one([for s in data.aws_iam_policy_document.task[0].statement : s if s.sid == "RemedyKeySignDigestOnly"]).resources) == toset(["arn:aws:kms:us-east-1:222222222222:key/77777777-7777-4777-8777-777777777777"]))
++    error_message = "The task role reaches the remedy key in its OWN statements: GetPublicKey and Sign on exactly that one key ARN."
++  }
++  assert {
++    condition = toset([for c in one([for s in data.aws_iam_policy_document.task[0].statement : s if s.sid == "RemedyKeySignDigestOnly"]).condition : "${c.test}|${c.variable}|${join(",", c.values)}"]) == toset([
++      "StringEquals|kms:SigningAlgorithm|ECDSA_SHA_256", "StringEquals|kms:MessageType|DIGEST",
++    ])
++    error_message = "kms:Sign on the remedy key only with ECDSA_SHA_256 over a DIGEST."
++  }
++  assert {
++    condition = (toset(one([for s in data.aws_iam_policy_document.bootstrap.statement : s if s.sid == "RemedyKeyReadOnly"]).actions) == toset(["kms:DescribeKey", "kms:GetPublicKey", "kms:ListGrants"])
++      && toset(one([for s in data.aws_iam_policy_document.bootstrap.statement : s if s.sid == "RemedyKeyReadOnly"]).resources) == toset(["arn:aws:kms:us-east-1:222222222222:key/77777777-7777-4777-8777-777777777777"])
++    && toset(one([for s in data.aws_iam_policy_document.bootstrap.statement : s if s.sid == "SigningKeysReadOnly"]).resources) == toset(values(var.signing_keys)))
++    error_message = "The bootstrap role READS the remedy key (DescribeKey, GetPublicKey, ListGrants) in its own statement; its three-key read is unchanged."
++  }
++  assert {
++    condition     = length([for s in data.aws_iam_policy_document.bootstrap.statement : s if contains(s.actions, "kms:Sign")]) == 0
++    error_message = "The bootstrap role never signs -- with the remedy key or any other."
++  }
++  assert {
++    condition = alltrue([for s in concat(data.aws_iam_policy_document.task[0].statement, data.aws_iam_policy_document.bootstrap.statement) :
++    !contains(s.resources, "*") || length([for a in s.actions : a if startswith(a, "kms:")]) == 0])
++    error_message = "No KMS action on a '*' resource (no accidental broad kms:Sign or read)."
++  }
++  assert {
++    condition = alltrue(flatten([for s in concat(data.aws_iam_policy_document.task[0].statement, data.aws_iam_policy_document.bootstrap.statement) :
++    [for a in s.actions : !contains(["kms:*", "kms:CreateGrant", "kms:Sign*", "kms:Decrypt", "kms:Encrypt"], a)]]))
++    error_message = "No wildcard KMS action, no CreateGrant, no encrypt/decrypt on any role."
++  }
++  assert {
++    condition     = toset(flatten([for s in data.aws_iam_policy_document.task[0].statement : s.resources if contains(s.actions, "kms:Sign")])) == toset(concat(values(var.signing_keys), ["arn:aws:kms:us-east-1:222222222222:key/77777777-7777-4777-8777-777777777777"]))
++    error_message = "Everything the task role may Sign with is exactly the three configured keys plus the configured remedy key."
++  }
++}
++
++run "refuses_a_remedy_key_alias" {
++  command = plan
++  variables {
++    remedy_signing_key = "arn:aws:kms:us-east-1:222222222222:alias/gs-staging-remedy"
++    escrow             = merge(var.escrow, { remedy_key = { remedy_key_id = 1, public_key_hex = "0238194abfc289cc915ccc280e22ab5959c87e379a2039e494433e70f29c3c1a6b" } })
++  }
++  expect_failures = [var.remedy_signing_key]
++}
++
++run "refuses_the_settlement_key_as_the_remedy_key" {
++  command = plan
++  variables {
++    remedy_signing_key = "arn:aws:kms:us-east-1:222222222222:key/22222222-2222-4222-8222-222222222222"
++    escrow             = merge(var.escrow, { remedy_key = { remedy_key_id = 1, public_key_hex = "0238194abfc289cc915ccc280e22ab5959c87e379a2039e494433e70f29c3c1a6b" } })
++  }
++  expect_failures = [var.remedy_signing_key]
++}
++
++run "refuses_the_relayer_or_admission_key_as_the_remedy_key" {
++  command = plan
++  variables {
++    remedy_signing_key = "arn:aws:kms:us-east-1:222222222222:key/33333333-3333-4333-8333-333333333333"
++    escrow             = merge(var.escrow, { remedy_key = { remedy_key_id = 1, public_key_hex = "0238194abfc289cc915ccc280e22ab5959c87e379a2039e494433e70f29c3c1a6b" } })
++  }
++  expect_failures = [var.remedy_signing_key]
++}
++
++run "refuses_a_relayer_rotation_key_as_the_remedy_key" {
++  command = plan
++  variables {
++    relayer_rotation_key_arns = ["arn:aws:kms:us-east-1:222222222222:key/66666666-6666-4666-8666-666666666666"]
++    remedy_signing_key        = "arn:aws:kms:us-east-1:222222222222:key/66666666-6666-4666-8666-666666666666"
++    escrow                    = merge(var.escrow, { remedy_key = { remedy_key_id = 1, public_key_hex = "0238194abfc289cc915ccc280e22ab5959c87e379a2039e494433e70f29c3c1a6b" } })
++  }
++  expect_failures = [var.remedy_signing_key]
++}
++
++run "refuses_a_remedy_key_in_another_region" {
++  command = plan
++  variables {
++    remedy_signing_key = "arn:aws:kms:us-west-2:222222222222:key/77777777-7777-4777-8777-777777777777"
++    escrow             = merge(var.escrow, { remedy_key = { remedy_key_id = 1, public_key_hex = "0238194abfc289cc915ccc280e22ab5959c87e379a2039e494433e70f29c3c1a6b" } })
++  }
++  expect_failures = [var.remedy_signing_key]
++}
++
++run "refuses_a_remedy_signer_without_its_on_chain_key" {
++  command = plan
++  variables {
++    remedy_signing_key = "arn:aws:kms:us-east-1:222222222222:key/77777777-7777-4777-8777-777777777777"
++  }
++  expect_failures = [var.remedy_signing_key]
++}
++
++run "refuses_an_on_chain_remedy_key_without_its_signer" {
++  command = plan
++  variables {
++    escrow = merge(var.escrow, { remedy_key = { remedy_key_id = 1, public_key_hex = "0238194abfc289cc915ccc280e22ab5959c87e379a2039e494433e70f29c3c1a6b" } })
++  }
++  expect_failures = [var.remedy_signing_key]
++}
++
++run "refuses_a_remedy_key_without_signing_keys" {
++  command = plan
++  variables {
++    signing_keys       = null
++    escrow             = null
++    remedy_signing_key = "arn:aws:kms:us-east-1:222222222222:key/77777777-7777-4777-8777-777777777777"
++  }
++  expect_failures = [var.remedy_signing_key]
++}
++
++run "refuses_a_malformed_on_chain_remedy_key" {
++  command = plan
++  variables {
++    remedy_signing_key = "arn:aws:kms:us-east-1:222222222222:key/77777777-7777-4777-8777-777777777777"
++    escrow             = merge(var.escrow, { remedy_key = { remedy_key_id = 65, public_key_hex = "0238194abfc289cc915ccc280e22ab5959c87e379a2039e494433e70f29c3c1a6b" } })
++  }
++  expect_failures = [var.escrow]
++}
++
++run "refuses_the_settlement_public_key_as_the_remedy_public_key" {
++  command = plan
++  variables {
++    remedy_signing_key = "arn:aws:kms:us-east-1:222222222222:key/77777777-7777-4777-8777-777777777777"
++    escrow             = merge(var.escrow, { remedy_key = { remedy_key_id = 1, public_key_hex = "03d01115d548e7561b15c38f004d734633687cf4419620095bc5b0f47070afe85a" } })
++  }
++  expect_failures = [var.escrow]
++}
+diff --git a/infra/aws/modules/app/tests/compute_none.tftest.hcl b/infra/aws/modules/app/tests/compute_none.tftest.hcl
+--- a/infra/aws/modules/app/tests/compute_none.tftest.hcl
++++ b/infra/aws/modules/app/tests/compute_none.tftest.hcl
+@@ -66,7 +66,7 @@ variables {
+     network_class    = "testnet"
+     rest_endpoints   = ["https://juno-testnet-rest.example.net"]
+     contract_address = "juno1qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qursaq28r5"
+-    code_checksum    = "5ecc302221a2dab4bb4f0f71b632f2beeafe9523ebd7b33bd0e94d017b8d09e8"
++    code_checksum    = "c3bd0618615e0d8688f71860a90f235a796b0152be84e2489ce6639e3a218219"
+     wasm_admin       = null
+     denom            = "ujunox"
+     asset_symbol     = "JUNOX"
+diff --git a/infra/aws/modules/app/variables.tf b/infra/aws/modules/app/variables.tf
+--- a/infra/aws/modules/app/variables.tf
++++ b/infra/aws/modules/app/variables.tf
+@@ -106,6 +106,41 @@ variable "signing_keys" {
+   }
+ }
+ 
++variable "remedy_signing_key" {
++  description = <<-EOT
++    PHASE 3 ESCROW 2.1 (owner decision 2026-10-08): the DEDICATED REMEDY signing key -- the ledger stack's
++    `remedy_key_arns.<label>`, by KEY ARN (never an alias) -- or null (the default: no remedy key, every policy and the
++    Juno document exactly as before). Its own purpose: never the relayer, settlement or admission key, nor a relayer
++    rotation key. When set, (1) the Juno document carries `remedy_key` (this ARN, with `escrow.remedy_key`'s on-chain id
++    and public key -- both or neither), (2) the task role gets GetPublicKey + Sign (ECDSA_SHA_256 over a DIGEST) on THIS key
++    only, in its own statements (RemedyKeyPublicKey / RemedyKeySignDigestOnly), and (3) the bootstrap role reads it
++    (RemedyKeyReadOnly: DescribeKey, GetPublicKey, ListGrants) for `awsDeploy verify` / `signer-keys`. Null: the server
++    signs no remedy and refuses every timed money table (fail closed).
++  EOT
++  type        = string
++  default     = null
++  validation {
++    condition     = var.remedy_signing_key == null || can(regex("^arn:aws:kms:[a-z]{2}(-[a-z]+)+-[0-9]{1,2}:[0-9]{12}:key/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|mrk-[0-9a-f]{32})$", var.remedy_signing_key))
++    error_message = "remedy_signing_key must be a KMS KEY ARN (arn:aws:kms:<region>:<account>:key/<id>); an alias is refused."
++  }
++  validation {
++    condition     = var.remedy_signing_key == null || var.signing_keys != null
++    error_message = "remedy_signing_key needs signing_keys: a remedy key belongs to a configured escrow."
++  }
++  validation {
++    condition     = var.remedy_signing_key == null || var.signing_keys == null ? true : !contains(values(var.signing_keys), var.remedy_signing_key) && !contains(var.relayer_rotation_key_arns, var.remedy_signing_key)
++    error_message = "remedy_signing_key must be its OWN key: never the relayer, settlement or admission key, nor a relayer rotation key."
++  }
++  validation {
++    condition     = var.remedy_signing_key == null || var.signing_keys == null ? true : split(":", var.remedy_signing_key)[3] == split(":", var.signing_keys.relayer)[3]
++    error_message = "remedy_signing_key must be in the signing keys' one region (the Juno configuration's KMS region)."
++  }
++  validation {
++    condition     = (var.remedy_signing_key == null) == (try(var.escrow.remedy_key, null) == null)
++    error_message = "remedy_signing_key and escrow.remedy_key go together: both (a configured remedy signer) or neither (no remedy: timed money refused)."
++  }
++}
++
+ variable "relayer_rotation_key_arns" {
+   description = <<-EOT
+     LIVE-6 relayer rotation: relayer keys (the ledger stack's `relayer_key_arns`, by KEY ARN) that are NOT the configured
+@@ -178,12 +213,22 @@ variable "escrow" {
+     }))
+     timeout_blocks     = optional(number)
+     request_timeout_ms = optional(number)
++    # PHASE 3 ESCROW 2.1: the dedicated REMEDY key's on-chain registry id (1..64) and public key (`signer-keys --remedy`);
++    # its signer is `remedy_signing_key`. Absent / null: no remedy key (the server refuses timed money: fail closed).
++    remedy_key = optional(object({
++      remedy_key_id  = number
++      public_key_hex = string
++    }))
+   })
+   default = null
+   validation {
+     condition     = var.escrow == null ? true : contains(["mainnet", "testnet", "local"], var.escrow.network_class)
+     error_message = "escrow.network_class must be mainnet, testnet or local."
+   }
++  validation {
++    condition     = try(var.escrow.remedy_key, null) == null ? true : (floor(var.escrow.remedy_key.remedy_key_id) == var.escrow.remedy_key.remedy_key_id && var.escrow.remedy_key.remedy_key_id >= 1 && var.escrow.remedy_key.remedy_key_id <= 64 && can(regex("^0[23][0-9a-f]{64}$", var.escrow.remedy_key.public_key_hex)) && var.escrow.remedy_key.public_key_hex != var.escrow.settlement_key.public_key_hex && var.escrow.remedy_key.public_key_hex != var.escrow.admission_key.public_key_hex)
++    error_message = "escrow.remedy_key: remedy_key_id a whole number 1..64, public_key_hex a 33-byte compressed key (lowercase hex) that is neither the settlement nor the admission key."
++  }
+   validation {
+     condition     = var.escrow == null ? true : alltrue([for url in var.escrow.rest_endpoints : startswith(url, "https://")])
+     error_message = "escrow.rest_endpoints must be https (allow_insecure_local_http is refused in production and is never written)."
+diff --git a/infra/aws/modules/ledger/main.tf b/infra/aws/modules/ledger/main.tf
+--- a/infra/aws/modules/ledger/main.tf
++++ b/infra/aws/modules/ledger/main.tf
+@@ -10,7 +10,8 @@
+ #                     control-plane record (L6-4 moves it), and a Terraform-managed item would later be "corrected" back.
+ #   KMS               three ECC_SECG_P256K1 / SIGN_VERIFY keys (relayer, settlement, admission), named by KEY ARN in the
+ #                     Juno configuration (never an alias); the task role may GetPublicKey, and Sign only with
+-#                     ECDSA_SHA_256 over a DIGEST.
++#                     ECDSA_SHA_256 over a DIGEST. (+ the optional dedicated REMEDY keys, `remedy_key_count`: same spec,
++#                     same key policy.)
+ #
+ # GRANTS TO THE APP ACCOUNT are made to its account root with an `aws:PrincipalArn` condition naming the exact role
+ # (gs-<env>-app-task, gs-<env>-bootstrap). Both halves are required cross-account: this policy AND the role's own IAM policy
+@@ -40,7 +41,7 @@ locals {
+   # LIVE-6 L6-2: the operator (`gamesDoctor aws`, read only here) and the recovery (`npm run recovery`, L6-4) roles.
+   operator_arn    = "arn:${local.partition}:iam::${var.app_account_id}:role/gs-${var.environment}-operator"
+   recovery_arn    = "arn:${local.partition}:iam::${var.app_account_id}:role/gs-${var.environment}-recovery"
+-  signing_purpose = var.signing_keys_enabled ? toset(concat(["relayer", "settlement", "admission"], [for label in local.relayer_rotation_labels : "relayer-${label}"], local.financial_key_purposes)) : toset([])
++  signing_purpose = var.signing_keys_enabled ? toset(concat(["relayer", "settlement", "admission"], [for label in local.relayer_rotation_labels : "relayer-${label}"], local.financial_key_purposes, local.remedy_key_purposes)) : toset([])
+   tags            = merge(var.tags, { "gs:environment" = var.environment, "gs:component" = "ledger", "gs:slice" = "live5-l5-8" })
+ }
+ 
+@@ -57,6 +58,14 @@ locals {
+   # original settlement and admission keys never move; no relayer key is added. Labels are hyphen-free (validated), so
+   # `<purpose>-<label>` splits unambiguously.
+   financial_key_purposes = flatten([for label in var.financial_key_sets : ["settlement-${label}", "admission-${label}"]])
++  # PHASE 3 ESCROW 2.1 (owner decision 2026-10-08): the DEDICATED REMEDY keys -- escrow 2.1.0's REMEDY attestation
++  # authority (`InstantiateMsg.remedy_keys` / `AddRemedyKey`), never the relayer, settlement or admission key. `r1` ...
++  # `r<remedy_key_count>` join `signing_purpose` as `remedy-r<N>`: one more instance each of the same resource, same spec,
++  # same least-privilege key policy (the app runtime roles GetPublicKey + Sign ECDSA_SHA_256 over a DIGEST; the bootstrap /
++  # verifier role DescribeKey, GetPublicKey, ListGrants; nobody CreateGrant), `prevent_destroy`. Default 0: no remedy key,
++  # every existing plan unchanged. They never join `signing_key_arns` (the original three) or `financial_key_arns`.
++  remedy_key_labels   = [for n in range(1, var.remedy_key_count + 1) : "r${n}"]
++  remedy_key_purposes = [for label in local.remedy_key_labels : "remedy-${label}"]
+ }
+ 
+ /* ------------------------------------------------------------------ */
+@@ -455,6 +464,14 @@ resource "aws_backup_selection" "ledger" {
+ # `settlement-<l>` and `admission-<l>` -- dedicated settlement / admission identities for a separate financial
+ # deployment (e.g. JX-1), same spec and key policy as every key here. Removing a label would destroy its keys:
+ # `prevent_destroy` refuses that plan. They are not relayer keys and never join `signing_key_arns`.
++#
++# PHASE 3 ESCROW 2.1 REMEDY KEYS (owner decision 2026-10-08: a DEDICATED REMEDY signing purpose). `remedy_key_count`
++# (default 0: unchanged) is APPEND-ONLY: `remedy-r1` ... `remedy-r<N>`, each the same spec and the same key policy as
++# every key here (only the app runtime roles sign, digest-only; the bootstrap role reads; no grant). The contract registers
++# its public key at instantiation (`remedy_keys`) or by `AddRemedyKey`; WHICH key the deployment signs with is the app
++# stack's `remedy_signing_key` (by key ARN), never this module's -- a prepared next key signs nothing until it is named
++# there AND registered on chain. Lowering the count would destroy the newest key: `prevent_destroy` refuses that plan.
++# Retiring one is a separate, reviewed change (on chain `RetireRemedyKey`, then a `removed` block), never a variable.
+ 
+ data "aws_iam_policy_document" "signing" {
+   for_each = local.signing_purpose
+@@ -551,11 +568,13 @@ resource "aws_kms_key" "signing" {
+ 
+   # The original three keep their L5-8 tags exactly; a rotation key's purpose is `relayer`, its label says which one. A
+   # financial key set's keys: purpose `settlement` / `admission`, `gs:key-set` = the set's label.
++  # A REMEDY key's purpose is `remedy`, its label (`gs:remedy-key`) says which one.
+   tags = merge(
+     local.tags,
+     { Name = "gs-${var.environment}-${each.key}", "gs:signing-purpose" = split("-", each.key)[0] },
+     startswith(each.key, "relayer-") ? { "gs:relayer-key" = trimprefix(each.key, "relayer-") } : {},
+     contains(local.financial_key_purposes, each.key) ? { "gs:key-set" = split("-", each.key)[1] } : {},
++    contains(local.remedy_key_purposes, each.key) ? { "gs:remedy-key" = trimprefix(each.key, "remedy-") } : {},
+   )
+ 
+   lifecycle {
+diff --git a/infra/aws/modules/ledger/outputs.tf b/infra/aws/modules/ledger/outputs.tf
+--- a/infra/aws/modules/ledger/outputs.tf
++++ b/infra/aws/modules/ledger/outputs.tf
+@@ -42,6 +42,15 @@ output "financial_key_arns" {
+   value       = var.signing_keys_enabled ? { for label in var.financial_key_sets : label => { settlement = aws_kms_key.signing["settlement-${label}"].arn, admission = aws_kms_key.signing["admission-${label}"].arn } } : {}
+ }
+ 
++output "remedy_key_arns" {
++  description = <<-EOT
++    PHASE 3 ESCROW 2.1: the DEDICATED REMEDY keys by label -- { r1 = <key ARN>, ... } for `remedy_key_count` ({} by
++    default). The app stack names exactly one as `remedy_signing_key` (with its on-chain `escrow.remedy_key`); the
++    single-host stack the same one. Never part of `signing_key_arns` or `financial_key_arns`.
++  EOT
++  value       = var.signing_keys_enabled ? { for label in local.remedy_key_labels : label => aws_kms_key.signing["remedy-${label}"].arn } : {}
++}
++
+ output "kms_region" {
+   description = "The one KMS region of the Juno configuration (the keys' region)."
+   value       = local.region
+diff --git a/infra/aws/modules/ledger/tests/ledger.tftest.hcl b/infra/aws/modules/ledger/tests/ledger.tftest.hcl
+--- a/infra/aws/modules/ledger/tests/ledger.tftest.hcl
++++ b/infra/aws/modules/ledger/tests/ledger.tftest.hcl
+@@ -642,3 +642,162 @@ run "jx4c_operator_journal_query_is_atti_only_for_the_exact_operator" {
+     error_message = "JX-4C: no signing key names the operator (no Sign, no GetPublicKey)."
+   }
+ }
++
++/* ------------------------------------------------------------------ */
++/* PHASE 3 ESCROW 2.1: the DEDICATED REMEDY keys (`remedy_key_count`)  */
++/* ------------------------------------------------------------------ */
++# Owner decision 2026-10-08: the escrow 2.1.0 REMEDY attestation authority is its OWN signing purpose -- never the relayer,
++# settlement or admission key. One state ("remedy") carried through: an ARN equal to an earlier run's proves the key was
++# neither replaced nor recreated.
++
++run "remedy_baseline_no_remedy_key" {
++  command   = apply
++  state_key = "remedy"
++
++  assert {
++    condition     = toset(keys(aws_kms_key.signing)) == toset(["relayer", "settlement", "admission"]) && length(output.remedy_key_arns) == 0
++    error_message = "Default remedy_key_count = 0: exactly the three L5-8 keys and no remedy key (remedy_key_arns = {}): every existing plan is unchanged."
++  }
++}
++
++run "a_remedy_key_is_its_own_purpose" {
++  command   = apply
++  state_key = "remedy"
++  variables {
++    remedy_key_count = 1
++  }
++
++  assert {
++    condition     = toset(keys(aws_kms_key.signing)) == toset(["relayer", "settlement", "admission", "remedy-r1"])
++    error_message = "remedy_key_count = 1 adds exactly remedy-r1 -- no relayer, settlement or admission key."
++  }
++  assert {
++    condition     = output.signing_key_arns == run.remedy_baseline_no_remedy_key.signing_key_arns && output.relayer_key_arns == run.remedy_baseline_no_remedy_key.relayer_key_arns && length(output.financial_key_arns) == 0
++    error_message = "The original relayer, settlement and admission keys are untouched (same ARNs); signing_key_arns stays exactly the original three."
++  }
++  assert {
++    condition     = join(",", keys(output.remedy_key_arns)) == "r1" && output.remedy_key_arns["r1"] == aws_kms_key.signing["remedy-r1"].arn && !contains(values(output.signing_key_arns), output.remedy_key_arns["r1"])
++    error_message = "remedy_key_arns = { r1 = <the remedy key> }, never one of the signing_key_arns."
++  }
++  assert {
++    condition = (aws_kms_key.signing["remedy-r1"].customer_master_key_spec == "ECC_SECG_P256K1" && aws_kms_key.signing["remedy-r1"].key_usage == "SIGN_VERIFY"
++      && !aws_kms_key.signing["remedy-r1"].multi_region && !aws_kms_key.signing["remedy-r1"].enable_key_rotation && aws_kms_key.signing["remedy-r1"].is_enabled
++    && aws_kms_key.signing["remedy-r1"].deletion_window_in_days == 30)
++    error_message = "The remedy key is a secp256k1 SIGN_VERIFY key: single-region, no rotation, enabled, 30-day deletion window."
++  }
++  assert {
++    condition     = aws_kms_key.signing["remedy-r1"].tags == tomap(merge(local.tags, { Name = "gs-staging-remedy-r1", "gs:signing-purpose" = "remedy", "gs:remedy-key" = "r1" }))
++    error_message = "Tagged by its OWN purpose (remedy) and label (r1); never a relayer, settlement or admission tag, no key set."
++  }
++  assert {
++    condition     = aws_kms_key.signing["remedy-r1"].policy == data.aws_iam_policy_document.signing["remedy-r1"].json && aws_kms_key.signing["remedy-r1"].description == "18Cosmos staging remedy-r1 signing key (secp256k1, digest only; named by key ARN, never an alias)"
++    error_message = "The remedy key carries its own policy document and names itself."
++  }
++  assert {
++    condition = (toset([for s in data.aws_iam_policy_document.signing["remedy-r1"].statement : s.sid]) == toset(["KeyAdministrationWithoutSigning", "AppTaskPublicKey", "AppTaskSignDigestOnly", "BootstrapVerifyReadOnly"])
++      && toset(one([for s in data.aws_iam_policy_document.signing["remedy-r1"].statement : s if s.sid == "AppTaskSignDigestOnly"]).actions) == toset(["kms:Sign"])
++      && toset([for c in one([for s in data.aws_iam_policy_document.signing["remedy-r1"].statement : s if s.sid == "AppTaskSignDigestOnly"]).condition : "${c.test}|${c.variable}|${join(",", c.values)}"]) == toset([
++        "ArnEquals|aws:PrincipalArn|arn:aws:iam::111111111111:role/gs-staging-app-task", "StringEquals|kms:SigningAlgorithm|ECDSA_SHA_256", "StringEquals|kms:MessageType|DIGEST",
++      ])
++      && toset(one([for s in data.aws_iam_policy_document.signing["remedy-r1"].statement : s if s.sid == "BootstrapVerifyReadOnly"]).actions) == toset(["kms:DescribeKey", "kms:GetPublicKey", "kms:ListGrants"])
++    && !contains(one([for s in data.aws_iam_policy_document.signing["remedy-r1"].statement : s if s.sid == "KeyAdministrationWithoutSigning"]).actions, "kms:Sign"))
++    error_message = "Least privilege: only the app task role signs with the remedy key (ECDSA_SHA_256 over a DIGEST), the bootstrap role only reads, the account administers but never signs."
++  }
++  assert {
++    condition     = alltrue(flatten([for s in data.aws_iam_policy_document.signing["remedy-r1"].statement : [for a in s.actions : a != "kms:CreateGrant" && a != "kms:*"]]))
++    error_message = "Nobody may CreateGrant on the remedy key (a grant would hand out Sign without appearing in the policy), and no kms:*."
++  }
++  assert {
++    condition     = data.aws_iam_policy_document.signing["remedy-r1"].statement == data.aws_iam_policy_document.signing["settlement"].statement
++    error_message = "The remedy key's policy is exactly the established signing-key policy (no grant broader than the existing keys')."
++  }
++  assert {
++    condition = alltrue([for k in ["relayer", "settlement", "admission"] :
++    aws_kms_key.signing[k].tags == tomap(merge(local.tags, { Name = "gs-staging-${k}", "gs:signing-purpose" = k })) && aws_kms_key.signing[k].description == "18Cosmos staging ${k} signing key (secp256k1, digest only; named by key ARN, never an alias)"])
++    error_message = "The three L5-8 keys' descriptions and tags are unchanged."
++  }
++  assert {
++    condition     = length([for s in data.aws_iam_policy_document.ledger_resource.statement : s if s.sid == "BootstrapRelayerFenceRead"]) == 0
++    error_message = "A remedy key changes nothing in the ledger table's resource policy."
++  }
++}
++
++run "a_prepared_remedy_rotation_adds_r2_and_keeps_r1" {
++  command   = apply
++  state_key = "remedy"
++  variables {
++    remedy_key_count = 2
++  }
++
++  assert {
++    condition     = toset(keys(aws_kms_key.signing)) == toset(["relayer", "settlement", "admission", "remedy-r1", "remedy-r2"]) && join(",", keys(output.remedy_key_arns)) == "r1,r2"
++    error_message = "remedy_key_count = 2 prepares remedy-r2 beside remedy-r1."
++  }
++  assert {
++    condition     = output.remedy_key_arns["r1"] == run.a_remedy_key_is_its_own_purpose.remedy_key_arns["r1"] && output.signing_key_arns == run.remedy_baseline_no_remedy_key.signing_key_arns
++    error_message = "The current remedy key and the original three are untouched (same ARNs)."
++  }
++  assert {
++    condition     = aws_kms_key.signing["remedy-r2"].tags == tomap(merge(local.tags, { Name = "gs-staging-remedy-r2", "gs:signing-purpose" = "remedy", "gs:remedy-key" = "r2" })) && data.aws_iam_policy_document.signing["remedy-r2"].statement == data.aws_iam_policy_document.signing["remedy-r1"].statement
++    error_message = "The prepared key has the same spec and policy as r1, its own label."
++  }
++}
++
++run "the_remedy_key_can_never_be_dropped_by_the_count" {
++  command   = plan
++  state_key = "remedy"
++  variables {
++    remedy_key_count = -1
++  }
++  expect_failures = [var.remedy_key_count]
++}
++
++run "a_remedy_key_count_is_a_whole_bounded_number" {
++  command = plan
++  variables {
++    remedy_key_count = 17
++  }
++  expect_failures = [var.remedy_key_count]
++}
++
++run "a_remedy_key_needs_the_signing_keys" {
++  command = plan
++  variables {
++    signing_keys_enabled = false
++    remedy_key_count     = 1
++  }
++  expect_failures = [var.remedy_key_count]
++}
++
++run "a_remedy_key_beside_a_financial_set_and_a_rotation" {
++  command = plan
++  variables {
++    relayer_key_count  = 2
++    financial_key_sets = ["jx1"]
++    remedy_key_count   = 1
++  }
++
++  assert {
++    condition     = toset(keys(aws_kms_key.signing)) == toset(["relayer", "relayer-r2", "settlement", "admission", "settlement-jx1", "admission-jx1", "remedy-r1"])
++    error_message = "The purposes compose without collision: a rotation, a financial set and the remedy key each add only their own keys."
++  }
++  assert {
++    condition     = aws_kms_key.signing["remedy-r1"].tags["gs:signing-purpose"] == "remedy" && !contains(keys(aws_kms_key.signing["remedy-r1"].tags), "gs:key-set") && !contains(keys(aws_kms_key.signing["remedy-r1"].tags), "gs:relayer-key")
++    error_message = "The remedy key is never tagged as a relayer key or a financial key set."
++  }
++}
++
++run "a_remedy_key_authorises_the_host_role_like_every_signing_key" {
++  command = plan
++  variables {
++    remedy_key_count         = 1
++    app_runtime_role_arns    = ["arn:aws:iam::111111111111:role/gs-staging-host-app"]
++    ecs_task_role_authorized = false
++  }
++
++  assert {
++    condition = length([for s in data.aws_iam_policy_document.signing["remedy-r1"].statement : s if contains(["AppTaskPublicKey", "AppTaskSignDigestOnly"], s.sid)
++    && toset(flatten([for c in s.condition : c.values if c.variable == "aws:PrincipalArn"])) == toset(["arn:aws:iam::111111111111:role/gs-staging-host-app"])]) == 2
++    error_message = "On the single host, exactly the host's app role may GetPublicKey / Sign with the remedy key -- the same runtime roles as every signing key, nobody else."
++  }
++}
+diff --git a/infra/aws/modules/ledger/variables.tf b/infra/aws/modules/ledger/variables.tf
+--- a/infra/aws/modules/ledger/variables.tf
++++ b/infra/aws/modules/ledger/variables.tf
+@@ -139,6 +139,29 @@ variable "financial_key_sets" {
+   }
+ }
+ 
++variable "remedy_key_count" {
++  description = <<-EOT
++    PHASE 3 ESCROW 2.1 (owner decision 2026-10-08): how many DEDICATED REMEDY signing keys this ledger holds -- escrow 2.1.0's
++    REMEDY attestation authority, its own signing purpose (never the relayer, settlement or admission key). Default 0: no
++    remedy key, every existing plan unchanged (and the server, configured without one, refuses every timed money table: fail
++    closed). Key N is `aws_kms_key.signing["remedy-r<N>"]` -- same spec (ECC_SECG_P256K1 / SIGN_VERIFY, single-region), same
++    least-privilege key policy, `prevent_destroy`. APPEND-ONLY: raise it by one to create the first key or to PREPARE a
++    rotation (the new key exists beside the current one; the app stack's `remedy_signing_key` still names the current one).
++    Lowering it would destroy the newest key: `prevent_destroy` refuses that plan. Output: `remedy_key_arns`.
++  EOT
++  type        = number
++  default     = 0
++  nullable    = false
++  validation {
++    condition     = var.remedy_key_count >= 0 && var.remedy_key_count <= 16 && floor(var.remedy_key_count) == var.remedy_key_count
++    error_message = "remedy_key_count must be a whole number 0..16."
++  }
++  validation {
++    condition     = var.remedy_key_count == 0 || var.signing_keys_enabled
++    error_message = "remedy_key_count > 0 needs signing_keys_enabled: a remedy key is a signing key."
++  }
++}
++
+ variable "tags" {
+   description = "Tags on every resource."
+   type        = map(string)
+diff --git a/infra/aws/modules/single-host/iam.tf b/infra/aws/modules/single-host/iam.tf
+--- a/infra/aws/modules/single-host/iam.tf
++++ b/infra/aws/modules/single-host/iam.tf
+@@ -98,6 +98,22 @@ locals {
+         Condition = { StringEquals = { "kms:SigningAlgorithm" = "ECDSA_SHA_256", "kms:MessageType" = "DIGEST" } }
+       },
+     ] : statement if var.signing_keys != null],
++    # --- KMS: the DEDICATED REMEDY key (Phase 3 escrow 2.1; owner decision 2026-10-08), in its OWN statements ----------
++    [for statement in [
++      {
++        Sid      = "RemedyKeyPublicKey"
++        Effect   = "Allow"
++        Action   = ["kms:GetPublicKey"]
++        Resource = [var.remedy_signing_key]
++      },
++      {
++        Sid       = "RemedyKeySignDigestOnly"
++        Effect    = "Allow"
++        Action    = ["kms:Sign"]
++        Resource  = [var.remedy_signing_key]
++        Condition = { StringEquals = { "kms:SigningAlgorithm" = "ECDSA_SHA_256", "kms:MessageType" = "DIGEST" } }
++      },
++    ] : statement if var.remedy_signing_key != null],
+     [
+       # --- the image: the ONE existing repository (GetAuthorizationToken has no resource-level scope) ---------------
+       {
+diff --git a/infra/aws/modules/single-host/observability.tf b/infra/aws/modules/single-host/observability.tf
+--- a/infra/aws/modules/single-host/observability.tf
++++ b/infra/aws/modules/single-host/observability.tf
+@@ -8,7 +8,9 @@
+ #   HostHealthProblems the server's `single-host` metric profile (GS_METRICS_PROFILE): the count of standing problems at
+ #                      each 30 s status tick (not ready, pool writer unconfirmed, not primary / not the identity writer,
+ #                      money sweep stale >= 180 s, relayer unusable, escrow inactive, relayer paging, restored money games
+-#                      unverified, signer unavailable). 0 = healthy. Three consecutive minutes page.
++#                      unverified, signer unavailable, and -- Phase 3 escrow 2.1 -- a timed money table FROZEN at an
++#                      undecided minute 30 because its consent keys cannot be read on chain: ClockFinalityHeldTables >= 1).
++#                      0 = healthy. Three consecutive minutes page.
+ #                      MISSING DATA IS BREACHING: a dead, stopped or wedged server pages through the same alarm.
+ #   HostCriticalEvents the sum of the incident counters (task loss of any cause, uncertain store, refused start, money
+ #                      sweep pass / game failures, relayer takeover not taken, KMS refused / invalid / other failure,
+diff --git a/infra/aws/modules/single-host/tests/single-host.tftest.hcl b/infra/aws/modules/single-host/tests/single-host.tftest.hcl
+--- a/infra/aws/modules/single-host/tests/single-host.tftest.hcl
++++ b/infra/aws/modules/single-host/tests/single-host.tftest.hcl
+@@ -468,3 +468,73 @@ run "ecr_lifecycle_keeps_rollback_history" {
+     error_message = "the existing repository keeps the newest 20 images"
+   }
+ }
++
++# ---------------------------------------------------------------- PHASE 3 ESCROW 2.1: the DEDICATED REMEDY key
++# Owner decision 2026-10-08: the host role signs remedy attestations with the remedy key ONLY, in its own statements; the
++# three-key statements are unchanged. No remedy key by default (the fixture above): the host policy is byte-for-byte as before.
++
++run "remedy_key_absent_by_default" {
++  command = plan
++
++  assert {
++    condition     = length([for s in local.host_policy_statements : s if startswith(s.Sid, "RemedyKey")]) == 0
++    error_message = "Default (remedy_signing_key = null): no remedy statement; the host policy is the unchanged fixture."
++  }
++}
++
++run "remedy_key_has_its_own_statements_and_fixture" {
++  command = plan
++  variables {
++    remedy_signing_key = "arn:aws:kms:us-east-1:222222222222:key/77777777-7777-4777-8777-777777777777"
++  }
++
++  assert {
++    condition     = jsondecode(local.host_policy) == jsondecode(file("${path.module}/../../fixtures/host-role-policy-staging-remedy.json"))
++    error_message = "The host role's policy with a remedy key must equal infra/aws/fixtures/host-role-policy-staging-remedy.json (the host verifier's GOOD evidence) -- update both and hostVerify.ts together."
++  }
++  assert {
++    condition = (flatten([for s in local.host_policy_statements : s.Resource if s.Sid == "RemedyKeyPublicKey"]) == ["arn:aws:kms:us-east-1:222222222222:key/77777777-7777-4777-8777-777777777777"]
++      && flatten([for s in local.host_policy_statements : s.Action if s.Sid == "RemedyKeyPublicKey"]) == ["kms:GetPublicKey"]
++      && flatten([for s in local.host_policy_statements : s.Resource if s.Sid == "RemedyKeySignDigestOnly"]) == ["arn:aws:kms:us-east-1:222222222222:key/77777777-7777-4777-8777-777777777777"]
++    && flatten([for s in local.host_policy_statements : s.Action if s.Sid == "RemedyKeySignDigestOnly"]) == ["kms:Sign"])
++    error_message = "GetPublicKey and Sign on exactly the remedy key, in RemedyKeyPublicKey / RemedyKeySignDigestOnly."
++  }
++  assert {
++    condition     = [for s in local.host_policy_statements : s.Condition.StringEquals if s.Sid == "RemedyKeySignDigestOnly"][0] == { "kms:SigningAlgorithm" = "ECDSA_SHA_256", "kms:MessageType" = "DIGEST" }
++    error_message = "Remedy Sign: ECDSA_SHA_256 over a DIGEST only."
++  }
++  assert {
++    condition     = toset(flatten([for s in local.host_policy_statements : s.Resource if s.Sid == "SigningKeysSignDigestOnly"])) == toset(values(var.signing_keys)) && toset(flatten([for s in local.host_policy_statements : s.Resource if s.Sid == "SigningKeysPublicKey"])) == toset(values(var.signing_keys))
++    error_message = "The three-key statements are unchanged (never widened to the remedy key)."
++  }
++  assert {
++    condition     = toset(flatten([for s in local.host_policy_statements : flatten([s.Resource]) if contains(flatten([s.Action]), "kms:Sign")])) == toset(concat(values(var.signing_keys), ["arn:aws:kms:us-east-1:222222222222:key/77777777-7777-4777-8777-777777777777"]))
++    error_message = "Everything the host may Sign with: the three configured keys plus the remedy key -- nothing else, never '*'."
++  }
++}
++
++run "remedy_key_refuses_an_alias" {
++  command = plan
++  variables {
++    remedy_signing_key = "arn:aws:kms:us-east-1:222222222222:alias/gs-staging-remedy"
++  }
++  expect_failures = [var.remedy_signing_key]
++}
++
++run "remedy_key_refuses_a_configured_signing_key" {
++  command = plan
++  variables {
++    remedy_signing_key = "arn:aws:kms:us-east-1:222222222222:key/22222222-2222-4222-8222-222222222222"
++  }
++  expect_failures = [var.remedy_signing_key]
++}
++
++run "remedy_key_needs_escrow" {
++  command = plan
++  variables {
++    signing_keys       = null
++    escrow_enabled     = false
++    remedy_signing_key = "arn:aws:kms:us-east-1:222222222222:key/77777777-7777-4777-8777-777777777777"
++  }
++  expect_failures = [var.remedy_signing_key]
++}
+diff --git a/infra/aws/modules/single-host/variables.tf b/infra/aws/modules/single-host/variables.tf
+--- a/infra/aws/modules/single-host/variables.tf
++++ b/infra/aws/modules/single-host/variables.tf
+@@ -72,6 +72,33 @@ variable "signing_keys" {
+   }
+ }
+ 
++variable "remedy_signing_key" {
++  description = <<-EOT
++    PHASE 3 ESCROW 2.1 (owner decision 2026-10-08): the DEDICATED REMEDY signing key the Juno document's `remedy_key` names,
++    by key ARN -- the app stack's `remedy_signing_key` -- or null (the default: no remedy key, the host policy unchanged).
++    Its own purpose: never the relayer, settlement or admission key. When set, the host role may GetPublicKey and Sign
++    (ECDSA_SHA_256 over a DIGEST) with exactly this key, in its own statements (RemedyKeyPublicKey / RemedyKeySignDigestOnly).
++  EOT
++  type        = string
++  default     = null
++  validation {
++    condition     = var.remedy_signing_key == null || can(regex("^arn:aws:kms:[a-z0-9-]+:[0-9]{12}:key/[0-9a-f-]{36}$", var.remedy_signing_key))
++    error_message = "remedy_signing_key must be a KMS key ARN (never an alias)."
++  }
++  validation {
++    condition     = var.remedy_signing_key == null || (var.signing_keys != null && var.escrow_enabled)
++    error_message = "remedy_signing_key needs signing_keys and escrow_enabled: a remedy key belongs to a configured escrow."
++  }
++  validation {
++    condition     = var.remedy_signing_key == null || var.signing_keys == null ? true : !contains(values(var.signing_keys), var.remedy_signing_key)
++    error_message = "remedy_signing_key must be its OWN key: never the relayer, settlement or admission key."
++  }
++  validation {
++    condition     = var.remedy_signing_key == null || var.signing_keys == null ? true : split(":", var.remedy_signing_key)[3] == split(":", var.signing_keys.relayer)[3]
++    error_message = "remedy_signing_key must be in the signing keys' one region (take it from the app stack's validated remedy_signing_key)."
++  }
++}
++
+ variable "escrow_enabled" {
+   description = "Whether the runtime document carries escrow (the host role then reads /gs/<environment>/juno-backend)."
+   type        = bool
+diff --git a/infra/aws/stacks/app/example.tfvars.example b/infra/aws/stacks/app/example.tfvars.example
+--- a/infra/aws/stacks/app/example.tfvars.example
++++ b/infra/aws/stacks/app/example.tfvars.example
+@@ -20,6 +20,12 @@ signing_keys = {
+ # gate and SetOperator): signing_keys.relayer = that key, and the previous relayer key here (kept readable for rollback).
+ # relayer_rotation_key_arns = ["arn:aws:kms:us-east-1:222222222222:key/66666666-6666-4666-8666-666666666666"]
+ 
++# PHASE 3 ESCROW 2.1 (owner decision 2026-10-08): the DEDICATED REMEDY key -- the ledger stack's remedy_key_arns.r1 -- and,
++# in `escrow`, its on-chain registry entry: remedy_key = { remedy_key_id = <the contract's id, 1 for the first key
++# registered at instantiation>, public_key_hex = <`signer-keys ... --remedy <arn>`'s remedy.public_key_hex> }. Both or
++# neither. Absent: the server signs no remedy and refuses every timed money table (fail closed).
++# remedy_signing_key = "arn:aws:kms:us-east-1:222222222222:key/77777777-7777-4777-8777-777777777777"
++
+ # null: no escrow. Public keys and the relayer address: `npm run awsDeploy -- signer-keys --relayer <arn> ...`.
+ escrow = null
+ 
+diff --git a/infra/aws/stacks/app/main.tf b/infra/aws/stacks/app/main.tf
+--- a/infra/aws/stacks/app/main.tf
++++ b/infra/aws/stacks/app/main.tf
+@@ -36,6 +36,7 @@ module "app" {
+   ledger_table_arn                  = var.ledger_table_arn
+   signing_keys                      = var.signing_keys
+   relayer_rotation_key_arns         = var.relayer_rotation_key_arns
++  remedy_signing_key                = var.remedy_signing_key
+   escrow                            = var.escrow
+   money_tables_nonmainnet           = var.money_tables_nonmainnet
+   edge_diagnostic_staging           = var.edge_diagnostic_staging
+diff --git a/infra/aws/stacks/app/variables.tf b/infra/aws/stacks/app/variables.tf
+--- a/infra/aws/stacks/app/variables.tf
++++ b/infra/aws/stacks/app/variables.tf
+@@ -33,6 +33,12 @@ variable "relayer_rotation_key_arns" {
+   default = []
+ }
+ 
++# PHASE 3 ESCROW 2.1: the DEDICATED REMEDY key (the ledger stack's remedy_key_arns.<label>), with escrow.remedy_key.
++variable "remedy_signing_key" {
++  type    = string
++  default = null
++}
++
+ variable "escrow" {
+   type    = any
+   default = null
+diff --git a/infra/aws/stacks/ledger/example.tfvars.example b/infra/aws/stacks/ledger/example.tfvars.example
+--- a/infra/aws/stacks/ledger/example.tfvars.example
++++ b/infra/aws/stacks/ledger/example.tfvars.example
+@@ -21,3 +21,13 @@ backup = {
+ # COST (infra/aws/COST_BUDGET.json max_kms_keys = 6): the LIVE-6 -> JX-1 transition is the three keys + r2 + this pair = 6;
+ # a further label or rotation key is an owner budget decision (docs/hosting-budget.md), never a tfvars edit alone.
+ # financial_key_sets = ["jx1"]
++
++# PHASE 3 ESCROW 2.1 (owner decision 2026-10-08): the DEDICATED REMEDY signing key -- escrow 2.1.0's REMEDY attestation
++# authority, its own purpose (never the relayer, settlement or admission key). APPEND-ONLY (prevent_destroy). Create it
++# BEFORE the 2.1 instantiate: `npm run awsDeploy -- signer-keys ... --remedy <remedy_key_arns.r1>` derives the public key
++# the contract's `remedy_keys` registers. Then the app stack (and, on the COST-1 single host, stacks/single-host) names it
++# as `remedy_signing_key`. COST: +1 key-month ($1). Live staging (read-only KMS inventory 2026-10-08) holds 3 project keys
++# (relayer r1, settlement, admission; no relayer-r2, no jx1 pair), so the remedy key makes 4 of max_kms_keys (6). FUTURE
++# scenario only: if the LIVE-6 -> JX-1 transition keys above are ever created beside it, the total (7) exceeds 6 -- an owner
++# budget decision (docs/hosting-budget.md), never a tfvars edit alone.
++# remedy_key_count = 1
+diff --git a/infra/aws/stacks/ledger/main.tf b/infra/aws/stacks/ledger/main.tf
+--- a/infra/aws/stacks/ledger/main.tf
++++ b/infra/aws/stacks/ledger/main.tf
+@@ -33,6 +33,7 @@ module "ledger" {
+   signing_keys_enabled = var.signing_keys_enabled
+   relayer_key_count    = var.relayer_key_count
+   financial_key_sets   = var.financial_key_sets
++  remedy_key_count     = var.remedy_key_count
+ 
+   # COST-1: the single host's app role beside (then instead of) the ECS task role.
+   app_runtime_role_arns    = var.app_runtime_role_arns
+diff --git a/infra/aws/stacks/ledger/outputs.tf b/infra/aws/stacks/ledger/outputs.tf
+--- a/infra/aws/stacks/ledger/outputs.tf
++++ b/infra/aws/stacks/ledger/outputs.tf
+@@ -16,6 +16,11 @@ output "financial_key_arns" {
+   value = module.ledger.financial_key_arns
+ }
+ 
++# PHASE 3 ESCROW 2.1: the dedicated REMEDY keys by label (r1 = the first); the app stack names one as remedy_signing_key.
++output "remedy_key_arns" {
++  value = module.ledger.remedy_key_arns
++}
++
+ output "kms_region" {
+   value = module.ledger.kms_region
+ }
+diff --git a/infra/aws/stacks/ledger/variables.tf b/infra/aws/stacks/ledger/variables.tf
+--- a/infra/aws/stacks/ledger/variables.tf
++++ b/infra/aws/stacks/ledger/variables.tf
+@@ -38,6 +38,12 @@ variable "financial_key_sets" {
+   default = []
+ }
+ 
++# PHASE 3 ESCROW 2.1 (modules/ledger: append-only; owner decision 2026-10-08): the DEDICATED REMEDY keys (0 = none).
++variable "remedy_key_count" {
++  type    = number
++  default = 0
++}
++
+ variable "tags" {
+   type    = map(string)
+   default = {}
+diff --git a/infra/aws/stacks/single-host/example.tfvars.example b/infra/aws/stacks/single-host/example.tfvars.example
+--- a/infra/aws/stacks/single-host/example.tfvars.example
++++ b/infra/aws/stacks/single-host/example.tfvars.example
+@@ -13,6 +13,8 @@ signing_keys = {
+   settlement = "arn:aws:kms:us-east-1:222222222222:key/22222222-2222-4222-8222-222222222222"
+   admission  = "arn:aws:kms:us-east-1:222222222222:key/33333333-3333-4333-8333-333333333333"
+ }
++# PHASE 3 ESCROW 2.1: the DEDICATED REMEDY key -- the SAME ARN as the app stack's remedy_signing_key (null: no remedy key).
++# remedy_signing_key = "arn:aws:kms:us-east-1:222222222222:key/77777777-7777-4777-8777-777777777777"
+ escrow_enabled          = true
+ money_tables_nonmainnet = true
+ 
+diff --git a/infra/aws/stacks/single-host/main.tf b/infra/aws/stacks/single-host/main.tf
+--- a/infra/aws/stacks/single-host/main.tf
++++ b/infra/aws/stacks/single-host/main.tf
+@@ -36,6 +36,7 @@ module "host" {
+   game_generations        = var.game_generations
+   ledger_table_arn        = var.ledger_table_arn
+   signing_keys            = var.signing_keys
++  remedy_signing_key      = var.remedy_signing_key
+   escrow_enabled          = var.escrow_enabled
+   network                 = var.network
+   instance                = var.instance
+diff --git a/infra/aws/stacks/single-host/variables.tf b/infra/aws/stacks/single-host/variables.tf
+--- a/infra/aws/stacks/single-host/variables.tf
++++ b/infra/aws/stacks/single-host/variables.tf
+@@ -37,6 +37,12 @@ variable "signing_keys" {
+   default = null
+ }
+ 
++# PHASE 3 ESCROW 2.1: the DEDICATED REMEDY key (the ledger stack's remedy_key_arns.<label>; the app stack's same value).
++variable "remedy_signing_key" {
++  type    = string
++  default = null
++}
++
+ variable "escrow_enabled" {
+   type    = bool
+   default = false

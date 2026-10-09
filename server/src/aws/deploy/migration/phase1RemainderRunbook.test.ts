@@ -15,15 +15,15 @@
 
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { spawnSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
-import { CONDUCT_REVIEWERS_FILES, conductReviewersWiringProblems } from "../conductReviewersWiring";
+import { ESCROW21_TERRAFORM_PATCH } from "../escrow21TerraformWiring";
+import { terraformDriftProblems } from "../terraformDriftGuard";
+import { terraformDriftIo } from "../../../testSupport/terraformDriftIo";
 
 const REPO = path.resolve(__dirname, "../../../../../../.."); // dist/server/src/aws/deploy/migration -> the repository
 const read = (rel: string) => fs.readFileSync(path.join(REPO, rel), "utf8").replace(/\r\n/g, "\n");
 const BOOK = read("infra/aws/SINGLE_HOST_MIGRATION.md");
-const BASE = "083d0668556c05a84eb8b3e5befc4e973544aa9a";
 
 /** The runbook text from a numbered step's start to the next numbered step (e.g. "19." up to "20-pre."). */
 const at = (marker: string): number => {
@@ -136,25 +136,18 @@ describe("PHASE 1 REMAINDER: the migration runbook's corrections", () => {
     for (const item of [/interrupted drill/i, /Step 13's READY/, /-TeardownAppliedAt/, /F10 \(replacement\)/, /Alarm notifications/]) assert.match(known, item);
   });
 
-  test("no Terraform module or stack changed since the certified base but the pinned, additive GS_CONDUCT_REVIEWERS wiring (the host's resource shape is untouched)", () => {
-    const r = spawnSync("git", ["-C", REPO, "diff", "--name-only", BASE, "--", "infra/aws/modules", "infra/aws/stacks"], { encoding: "utf8" });
-    if (r.status !== 0) return; // not a checkout holding the base commit: the owner gate's clean-clone diff covers it
+  test("no Terraform module or stack differs from the certified base 083d066 but by the reviewed exceptions (fresh-host scripts, CONDUCT_REVIEWERS_WIRING, the pinned Escrow 2.1 delta)", () => {
     /* PHASE 1 FRESH-HOST HARDENING changed three HOST SCRIPTS (and the module's bash tests and README) -- no .tf,
        template, unit or stack. The scripts are embedded in the instance's user data, so a stacks/single-host plan from that commit REPLACES
        the instance: the live host takes them by the reviewed one-file install (runbook 13r), and step 22b is planned from
-       the host-create commit's module (the runbook says so). */
-    const freshHost = new Set(["files/bin/gs-preflight", "files/bin/gs-lib.sh", "files/bin/gs-health", "tests/host-scripts.test.sh", "tests/preflight-real-docker.test.sh", "README.md"].map((f) => `infra/aws/modules/single-host/${f}`));
-    /* CONSOLIDATED FINAL PRE-PLAYTEST INTEGRATION (player reporting, P3-N035): the one reviewed exception -- the
-       GS_CONDUCT_REVIEWERS input, SOURCE ONLY, absent by default (the default rendering is byte-identical, so the host's
-       resource shape is untouched). Exactly the wired files, exactly their pinned added lines, nothing of the base
-       removed (`conductReviewersWiring.ts`); any other change to those files fails here. */
-    const changed = r.stdout.trim().split("\n").filter((f) => f !== "");
-    const diffOf = (file: string) => {
-      const d = spawnSync("git", ["-C", REPO, "diff", "--unified=0", BASE, "--", file], { encoding: "utf8" });
-      return d.status === 0 ? d.stdout : null;
-    };
-    assert.deepEqual(conductReviewersWiringProblems(changed, diffOf), [], r.stdout);
-    const conductReviewers = CONDUCT_REVIEWERS_FILES;
-    assert.deepEqual(r.stdout.trim().split("\n").filter((f) => f !== "" && !freshHost.has(f) && !conductReviewers.has(f)), [], r.stdout);
+       the host-create commit's module (the runbook says so).
+       CONSOLIDATED FINAL PRE-PLAYTEST INTEGRATION (player reporting, P3-N035): the GS_CONDUCT_REVIEWERS input, SOURCE ONLY,
+       absent by default -- exactly the wired files and their pinned added lines, nothing of the base removed.
+       PHASE 3 ESCROW 2.1 RELEASE READINESS (owner ruling 2026-10-08, OPTION 1): the REMEDY key family and IAM, alarm C1,
+       the 2.1.0 checksum in the module tests and the stack plumbing -- the pinned patch escrow21TerraformWiring.patch,
+       required and exact. All three are judged by the one comparison in terraformDriftGuard.ts; the base is NOT moved.
+       FAIL CLOSED: without the base in the checkout this FAILS -- it never returns early. */
+    const problems = terraformDriftProblems(terraformDriftIo(REPO), { scope: ["infra/aws/modules", "infra/aws/stacks"], patchText: fs.readFileSync(path.join(REPO, ESCROW21_TERRAFORM_PATCH), "utf8") });
+    assert.deepEqual(problems, []);
   });
 });

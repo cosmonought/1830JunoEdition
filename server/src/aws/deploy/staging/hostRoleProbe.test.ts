@@ -29,7 +29,9 @@ import { PROBE_FORMAT, recordLines, sha256Hex } from "./evidence";
 import { HOST_ROLE_FILES, HOST_ROLE_PROBE_FORMAT, HOST_ROLE_WRAPPER, hostRoleName, judgeHostRoleCapture, wrapperSha256, type HostRoleExpect, type HostRoleProbe } from "./hostRoleProbe";
 import { runIamProbe } from "./iamProbe";
 import { KMS_LATENCY_BOUND_MS } from "./kmsProbe";
-import { CONDUCT_REVIEWERS_FILES, conductReviewersWiringProblems } from "../conductReviewersWiring";
+import { ESCROW21_TERRAFORM_PATCH } from "../escrow21TerraformWiring";
+import { terraformDriftProblems } from "../terraformDriftGuard";
+import { terraformDriftIo } from "../../../testSupport/terraformDriftIo";
 
 const REPO = path.resolve(__dirname, "../../../../../../.."); // dist/server/src/aws/deploy/staging -> the repository
 const WRAPPER = path.join(REPO, HOST_ROLE_WRAPPER);
@@ -628,24 +630,15 @@ describe("PHASE 1 REMAINDER F5 / F6: the operator wrappers (static)", () => {
     assert.ok(!wrapper.includes("\r"), "LF only (it is sent byte for byte)");
   });
 
-  test("modules/single-host is untouched by this tooling (the wrapper is sent, never installed); its only change is the pinned reviewer wiring", () => {
-    const r = spawnSync("git", ["-C", REPO, "diff", "--name-only", "083d0668556c05a84eb8b3e5befc4e973544aa9a", "--", "infra/aws/modules/single-host"], { encoding: "utf8" });
-    if (r.status !== 0) return; // not a git checkout with the base commit (an exported tree): the owner gate's own diff covers it
-    /* PHASE 1 FRESH-HOST HARDENING changed exactly these module files (step 13's gs-preflight fix, its same-class fixes and
-       their tests); nothing else in the module may differ from this tooling's base. */
-    const freshHost = new Set(["files/bin/gs-preflight", "files/bin/gs-lib.sh", "files/bin/gs-health", "tests/host-scripts.test.sh", "tests/preflight-real-docker.test.sh", "README.md"].map((f) => `infra/aws/modules/single-host/${f}`));
-    /* CONSOLIDATED FINAL PRE-PLAYTEST INTEGRATION (player reporting, P3-N035): the one reviewed exception -- the
-       GS_CONDUCT_REVIEWERS input, SOURCE ONLY, absent by default (the default rendering is byte-identical, so the host's
-       resource shape is untouched). Exactly the wired files, exactly their pinned added lines, nothing of the base
-       removed (`conductReviewersWiring.ts`); any other change to those files fails here. */
-    const changed = r.stdout.trim().split("\n").filter((f) => f !== "");
-    const diffOf = (file: string) => {
-      const d = spawnSync("git", ["-C", REPO, "diff", "--unified=0", "083d0668556c05a84eb8b3e5befc4e973544aa9a", "--", file], { encoding: "utf8" });
-      return d.status === 0 ? d.stdout : null;
-    };
-    assert.deepEqual(conductReviewersWiringProblems(changed, diffOf), [], r.stdout);
-    const conductReviewers = CONDUCT_REVIEWERS_FILES;
-    assert.deepEqual(r.stdout.trim().split("\n").filter((f) => f !== "" && !freshHost.has(f) && !conductReviewers.has(f)), [], r.stdout);
+  test("modules/single-host is untouched by this tooling (the wrapper is sent, never installed); it differs from the certified base only by the reviewed exceptions", () => {
+    /* The certified base stays 083d066. modules/single-host may differ from it by exactly: PHASE 1 FRESH-HOST HARDENING's
+       host scripts (step 13's gs-preflight fix, its same-class fixes and their tests); CONDUCT_REVIEWERS_WIRING (player
+       reporting, P3-N035: exact added lines, nothing removed); and the pinned Escrow 2.1 release-readiness delta (the REMEDY
+       key variable and host-role statements, the C1 comment, their tftest runs: escrow21TerraformWiring.patch, exact).
+       One shared comparison (terraformDriftGuard.ts). FAIL CLOSED: without the base in the checkout this FAILS -- it never
+       returns early (owner ruling 2026-10-08). */
+    const problems = terraformDriftProblems(terraformDriftIo(REPO), { scope: ["infra/aws/modules/single-host"], patchText: fs.readFileSync(path.join(REPO, ESCROW21_TERRAFORM_PATCH), "utf8") });
+    assert.deepEqual(problems, []);
     assert.ok(!fs.existsSync(path.join(REPO, "infra/aws/modules/single-host/files/bin/host-role-probe.sh")), "the wrapper is never one of the host's installed files");
     assert.doesNotMatch(fs.readFileSync(path.join(REPO, "infra/aws/modules/single-host/locals.tf"), "utf8"), /host-role-probe/, "cloud-init never installs the wrapper");
   });

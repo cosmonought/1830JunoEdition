@@ -1,0 +1,181 @@
+// server/src/aws/deploy/terraformDriftGuard.test.ts
+//
+// PHASE 3 ESCROW 2.1 RELEASE READINESS (owner ruling 2026-10-08, OPTION 1): the certified-Terraform drift guard ITSELF.
+// The base stays 083d066; CONDUCT_REVIEWERS_WIRING is unchanged; the Escrow 2.1 delta is a pinned patch, required and
+// exact; unrelated drift, a line beside a pinned change, a removed / altered / moved pinned line, future checksum / IAM /
+// alarm / KMS drift, a tampered patch, and a missing base all FAIL -- nothing skips. Every mutation here is an in-memory
+// overlay: the working tree is never written.
+
+import { describe, test } from "node:test";
+import assert from "node:assert/strict";
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
+
+import { CONDUCT_REVIEWERS_WIRING } from "./conductReviewersWiring";
+import { ESCROW21_TERRAFORM_FILES, ESCROW21_TERRAFORM_PATCH, ESCROW21_TERRAFORM_PATCH_SHA256, normalizeLf, parsePinnedPatch, reverseApplyPinnedHunks, sha256Hex } from "./escrow21TerraformWiring";
+import { CERTIFIED_TERRAFORM_BASE, terraformDriftProblems } from "./terraformDriftGuard";
+import { terraformDriftIo } from "../../testSupport/terraformDriftIo";
+
+const REPO = path.resolve(__dirname, "../../../../../.."); // dist/server/src/aws/deploy -> the repository
+const PATCH = fs.readFileSync(path.join(REPO, ESCROW21_TERRAFORM_PATCH), "utf8");
+const io = terraformDriftIo(REPO);
+const ALL = ["infra/aws/modules", "infra/aws/stacks"];
+const read = (rel: string) => normalizeLf(fs.readFileSync(path.join(REPO, rel), "utf8"));
+
+const check = (overlay?: ReadonlyMap<string, string | null>, scope: readonly string[] = ALL, extra: { base?: string; patchText?: string } = {}) =>
+  terraformDriftProblems(io, { scope, patchText: extra.patchText ?? PATCH, overlay, base: extra.base });
+
+/** An overlay changing one file; `edit` must change it (a mutation that matched nothing would prove nothing). */
+const mutate = (file: string, edit: (text: string) => string): Map<string, string | null> => {
+  const before = read(file);
+  const after = edit(before);
+  assert.notEqual(after, before, `the mutation of ${file} changed nothing`);
+  return new Map([[file, after]]);
+};
+/** Replace the first `find` after the first `anchor`. */
+const after = (anchor: string, find: string, replace: string) => (text: string) => {
+  const a = text.indexOf(anchor);
+  assert.ok(a >= 0, `anchor ${anchor}`);
+  const f = text.indexOf(find, a);
+  assert.ok(f >= 0, `${find} after ${anchor}`);
+  return text.slice(0, f) + replace + text.slice(f + find.length);
+};
+const failsNaming = (problems: string[], file: string, pattern?: RegExp) => {
+  assert.ok(problems.length > 0, `a change to ${file} must fail`);
+  assert.ok(problems.some((p) => p.includes(file) && (pattern === undefined || pattern.test(p))), JSON.stringify(problems));
+};
+
+describe("certified Terraform drift guard: the base, the two reviewed exceptions, fail closed", () => {
+  test("1. 083d066 stays the certified base, and both guards use it with no override and no early return", () => {
+    assert.equal(CERTIFIED_TERRAFORM_BASE, "083d0668556c05a84eb8b3e5befc4e973544aa9a");
+    for (const guard of ["server/src/aws/deploy/staging/hostRoleProbe.test.ts", "server/src/aws/deploy/migration/phase1RemainderRunbook.test.ts"]) {
+      const src = read(guard);
+      const calls = src.match(/terraformDriftProblems\(terraformDriftIo\(REPO\), \{[^}]*\}\)/g) ?? [];
+      assert.equal(calls.length, 1, `${guard}: exactly one drift comparison`);
+      assert.doesNotMatch(calls[0] ?? "", /\bbase\b|overlay/, `${guard}: never another base, never an overlay`);
+      assert.match(src, /assert\.deepEqual\(problems, \[\]\);/);
+      assert.doesNotMatch(src, /if \(r\.status !== 0\) return/, `${guard}: no silent skip`);
+      assert.doesNotMatch(src, /spawnSync\("git"/, `${guard}: no private diff of its own`);
+    }
+  });
+
+  test("the real tree passes: every module and stack, and modules/single-host alone", () => {
+    assert.deepEqual(check(), []);
+    assert.deepEqual(check(undefined, ["infra/aws/modules/single-host"]), []);
+  });
+
+  test("2. CONDUCT_REVIEWERS_WIRING is byte-for-byte the reviewed table, and still enforced", () => {
+    /* The table as integrated at 8c4dca9 (player reporting, P3-N035): this exception's data is not touched by Escrow 2.1. */
+    assert.equal(sha256Hex(JSON.stringify(CONDUCT_REVIEWERS_WIRING)), "648fd87a30e14b8682364cc43e8b274a4f6ad97acf202beb51853162b141f310");
+    const file = "infra/aws/modules/single-host/templates/server.env.tftpl";
+    failsNaming(check(mutate(file, after("GS_CONDUCT_REVIEWERS=", '${join(",", conduct_reviewers)}', '${join(";", conduct_reviewers)}'))), file, /pinned reviewer wiring/);
+  });
+
+  test("3. the pinned Escrow 2.1 delta is exactly the reviewed files; reversing it leaves no Escrow 2.1 token behind", () => {
+    assert.equal(sha256Hex(normalizeLf(PATCH)), ESCROW21_TERRAFORM_PATCH_SHA256);
+    const parsed = parsePinnedPatch(PATCH);
+    assert.ok(parsed.ok);
+    assert.deepEqual([...parsed.files.keys()].sort(), [...ESCROW21_TERRAFORM_FILES].sort());
+    assert.ok([...ESCROW21_TERRAFORM_FILES].every((f) => f.startsWith("infra/aws/modules/") || f.startsWith("infra/aws/stacks/")));
+    for (const [file, hunks] of parsed.files) {
+      const reversed = reverseApplyPinnedHunks(read(file), hunks);
+      assert.ok(reversed.ok, file);
+      const base = io.git(["cat-file", "blob", `${CERTIFIED_TERRAFORM_BASE}:${file}`]);
+      assert.equal(base.status, 0, file);
+      for (const token of ["remedy_signing_key", "remedy_key_count", "RemedyKey", "ClockFinalityHeldTables", "c1-clock-finality-held", "c3bd0618615e0d8688f71860a90f235a796b0152be84e2489ce6639e3a218219"])
+        assert.equal(reversed.text.split(token).length, normalizeLf(base.stdout).split(token).length, `${file}: ${token} enters only through the pinned delta`);
+    }
+  });
+
+  test("4 / 8. an unrelated change in every protected area -- app, ledger, single-host, each stack -- still fails", () => {
+    const files = [
+      "infra/aws/modules/app/iam.tf", "infra/aws/modules/app/ecs.tf", "infra/aws/modules/app/alarm-contract.json", "infra/aws/modules/app/variables.tf",
+      "infra/aws/modules/ledger/main.tf", "infra/aws/modules/ledger/versions.tf",
+      "infra/aws/modules/single-host/iam.tf", "infra/aws/modules/single-host/host.tf", "infra/aws/modules/single-host/variables.tf",
+      "infra/aws/stacks/app/main.tf", "infra/aws/stacks/ledger/main.tf", "infra/aws/stacks/single-host/main.tf", "infra/aws/stacks/single-host/outputs.tf",
+    ];
+    for (const file of files) failsNaming(check(mutate(file, (t) => `${t}# unrelated drift\n`)), file);
+    for (const file of ["infra/aws/modules/single-host/iam.tf", "infra/aws/modules/single-host/host.tf"])
+      failsNaming(check(mutate(file, (t) => `${t}# unrelated drift\n`), ["infra/aws/modules/single-host"]), file);
+    failsNaming(check(new Map([["infra/aws/modules/app/extra.tf", 'resource "null_resource" "x" {}\n']])), "infra/aws/modules/app/extra.tf", /no reviewed exception/);
+    failsNaming(check(new Map([["infra/aws/modules/ledger/main.tf", null]])), "infra/aws/modules/ledger/main.tf");
+  });
+
+  test("5. a line inserted beside a pinned Escrow 2.1 change fails (app and single-host)", () => {
+    const appIam = "infra/aws/modules/app/iam.tf";
+    failsNaming(check(mutate(appIam, after('sid       = "RemedyKeyPublicKey"', "\n", '\n      # adjacent\n'))), appIam, /pinned Escrow 2\.1 change/);
+    const hostIam = "infra/aws/modules/single-host/iam.tf";
+    failsNaming(check(mutate(hostIam, after('Sid      = "RemedyKeyPublicKey"', "\n", '\n        Extra    = "x"\n'))), hostIam, /pinned Escrow 2\.1 change/);
+    const stack = "infra/aws/stacks/app/main.tf";
+    failsNaming(check(mutate(stack, after("remedy_signing_key                = var.remedy_signing_key", "\n", "\n  unrelated = true\n"))), stack, /pinned Escrow 2\.1 change/);
+  });
+
+  test("6. deleting, altering, moving or reverting a required pinned line fails", () => {
+    const appIam = "infra/aws/modules/app/iam.tf";
+    failsNaming(check(mutate(appIam, after('sid       = "RemedyKeySignDigestOnly"', '        values   = ["DIGEST"]\n', ""))), appIam, /pinned Escrow 2\.1 change/);
+    failsNaming(check(mutate(appIam, after('sid       = "RemedyKeyPublicKey"', '["kms:GetPublicKey"]', '["kms:GetPublicKey", "kms:Decrypt"]'))), appIam, /pinned Escrow 2\.1 change/);
+    const stack = "infra/aws/stacks/ledger/main.tf";
+    failsNaming(check(mutate(stack, (t) => t.replace("  remedy_key_count     = var.remedy_key_count\n", ""))), stack, /pinned Escrow 2\.1 change/);
+    failsNaming(check(mutate(stack, (t) => t.replace("  remedy_key_count     = var.remedy_key_count\n", "").replace(/\n}\n/, "\n  remedy_key_count     = var.remedy_key_count\n}\n"))), stack);
+    const parsed = parsePinnedPatch(PATCH);
+    assert.ok(parsed.ok);
+    const file = "infra/aws/modules/single-host/variables.tf";
+    const reverted = reverseApplyPinnedHunks(read(file), parsed.files.get(file) ?? []);
+    assert.ok(reverted.ok);
+    failsNaming(check(new Map([[file, reverted.text]])), file, /pinned Escrow 2\.1 change/);
+  });
+
+  test("7. a missing certified base, a non-git tree or a tampered patch FAILS -- never a silent pass", () => {
+    const gone = check(undefined, ALL, { base: "0123456789abcdef0123456789abcdef01234567" });
+    assert.equal(gone.length, 1);
+    assert.match(gone[0], /certified Terraform base 0123456789abcdef0123456789abcdef01234567 is not available in this checkout .* FAILS rather than skip/);
+    const exported = fs.mkdtempSync(path.join(os.tmpdir(), "tf-exported-"));
+    try {
+      const r = terraformDriftProblems(terraformDriftIo(exported), { scope: ALL, patchText: PATCH });
+      assert.equal(r.length, 1);
+      assert.match(r[0], /083d0668556c05a84eb8b3e5befc4e973544aa9a is not available .* FAILS rather than skip/);
+    } finally {
+      fs.rmSync(exported, { recursive: true, force: true });
+    }
+    assert.match(terraformDriftProblems(terraformDriftIo(path.join(os.tmpdir(), "tf-no-such-dir-x7")), { scope: ALL, patchText: PATCH })[0], /FAILS rather than skip/);
+    assert.match(check(undefined, ALL, { patchText: PATCH.replace("+variable \"remedy_signing_key\" {", "+variable \"remedy_signing_keys\" {") })[0], /does not match its pinned SHA-256/);
+  });
+
+  test("9. no future checksum, IAM, alarm or KMS drift hides behind the exception", () => {
+    const tf = "infra/aws/modules/app/tests/compute_none.tftest.hcl";
+    failsNaming(check(mutate(tf, (t) => t.replace("c3bd0618615e0d8688f71860a90f235a796b0152be84e2489ce6639e3a218219", "d".repeat(64)))), tf);
+    const appTf = "infra/aws/modules/app/tests/app.tftest.hcl";
+    failsNaming(check(mutate(appTf, (t) => t.replace("c3bd0618615e0d8688f71860a90f235a796b0152be84e2489ce6639e3a218219", "e".repeat(64)))), appTf);
+    const hostIam = "infra/aws/modules/single-host/iam.tf";
+    failsNaming(check(mutate(hostIam, after('Sid       = "RemedyKeySignDigestOnly"', '["kms:Sign"]', '["kms:*"]'))), hostIam);
+    failsNaming(check(mutate(hostIam, after('Sid       = "RemedyKeySignDigestOnly"', "Resource  = [var.remedy_signing_key]", 'Resource  = ["*"]'))), hostIam);
+    const appIam = "infra/aws/modules/app/iam.tf";
+    failsNaming(check(mutate(appIam, after('sid       = "RemedyKeyReadOnly"', '"kms:ListGrants"]', '"kms:ListGrants", "kms:CreateGrant"]'))), appIam);
+    const alarms = "infra/aws/modules/app/alarm-contract.json";
+    failsNaming(check(mutate(alarms, after('"c1-clock-finality-held"', '"threshold": 1', '"threshold": 2'))), alarms);
+    failsNaming(check(mutate(alarms, after('"c1-clock-finality-held"', '"suppressible": false', '"suppressible": true'))), alarms);
+    const ledger = "infra/aws/modules/ledger/main.tf";
+    failsNaming(check(mutate(ledger, (t) => t.replace('"gs:remedy-key" = trimprefix(each.key, "remedy-")', '"gs:remedy-key" = each.key'))), ledger);
+    failsNaming(check(mutate(ledger, (t) => t.replace("customer_master_key_spec", "customer_master_key_spec "))), ledger);
+    const vars = "infra/aws/modules/ledger/variables.tf";
+    failsNaming(check(mutate(vars, (t) => t.replace("var.remedy_key_count <= 16", "var.remedy_key_count <= 64"))), vars);
+  });
+
+  test("the patch parser and the reverse application are strict", () => {
+    const one = "diff --git a/x.tf b/x.tf\n--- a/x.tf\n+++ b/x.tf\n@@ -1,2 +1,3 @@\n a\n+b\n c\n";
+    const parsed = parsePinnedPatch(one);
+    assert.ok(parsed.ok);
+    const hunks = parsed.files.get("x.tf") ?? [];
+    assert.deepEqual(reverseApplyPinnedHunks("a\nb\nc\n", hunks), { ok: true, text: "a\nc\n" });
+    assert.equal(reverseApplyPinnedHunks("a\nb\nc\r\n", hunks).ok, true, "CRLF working trees normalize");
+    for (const bad of ["z\na\nb\nc\n", "a\nb\nb\nc\n", "a\nc\n", "a\nb\nc", null]) assert.equal(reverseApplyPinnedHunks(bad, hunks).ok, false, JSON.stringify(bad));
+    for (const bad of [
+      "diff --git a/x.tf b/x.tf\nnew file mode 100644\n--- /dev/null\n+++ b/x.tf\n@@ -0,0 +1 @@\n+a\n",
+      "diff --git a/x.tf b/x.tf\n--- a/x.tf\n+++ b/x.tf\n@@ -1 +1 @@\n-a\n+b\n\\ No newline at end of file\n",
+      "diff --git a/x.tf b/x.tf\n--- a/x.tf\n+++ b/x.tf\n@@ -1,2 +1,3 @@\n a\n+b\n",
+      "diff --git a/x.tf b/y.tf\n--- a/x.tf\n+++ b/y.tf\n@@ -1 +1 @@\n-a\n+b\n",
+    ])
+      assert.equal(parsePinnedPatch(bad).ok, false, bad);
+  });
+});

@@ -16,14 +16,23 @@
 //
 // DEVELOPMENT is loopback-only by construction: GS_TRUSTED_PROXY_HOPS must be 0 (or absent), and every allowed
 // origin must be loopback -- the CRA dev server's two origins when GS_ALLOWED_ORIGINS is absent.
+//
+// LUDUM (docs/ludum/LUDUM_PLATFORM_ARCHITECTURE.md §2.1): `GS_LUDUM_ORIGINS` (or `--ludum-origins`) -- the exact origins
+// of the Ludum site, which may call ONLY `/gs/api/ludum/v1/*` with credentialed CORS. Absent or empty: none. Each entry
+// is checked exactly as an allowed origin is (no wildcard, no `null`, no trailing slash, written as an origin); production
+// refuses anything that is not https, development anything that is not loopback. It is NEVER merged into
+// `allowedOrigins`: the money, identity, conduct and trust routes stay closed to it. In AWS storage mode the runtime
+// document's `ludum_origins` is the one source (`aws/runtime/runtimeConfig.ts`), and this variable is refused there.
 
-import { isLoopbackOrigin, parseAllowedOrigins } from "./origins";
+import { checkOriginEntry, isLoopbackOrigin, parseAllowedOrigins } from "./origins";
 
 export type GsMode = "development" | "production";
 
 export interface ServerConfig {
   mode: GsMode;
   allowedOrigins: string[];
+  /** LUDUM: the Ludum site's exact origins (credentialed CORS on `/gs/api/ludum/v1/*` only). Empty: none. */
+  ludumOrigins: string[];
   trustedProxyHops: number;
   legacyLogs: "refuse" | "development-corpus";
   explainDivergence: boolean;
@@ -54,6 +63,30 @@ function single(argv: readonly string[], env: string | undefined, name: string, 
   return { value: distinct[0] };
 }
 
+export const LUDUM_ORIGINS_ENV = "GS_LUDUM_ORIGINS";
+
+/** One Ludum origin, or why it is not one, for `mode` (production: https only; development: loopback only). */
+export function ludumOriginProblem(entry: string, mode: GsMode): string | null {
+  const problem = checkOriginEntry(entry);
+  if (problem !== null) return problem;
+  if (mode === "production" && !entry.startsWith("https://")) return `"${entry}" is not an https origin (production)`;
+  if (mode === "development" && !isLoopbackOrigin(entry)) return `"${entry}" is not a loopback origin (development is loopback-only)`;
+  return null;
+}
+
+/** `GS_LUDUM_ORIGINS`: a comma-separated list of exact origins, each checked by `ludumOriginProblem`. */
+export function parseLudumOrigins(value: string | undefined, mode: GsMode): { ok: true; origins: string[] } | { ok: false; reason: string } {
+  if (value === undefined || value.trim() === "") return { ok: true, origins: [] };
+  const origins: string[] = [];
+  for (const raw of value.split(",")) {
+    const entry = raw.trim();
+    const problem = ludumOriginProblem(entry, mode);
+    if (problem !== null) return { ok: false, reason: `${LUDUM_ORIGINS_ENV}: ${problem}` };
+    if (!origins.includes(entry)) origins.push(entry);
+  }
+  return { ok: true, origins };
+}
+
 export function resolveServerConfig(argv: readonly string[], env: Readonly<Record<string, string | undefined>>): ServerConfigResult {
   const fail = (reason: string): ServerConfigResult => ({ ok: false, reason });
   const notes: string[] = [];
@@ -79,6 +112,11 @@ export function resolveServerConfig(argv: readonly string[], env: Readonly<Recor
   if (originsArg.conflict) return fail(originsArg.conflict);
   const parsedOrigins = parseAllowedOrigins(originsArg.value);
   if (!parsedOrigins.ok) return fail(parsedOrigins.reason);
+
+  const ludumArg = single(argv, env[LUDUM_ORIGINS_ENV], "--ludum-origins", LUDUM_ORIGINS_ENV);
+  if (ludumArg.conflict) return fail(ludumArg.conflict);
+  const ludum = parseLudumOrigins(ludumArg.value, mode);
+  if (!ludum.ok) return fail(ludum.reason);
 
   const hopsArg = single(argv, env.GS_TRUSTED_PROXY_HOPS, "--trusted-proxy-hops", "GS_TRUSTED_PROXY_HOPS");
   if (hopsArg.conflict) return fail(hopsArg.conflict);
@@ -106,7 +144,7 @@ export function resolveServerConfig(argv: readonly string[], env: Readonly<Recor
     if (hops === null) {
       return fail("production needs GS_TRUSTED_PROXY_HOPS set explicitly (0 = the TCP peer; N = the N-th X-Forwarded-For entry from the right).");
     }
-    return { ok: true, config: { mode, allowedOrigins: parsedOrigins.origins, trustedProxyHops: hops, legacyLogs, explainDivergence: false, notes } };
+    return { ok: true, config: { mode, allowedOrigins: parsedOrigins.origins, ludumOrigins: ludum.origins, trustedProxyHops: hops, legacyLogs, explainDivergence: false, notes } };
   }
 
   /* development */
@@ -116,5 +154,5 @@ export function resolveServerConfig(argv: readonly string[], env: Readonly<Recor
   const remote = origins.find((origin) => !isLoopbackOrigin(origin));
   if (remote !== undefined) return fail(`development refuses a non-loopback allowed origin ("${remote}"). Never point a tunnel at a development server.`);
   if (insecureFlag || insecureEnv) notes.push("--insecure-local-identity / INSECURE_LOCAL_IDENTITY is obsolete: development identity is GS_MODE=development");
-  return { ok: true, config: { mode, allowedOrigins: origins, trustedProxyHops: 0, legacyLogs, explainDivergence: true, notes } };
+  return { ok: true, config: { mode, allowedOrigins: origins, ludumOrigins: ludum.origins, trustedProxyHops: 0, legacyLogs, explainDivergence: true, notes } };
 }

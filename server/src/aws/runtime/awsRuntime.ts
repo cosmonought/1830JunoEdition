@@ -324,7 +324,7 @@ export interface AwsRuntimeInput<W extends PoolWriterPort, L extends Inspectable
   readonly config: AwsRuntimeConfig;
   /** The Juno backend configuration (checked by `checkEscrowConfigForAws`), or null: no escrow. */
   readonly escrowConfig: JunoBackendConfig | null;
-  readonly server: { readonly mode: GsMode; readonly allowedOrigins: readonly string[]; readonly trustedProxyHops: number };
+  readonly server: { readonly mode: GsMode; readonly allowedOrigins: readonly string[]; readonly trustedProxyHops: number; readonly ludumOrigins?: readonly string[] };
   readonly build: string;
   readonly port: number;
   readonly bindHost: string;
@@ -1156,7 +1156,7 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
       capability,
       runtime: serving.runtime(),
       moneyFacts: settlement,
-      identity: { mode: input.server.mode, allowedOrigins: input.server.allowedOrigins, trustedProxyHops: input.server.trustedProxyHops, service: identity },
+      identity: { mode: input.server.mode, allowedOrigins: input.server.allowedOrigins, ludumOrigins: input.server.ludumOrigins ?? [], trustedProxyHops: input.server.trustedProxyHops, service: identity },
       store: stores.log,
       records: stores.records,
       legacyLogs: "refuse",

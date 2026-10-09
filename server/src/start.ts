@@ -445,6 +445,7 @@ async function main(): Promise<void> {
     identity: {
       mode: config.mode,
       allowedOrigins: config.allowedOrigins,
+      ludumOrigins: config.ludumOrigins,
       trustedProxyHops: config.trustedProxyHops,
       service: identity,
       ...(config.mode === "development" ? { devAuthenticator: createDevAuthenticator() } : {}),

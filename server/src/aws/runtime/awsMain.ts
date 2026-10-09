@@ -187,7 +187,8 @@ export async function runAwsStorageMode(input: {
     runtime = await startAwsRuntime({
       config,
       escrowConfig: startup.escrowConfig,
-      server: input.server,
+      /* LUDUM: the Ludum origins come from the runtime document (`ludum_origins`), never the environment, in AWS mode. */
+      server: { ...input.server, ludumOrigins: [...config.ludumOrigins] },
       build: input.build,
       port: input.port,
       bindHost: AWS_BIND_HOST,

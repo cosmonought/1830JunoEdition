@@ -186,7 +186,7 @@ describe("certified Terraform drift guard: the base, the two reviewed exceptions
   });
 
   /* A throwaway repository (the regression tests below need real git index states; the real tree is never touched). */
-  const scratch = (files: Record<string, string>, after?: (git: (...a: string[]) => void, dir: string) => void) => {
+  const scratch = (files: Record<string, string>, after?: (git: (...a: string[]) => string, dir: string) => void) => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tf-guard-"));
     const git = (...args: string[]) => {
       const r = spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "-c", "core.autocrlf=false", ...args], { cwd: dir, encoding: "utf8" });
@@ -269,6 +269,35 @@ describe("certified Terraform drift guard: the base, the two reviewed exceptions
       } finally {
         r.done();
       }
+    }
+  });
+
+  test("re-review: local repository state cannot hide a change -- a replace ref or a clean filter still fails", () => {
+    const evil = 'resource "aws_iam_policy" "p" {}\n';
+    const replaced = scratch({}, (git, dir) => {
+      const baseBlob = git("rev-parse", "HEAD:x/main.tf").trim();
+      fs.writeFileSync(path.join(dir, "evil.txt"), evil);
+      const evilBlob = git("hash-object", "-w", "evil.txt").trim();
+      fs.rmSync(path.join(dir, "evil.txt"));
+      git("replace", baseBlob, evilBlob);
+      fs.writeFileSync(path.join(dir, "x/main.tf"), evil);
+    });
+    try {
+      assert.ok(replaced.problems().some((m) => m.startsWith("x/main.tf:")), JSON.stringify(replaced.problems()));
+    } finally {
+      replaced.done();
+    }
+    const filtered = scratch({}, (git, dir) => {
+      fs.writeFileSync(path.join(dir, ".git/info/attributes"), "x/main.tf filter=hide\n");
+      git("config", "filter.hide.clean", "printf '# base\\n'");
+      git("config", "filter.hide.smudge", "cat");
+      fs.writeFileSync(path.join(dir, "x/main.tf"), evil);
+      assert.equal(git("diff", "--name-only").trim(), "", "the filter does hide the edit from git diff");
+    });
+    try {
+      assert.ok(filtered.problems().some((m) => m.startsWith("x/main.tf:")), JSON.stringify(filtered.problems()));
+    } finally {
+      filtered.done();
     }
   });
 

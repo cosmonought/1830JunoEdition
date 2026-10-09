@@ -27,7 +27,7 @@ const MAX_BUFFER = 256 * 1024 * 1024;
 
 export function terraformDriftIo(repo: string): DriftIo {
   const run = (args: readonly string[], cwd?: string): GitResult => {
-    const r = spawnSync("git", [...args], { cwd: cwd ?? repo, encoding: "utf8", maxBuffer: MAX_BUFFER, env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0" } });
+    const r = spawnSync("git", [...args], { cwd: cwd ?? repo, encoding: "utf8", maxBuffer: MAX_BUFFER, env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0", GIT_NO_REPLACE_OBJECTS: "1" } });
     return { status: r.error === undefined ? r.status : null, stdout: r.stdout ?? "" };
   };
   return {

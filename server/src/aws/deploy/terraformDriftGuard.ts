@@ -70,10 +70,14 @@ const TERRAFORM_LOADED = /(\.tf|\.tf\.json|\.tftest\.hcl|\.tftest\.json|\.tfmock
 
 /** Every reason the tree under `scope` is not the certified base plus the reviewed exceptions ([] = it is). */
 export function terraformDriftProblems(io: DriftIo, options: DriftOptions): string[] {
+  /* Review (re-review MEDIUM): local repository state must not steer the comparison. Every call ignores replace refs
+     (`--no-replace-objects`), and every tracked file is compared by its bytes, not by git's view of what changed -- a
+     clean filter or textconv in .git/config / .git/info/attributes can make `git diff` report nothing. */
+  const git = (args: readonly string[]): GitResult => io.git(["--no-replace-objects", ...args]);
   const base = options.base ?? CERTIFIED_TERRAFORM_BASE;
   const missingBase = `the certified Terraform base ${base} is not available in this checkout (a shallow clone, an exported tree, or not a git checkout): the drift guard FAILS rather than skip. Fetch it (git fetch --depth=1 origin ${base}) and run again.`;
-  if (io.git(["rev-parse", "--is-inside-work-tree"]).status !== 0) return [missingBase];
-  if (io.git(["cat-file", "-e", `${base}^{commit}`]).status !== 0) return [missingBase];
+  if (git(["rev-parse", "--is-inside-work-tree"]).status !== 0) return [missingBase];
+  if (git(["cat-file", "-e", `${base}^{commit}`]).status !== 0) return [missingBase];
 
   if (sha256Hex(normalizeLf(options.patchText)) !== ESCROW21_TERRAFORM_PATCH_SHA256) return ["the Escrow 2.1 Terraform patch does not match its pinned SHA-256 (escrow21TerraformWiring.ts): a reviewed edit changes both"];
   const patch = parsePinnedPatch(options.patchText);
@@ -83,10 +87,10 @@ export function terraformDriftProblems(io: DriftIo, options: DriftOptions): stri
 
   /* NUL-separated, never C-quoted (review H1). */
   const q = ["-c", "core.quotePath=false"];
-  const listed = io.git([...q, "diff", "-z", "--name-only", "--no-renames", base, "--", ...options.scope]);
-  const untracked = io.git([...q, "ls-files", "-z", "--others", "--exclude-standard", "--", ...options.scope]);
-  const ignored = io.git([...q, "ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--", ...options.scope]);
-  const tracked = io.git([...q, "ls-files", "-z", "-v", "--", ...options.scope]);
+  const listed = git([...q, "diff", "-z", "--name-only", "--no-renames", base, "--", ...options.scope]);
+  const untracked = git([...q, "ls-files", "-z", "--others", "--exclude-standard", "--", ...options.scope]);
+  const ignored = git([...q, "ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--", ...options.scope]);
+  const tracked = git([...q, "ls-files", "-z", "-v", "--", ...options.scope]);
   if (listed.status !== 0 || untracked.status !== 0 || ignored.status !== 0 || tracked.status !== 0) return [`git could not list the changes under ${options.scope.join(", ")} since ${base}`];
   const entries = (s: string) => s.split("\0").filter((l) => l !== "");
 
@@ -95,7 +99,28 @@ export function terraformDriftProblems(io: DriftIo, options: DriftOptions): stri
   for (const entry of entries(tracked.stdout)) if (!entry.startsWith("H ")) problems.push(`${entry.slice(2)}: its index entry is flagged "${entry[0]}" (skip-worktree / assume-unchanged): git would not see its changes -- clear the flag (git update-index --no-skip-worktree --no-assume-unchanged)`);
   for (const file of entries(ignored.stdout))
     if (!file.split("/").includes(".terraform") && TERRAFORM_LOADED.test(file)) problems.push(`${file}: git-ignored, but Terraform loads it (an override, auto-loaded variables or configuration): remove it`);
+  /* Byte comparison of every tracked file (and every base file) in scope, independent of `git diff`: the base blob ids
+     from the tree, the working files hashed raw (`--no-filters`, so no clean filter applies). An equal hash is certainly
+     unchanged; anything else is judged in full below (where CRLF is normalized, so a CRLF checkout is not drift). */
+  const baseTree = git([...q, "ls-tree", "-r", "-z", base, "--", ...options.scope]);
+  if (baseTree.status !== 0) return [`git could not read the tree of ${base} under ${options.scope.join(", ")}`];
+  const baseOid = new Map<string, string>();
+  for (const entry of entries(baseTree.stdout)) {
+    const m = /^\d+ blob ([0-9a-f]{40,64})\t(.+)$/.exec(entry);
+    if (m === null) return [`${base}: an unexpected tree entry under ${options.scope.join(", ")}: ${JSON.stringify(entry)}`];
+    baseOid.set(m[2], m[1]);
+  }
+  const trackedFiles = entries(tracked.stdout).map((e) => e.slice(2));
+  const onDisk = trackedFiles.filter((f) => safePath(f) && !options.overlay?.has(f) && io.readWorking(f) !== null);
+  const hashed = onDisk.length === 0 ? { status: 0, stdout: "" } : git(["hash-object", "--no-filters", "--", ...onDisk]);
+  const hashes = hashed.stdout.split("\n").filter((l) => l !== "");
+  if (hashed.status !== 0 || hashes.length !== onDisk.length) return ["git could not hash the working files in scope"];
   const candidates = new Set([...entries(listed.stdout), ...entries(untracked.stdout)]);
+  onDisk.forEach((f, i) => {
+    if (baseOid.get(f) !== hashes[i]) candidates.add(f);
+  });
+  for (const f of trackedFiles) if (!onDisk.includes(f)) candidates.add(f);
+  for (const f of baseOid.keys()) if (io.readWorking(f) === null || options.overlay?.has(f)) candidates.add(f);
   for (const file of options.overlay?.keys() ?? []) if (inScope(file, options.scope)) candidates.add(file);
   for (const file of patched) if (inScope(file, options.scope)) candidates.add(file);
   for (const file of [...candidates]) if (!safePath(file)) {
@@ -107,8 +132,8 @@ export function terraformDriftProblems(io: DriftIo, options: DriftOptions): stri
   const diffs = new Map<string, string | null>();
   for (const file of [...candidates].sort()) {
     let before: string | null = null;
-    if (io.git(["cat-file", "-e", `${base}:${file}`]).status === 0) {
-      const blob = io.git(["cat-file", "blob", `${base}:${file}`]);
+    if (git(["cat-file", "-e", `${base}:${file}`]).status === 0) {
+      const blob = git(["cat-file", "blob", `${base}:${file}`]);
       if (blob.status !== 0) {
         problems.push(`${file}: its certified text could not be read from ${base}`);
         continue;

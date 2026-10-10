@@ -291,6 +291,15 @@ describe("§6: Watching and Removed", () => {
     expect(onTakeSeat).toHaveBeenCalledTimes(1);
   });
 
+  it("a read-only Watch tab (OD-19) of an open table: never 'every seat is taken' -- it says how to play", async () => {
+    await render(room(moneyView({ you: null }), { me: null, players: [{ id: "p-other", nickname: "Ana", isReady: false, online: true }] }));
+    const panel = byTestId("waiting-room-watching")!;
+    expect(panel.textContent).toContain("You are watching this table. To play, join it from the lobby with its code.");
+    expect(panel.textContent).not.toContain("Every seat is taken");
+    expect(panel.textContent).toContain("Taking a seat holds it for you. You board by anteing 1 JUNOX.");
+    expect(byTestId("take-seat")).toBeNull();
+  });
+
   it("a watcher of a full table is told so, with no button", async () => {
     await render(room(moneyView({ you: null }), { me: null }));
     const panel = byTestId("waiting-room-watching")!;

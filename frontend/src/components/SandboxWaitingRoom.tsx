@@ -174,6 +174,8 @@ export function SandboxWaitingRoom({
   const cap = room?.playerCount ?? room?.seatCap ?? 0;
   const money = room?.money ?? null;
   const wasKicked = room !== null && room.you.kicked;
+  /* A seat is still free at a waiting table (a watcher's panel says how to take it, or that it can't). */
+  const seatFree = room !== null && room.status === "waiting" && room.joinable && players.length < cap;
   const hostPlayer = players.find((player) => player.id === room?.hostId) ?? null;
   const hostName = hostPlayer?.nickname || "The host";
   const nameOf = (player: { nickname: string }) => player.nickname || "A player";
@@ -727,7 +729,9 @@ export function SandboxWaitingRoom({
           ) : (
             <div className="rm-nopass" data-testid="waiting-room-watching">
               <span className="rm-wtag">Watching</span>
-              <p>{onTakeSeat ? "You are watching this table. Take a seat to play." : "You are watching this table. Every seat is taken."}</p>
+              {/* Three cases, never confused: a seat this tab may take; a seat free but this is a read-only Watch tab (OD-19:
+                  a seat is taken with Join, from the lobby); every seat taken. */}
+              <p>{onTakeSeat ? "You are watching this table. Take a seat to play." : seatFree ? "You are watching this table. To play, join it from the lobby with its code." : "You are watching this table. Every seat is taken."}</p>
               {onTakeSeat ? (
                 <div className="rm-actions">
                   <button type="button" className="rm-btn rm-primary rm-big" onClick={onTakeSeat} disabled={busy} data-testid="take-seat">
@@ -735,7 +739,7 @@ export function SandboxWaitingRoom({
                   </button>
                 </div>
               ) : null}
-              <p className="rm-why">{onTakeSeat ? (ante !== null ? `Taking a seat holds it for you. You board by anteing ${ante}.` : "Taking a seat holds it for you.") : "You can keep watching; the game is shown here when it starts."}</p>
+              <p className="rm-why">{onTakeSeat || seatFree ? (ante !== null ? `Taking a seat holds it for you. You board by anteing ${ante}.` : "Taking a seat holds it for you.") : "You can keep watching; the game is shown here when it starts."}</p>
               {error ? (
                 <p className="rm-err" role="alert">
                   {error}

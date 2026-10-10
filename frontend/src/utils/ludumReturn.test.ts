@@ -4,7 +4,7 @@
 // once when already signed in; nothing for any other path (§2.1: not an open redirect).
 
 import { accountPromptState, accountSignedIn, closeAccountDialog, requireAccount, resetAccountPromptForTests } from "./accountPrompt";
-import { closeLudumConfirm, handleLudumConfirm, handleLudumSignIn, LUDUM_ORIGIN, ludumConfirmTarget, ludumReturnTarget } from "./ludumReturn";
+import { closeLudumConfirm, handleLudumConfirm, handleLudumSignIn, handleLudumSignOut, LUDUM_ORIGIN, ludumConfirmTarget, ludumPrompt, ludumReturnTarget } from "./ludumReturn";
 import { readySessionPort } from "./sessionBootstrap";
 
 afterEach(() => resetAccountPromptForTests());
@@ -126,5 +126,33 @@ describe("LUDUM v1.1: handleLudumConfirm", () => {
     let calls = 0;
     expect(handleLudumConfirm({ search: "?ludum=signin&return=/me/", navigate: () => (calls += 1), port: readySessionPort(), openConfirm: () => (calls += 1) })).toBe(false);
     expect(calls).toBe(0);
+  });
+});
+
+/* LUDUM v1.1: `?ludum=signout&return=<path>` -- Ludum's "Sign out" happens on Play, after one press. */
+describe("LUDUM v1.1: handleLudumSignOut", () => {
+  it("signed in: asks first (a link alone never signs anyone out); never leaves before the press", () => {
+    const went: string[] = [];
+    const asked: string[] = [];
+    expect(handleLudumSignOut({ search: "?ludum=signout&return=/", navigate: (url) => went.push(url), port: readySessionPort(), openSignOut: (target) => asked.push(target) })).toBe(true);
+    expect(asked).toEqual(["https://ludum.netadao.org/"]);
+    expect(went).toEqual([]);
+  });
+
+  it("the default host state is the sign-out card, not the password card", () => {
+    handleLudumSignOut({ search: "?ludum=signout&return=/me/", navigate: () => undefined, port: readySessionPort() });
+    expect(ludumPrompt()).toEqual({ mode: "signout", target: "https://ludum.netadao.org/me/" });
+    expect(ludumConfirmTarget()).toBeNull();
+    closeLudumConfirm();
+    expect(ludumPrompt()).toBeNull();
+  });
+
+  it("already signed out: straight back; unsafe paths do nothing", () => {
+    const went: string[] = [];
+    const visitor = { state: "unprofiled", account: null } as never;
+    expect(handleLudumSignOut({ search: "?ludum=signout&return=/me/", navigate: (url) => went.push(url), port: visitor })).toBe(true);
+    expect(went).toEqual(["https://ludum.netadao.org/me/"]);
+    expect(handleLudumSignOut({ search: "?ludum=signout&return=//evil.example/", navigate: (url) => went.push(url), port: visitor })).toBe(false);
+    expect(went.length).toBe(1);
   });
 });

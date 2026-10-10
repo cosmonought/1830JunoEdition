@@ -460,6 +460,49 @@ cancelled, expired and archived games. An archived game whose record has moved o
 
 Lanes B and C call only `LudumSession.api`.
 
+### 5.1 Amendment v1.1 (coordinator, 2026-10-09; owner request "PROCEED WITH IMPLEMENTATION AND DESIGN INTEGRATION")
+
+Additive only: no v1 field changes meaning, and every new field is optional on the wire. The types are in
+`server/src/ludum/contract.ts` (the v1.1 block). Error vocabulary gains `conflict` (409, with `detail`) and
+`reauth-required` (403, with `confirmUrl`).
+
+| Route | Access | Body | Answer |
+|---|---|---|---|
+| `session` | public | `{}` | v1, plus `roles: {reviewer}` when signed in (draws the Moderation tab) |
+| `account` | profiled | `{}` | `{displayName: {name, state, changedAt}, tablemates: Fact<trust facts>, roles}` |
+| `display-name` | profiled | `{name}` | the ONE change: 200 `{displayName}`; 400 `bad-name`; 409 `taken` / `unchanged` / `already-changed` / `locked-playing` / `locked-seated` |
+| `moderation-queue` | reviewer | `{}` | `{cases, unreadable}` (Play's reviewer views) |
+| `moderation-case` | reviewer | `{caseId}` | `{case}` |
+| `moderation-decide` | reviewer | `{caseId, revision, status, note?}` (8 KiB) | `{case}`; 403 `reauth-required` without a live "Confirm it's you" |
+| `game` | profiled | v1 | v1, plus `transactions` |
+| `case` | public | v1 | v1, plus `seats[].displayName` and `transactions` |
+
+- **Display names** are unique by an NFKC, case- and space-folded key, enforced by the single identity writer; names two
+  legacy profiles already shared stay. A profile has ONE change, before its first game: refused while it holds a seat
+  at a waiting table, and once any table it sits at has started. It is written under a `profile-name` compare-and-swap
+  (memory store and DynamoDB alike) and recorded in the optional schema-3 field `name_changed_at`. Account creation
+  answers 409 `display-name-taken`. The change is not a security event, so a security-journal replay does not carry
+  it: an identity restore from a backup taken before a change shows the earlier name.
+- **"reviewer" access**: anyone who is not one of the conduct reviewers bound at Play's startup -- signed out included
+  -- gets 404 `not-found`, as for a route that does not exist. The service, the party exclusion and the transitions are
+  Play's own (`conduct/conductService.ts`); a decision needs the session's live sensitive grant, given on Play
+  (`https://play.netadao.org/?ludum=confirm&return=/moderation/`). Play's `/gs/api/conduct/*`, `/gs/api/trust/*` and
+  account routes stay closed to Ludum's origin: no CORS was relaxed.
+- **Seat display names** on the public case record are the names the table showed every seat (frozen at the deal),
+  mapped through the server's frozen roster only when it names exactly the chain's seat wallets; otherwise null.
+- **Transactions** are those THIS server relayed (its chain intents): `included` (chain-observed by the relayer, with the
+  height) or `broadcast` (pending). Wallet-signed transactions (create, join, challenge, DAO proposals) never pass the
+  server; `walletSigned: "not-server-recorded"` says so.
+- **Play links** (each checks the path `^/[a-z0-9/_-]{0,128}$`, the host is a build constant): `?ludum=signin`,
+  `?ludum=confirm` ("Confirm it's you" on Play, then back) and `?ludum=signout` (Play asks once, signs this browser
+  out, then back; a link alone never signs anyone out).
+
+### 5.2 Escrow policy (owner, 2026-10-09)
+
+Escrow 2.1's resolver-timeout behaviour is final. The "timeout-exit fix" is removed from the backlog: no change,
+replacement or redeployment of the escrow contract is planned for it. The pages show the exit exactly as the deployed
+contract defines it.
+
 ---
 
 ## 6. Governance contract for appeals (verified source + live config; FROZEN)
@@ -472,6 +515,11 @@ Lanes B and C call only `LudumSession.api`.
 - It fails with `ResolverIsSeated` if the resolver holds a seat.
 - A paused contract does not block it.
 - `Replace` is refused for remedy foreclosure, and must be beyond the trusted checkpoint.
+- v1.1: Ludum builds the Replace payload in the browser (`platform/js/gov.js` `replacePayload`): version 1, the game's
+  domain, kind 1, reason 5, `seq = 2·log_len + 1`, `appraisal_log_len == log_len`, `state_schema_version` 1, one u128
+  weight per seat with a positive sum, beyond the trusted checkpoint. The case page prefills it from the server's
+  terminal record only once that record agrees with the chain; the proposer may correct the weights. It is authorised by
+  the DAO's executing transaction, never signed by the server.
 
 **Race with liveness settle.** After `disputed_at + 2592000 s`, any seated wallet may `liveness_settle`. After that the game
 is no longer disputed, and a later DAO execute becomes `execution_failed` (the proposal closes).
@@ -522,7 +570,7 @@ differ from the pinned table in section 1.4 (pin mismatch: stop, do not guess).
 - Later:
   - a durable account → games index;
   - multiple products;
-  - Ludum-side sign-out;
+  - ~~Ludum-side sign-out~~ (v1.1: on Play, through `?ludum=signout`);
   - mainnet DAO pins, once a mainnet Ludum DAO is decided. None is decided today.
 
 ---

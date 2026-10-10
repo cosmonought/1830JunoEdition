@@ -9,7 +9,7 @@ import { createRoot, type Root } from "react-dom/client";
 
 import { LudumConfirmHost } from "./LudumConfirmHost";
 import { ModalLayerHost } from "./ModalPortal";
-import { closeLudumConfirm, handleLudumConfirm } from "../utils/ludumReturn";
+import { closeLudumConfirm, handleLudumConfirm, handleLudumSignOut } from "../utils/ludumReturn";
 import { readySessionPort } from "../utils/sessionBootstrap";
 
 declare global {
@@ -53,6 +53,29 @@ describe("LUDUM v1.1: LudumConfirmHost", () => {
     const stay = Array.from(document.querySelectorAll("button")).find((button) => button.textContent === "Stay on Play") as HTMLButtonElement;
     act(() => stay.click());
     expect(document.querySelector('[data-testid="ludum-confirm-form"]')).toBeNull();
+    expect(went).toEqual([]);
+  });
+});
+
+describe("LUDUM v1.1: LudumConfirmHost (sign out)", () => {
+  it("the sign-out card: Stay signed in closes it and stays on Play", () => {
+    const went: string[] = [];
+    act(() =>
+      root.render(
+        <>
+          <ModalLayerHost />
+          <LudumConfirmHost port={readySessionPort()} navigate={(url) => went.push(url)} />
+        </>,
+      ),
+    );
+    act(() => {
+      handleLudumSignOut({ search: "?ludum=signout&return=/", navigate: (url) => went.push(url), port: readySessionPort() });
+    });
+    expect(document.querySelector('[data-testid="ludum-signout-confirm"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="ludum-confirm-form"]')).toBeNull();
+    const stay = Array.from(document.querySelectorAll("button")).find((button) => button.textContent === "Stay signed in") as HTMLButtonElement;
+    act(() => stay.click());
+    expect(document.querySelector('[data-testid="ludum-signout-confirm"]')).toBeNull();
     expect(went).toEqual([]);
   });
 });

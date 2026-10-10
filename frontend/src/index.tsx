@@ -21,7 +21,7 @@ import { ClientUpdateNotice } from "./components/ClientUpdateNotice";
 import { GAME_SERVER_URL } from "./config";
 import { createAppSessionPort, installSessionPort } from "./utils/sessionBootstrap";
 import { createBrowserClientUpdatePort, installClientUpdatePort } from "./utils/clientUpdate";
-import { handleLudumConfirm, handleLudumSignIn } from "./utils/ludumReturn";
+import { handleLudumConfirm, handleLudumSignIn, handleLudumSignOut } from "./utils/ludumReturn";
 import { LudumConfirmHost } from "./components/LudumConfirmHost";
 
 /* LIVE-2B (LIVE-2 §4.3): before any link opens a socket, the session is bootstrapped (`POST /gs/api/session`) -- the
@@ -38,6 +38,8 @@ installClientUpdatePort(createBrowserClientUpdatePort());
 handleLudumSignIn({ search: window.location.search, navigate: (url) => window.location.assign(url) });
 /* LUDUM v1.1: `?ludum=confirm&return=<path>` -- "Confirm it's you" here (the password is only typed on Play), then back. */
 handleLudumConfirm({ search: window.location.search, navigate: (url) => window.location.assign(url) });
+/* LUDUM v1.1: `?ludum=signout&return=<path>` -- Ludum's "Sign out": one press here, then back. */
+handleLudumSignOut({ search: window.location.search, navigate: (url) => window.location.assign(url) });
 
 const ROOT_ELEMENT_ID = "root";
 

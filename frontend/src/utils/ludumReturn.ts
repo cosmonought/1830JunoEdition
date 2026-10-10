@@ -17,6 +17,11 @@
 // the session's live sensitive grant; the password is only ever typed on Play). Signed in: Play's own `ConfirmItsYou`
 // (`LudumConfirmHost`), then back. Signed out: the sign-in dialog -- a fresh sign-in IS the grant for its first five
 // minutes -- then back. The same path rule; cancelling stays on Play.
+//
+// LUDUM v1.1: `?ludum=signout&return=<path>` -- Ludum's account menu "Sign out". Ludum cannot end Play's session itself
+// (Play's session routes stay closed to its origin), so it links here. Signed in: Play asks once ("Sign out of Play and
+// Ludum?" -- a link alone never signs anyone out), ends THIS browser's session, then returns. Already signed out: straight
+// back.
 
 import { isSignedIn, requireAccount as defaultRequireAccount } from "./accountPrompt";
 import { sessionPort, type SessionPort } from "./sessionBootstrap";
@@ -28,7 +33,7 @@ export const LUDUM_ORIGIN = "https://ludum.netadao.org";
 export const LUDUM_RETURN_PATH = /^\/[a-z0-9/_-]{0,128}$/;
 
 /** What Play does before returning: sign in, or confirm it's you (v1.1). */
-export type LudumReturnMode = "signin" | "confirm";
+export type LudumReturnMode = "signin" | "confirm" | "signout";
 
 /** The Ludum URL a page's query asks to return to after sign-in (or, `mode` "confirm", after "Confirm it's you"), or
  *  null (not that request, or not a safe one). */
@@ -73,21 +78,29 @@ export function handleLudumSignIn(deps: LudumSignInDeps): boolean {
 /* v1.1: "Confirm it's you", then back to Ludum                         */
 /* ------------------------------------------------------------------ */
 
-let confirmTarget: string | null = null;
+/** The open Ludum request: "Confirm it's you" or "Sign out", and the checked Ludum URL it returns to. */
+export interface LudumPrompt {
+  readonly mode: "confirm" | "signout";
+  readonly target: string;
+}
+let confirmPrompt: LudumPrompt | null = null;
 const confirmListeners = new Set<() => void>();
-const setConfirmTarget = (target: string | null) => {
-  confirmTarget = target;
+const setConfirmPrompt = (prompt: LudumPrompt | null) => {
+  confirmPrompt = prompt;
   confirmListeners.forEach((listener) => listener());
 };
+const setConfirmTarget = (target: string | null) => setConfirmPrompt(target === null ? null : { mode: "confirm", target });
 
+/** The open Ludum prompt, or null. */
+export const ludumPrompt = (): LudumPrompt | null => confirmPrompt;
 /** The Ludum URL the open confirmation returns to, or null (no confirmation is open). */
-export const ludumConfirmTarget = (): string | null => confirmTarget;
+export const ludumConfirmTarget = (): string | null => (confirmPrompt?.mode === "confirm" ? confirmPrompt.target : null);
 export function subscribeLudumConfirm(listener: () => void): () => void {
   confirmListeners.add(listener);
   return () => confirmListeners.delete(listener);
 }
 /** Cancel: the visitor stays on Play. */
-export const closeLudumConfirm = (): void => setConfirmTarget(null);
+export const closeLudumConfirm = (): void => setConfirmPrompt(null);
 
 export interface LudumConfirmDeps {
   readonly search: string;
@@ -109,6 +122,29 @@ export function handleLudumConfirm(deps: LudumConfirmDeps): boolean {
     /* Signed in: confirm with the password. Signed out: the sign-in is the confirmation (its own five-minute grant). */
     if (isSignedIn(port)) open(target);
     else ask(() => deps.navigate(target), "Log in to continue to Ludum.");
+  };
+  if (port.state === "unknown") void port.ensure().then(decide, decide);
+  else decide();
+  return true;
+}
+
+export interface LudumSignOutDeps {
+  readonly search: string;
+  readonly navigate: (url: string) => void;
+  readonly port?: SessionPort;
+  /** Ask before signing out (default: `LudumConfirmHost`'s sign-out card). */
+  readonly openSignOut?: (target: string) => void;
+}
+
+/** Handle a Ludum "Sign out" request on page load. True when the query was one. */
+export function handleLudumSignOut(deps: LudumSignOutDeps): boolean {
+  const target = ludumReturnTarget(deps.search, "signout");
+  if (target === null) return false;
+  const port = deps.port ?? sessionPort();
+  const open = deps.openSignOut ?? ((url: string) => setConfirmPrompt({ mode: "signout", target: url }));
+  const decide = () => {
+    if (isSignedIn(port)) open(target);
+    else deps.navigate(target);
   };
   if (port.state === "unknown") void port.ensure().then(decide, decide);
   else decide();

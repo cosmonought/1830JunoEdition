@@ -22,6 +22,7 @@
 // `crypto-browserify`, `stream-browserify`, `vm-browserify`, and (for the
 // ProvidePlugin globals below) `buffer` + `process`.
 
+const path = require("path");
 const webpack = require("webpack");
 
 module.exports = function override(config) {
@@ -31,6 +32,14 @@ module.exports = function override(config) {
     crypto: require.resolve("crypto-browserify"),
     stream: require.resolve("stream-browserify"),
     vm: require.resolve("vm-browserify"),
+  };
+
+  /* PHASE 4 SECURITY HEADERS: libsodium (pulled in by @cosmjs/crypto for Ed25519 / Argon2id / XChaCha20, none of which
+     Play uses) compiles WebAssembly at load, which Play's CSP refuses. It is replaced by a stub that throws if used
+     (`src/vendor/libsodiumStub.js`; Ludum's cosmjs build does the same). */
+  config.resolve.alias = {
+    ...(config.resolve.alias || {}),
+    "libsodium-wrappers-sumo": path.resolve(__dirname, "src/vendor/libsodiumStub.js"),
   };
 
   config.plugins = (config.plugins || []).concat([

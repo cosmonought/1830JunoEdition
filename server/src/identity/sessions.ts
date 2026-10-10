@@ -1181,8 +1181,8 @@ export class IdentityService {
 
   /** LUDUM (display names): the profile's ONE change, before its first game. Unique by `displayNameKey`; refused while
    *  the account holds any seat (`seat`, from the rooms: the name is copied into a seat at the deal, so it never changes
-   *  under a table); written under the `profile-name` compare-and-swap, so two racing changes cannot both land. Not a
-   *  security change: no session ends and no security event is journaled (the name is presentation, never authority). */
+   *  under a table); written under the `profile-name` compare-and-swap, so two racing changes cannot both land. No
+   *  session ends; the change IS journaled (`display-name-changed`) so an identity restore keeps names unique. */
   async changeDisplayName(principalId: string, raw: unknown, seat: () => "none" | "seated" | "playing", now: number): Promise<DisplayNameChangeOutcome> {
     const name = cleanProfileName(raw);
     if (name === null || name !== raw) return { kind: "bad-name" };
@@ -1197,7 +1197,17 @@ export class IdentityService {
       if (this.displayNameTaken(name, profile.profile_id)) return { kind: "taken" };
       const updated: Profile = { ...profile, display_name: name, name_changed_at: now };
       try {
-        await this.commit({ expect: [{ kind: "profile-name", profile_id: profile.profile_id, display_name: profile.display_name }], profiles: [updated] }, "changing a display name");
+        /* Journaled first (`display-name-changed`): names are unique, so an identity restore must replay the change in
+           order with the creations around it, or a later account's name could come back to this one. */
+        await this.commit({ expect: [{ kind: "profile-name", profile_id: profile.profile_id, display_name: profile.display_name }], profiles: [updated] }, "changing a display name", {
+          kind: "display-name-changed",
+          at: now,
+          principal_id: profile.principal_id,
+          profile_id: profile.profile_id,
+          from_name: profile.display_name,
+          to_name: name,
+          changed_at: now,
+        });
       } catch {
         return { kind: "unavailable" };
       }

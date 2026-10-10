@@ -65,8 +65,11 @@
 //     `password-replaced` (both wallets signed every replacement: whichever was committed, the player asked for it; no
 //     review). A designation a replacement retired is never re-installed. "Forgot password?" by the Authorization Wallet
 //     is a `password-replaced` with `via: "authorization-wallet"`.
+//   - LUDUM (display names): a profile's ONE display-name change is a `display-name-changed` (`from_name` -> `to_name`,
+//     `changed_at`). Display names are unique, so a restore must replay the change in order with the creations around
+//     it: otherwise a rename lost to the restore would give the profile back a name a later account took.
 //
-// WHAT IS RECORDED (and what is not): the eight kinds of change below, each carrying exactly what a replay needs to
+// WHAT IS RECORDED (and what is not): the nine kinds of change below, each carrying exactly what a replay needs to
 // re-apply it idempotently and in any order -- a rotation names the selector it replaced and the one it installed (a
 // chain, not a clock), a revocation names its families -- and their confirmations. Plain session rotations and
 // single-session evictions are NOT recorded: the restore procedure signs every session out (preflight §17.3 step 3). No
@@ -78,7 +81,7 @@
 import { StoreDefiniteError, StoreUncertainError } from "../persistence/storeResult";
 import { isLoginKey, isLoginName, isPasswordHash, loginKeyOf } from "./accountCredentials";
 import { FAMILY_ID_PATTERN, PRINCIPAL_ID_PATTERN, PROFILE_ID_PATTERN, RECOVERY_SELECTOR_PATTERN } from "./ids";
-import { isPrincipal, isProfile, PROFILE_V2_FIELDS, REVOKE_REASONS, type Principal, type Profile, type RevokeReason } from "./store";
+import { isDisplayName, isPrincipal, isProfile, PROFILE_V2_FIELDS, REVOKE_REASONS, type Principal, type Profile, type RevokeReason } from "./store";
 
 export const SECURITY_EVENT_FORMAT = "gs-security-event";
 export const SECURITY_EVENT_VERSION = 1;
@@ -108,7 +111,8 @@ export type SecurityChangeKind =
   | "principal-disabled"
   | "credentials-established"
   | "password-replaced"
-  | "authorization-wallet-replaced";
+  | "authorization-wallet-replaced"
+  | "display-name-changed";
 export const SECURITY_CHANGE_KINDS: readonly SecurityChangeKind[] = Object.freeze([
   "profile-created",
   "recovery-key-rotated",
@@ -118,6 +122,7 @@ export const SECURITY_CHANGE_KINDS: readonly SecurityChangeKind[] = Object.freez
   "credentials-established",
   "password-replaced",
   "authorization-wallet-replaced",
+  "display-name-changed",
 ]);
 
 /** What authorized a password replacement: the current password ("Change password"), the Authorization Wallet ("Forgot
@@ -178,6 +183,8 @@ export type SecurityEvent =
       readonly to_wallet: string;
       readonly to_since: number;
     })
+  /** LUDUM: the profile's ONE display-name change (unique names: replayed in journal order with the creations). */
+  | (SecurityEventCommon & { readonly kind: "display-name-changed"; readonly profile_id: string; readonly from_name: string; readonly to_name: string; readonly changed_at: number })
   /** Review F2: the change the event `confirms` (of kind `confirmed_kind`, same principal) WAS committed. */
   | (SecurityEventCommon & { readonly kind: "confirmed"; readonly confirms: string; readonly confirmed_kind: SecurityChangeKind });
 
@@ -194,6 +201,7 @@ const KIND_FIELDS: Readonly<Record<SecurityEventKind, readonly string[]>> = {
   "credentials-established": ["profile_id", "login_key", "login_name", "password_hash", "set_at"],
   "password-replaced": ["profile_id", "from_hash", "to_hash", "set_at", "via", "kept_family_id", "family_ids"],
   "authorization-wallet-replaced": ["profile_id", "from_wallet", "from_since", "to_wallet", "to_since"],
+  "display-name-changed": ["profile_id", "from_name", "to_name", "changed_at"],
   confirmed: ["confirms", "confirmed_kind"],
 };
 const COMMON_FIELDS = ["format", "version", "event_id", "kind", "at", "principal_id"];
@@ -293,6 +301,15 @@ export function isSecurityEvent(value: unknown): value is SecurityEvent {
         isEventTime(value.from_since) &&
         isEventTime(value.to_since) &&
         (value.to_since as number) > (value.from_since as number)
+      );
+    case "display-name-changed":
+      return (
+        typeof value.profile_id === "string" &&
+        PROFILE_ID_PATTERN.test(value.profile_id) &&
+        isDisplayName(value.from_name) &&
+        isDisplayName(value.to_name) &&
+        value.from_name !== value.to_name &&
+        isEventTime(value.changed_at)
       );
     case "confirmed":
       return (

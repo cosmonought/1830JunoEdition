@@ -22,7 +22,13 @@ import { decodeItem, profileItem } from "../aws/identity/identityItems";
 import { planIdentityChange } from "../aws/identity/identityPlan";
 import { displayNameKey } from "./profileName";
 import { IdentityService } from "./sessions";
-import { createMemoryIdentityStore, isProfile, type Profile } from "./store";
+import { applyChange, createMemoryIdentityStore, isProfile, type Profile } from "./store";
+import { createMemorySecurityJournal, parseSecurityEventBody, SECURITY_EVENT_FORMAT, SECURITY_EVENT_VERSION, type SecurityEvent } from "./securityEvents";
+import { planSecurityReplay, SecurityReplayError } from "./securityReplay";
+import { mintPrincipalId, mintProfileId } from "./ids";
+
+const mintPrincipalIdForTest = (): string => mintPrincipalId();
+const mintProfileIdForTest = (): string => mintProfileId();
 
 const PASSWORD = "correct horse battery";
 const POLICY = { passwordKdf: TEST_PASSWORD_KDF };
@@ -168,5 +174,80 @@ describe("Ludum display names E: DynamoDB", () => {
     const stale = planIdentityChange({ profiles: [before] }, view, "identity-table");
     assert.equal(stale.kind, "plan");
     assert.ok(JSON.stringify(stale).includes("name_changed_at"), "the guard names the field");
+  });
+});
+
+/* ==================================================================
+    F. THE IDENTITY RESTORE (L6-4) -- names stay unique across a restore and its journal replay
+   ================================================================== */
+describe("Ludum display names F: the identity restore replays the one change in order, and never serves a duplicate", () => {
+  async function journaled() {
+    const journal = createMemorySecurityJournal();
+    const store = createMemoryIdentityStore();
+    const service = IdentityService.fromSnapshot(store, { principals: [], sessions: [] }, { policy: POLICY, security: { journal } });
+    const events = () => journal.snapshot().map((body) => parseSecurityEventBody(body) as SecurityEvent);
+    return { journal, store, service, events };
+  }
+  const replayed = (snapshot: ReturnType<ReturnType<typeof createMemoryIdentityStore>["snapshot"]>, events: SecurityEvent[], at: number) => {
+    const plan = planSecurityReplay({ snapshot, events, restoreId: "r-names", at });
+    return { plan, after: plan.principals.reduce((state, entry) => (entry.change === null ? state : applyChange(state, entry.change)), snapshot) };
+  };
+  const nameOf = (snapshot: { profiles: readonly Profile[] }, profileId: string) => snapshot.profiles.find((p) => p.profile_id === profileId);
+
+  test("a rename after the backup and a new account taking the freed name: both replayed, no duplicate; idempotent", async () => {
+    const w = await journaled();
+    const now = Date.now();
+    const ann = principalOf(w.service, (await account(w.service, "ann", "Marlowe", now)) as { setCookie: string }, now);
+    const atT = JSON.parse(JSON.stringify(w.store.snapshot()));
+    assert.equal((await w.service.changeDisplayName(ann, "Quill", () => "none", now + 5)).kind, "ok");
+    assert.equal((await account(w.service, "bob", "Marlowe", now + 6)).kind, "ok");
+    const events = w.events();
+    assert.ok(events.some((e) => e.kind === "display-name-changed"), "the change is journaled");
+    const { after } = replayed(atT, events, now + 100);
+    const annProfile = (w.service.peekProfileOf(ann) as Profile).profile_id;
+    assert.equal(nameOf(after, annProfile)?.display_name, "Quill");
+    assert.equal(nameOf(after, annProfile)?.name_changed_at, now + 5);
+    assert.equal(after.profiles.filter((p) => displayNameKey(p.display_name) === "marlowe").length, 1, "one Marlowe: the new account");
+    /* The restored identity serves the same rule: the used change stays used; the names stay held. */
+    const restored = IdentityService.fromSnapshot(createMemoryIdentityStore(), after, { policy: POLICY });
+    assert.equal(restored.displayNameTaken("quill"), true);
+    assert.equal((await restored.changeDisplayName(ann, "Other", () => "none", now + 200)).kind, "already-changed");
+    /* Idempotent: the replay of the replayed table plans no profile change. */
+    const again = planSecurityReplay({ snapshot: after, events, restoreId: "r-names", at: now + 100 });
+    assert.ok(again.principals.every((entry) => entry.change === null || entry.change.profiles === undefined));
+  });
+
+  test("without the change in the journal the replay would serve a duplicate -- it refuses (fail closed)", async () => {
+    const w = await journaled();
+    const now = Date.now();
+    const ann = principalOf(w.service, (await account(w.service, "ann", "Marlowe", now)) as { setCookie: string }, now);
+    const atT = JSON.parse(JSON.stringify(w.store.snapshot()));
+    await w.service.changeDisplayName(ann, "Quill", () => "none", now + 5);
+    await account(w.service, "bob", "Marlowe", now + 6);
+    const withoutRenames = w.events().filter((e) => e.kind !== "display-name-changed" && !(e.kind === "confirmed" && e.confirmed_kind === "display-name-changed"));
+    assert.throws(() => planSecurityReplay({ snapshot: atT, events: withoutRenames, restoreId: "r-names", at: now + 100 }), SecurityReplayError);
+  });
+
+  test("an unconfirmed change another account's later claim shows never committed is not applied", async () => {
+    const w = await journaled();
+    const now = Date.now();
+    const ann = principalOf(w.service, (await account(w.service, "ann", "Marlowe", now)) as { setCookie: string }, now);
+    const annProfile = w.service.peekProfileOf(ann) as Profile;
+    const atT = JSON.parse(JSON.stringify(w.store.snapshot()));
+    /* Ann's change to "Quill" was journaled but its write failed (no confirmation, the table never held it). */
+    const phantom = { format: SECURITY_EVENT_FORMAT, version: SECURITY_EVENT_VERSION, event_id: "f".repeat(32), kind: "display-name-changed", at: now + 5, principal_id: ann, profile_id: annProfile.profile_id, from_name: "Marlowe", to_name: "Quill", changed_at: now + 5 } as unknown as SecurityEvent;
+    assert.equal((await account(w.service, "bob", "Quill", now + 6)).kind, "ok", "the writer's index never held Quill for Ann");
+    const { after } = replayed(atT, [...w.events(), phantom], now + 100);
+    assert.equal(nameOf(after, annProfile.profile_id)?.display_name, "Marlowe");
+    assert.equal(nameOf(after, annProfile.profile_id)?.name_changed_at, undefined, "Ann's one change is still hers to use");
+    assert.equal(after.profiles.filter((p) => displayNameKey(p.display_name) === "quill").length, 1);
+  });
+
+  test("the event's shape: a well-formed change parses; a change to the same name, or a malformed name, does not", () => {
+    const base = { format: SECURITY_EVENT_FORMAT, version: SECURITY_EVENT_VERSION, event_id: "a".repeat(32), kind: "display-name-changed", at: 1, principal_id: mintPrincipalIdForTest(), profile_id: mintProfileIdForTest(), from_name: "Ann", to_name: "Quill", changed_at: 1 };
+    assert.notEqual(parseSecurityEventBody(JSON.stringify(base)), null);
+    assert.equal(parseSecurityEventBody(JSON.stringify({ ...base, to_name: "Ann" })), null);
+    assert.equal(parseSecurityEventBody(JSON.stringify({ ...base, to_name: "" })), null);
+    assert.equal(parseSecurityEventBody(JSON.stringify({ ...base, extra: 1 })), null);
   });
 });

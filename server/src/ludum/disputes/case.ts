@@ -3,9 +3,10 @@
 // ==================================================================
 //  A public read: `caller` is ignored, and the answer carries no account data -- no principal, no `g_…` game id, no log
 //  `player_id`. Chain seat wallets are public on chain already.
-//  v1.1 (owner, 2026-10-09): each seat's DISPLAY NAME -- the name the table showed every seat (the seat's nickname, frozen
-//  at the deal) -- mapped through the same frozen roster as `serverTerminal`; null where it cannot be mapped. And the
-//  transactions this server relayed for the game (`../transactions.ts`).
+//  v1.1 (owner, 2026-10-09): each seat's DISPLAY NAME -- the seat account's CURRENT unique display name (never the seat's
+//  table nickname, which any player may set to anything, another player's name included) -- mapped through the same
+//  frozen roster as `serverTerminal`; null where it cannot be mapped. And the transactions this server relayed for the
+//  game (`../transactions.ts`).
 //
 //  Every part is a §4 `Fact`:
 //    * escrow / seats / dispute / chainSettlement -- the chain's own answer, with the port's provenance
@@ -184,8 +185,8 @@ async function serverTerminalOf(id: string, parsed: JunoGameResponse, contract: 
 }
 
 /** v1.1: this server's game for the chain game -- only when its record is bound to exactly this deployment and chain
- *  game and its frozen roster names exactly the chain's seat wallets -- with each chain seat's display name (the game
- *  record's seat nickname, by the roster's `player_id`). Null otherwise (the case still answers, without names). */
+ *  game and its frozen roster names exactly the chain's seat wallets -- with each chain seat's display name (the seat
+ *  account's unique display name, by the roster's `player_id`). Null otherwise (the case still answers, without names). */
 async function localGameOf(id: string, parsed: JunoGameResponse, contract: string, ports: LudumPorts): Promise<{ gameId: string; names: Map<number, string> } | null> {
   let financial: FinancialGameRecord | null;
   try {
@@ -214,7 +215,8 @@ async function localGameOf(id: string, parsed: JunoGameResponse, contract: strin
     const entry = roster.find((r) => r.chain_seat_index === i);
     if (entry === undefined || entry.payout_address !== seats[i].wallet) return { gameId: financial.game_id, names: new Map() };
     const seat = record?.seats.find((s) => s.player_id === entry.player_id);
-    if (seat !== undefined) names.set(i, seat.nickname);
+    const name = seat !== undefined && ports.accountDisplayName !== undefined ? ports.accountDisplayName(seat.principal_id) : null;
+    if (name !== null) names.set(i, name);
   }
   return { gameId: financial.game_id, names };
 }

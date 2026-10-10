@@ -24,6 +24,9 @@ export interface LudumPorts {
   escrowPin(): { contract: string; chainId: string; denom: "ujunox" } | null;
   product(): Product;
   now(): number;
+  /** v1.1: an account's CURRENT unique display name (`IdentityService.profileName`), or null (none, or not active).
+   *  The public case record names seats by it -- never by a seat's free table nickname, which any player may set. */
+  accountDisplayName?(principalId: string): string | null;
   /** v1.1: the chain transactions this server relayed for a game (`escrow/chainIntents.ts`). Absent: none recorded here. */
   chainIntents?(gameId: string): Promise<readonly ChainIntentRecord[]>;
   /** v1.1: the account's own page and the reviewers' routes. Absent: those routes answer 503 `unavailable`. */

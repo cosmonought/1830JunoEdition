@@ -115,6 +115,8 @@ interface Fakes {
   /** v1.1: the game records (seat nicknames) and the relayed chain intents. */
   records?: GameRecord[];
   intents?: Record<string, ChainIntentRecord[]>;
+  /** principal -> the account's unique display name. */
+  names?: Record<string, string>;
 }
 
 function ports(f: Fakes): LudumPorts {
@@ -141,6 +143,7 @@ function ports(f: Fakes): LudumPorts {
     product: () => ({ key: "project-18xx", name: "Project 18XX" }),
     now: () => DISPUTED_AT * 1000,
     ...(f.intents !== undefined ? { chainIntents: async (gameId: string) => f.intents![gameId] ?? [] } : {}),
+    ...(f.names !== undefined ? { accountDisplayName: (principalId: string) => f.names![principalId] ?? null } : {}),
   };
 }
 
@@ -315,19 +318,23 @@ describe("ludum case v1.1: seat display names and relayed transactions", () => {
   const intent = (kind: string, over: Partial<ChainIntentRecord>): ChainIntentRecord =>
     ({ intent_id: `i-${kind}`, game_id: GAME_ID, op: { kind }, status: "confirmed", created_at: 1, updated_at: 2, attempts: [], confirmation: null, ...over }) as unknown as ChainIntentRecord;
 
-  test("each chain seat carries its table name, mapped through the frozen roster -- never the principal or the player id", async () => {
-    const record = await caseOf(ports({ games: { "5": rawGame(5, "open") }, financial: { "5": financialRecord("5") }, records: [seatsRecord(["Marlowe", "Quill"])] }), "5");
-    assert.deepEqual(record.seats.map((seat) => seat.displayName), ["Marlowe", "Quill"]);
+  test("each chain seat carries its ACCOUNT's unique display name, through the frozen roster -- never the table nickname, principal or player id", async () => {
+    const names = { [`${PRINCIPAL}0`]: "Marlowe", [`${PRINCIPAL}1`]: "Quill" };
+    const record = await caseOf(ports({ games: { "5": rawGame(5, "open") }, financial: { "5": financialRecord("5") }, records: [seatsRecord(["Teodora (impostor)", "anything"])], names }), "5");
+    assert.deepEqual(record.seats.map((seat) => seat.displayName), ["Marlowe", "Quill"], "a seat's free table nickname is never shown");
+    const partial = await caseOf(ports({ games: { "5": rawGame(5, "open") }, financial: { "5": financialRecord("5") }, records: [seatsRecord(["x", "y"])], names: { [`${PRINCIPAL}0`]: "Marlowe" } }), "5");
+    assert.deepEqual(partial.seats.map((seat) => seat.displayName), ["Marlowe", null], "an account with no active profile: null");
     const wire = JSON.stringify(record);
     for (const secret of [GAME_ID, PRINCIPAL, ...PLAYER_IDS]) assert.ok(!wire.includes(secret), secret);
   });
 
   test("no names when the roster does not match the chain, the record is unbound, or the index cannot be read", async () => {
-    const mismatch = await caseOf(ports({ games: { "5": rawGame(5, "open") }, financial: { "5": financialRecord("5", { rosterWallets: [W1, W0] }) }, records: [seatsRecord(["Marlowe", "Quill"])] }), "5");
+    const names = { [`${PRINCIPAL}0`]: "Marlowe", [`${PRINCIPAL}1`]: "Quill" };
+    const mismatch = await caseOf(ports({ games: { "5": rawGame(5, "open") }, financial: { "5": financialRecord("5", { rosterWallets: [W1, W0] }) }, records: [seatsRecord(["Marlowe", "Quill"])], names }), "5");
     assert.deepEqual(mismatch.seats.map((seat) => seat.displayName), [null, null]);
-    const unbound = await caseOf(ports({ games: { "5": rawGame(5, "open") }, financial: { "5": financialRecord("5", { contract: "juno1other" }) }, records: [seatsRecord(["Marlowe", "Quill"])] }), "5");
+    const unbound = await caseOf(ports({ games: { "5": rawGame(5, "open") }, financial: { "5": financialRecord("5", { contract: "juno1other" }) }, records: [seatsRecord(["Marlowe", "Quill"])], names }), "5");
     assert.deepEqual(unbound.seats.map((seat) => seat.displayName), [null, null]);
-    const unreadable = await caseOf(ports({ games: { "5": rawGame(5, "open") }, financial: { "5": financialRecord("5") } }), "5");
+    const unreadable = await caseOf(ports({ games: { "5": rawGame(5, "open") }, financial: { "5": financialRecord("5") }, names }), "5");
     assert.deepEqual(unreadable.seats.map((seat) => seat.displayName), [null, null]);
   });
 

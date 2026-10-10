@@ -481,15 +481,20 @@ Additive only: no v1 field changes meaning, and every new field is optional on t
   legacy profiles already shared stay. A profile has ONE change, before its first game: refused while it holds a seat
   at a waiting table, and once any table it sits at has started. It is written under a `profile-name` compare-and-swap
   (memory store and DynamoDB alike) and recorded in the optional schema-3 field `name_changed_at`. Account creation
-  answers 409 `display-name-taken`. The change is not a security event, so a security-journal replay does not carry
-  it: an identity restore from a backup taken before a change shows the earlier name.
+  answers 409 `display-name-taken`. The change IS a security event (`display-name-changed`, journaled before the write),
+  so an identity restore replays it in order with the creations around it; the replay refuses (fails closed) any
+  display name it would leave on two profiles that did not already share it. Uniqueness rests on the single fenced
+  identity writer (every write carries the role fence; a new writer rebuilds the index from the table it loads),
+  verified on DynamoDB Local (concurrency, stale writer, takeover).
 - **"reviewer" access**: anyone who is not one of the conduct reviewers bound at Play's startup -- signed out included
   -- gets 404 `not-found`, as for a route that does not exist. The service, the party exclusion and the transitions are
   Play's own (`conduct/conductService.ts`); a decision needs the session's live sensitive grant, given on Play
   (`https://play.netadao.org/?ludum=confirm&return=/moderation/`). Play's `/gs/api/conduct/*`, `/gs/api/trust/*` and
   account routes stay closed to Ludum's origin: no CORS was relaxed.
-- **Seat display names** on the public case record are the names the table showed every seat (frozen at the deal),
-  mapped through the server's frozen roster only when it names exactly the chain's seat wallets; otherwise null.
+- **Seat display names** on the public case record are each seat ACCOUNT's current unique display name, mapped through
+  the server's frozen roster only when it names exactly the chain's seat wallets; otherwise null. Never the seat's
+  table nickname: Play lets a player set any 1-24 character nickname at a waiting table (another player's name
+  included), so a nickname proves nothing. Game records are keyed by account, never by a name.
 - **Transactions** are those THIS server relayed (its chain intents): `included` (chain-observed by the relayer, with the
   height) or `broadcast` (pending). Wallet-signed transactions (create, join, challenge, DAO proposals) never pass the
   server; `walletSigned: "not-server-recorded"` says so.

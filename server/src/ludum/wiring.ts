@@ -63,6 +63,8 @@ export interface LudumWiringDeps {
   readonly product?: Product;
   /** v1.1: the account and reviewer ports (absent: those routes answer 503). */
   readonly members?: LudumMemberPorts;
+  /** v1.1: an account's current unique display name (the public case record's seat names). */
+  readonly displayNameOf?: (principalId: string) => string | null;
 }
 
 /** v1.1: where an account's seats stand, from the record index -- `playing` once any table it sits at has started (its
@@ -178,5 +180,6 @@ export function createLudumPorts(deps: LudumWiringDeps): LudumPorts {
       return money === null ? [] : money.ludumChain.intents(gameId);
     },
     ...(deps.members !== undefined ? { members: deps.members } : {}),
+    ...(deps.displayNameOf !== undefined ? { accountDisplayName: deps.displayNameOf } : {}),
   };
 }

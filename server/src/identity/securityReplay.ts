@@ -53,6 +53,14 @@
 //                        replacements of this profile exist is refused (the table contradicts the journal). Its
 //                        `family_ids` are closed like `signed-out-others`.
 //   WALLETS (P3-ACCT)    a LEGACY (schema-2) profile's persisted convenience wallet is CLEARED (it was never journaled).
+//   DISPLAY NAMES (LUDUM) a display name is unique (`displayNameKey`). `display-name-changed` is the profile's ONE change:
+//                        the confirmed one (two different ones: refused), else its LAST unconfirmed one -- applied only to a
+//                        profile still holding `from_name` with no change used, and NOT when another profile claims the same
+//                        name later in journal order (a creation or a change): the writer's index refused that later claim
+//                        unless this change had failed, so this one never committed. A table profile that already used its
+//                        change keeps it (a confirmed change naming another result: refused). Finally, a name the replay
+//                        would leave on two profiles that did not already share it in the restored table is refused
+//                        (`SecurityReplayError`: fail closed, never a duplicate served).
 //   authorization-wallet-replaced (PHASE 3 FINAL)
 //                        a schema-3 profile's Authorization Wallet: a CHAIN of designations (wallet, since) -- `since`
 //                        strictly increases, so it never cycles even when a wallet comes back. From the designation the
@@ -83,6 +91,7 @@
 import { createHash } from "crypto";
 
 import { base32Lower, ID_BYTES } from "./ids";
+import { displayNameKey } from "./profileName";
 import { isSecurityEvent, securityEventBody, securityEventSortKey, type SecurityEvent } from "./securityEvents";
 import { asSchema2, loginOf, walletOf, type FullIdentitySnapshot, type IdentityChange, type IdentityPrecondition, type Principal, type Profile, type RevokeReason, type Session, type SessionFamily } from "./store";
 
@@ -210,6 +219,7 @@ type Creation = Extract<SecurityEvent, { kind: "profile-created" }>;
 type Establishment = Extract<SecurityEvent, { kind: "credentials-established" }>;
 type Replacement = Extract<SecurityEvent, { kind: "password-replaced" }>;
 type WalletReplacement = Extract<SecurityEvent, { kind: "authorization-wallet-replaced" }>;
+type Rename = Extract<SecurityEvent, { kind: "display-name-changed" }>;
 
 const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
 const byText = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
@@ -293,6 +303,25 @@ export function planSecurityReplay(input: ReplayInput): ReplayPlan {
     const last = [...claims].sort((a, b) => byText(a.order, b.order)).pop();
     return last?.profileId;
   };
+  /* ---- LUDUM: every claim of a display name in the journal (creations and changes), for the "later claim" rule ---- */
+  const nameClaims = new Map<string, Array<{ readonly principalId: string; readonly order: string }>>();
+  for (const event of journal.events) {
+    const name = event.kind === "profile-created" ? event.profile.display_name : event.kind === "display-name-changed" ? event.to_name : null;
+    if (name === null) continue;
+    const key = displayNameKey(name);
+    nameClaims.set(key, [...(nameClaims.get(key) ?? []), { principalId: event.principal_id, order: `${securityEventSortKey(event)}#${event.principal_id}` }]);
+  }
+  const claimedLaterByOther = (rename: Rename): boolean => {
+    const mine = `${securityEventSortKey(rename)}#${rename.principal_id}`;
+    return (nameClaims.get(displayNameKey(rename.to_name)) ?? []).some((claim) => claim.principalId !== rename.principal_id && byText(claim.order, mine) > 0);
+  };
+  const tableNameHolders = new Map<string, Set<string>>();
+  for (const record of snapshot.profiles) {
+    const key = displayNameKey(record.display_name);
+    tableNameHolders.set(key, new Set([...(tableNameHolders.get(key) ?? []), record.profile_id]));
+  }
+  const finalNameHolders = new Map<string, Set<string>>();
+
   const out: PrincipalReplay[] = [];
   const reviews: ReviewDraft[] = [];
 
@@ -532,6 +561,34 @@ export function planSecurityReplay(input: ReplayInput): ReplayPlan {
         profile = { ...profile, wallet_address: wallet, wallet_verified_at: since };
       }
     }
+    /* ---- LUDUM: the display name's ONE change (the header's rule) ---- */
+    const renames = events.filter((event): event is Rename => event.kind === "display-name-changed");
+    let renamedFrom: string | null = null;
+    if (renames.length > 0) {
+      if (profile === undefined) throw new SecurityReplayError(`display-name change ${renames[0].event_id} names a profile this principal does not have`);
+      const profileId = profile.profile_id;
+      for (const event of renames) if (event.profile_id !== profileId) throw new SecurityReplayError(`display-name change ${event.event_id} names another profile than this principal's`);
+      if (profile.schema !== 3) throw new SecurityReplayError(`display-name change ${renames[0].event_id} names a profile made before Authorization Wallets`);
+      const confirmedRenames = renames.filter((event) => confirmed.has(event.event_id));
+      if (new Set(confirmedRenames.map((event) => `${event.to_name}|${event.changed_at}`)).size > 1) throw new SecurityReplayError(`two different confirmed display-name changes (${confirmedRenames.map((event) => event.event_id).join(", ")})`);
+      if (profile.name_changed_at !== undefined) {
+        const first = confirmedRenames[0];
+        if (first !== undefined && (first.to_name !== profile.display_name || first.changed_at !== profile.name_changed_at)) throw new SecurityReplayError(`display-name change ${first.event_id} is not the one the profile holds`);
+      } else {
+        const candidates = renames.filter((event) => event.from_name === (profile as Profile).display_name);
+        const pick = confirmedRenames[0] ?? [...candidates].filter((event) => !claimedLaterByOther(event)).pop();
+        if (pick !== undefined) {
+          if (pick.from_name !== profile.display_name) throw new SecurityReplayError(`display-name change ${pick.event_id} starts from another name than the profile holds`);
+          renamedFrom = profile.display_name;
+          profile = { ...profile, display_name: pick.to_name, name_changed_at: pick.changed_at };
+        }
+      }
+    }
+    if (profile !== undefined) {
+      const key = displayNameKey(profile.display_name);
+      finalNameHolders.set(key, new Set([...(finalNameHolders.get(key) ?? []), profile.profile_id]));
+    }
+
     /* ---- P3-ACCT: a LEGACY profile's persisted convenience wallet is cleared (`walletOf`: schema 2 only) ---- */
     let walletCleared = false;
     if (profile !== undefined && walletOf(profile) !== null) {
@@ -602,6 +659,8 @@ export function planSecurityReplay(input: ReplayInput): ReplayPlan {
       expect.push({ kind: "profile-authorization-wallet", profile_id: profile.profile_id, wallet_address: authorizationFrom.address, wallet_since: authorizationFrom.since });
       counters.authorizationWallets += 1;
     }
+    /* LUDUM: the name the table holds is pinned (a profile created here is pinned by its creation). */
+    if (renamedFrom !== null && !created && profile !== undefined) expect.push({ kind: "profile-name", profile_id: profile.profile_id, display_name: renamedFrom });
     if (credentialsInstalled !== null) counters.credentials += 1;
     if (walletCleared) counters.wallets += 1;
     if (keyAdvanced) counters.advanced += 1;
@@ -642,6 +701,13 @@ export function planSecurityReplay(input: ReplayInput): ReplayPlan {
     if (review !== null) reviews.push(review);
     if (dropReview) counters.withdrawn += 1;
     out.push({ principal_id: principalId, change: empty ? null : { ...(expect.length > 0 ? { expect } : {}), ...change }, review, dropReview: dropReview ? (profile as Profile).profile_id : null });
+  }
+
+  /* LUDUM: never serve a duplicate display name the restored table did not already hold (fail closed). */
+  for (const [key, holders] of finalNameHolders) {
+    if (holders.size < 2) continue;
+    const before = tableNameHolders.get(key) ?? new Set<string>();
+    if (![...holders].every((profileId) => before.has(profileId))) throw new SecurityReplayError(`the replay would give one display name to ${holders.size} profiles that did not share it (an operator must resolve it before the table serves)`);
   }
 
   return {

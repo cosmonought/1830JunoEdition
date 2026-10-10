@@ -19,7 +19,7 @@ import { createMemoryIdentityStore } from "../identity/store";
 import { conductReviewersFromEnv } from "../conduct/conductHttpApi";
 import { createMemoryConductCaseStore } from "../conduct/conductStore";
 import { createMemoryRecordStore } from "../rooms/recordStore";
-import { accountBrowser, apiRequest, Client, PROD_ORIGIN, quietConsole, startServer, stopServer, type AccountBrowser, type ApiAnswer } from "../rooms/testSupport";
+import { accountBrowser, apiRequest, bootstrapCookie, Client, PROD_ORIGIN, quietConsole, startServer, stopServer, type AccountBrowser, type ApiAnswer } from "../rooms/testSupport";
 import { LUDUM_PREFIX } from "./registry";
 
 quietConsole();
@@ -94,12 +94,16 @@ describe("LUDUM v1.1 B: conduct review from Ludum -- reviewers only, never their
     /* The accounts and the report first (reviewers are bound at startup to accounts that already exist). */
     const first = await startServer({ identity: w.auth, records: w.records, conduct: { store: w.conduct } });
     try {
-      for (const name of ["Ann", "Ben", "Vic"]) browsers[name] = await accountBrowser(first.port, `${name.toLowerCase()}-mod`, PASSWORD, name);
+      for (const name of ["Ann", "Ben", "Vic", "Sal"]) browsers[name] = await accountBrowser(first.port, `${name.toLowerCase()}-mod`, PASSWORD, name);
       const ann = await Client.openWithCookie(first.port, browsers.Ann.cookie, "Ann");
       const created = await ann.op({ type: "create", visibility: "public", exactPlayers: null, variants: {}, nickname: "Ann" });
       const gameId = (created.data as { gameId: string }).gameId;
       const ben = await Client.openWithCookie(first.port, browsers.Ben.cookie, "Ben");
       assert.equal((await ben.op({ type: "join", code: (created.data as { code: string }).code, takeSeat: true })).ok, true);
+      /* Sal sits at the table too (neither reporter nor reported): a party all the same. */
+      const sal = await Client.openWithCookie(first.port, browsers.Sal.cookie, "Sal");
+      assert.equal((await sal.op({ type: "join", code: (created.data as { code: string }).code, takeSeat: true })).ok, true);
+      await sal.close();
       const reported = await ben.op({ type: "report-player", playerId: (created.data as { playerId: string }).playerId, category: "harassment", note: "Insults in the chat." }, gameId);
       assert.equal(reported.ok, true, JSON.stringify(reported));
       caseId = (await w.conduct.list())[0];
@@ -108,7 +112,7 @@ describe("LUDUM v1.1 B: conduct review from Ludum -- reviewers only, never their
       await stopServer(first.server);
     }
 
-    const reviewers = conductReviewersFromEnv({ GS_CONDUCT_REVIEWERS: "vic-mod,ben-mod" });
+    const reviewers = conductReviewersFromEnv({ GS_CONDUCT_REVIEWERS: "vic-mod,ben-mod,sal-mod" });
     if (!reviewers.ok) throw new Error(reviewers.reason);
     const { server, port } = await startServer({ identity: w.auth, records: w.records, conduct: { store: w.conduct, reviewers: reviewers.reviewers } });
     try {
@@ -128,6 +132,15 @@ describe("LUDUM v1.1 B: conduct review from Ludum -- reviewers only, never their
       assert.equal(benQueue.status, 200, benQueue.text);
       assert.deepEqual(benQueue.body?.cases, []);
       assert.deepEqual(errorOf(await ludum(port, "moderation-case", browsers.Ben.cookie, { caseId })), [404, "not-found", undefined]);
+
+      /* Sal IS a reviewer, but seated at the reported table: withheld everywhere, decisions included. */
+      assert.equal((await play(port, "/gs/api/profile/reauth", browsers.Sal.cookie, { password: PASSWORD })).status, 200);
+      assert.deepEqual((await ludum(port, "moderation-queue", browsers.Sal.cookie)).body?.cases, []);
+      assert.deepEqual(errorOf(await ludum(port, "moderation-case", browsers.Sal.cookie, { caseId })), [404, "not-found", undefined]);
+      assert.deepEqual(errorOf(await ludum(port, "moderation-decide", browsers.Sal.cookie, { caseId, revision: 1, status: "under-review" })), [404, "not-found", undefined]);
+      /* A guest (an unprofiled session) is no reviewer. */
+      const guest = await bootstrapCookie(port);
+      assert.deepEqual(errorOf(await ludum(port, "moderation-queue", guest)), [404, "not-found", undefined]);
 
       /* Vic reviews it. */
       const queue = await ludum(port, "moderation-queue", browsers.Vic.cookie);

@@ -55,7 +55,7 @@ export interface CaseRecord {
   chainGameId: string; contract: string; chainId: string;
   escrow: Fact<string>;
   seats: Array<{ chainSeatIndex: number; wallet: string; isChallenger: boolean;         // wallets are already public on chain
-                 displayName?: string | null }>;                    // v1.1 (owner, 2026-10-09): the seat's table name
+                 displayName?: string | null }>;                    // v1.1 (owner, 2026-10-09): the seat account's unique display name
   dispute: Fact<{ challenger: string; bond: Junox; evidenceHash: string; disputedAt: string; resolverTimeoutAt: string }>;
   chainSettlement: Fact<{ seq: string; logHash: string; appraisalStateHash: string; weights: string[] }>;
   serverTerminal: Fact<{ logLen: number; logHash: string; appraisalStateHash: string; reason: string;

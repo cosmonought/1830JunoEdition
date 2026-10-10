@@ -1757,6 +1757,7 @@ export function createGameServer(options: GameServerOptions): {
       money: () => options.money?.() ?? null,
       now: identityNow,
       members: ludumMembers,
+      displayNameOf: (principalId) => (principalId.startsWith(DEV_PRINCIPAL_PREFIX) ? null : identity.profileName(principalId)),
     });
   const ludumIngress = {
     corsOrigins: new Set<string>([...ludumOriginList, ...allowedOriginList]) as ReadonlySet<string>,

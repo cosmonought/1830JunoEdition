@@ -1,7 +1,7 @@
 // server/src/ludum/ingress.ts
 //
 // ==================================================================
-//  LUDUM v1 (Lane A): THE INGRESS FOR `/gs/api/ludum/v1/*` -- CREDENTIALED CORS FOR THIS PREFIX ONLY, READ-ONLY, NO COOKIE
+//  LUDUM v1 (Lane A): THE INGRESS FOR `/gs/api/ludum/v1/*` -- CREDENTIALED CORS FOR THIS PREFIX ONLY (v1.2: `auth/*` alone sets the cookie)
 // ==================================================================
 //
 // docs/ludum/LUDUM_PLATFORM_ARCHITECTURE.md §2.1 (normative), §5, §10.3. `ludum.netadao.org` and `play.netadao.org` are
@@ -23,7 +23,7 @@
 //      `last_seen` behind at most every 15 minutes and nothing else) -- then only a CURRENT, activated, profiled, standing
 //      session is a principal. A rotated predecessor (bootstrap-only), a revoked, idle- or absolute-expired, provisional
 //      or unprofiled session, a malformed or duplicated cookie, or none: `principalId: null` (signed out). It NEVER
-//      rotates, NEVER mints, and NO response here carries `Set-Cookie`. A signed-in caller is charged to its session's
+//      rotates, NEVER mints, and NO response of these routes carries `Set-Cookie` (only v1.2's `auth/*`, below, does). A signed-in caller is charged to its session's
 //      request budget (the same budget `/gs/api/account/me` reads under).
 //   7. Dispatch through `registry.ts`: `session` here (`session.ts`); a "profiled" route answers a signed-out caller 401
 //      `signed-out`; a "reviewer" route (v1.1) answers anyone who is not a bound conduct reviewer 404 `not-found`; a
@@ -38,6 +38,16 @@
 // `Access-Control-Allow-Credentials: true`, `Vary: Origin` and `Cache-Control: no-store`, so Ludum can read the error
 // JSON. Never `*`, never an unlisted origin reflected, never `Access-Control-Expose-Headers`.
 //
+// v1.2 (docs/ludum/LUDUM_PLATFORM_ARCHITECTURE.md §15, owner request 2026-10-10): Ludum's OWN sign-up, sign-in, sign-out,
+// "Confirm it's you" and "Forgot password?". Seven exact paths, `auth/<action>` (`LUDUM_AUTH_ROUTES`), each mapped to ONE
+// existing Play account route and served by Play's own handler (`identity/httpApi.ts` `serveLudumAccount`): the same
+// identity service, budgets, KDF gate, Authorization Wallet proofs and the same host-only `__Host-gs_session` cookie
+// (Secure, HttpOnly, SameSite=Strict, Path=/, no Domain) -- so one session signs both sites in and out. These seven, and
+// only these, may answer with `Set-Cookie`; their answers use the account routes' own vocabulary. Steps 1-5's origin,
+// preflight, method, content-type and per-address checks run first, exactly as for every other route; a body is then
+// Play's (4 KiB, its closed schema). Password change, Authorization Wallet replacement, "sign out other devices" and
+// every money / conduct / trust route stay Play-origin only.
+//
 // Errors use §5's vocabulary only: `{error: "bad-request" | "signed-out" | "not-found" | "rate-limited" | "unavailable",
 // detail?}`. Nothing here logs a header, a cookie, a body or an id.
 
@@ -45,7 +55,19 @@ import type { IncomingMessage, ServerResponse } from "http";
 
 import { readSessionCookie } from "../identity/cookies";
 import { clientIpOf } from "../identity/clientIp";
-import { isJson, readBody } from "../identity/httpApi";
+import {
+  ACCOUNT_AUTHORIZATION_PATH,
+  ACCOUNT_CREATE_PATH,
+  ACCOUNT_LOGIN_PATH,
+  ACCOUNT_RECOVER_PATH,
+  REAUTH_PATH,
+  REVOKE_PATH,
+  SESSION_PATH,
+  isJson,
+  readBody,
+  serveLudumAccount,
+  type HttpApi,
+} from "../identity/httpApi";
 import type { IdentityLimiter } from "../identity/limiter";
 import type { IdentityService } from "../identity/sessions";
 import { IpBuckets } from "../ingress/limits";
@@ -57,6 +79,24 @@ import { sessionAnswer } from "./session";
 export const LUDUM_MAX_BODY_BYTES = 1024;
 /** §2.1: how long a browser may cache an allowed preflight. */
 export const LUDUM_PREFLIGHT_MAX_AGE_S = 600;
+
+/** v1.2 (§15): Ludum's own account actions, each the ONE Play account route it is served by. Exact names only. */
+export const LUDUM_AUTH_ROUTES: Readonly<Record<string, string>> = Object.freeze({
+  "auth/start": SESSION_PATH,
+  "auth/sign-out": REVOKE_PATH,
+  "auth/authorization": ACCOUNT_AUTHORIZATION_PATH,
+  "auth/create": ACCOUNT_CREATE_PATH,
+  "auth/sign-in": ACCOUNT_LOGIN_PATH,
+  "auth/recover": ACCOUNT_RECOVER_PATH,
+  "auth/confirm": REAUTH_PATH,
+});
+
+/** The Play account route a `/gs/api/ludum/v1/auth/<action>` path is served by, or null. */
+export function ludumAuthRouteOf(pathname: string): string | null {
+  if (!pathname.startsWith(LUDUM_PREFIX)) return null;
+  const name = pathname.slice(LUDUM_PREFIX.length);
+  return Object.prototype.hasOwnProperty.call(LUDUM_AUTH_ROUTES, name) ? LUDUM_AUTH_ROUTES[name] : null;
+}
 
 /** A closed body field: a string of at most this many characters, or a whole number. */
 export type LudumFieldSpec = { readonly string: number } | "integer";
@@ -91,6 +131,8 @@ export interface LudumIngress {
   readonly ports: LudumPorts;
   readonly now: () => number;
   readonly onError: (what: string, error: unknown) => string;
+  /** v1.2 (§15): Play's account HTTP surface, for the `auth/*` actions. Absent: those paths answer 404. */
+  readonly account?: HttpApi;
 }
 
 /** Per client address: a burst of 60, then one a second (a page makes a handful of calls). */
@@ -200,9 +242,10 @@ export function handleLudumHttp(request: IncomingMessage, response: ServerRespon
     return true;
   }
   const route = ludumRouteOf(pathname);
+  const authPath = api.account === undefined ? null : ludumAuthRouteOf(pathname);
   if (method === "OPTIONS") {
     request.resume();
-    if (route === null) {
+    if (route === null && authPath === null) {
       send(response, 404, fail("not-found"), origin);
       return true;
     }
@@ -219,6 +262,14 @@ export function handleLudumHttp(request: IncomingMessage, response: ServerRespon
     response.end();
     return true;
   }
+  if (authPath !== null && api.account !== undefined) {
+    const account = api.account;
+    void serveAuth(request, response, api, account, origin, authPath).catch((error) => {
+      const ref = api.onError("a ludum account request", error);
+      send(response, 503, fail("unavailable", `ref ${ref}`), origin);
+    });
+    return true;
+  }
   if (route === null) {
     request.resume();
     send(response, 404, fail("not-found"), origin);
@@ -229,6 +280,32 @@ export function handleLudumHttp(request: IncomingMessage, response: ServerRespon
     send(response, 503, fail("unavailable", `ref ${ref}`), origin);
   });
   return true;
+}
+
+/** v1.2 (§15): an `auth/*` action. The content type and the per-address budget as for every route; then the CORS headers
+ *  go on the response and Play's own handler answers (its body, its budgets, its cookie). */
+async function serveAuth(request: IncomingMessage, response: ServerResponse, api: LudumIngress, account: HttpApi, origin: string, playPath: string): Promise<void> {
+  if (!isJson(request.headers["content-type"])) {
+    request.resume();
+    send(response, 400, fail("bad-request", "content-type"), origin);
+    return;
+  }
+  const client = clientIpOf(request, api.trustedProxyHops);
+  if (!client.ok) {
+    api.limiter.deny("client-ip");
+    request.resume();
+    send(response, 400, fail("bad-request"), origin);
+    return;
+  }
+  const ipWait = api.ipBudget.take(client.ip);
+  if (ipWait > 0) {
+    api.limiter.deny("ludum-ip");
+    request.resume();
+    send(response, 429, fail("rate-limited"), origin, { "Retry-After": String(Math.max(1, Math.ceil(ipWait / 1000))) });
+    return;
+  }
+  for (const [name, value] of Object.entries({ ...corsHeaders(origin), Vary: "Origin" })) response.setHeader(name, value);
+  await serveLudumAccount(request, response, account, playPath, origin);
 }
 
 async function serve(request: IncomingMessage, response: ServerResponse, api: LudumIngress, origin: string, name: LudumRouteName): Promise<void> {

@@ -278,6 +278,32 @@ async function serve(request: IncomingMessage, response: ServerResponse, api: Ht
     request.resume();
     return;
   }
+  await serveAllowed(request, response, api, pathname, request.headers.origin as string);
+}
+
+/** LUDUM v1.2: the account actions Ludum's own pages perform (docs/ludum/LUDUM_PLATFORM_ARCHITECTURE.md §15). The SAME
+ *  handlers, budgets, KDF gate and host-only cookie as Play's -- reached through `/gs/api/ludum/v1/auth/*`, whose ingress
+ *  has already checked the exact Ludum Origin and the method, and set the credentialed CORS headers. Nothing else of
+ *  `/gs/api/*` is reachable this way: password change, Authorization Wallet replacement, "sign out other devices" and
+ *  `account/me` stay Play's own. */
+export const LUDUM_ACCOUNT_PATHS: ReadonlySet<string> = new Set([
+  SESSION_PATH,
+  REVOKE_PATH,
+  ACCOUNT_AUTHORIZATION_PATH,
+  ACCOUNT_CREATE_PATH,
+  ACCOUNT_LOGIN_PATH,
+  ACCOUNT_RECOVER_PATH,
+  REAUTH_PATH,
+]);
+
+/** Serve one of `LUDUM_ACCOUNT_PATHS` for a request whose (exact, allow-listed) Ludum origin is `origin`. The origin is
+ *  what an Authorization Wallet text names as its site. */
+export function serveLudumAccount(request: IncomingMessage, response: ServerResponse, api: HttpApi, pathname: string, origin: string): Promise<void> {
+  if (!LUDUM_ACCOUNT_PATHS.has(pathname)) throw new Error("not a Ludum account path");
+  return serveAllowed(request, response, api, pathname, origin);
+}
+
+async function serveAllowed(request: IncomingMessage, response: ServerResponse, api: HttpApi, pathname: string, origin: string): Promise<void> {
   if (!isJson(request.headers["content-type"])) {
     json(response, 415, { error: "unsupported-media-type" });
     request.resume();
@@ -328,7 +354,7 @@ async function serve(request: IncomingMessage, response: ServerResponse, api: Ht
   }
 
   if (pathname !== SESSION_PATH) {
-    await serveProfile(response, api, pathname, body.text, read, client.ip, now, request.headers.origin as string);
+    await serveProfile(response, api, pathname, body.text, read, client.ip, now, origin);
     return;
   }
 

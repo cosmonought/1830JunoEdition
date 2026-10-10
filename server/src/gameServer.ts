@@ -55,7 +55,7 @@ import { WebSocketServer, type WebSocket } from "ws";
 
 import { decideUpgrade, refuseUpgrade, type ConnectionContext } from "./identity/authenticateUpgrade";
 import { DEV_PRINCIPAL_PREFIX, devClaimOf, type DevAuthenticator } from "./identity/devAuthenticator";
-import { handleIdentityHttp } from "./identity/httpApi";
+import { handleIdentityHttp, type HttpApi } from "./identity/httpApi";
 import { IdentityLimiter } from "./identity/limiter";
 import type { GsMode } from "./identity/mode";
 import { isLoopbackOrigin } from "./identity/origins";
@@ -1759,7 +1759,24 @@ export function createGameServer(options: GameServerOptions): {
       members: ludumMembers,
       displayNameOf: (principalId) => (principalId.startsWith(DEV_PRINCIPAL_PREFIX) ? null : identity.profileName(principalId)),
     });
+  /* The account HTTP surface: Play's `/gs/api/*` routes, and (LUDUM v1.2, §15) the same handlers behind Ludum's `auth/*`. */
+  const identityHttp: HttpApi = {
+    mode,
+    allowedOrigins,
+    trustedProxyHops: identityOptions.trustedProxyHops,
+    identity,
+    limiter: identityLimiter,
+    limits: limits.identity,
+    now: identityNow,
+    onError: (what, error) => {
+      const ref = errorRef();
+      // eslint-disable-next-line no-console
+      console.error(`  identity: ${what} failed (ref ${ref}) -- ${excerpt(error instanceof Error ? error.message : String(error), 300)}`);
+      return ref;
+    },
+  };
   const ludumIngress = {
+    account: identityHttp,
     corsOrigins: new Set<string>([...ludumOriginList, ...allowedOriginList]) as ReadonlySet<string>,
     playOrigin: allowedOriginList[0],
     trustedProxyHops: identityOptions.trustedProxyHops,
@@ -1884,21 +1901,7 @@ export function createGameServer(options: GameServerOptions): {
       return;
     }
     if (
-      handleIdentityHttp(req, res, {
-        mode,
-        allowedOrigins,
-        trustedProxyHops: identityOptions.trustedProxyHops,
-        identity,
-        limiter: identityLimiter,
-        limits: limits.identity,
-        now: identityNow,
-        onError: (what, error) => {
-          const ref = errorRef();
-          // eslint-disable-next-line no-console
-          console.error(`  identity: ${what} failed (ref ${ref}) -- ${excerpt(error instanceof Error ? error.message : String(error), 300)}`);
-          return ref;
-        },
-      })
+      handleIdentityHttp(req, res, identityHttp)
     ) {
       return;
     }

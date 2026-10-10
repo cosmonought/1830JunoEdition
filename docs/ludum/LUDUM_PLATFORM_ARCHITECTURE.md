@@ -161,7 +161,7 @@ The `application/json` content type makes every call non-simple, so the browser 
   `Access-Control-Allow-Credentials: true` and `Vary: Origin`, including 4xx and 5xx errors, so Ludum can read the error
   JSON.
 - The response never uses `*`, never reflects an unlisted origin, never sends `Set-Cookie`, and does not add
-  `Access-Control-Expose-Headers`.
+  `Access-Control-Expose-Headers`. (v1.2, §15: the seven `auth/*` account actions alone set or clear the session cookie.)
 - Every route outside `/gs/api/ludum/v1/` keeps its current behaviour: no CORS headers, and a Ludum origin gets `403` there.
 
 **Session semantics through the ingress:**
@@ -178,8 +178,10 @@ The `application/json` content type makes every call non-simple, so the browser 
 - Step-up is not needed, because v1 Ludum routes are read-only.
 - Sign-in and sign-out happen on Play. Ludum links to `https://play.netadao.org/?ludum=signin&return=<path>`, and Play
   returns to `https://ludum.netadao.org<path>` only when the path matches `^/[a-z0-9/_-]{0,128}$`. The host is hard-coded,
-  so this is not an open redirect.
-- The Authorization Wallet's `Site:` binding is untouched. Ludum never mints wallet texts.
+  so this is not an open redirect. **Superseded by v1.2 (§15):** Ludum signs in, signs up, signs out and confirms
+  natively; Play's links stay as the fallback.
+- The Authorization Wallet's `Site:` binding is untouched. Ludum never mints wallet texts. (v1.2, §15: Ludum's own
+  CREATE / RECOVER texts name Ludum's exact origin as `Site:`.)
 
 **What it costs:** the CORS grant is per **origin**, not per page. Any script running on any `ludum.netadao.org` page can
 read the signed-in account's Ludum v1 data. Section 2.4 governs which scripts may run there.
@@ -895,3 +897,102 @@ example the `display-name` route answering 503), never back below `F`.
 or event but never writes it), let it become the rollback target, then ship the WRITER. The previous image is then
 always a valid rollback target. v1.1 shipped reader and writer together; the floor above is the price, and it is bounded
 by the publication gate.
+
+## 15. Amendment v1.2: one account, native on both sites; moderation administration (owner request 2026-10-10)
+
+The owner's ruling ("CORRECT ACCOUNT AND PLATFORM RESPONSIBILITIES"): Ludum is the primary platform for identity,
+accounts, profiles, history, governance, disputes and moderation; Play is the game application. Both keep native
+sign-up, sign-in and sign-out, over ONE account database, ONE authentication service and ONE session. Signing in on
+either site signs both in; signing out on either ends the shared session. Neither redirects to the other to do it.
+
+### 15.1 The seven `auth/*` actions (server: `ludum/ingress.ts` `LUDUM_AUTH_ROUTES`, `identity/httpApi.ts` `serveLudumAccount`)
+
+| `/gs/api/ludum/v1/…` | Served by Play's own route | What |
+|---|---|---|
+| `auth/start` | `POST /gs/api/session` | this browser's session (`{}`; `{fresh:true}` replaces an ended one, on the player's press) |
+| `auth/sign-in` | `POST /gs/api/account/login` | username and password |
+| `auth/authorization` | `POST /gs/api/account/authorization` | the CREATE / RECOVER text the Authorization Wallet signs |
+| `auth/create` | `POST /gs/api/account/create` | a new account, with its Authorization Wallet's signature |
+| `auth/recover` | `POST /gs/api/account/recover` | "Forgot password?" by the Authorization Wallet |
+| `auth/confirm` | `POST /gs/api/profile/reauth` | "Confirm it's you" (the five-minute sensitive window) |
+| `auth/sign-out` | `POST /gs/api/session/revoke` | ends this browser's session, for both sites |
+
+- **Reuse, not a copy.** Each action runs Play's own handler (`serveAllowed`) with the same identity service, the same
+  limiters (per address, per session, per username; the account backstops), the same KDF gate, the same closed 4 KiB
+  bodies and the same answers. Rate limiting and account recovery are therefore exactly Play's.
+- **The cookie.** The answers set or clear the existing `__Host-gs_session` (Secure, HttpOnly, SameSite=Strict, Path=/, no
+  Domain) for `play.netadao.org` only. A credentialed same-site CORS response may set it; nothing on Ludum's origin
+  can read it, and there is no new cookie, no `Domain=` cookie and no token in JS storage.
+- **The ingress rules hold first.** Exactly one allow-listed `Origin` (byte for byte), the static preflight, POST only,
+  `application/json` (so every call is preflighted and a form or `text/plain` post does nothing), the per-address budget,
+  then Play's handler. Only these seven paths exist under `auth/`; anything else is 404.
+- **Not opened.** Password change, Authorization Wallet replacement, "sign out other devices", `account/me` and every
+  money, conduct and trust route stay Play-origin only. `GS_LUDUM_ORIGINS` is still never added to `GS_ALLOWED_ORIGINS`,
+  and Play's own `/gs/api/*` routes still answer a Ludum origin 403 with no CORS header.
+- **The Authorization Wallet's `Site:`** is the requesting origin, so a text minted for Ludum names
+  `https://ludum.netadao.org`. Ludum's page parses the text and refuses to ask Keplr unless it is exactly the action asked
+  for (purpose, this site, the account, the wallet Keplr is on), as Play's page does.
+- **The read routes are unchanged:** `session`, `games`, `game`, `case`, `account`, `display-name` and the moderation
+  routes still never set a cookie.
+- **Ludum's pages:** `/me/sign-in/`, `/me/sign-up/`, `/me/recover/` (the §2.4 CSP; no third-party script on a page that
+  takes a password), the account menu's native Sign out, and an inline "Confirm it's you" for a moderation decision.
+  Play's `?ludum=signin|confirm|signout` links stay as the fallback, and are offered when a game server without `auth/*`
+  answers 404.
+
+**Cost.** Ludum's origin can now cause sign-in. A script running on `ludum.netadao.org` could read a password typed
+there. §2.4 already governs which scripts may run there; the account pages load no third-party script at all. Whoever
+can publish to the Ludum repository's `main` can change these pages, so publishing rights there are now as sensitive as
+Play's own deployment.
+
+**Release order.** Backend first (an image with `auth/*`), then Ludum. The server change writes no new identity data, so
+the §14 rollback floor `F` is unchanged. Rolling the backend back to `F` removes `auth/*`, and Ludum's pages then offer
+Play's sign-in.
+
+### 15.2 Navigation: DAO membership per account
+
+Appeals & Disputes is drawn when the chain says the SIGNED-IN account's Authorization Wallet
+(`session.account.authorizationWallet.address`) is a Ludum DAO member: the cw4 group's public `member` query, read by
+the page with no Keplr connection. A Keplr wallet the account connects on the governance pages is read too. The answer
+is kept for ten minutes in this browser UNDER THAT ACCOUNT'S USERNAME (`ludum.daoMembership.v2`), is never used for
+another account, and is forgotten on sign-out. v1's browser-wide `ludum.daoMember` is never read and is removed on
+sight. It only draws a tab: every governance action re-reads the chain, and a transaction still needs Keplr.
+
+### 15.3 Moderation: where it stands
+
+- **Who is a reviewer today.** The Terraform variable `conduct_reviewers` (`infra/aws/modules/{single-host,app}`) renders
+  `GS_CONDUCT_REVIEWERS`: usernames, bound at server STARTUP to the accounts that hold them (`gameServer.ts`; a name
+  nobody holds refuses the start). Reviewers are then recognised server-side by principal. Staging has none.
+- **Who can change that.** Only whoever can change and apply the deployment configuration and restart the server. There
+  is no runtime grant, no administrator role and no grant journal.
+- **What v1.2 changes:** nothing in that authority. Moderation stays Ludum's interface over the server's conduct service;
+  authorization stays server-side (non-reviewers get 404); DAO membership grants nothing; nobody can assign themselves.
+
+### 15.4 The missing authorization decision (owner)
+
+Reviewer administration "through Ludum by an appropriately authorized administrator" needs an authority that does not
+exist yet. **Undecided: who may appoint and remove conduct reviewers at runtime, and how that authority is itself
+established and revoked.** Until the owner decides, nothing is built and no privileged account is created.
+
+Options, for the owner:
+1. **Deployment-only (today).** The infrastructure operator edits `conduct_reviewers` and restarts. No Ludum interface.
+2. **Named platform administrators.** A small set of accounts is designated through deployment configuration, as reviewers
+   are today. They appoint and remove reviewers at runtime on Ludum, with these rules:
+   - Every grant needs a live "Confirm it's you".
+   - Every grant is written to the security journal and survives restore.
+   - An administrator can never appoint themselves.
+   - Administration and review are separate roles.
+3. **The Ludum DAO by proposal.** A passed proposal executes the grant. The authority is on chain; this needs a contract
+   message the server trusts. It is not "every DAO member is a reviewer", which is excluded.
+
+Whichever is chosen, it must also fix three things:
+- Whether one person may hold both roles.
+- How many administrators there must be (one alone is a single point of compromise).
+- How an administrator is removed.
+
+### 15.5 Tests
+
+- Server: `server/src/ludum/ludumAuth.test.ts`, over real HTTP. One account for both sites; sign-out from either; the
+  cookie's attributes; refused origins with no CORS and no cookie; only seven paths; the static preflight; non-JSON and
+  oversize requests doing nothing; Play's sign-in budget; recovery by the wallet only; the confirmation window.
+- Ludum: `platform/tests/auth.test.mjs`. Play's own wallet texts and every refusal; the flows against a recorded session
+  and Keplr; per-account membership; the client request; the pages.

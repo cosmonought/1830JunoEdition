@@ -38,6 +38,8 @@ export type ProfileErrorCode =
   | "invalid-credential"
   /** Create account -- the username is someone else's (in any letter case). */
   | "username-taken"
+  /** LUDUM: create account -- the display name is another player's (names are unique, in any letter case). */
+  | "display-name-taken"
   /** Create account -- not a username this server accepts (spaces, control characters, too long). */
   | "bad-username"
   /** The password is too short or too long (`problem`). */
@@ -114,6 +116,7 @@ function failureOf(answer: SessionApiAnswer): ProfileFailure {
     case 409: {
       if (code === "has-tables") return failure("has-tables");
       if (code === "username-taken") return failure("username-taken");
+      if (code === "display-name-taken") return failure("display-name-taken");
       if (code === "authorization-used") return failure("authorization-used");
       if (code === "same-wallet") return failure("same-wallet");
       if (code === "stale") return failure("stale");
@@ -366,6 +369,8 @@ export function profileErrorSentence(result: ProfileFailure, context: "create" |
       return "That didn't work. Check it and try again.";
     case "username-taken":
       return "That username is taken. Choose another.";
+    case "display-name-taken":
+      return "Another player already has that display name. Choose another.";
     case "bad-username":
       return `A username is 1 to ${USERNAME_MAX} characters, with no spaces.`;
     case "bad-password":

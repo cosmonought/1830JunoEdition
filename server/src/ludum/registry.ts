@@ -8,15 +8,29 @@
 import type { LudumHandler } from "./ports";
 import { games, game } from "./history";
 import { caseRecord } from "./disputes";
+import { account, displayName } from "./account";
+import { moderationCase, moderationDecide, moderationQueue } from "./moderation";
 
 export const LUDUM_PREFIX = "/gs/api/ludum/v1/";
 
-export type LudumRouteName = "session" | "games" | "game" | "case";
+export type LudumRouteName =
+  | "session"
+  | "games"
+  | "game"
+  | "case"
+  /* v1.1 (additive): the account's own page, and the conduct reviewers' routes. */
+  | "account"
+  | "display-name"
+  | "moderation-queue"
+  | "moderation-case"
+  | "moderation-decide";
 
 export interface LudumRoute {
   readonly name: LudumRouteName;
-  /** "public": answered for signed-out callers too. "profiled": a signed-out caller gets 401 `signed-out`. */
-  readonly access: "public" | "profiled";
+  /** "public": answered for signed-out callers too. "profiled": a signed-out caller gets 401 `signed-out`. "reviewer"
+   *  (v1.1): anyone but a conduct reviewer -- signed out included -- gets 404 `not-found`, as for a route that does not
+   *  exist (the handler checks again). */
+  readonly access: "public" | "profiled" | "reviewer";
   /** null: answered by the ingress itself (`session`, Lane A). */
   readonly handler: LudumHandler | null;
 }
@@ -26,6 +40,11 @@ export const LUDUM_ROUTES: Readonly<Record<LudumRouteName, LudumRoute>> = Object
   games: { name: "games", access: "profiled", handler: games },
   game: { name: "game", access: "profiled", handler: game },
   case: { name: "case", access: "public", handler: caseRecord },
+  account: { name: "account", access: "profiled", handler: account },
+  "display-name": { name: "display-name", access: "profiled", handler: displayName },
+  "moderation-queue": { name: "moderation-queue", access: "reviewer", handler: moderationQueue },
+  "moderation-case": { name: "moderation-case", access: "reviewer", handler: moderationCase },
+  "moderation-decide": { name: "moderation-decide", access: "reviewer", handler: moderationDecide },
 });
 
 /** The route a request path names, or null (not a Ludum v1 route). Exact match only: no trailing slash, no query

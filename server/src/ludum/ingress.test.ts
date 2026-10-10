@@ -282,7 +282,7 @@ describe("LUDUM ingress: the session (§2.1 session semantics, §10.3)", () => {
       assertNoCookie(answer, "session");
       const body = answer.body as { signedIn: true; account: Record<string, unknown>; manageUrl: string };
       assert.equal(body.signedIn, true);
-      assert.deepEqual(Object.keys(body).sort(), ["account", "manageUrl", "signedIn"]);
+      assert.deepEqual(Object.keys(body).sort(), ["account", "manageUrl", "roles", "signedIn"]);
       assert.deepEqual(Object.keys(body.account).sort(), ["authorizationWallet", "memberSince", "name", "username"]);
       assert.equal(body.account.name, browser.name);
       assert.equal(body.account.username, browser.username);

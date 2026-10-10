@@ -15,16 +15,25 @@
 //                              with its height); null when the chain has no such game
 //   escrowPin()                the pinned deployment -- null without money, or when its denom is not `ujunox`
 //   product()                  { key: "project-18xx", name: APP_NAME }
+//   chainIntents(gameId)       v1.1: the money layer's relayed chain intents (`MoneyTables.ludumChain.intents`)
+//   members                    v1.1: `createLudumMemberPorts` -- the caller's own display name and facts, and the conduct
+//                              reviewers' service (bound at startup; Play's conduct routes are untouched)
 //
-// Nothing here writes, caches a chain fact, or reads an identity record: principals stay on the server (the handlers see
-// `LudumCaller.principalId` and these ports only).
+// Nothing here caches a chain fact; principals stay on the server (the handlers see `LudumCaller.principalId` and these
+// ports only). The only writes (v1.1) are the members port's: the identity service's own display-name change and the
+// conduct service's own decision, each under that service's rules.
 
 import { APP_NAME } from "../../../frontend/src/config";
 import { seatOf, type GameRecord } from "../rooms/gameRecord";
 import type { FinancialGameRecord } from "../escrow/moneyLifecycle";
 import type { MoneyTables } from "../escrow/moneyTables";
+import type { ConductService } from "../conduct/conductService";
+import type { IdentityService } from "../identity/sessions";
+import type { TrustFacts } from "../rooms/trustFacts";
+import type { ServerLogEntry } from "../../../frontend/src/utils/roomSession";
 import type { Product } from "./contract";
-import type { LudumPorts } from "./ports";
+import type { LudumMemberPorts, LudumPorts } from "./ports";
+import { ludumConfirmUrl } from "./session";
 
 const CHAIN_GAME_ID = /^[1-9][0-9]{0,19}$/;
 
@@ -52,6 +61,61 @@ export interface LudumWiringDeps {
   readonly money: () => MoneyTables | null;
   readonly now: () => number;
   readonly product?: Product;
+  /** v1.1: the account and reviewer ports (absent: those routes answer 503). */
+  readonly members?: LudumMemberPorts;
+}
+
+/** v1.1: where an account's seats stand, from the record index -- `playing` once any table it sits at has started (its
+ *  first game: the one change is then gone), `seated` at a table still waiting, else `none`. Throws `LudumIndexIncomplete`
+ *  while the index is not the whole record set (never guessed from a partial one). */
+export function seatStateOf(records: () => Iterable<GameRecord>, principalId: string): "none" | "seated" | "playing" {
+  let seated = false;
+  for (const record of records()) {
+    if (seatOf(record, principalId) === null) continue;
+    if (record.started_at !== null || record.status === "active" || record.status === "completed") return "playing";
+    if (record.status === "waiting") seated = true;
+  }
+  return seated ? "seated" : "none";
+}
+
+export interface LudumMemberDeps {
+  readonly identity: IdentityService;
+  /** The record index, complete (`createLudumPorts`'s guarded `records`, or the same guard). */
+  readonly records: () => Iterable<GameRecord>;
+  readonly trustFacts: (principalId: string) => Promise<TrustFacts | null>;
+  readonly conduct: () => ConductService | null;
+  /** The principals bound at startup to the configured reviewer usernames (`gameServer.ts`). */
+  readonly reviewers: ReadonlySet<string>;
+  readonly readLog: (gameId: string) => Promise<readonly ServerLogEntry[] | null>;
+  readonly playOrigin: string;
+  readonly now: () => number;
+}
+
+export function createLudumMemberPorts(deps: LudumMemberDeps): LudumMemberPorts {
+  const seat = (principalId: string) => seatStateOf(deps.records, principalId);
+  const service = (): ConductService => {
+    const conduct = deps.conduct();
+    if (conduct === null || !conduct.enabled) throw new Error("the conduct service is not enabled");
+    return conduct;
+  };
+  return {
+    displayName(principalId) {
+      const name = deps.identity.profileName(principalId);
+      if (name === null) return null;
+      const state = deps.identity.displayNameState(principalId, seat(principalId));
+      return state === null ? null : { name, state };
+    },
+    changeDisplayName: (principalId, name) => deps.identity.changeDisplayName(principalId, name, () => seat(principalId), deps.now()),
+    tablemateFacts: (principalId) => deps.trustFacts(principalId),
+    isReviewer(principalId) {
+      const conduct = deps.conduct();
+      return deps.reviewers.has(principalId) && conduct !== null && conduct.enabled;
+    },
+    queue: (principalId) => service().queue(principalId),
+    caseView: (caseId, principalId) => service().caseView(caseId, principalId, deps.readLog),
+    decide: (input) => service().decide(input, deps.readLog),
+    confirmUrl: (returnPath) => ludumConfirmUrl(deps.playOrigin, returnPath),
+  };
 }
 
 export function createLudumPorts(deps: LudumWiringDeps): LudumPorts {
@@ -109,5 +173,10 @@ export function createLudumPorts(deps: LudumWiringDeps): LudumPorts {
     },
     product: () => product,
     now: () => deps.now(),
+    async chainIntents(gameId) {
+      const money = deps.money();
+      return money === null ? [] : money.ludumChain.intents(gameId);
+    },
+    ...(deps.members !== undefined ? { members: deps.members } : {}),
   };
 }

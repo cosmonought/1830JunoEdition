@@ -26,7 +26,13 @@
 //      rotates, NEVER mints, and NO response here carries `Set-Cookie`. A signed-in caller is charged to its session's
 //      request budget (the same budget `/gs/api/account/me` reads under).
 //   7. Dispatch through `registry.ts`: `session` here (`session.ts`); a "profiled" route answers a signed-out caller 401
-//      `signed-out`; a handler's own answer otherwise. A handler that throws: 503 `unavailable` (with a reference).
+//      `signed-out`; a "reviewer" route (v1.1) answers anyone who is not a bound conduct reviewer 404 `not-found`; a
+//      handler's own answer otherwise. A handler that throws: 503 `unavailable` (with a reference).
+//
+// v1.1 (additive, docs/ludum/LUDUM_PLATFORM_ARCHITECTURE.md §5.1): two routes WRITE -- `display-name` (the account's one
+// change) and `moderation-decide` (a reviewer's decision, behind a live "Confirm it's you"). Both are reached only with
+// the exact allow-listed Origin, `application/json` (so the browser preflights) and the caller's own session; neither
+// sets a cookie. `moderation-decide` alone takes a larger body (a reviewer's note).
 //
 // EVERY response to an allow-listed origin -- 2xx, 4xx and 5xx alike -- carries the exact `Access-Control-Allow-Origin`,
 // `Access-Control-Allow-Credentials: true`, `Vary: Origin` and `Cache-Control: no-store`, so Ludum can read the error
@@ -61,7 +67,15 @@ export const LUDUM_BODY_SCHEMAS: Readonly<Record<LudumRouteName, Readonly<Record
   games: { cursor: { string: 512 }, limit: "integer" },
   game: { gameId: { string: 64 } },
   case: { chainGameId: { string: 24 } },
+  account: {},
+  "display-name": { name: { string: 96 } },
+  "moderation-queue": {},
+  "moderation-case": { caseId: { string: 64 } },
+  "moderation-decide": { caseId: { string: 64 }, revision: "integer", status: { string: 32 }, note: { string: 2000 } },
 });
+
+/** v1.1: a route whose body may exceed `LUDUM_MAX_BODY_BYTES` (a reviewer's note: 1000 characters, sanitized server-side). */
+export const LUDUM_ROUTE_MAX_BODY_BYTES: Readonly<Partial<Record<LudumRouteName, number>>> = Object.freeze({ "moderation-decide": 8192 });
 
 export interface LudumIngress {
   /** GS_LUDUM_ORIGINS ∪ GS_ALLOWED_ORIGINS: the exact origins this prefix answers with CORS. */
@@ -238,7 +252,7 @@ async function serve(request: IncomingMessage, response: ServerResponse, api: Lu
     send(response, 429, fail("rate-limited"), origin, { "Retry-After": String(Math.max(1, Math.ceil(ipWait / 1000))) });
     return;
   }
-  const body = await readBody(request, LUDUM_MAX_BODY_BYTES);
+  const body = await readBody(request, LUDUM_ROUTE_MAX_BODY_BYTES[name] ?? LUDUM_MAX_BODY_BYTES);
   if (!body.ok) {
     send(response, 400, fail("bad-request", body.status === 413 ? "too-large" : undefined), origin);
     return;
@@ -265,7 +279,8 @@ async function serve(request: IncomingMessage, response: ServerResponse, api: Lu
   }
   if (route.handler === null) {
     /* `session` (the only ingress-answered route). */
-    const answer = sessionAnswer(api.identity, readSessionCookie(request.headers.cookie), caller, now, api.playOrigin);
+    const reviewer = caller.principalId !== null && api.ports.members !== undefined && api.ports.members.isReviewer(caller.principalId);
+    const answer = sessionAnswer(api.identity, readSessionCookie(request.headers.cookie), caller, now, api.playOrigin, reviewer);
     send(response, 200, answer, origin);
     return;
   }
@@ -273,6 +288,12 @@ async function serve(request: IncomingMessage, response: ServerResponse, api: Lu
     send(response, 401, fail("signed-out"), origin);
     return;
   }
+  if (route.access === "reviewer" && (caller.principalId === null || api.ports.members === undefined || !api.ports.members.isReviewer(caller.principalId))) {
+    send(response, 404, fail("not-found"), origin);
+    return;
+  }
+  /* v1.1: whether this session holds a live sensitive grant (read, never written; only `moderation-decide` asks). */
+  if (caller.principalId !== null && route.access === "reviewer") caller.sensitiveAuth = api.identity.hasSensitiveAuth(readSessionCookie(request.headers.cookie), now);
   let result: { status: number; json: unknown };
   try {
     result = await route.handler(fields, caller, api.ports);

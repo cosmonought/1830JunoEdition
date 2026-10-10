@@ -5,12 +5,18 @@ import assert from "node:assert/strict";
 import { LUDUM_PREFIX, LUDUM_ROUTES, ludumRouteOf } from "./registry";
 import type { LudumPorts } from "./ports";
 
-test("ludum registry: exactly the §5 routes, with their access rules", () => {
-  assert.deepEqual(Object.keys(LUDUM_ROUTES).sort(), ["case", "game", "games", "session"]);
+test("ludum registry: exactly the §5 / §5.1 routes, with their access rules", () => {
+  assert.deepEqual(Object.keys(LUDUM_ROUTES).sort(), ["account", "case", "display-name", "game", "games", "moderation-case", "moderation-decide", "moderation-queue", "session"]);
   assert.equal(LUDUM_ROUTES.session.access, "public");
   assert.equal(LUDUM_ROUTES.case.access, "public");
   assert.equal(LUDUM_ROUTES.games.access, "profiled");
   assert.equal(LUDUM_ROUTES.game.access, "profiled");
+  /* v1.1 (§5.1) */
+  assert.equal(LUDUM_ROUTES.account.access, "profiled");
+  assert.equal(LUDUM_ROUTES["display-name"].access, "profiled");
+  assert.equal(LUDUM_ROUTES["moderation-queue"].access, "reviewer");
+  assert.equal(LUDUM_ROUTES["moderation-case"].access, "reviewer");
+  assert.equal(LUDUM_ROUTES["moderation-decide"].access, "reviewer");
   assert.equal(LUDUM_ROUTES.session.handler, null);
   assert.ok(Object.isFrozen(LUDUM_ROUTES));
 });

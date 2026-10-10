@@ -328,6 +328,13 @@ function preconditionTarget(condition: IdentityPrecondition): { key: ItemKey; cl
     case "profile-password":
       /* P3-ACCT POLICY: the password generation's compare-and-swap (the hash carries a fresh salt every time). */
       return { key: keys.profile(condition.profile_id), cls: "profile", clause: cl.and(cl.exists(), cl.eqS("password_hash", condition.password_hash)) };
+    case "profile-name":
+      /* LUDUM (display names): the one change's compare-and-swap, exactly as the memory store compares it. */
+      return {
+        key: keys.profile(condition.profile_id),
+        cls: "profile",
+        clause: cl.and(cl.exists(), cl.eqN("schema", 3), cl.eqS("display_name", condition.display_name), cl.attrAbsent("name_changed_at")),
+      };
     default:
       throw new Error("identity plan: an unknown precondition (the shape check refuses it first)");
   }
@@ -397,6 +404,8 @@ export function planIdentityChange(change: IdentityChange, view: IdentityPlanVie
     /* PHASE 3 FINAL: a schema-3 profile (the Authorization Wallet model) is made as one and stays one; no legacy record
        ever becomes one (there is no migration). */
     add(target, record.schema === 3 ? cl.or(cl.absent(), cl.gtN("schema", 2)) : cl.or(cl.absent(), cl.ltN("schema", 3)), "a profile never changes between the legacy and the Authorization Wallet schema");
+    /* LUDUM (display names): the one change, once used, is never undone -- a record without it never overwrites one with it. */
+    if (record.name_changed_at === undefined) add(target, cl.or(cl.absent(), cl.attrAbsent("name_changed_at")), "a used display-name change is never undone");
   }
   for (const record of change.families ?? []) {
     const target = spec(keys.family(record.family_id), "family");

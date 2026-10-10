@@ -26,10 +26,17 @@ export function ludumSignInUrl(playOrigin: string, returnPath = "/"): string {
   return `${playOrigin}/?ludum=signin&return=${encodeURIComponent(path)}`;
 }
 
+/** v1.1: `https://<play>/?ludum=confirm&return=<path>` -- Play's "Confirm it's you" (the password stays on Play), then back.
+ *  Play checks the path again (`frontend/src/utils/ludumReturn.ts`). */
+export function ludumConfirmUrl(playOrigin: string, returnPath = "/"): string {
+  const path = LUDUM_RETURN_PATH.test(returnPath) ? returnPath : "/";
+  return `${playOrigin}/?ludum=confirm&return=${encodeURIComponent(path)}`;
+}
+
 /** `YYYY-MM` (UTC) of an epoch-ms instant. */
 export const yearMonthOf = (ms: number): string => new Date(ms).toISOString().slice(0, 7);
 
-export function sessionAnswer(identity: IdentityService, read: SessionCookieRead, caller: LudumCaller, now: number, playOrigin: string): SessionResponse {
+export function sessionAnswer(identity: IdentityService, read: SessionCookieRead, caller: LudumCaller, now: number, playOrigin: string, reviewer = false): SessionResponse {
   const signedOut: SessionResponse = { signedIn: false, signInUrl: ludumSignInUrl(playOrigin) };
   if (caller.principalId === null) return signedOut;
   const details = identity.accountDetails(read, now);
@@ -43,5 +50,7 @@ export function sessionAnswer(identity: IdentityService, read: SessionCookieRead
       authorizationWallet: details.authorizationWallet === null ? null : { address: details.authorizationWallet.address, since: new Date(details.authorizationWallet.since).toISOString() },
     },
     manageUrl: `${playOrigin}/`,
+    /* v1.1: whether the account menu draws Moderation (a bound conduct reviewer). Nothing else about the role. */
+    roles: { reviewer },
   };
 }

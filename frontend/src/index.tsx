@@ -21,7 +21,8 @@ import { ClientUpdateNotice } from "./components/ClientUpdateNotice";
 import { GAME_SERVER_URL } from "./config";
 import { createAppSessionPort, installSessionPort } from "./utils/sessionBootstrap";
 import { createBrowserClientUpdatePort, installClientUpdatePort } from "./utils/clientUpdate";
-import { handleLudumSignIn } from "./utils/ludumReturn";
+import { handleLudumConfirm, handleLudumSignIn } from "./utils/ludumReturn";
+import { LudumConfirmHost } from "./components/LudumConfirmHost";
 
 /* LIVE-2B (LIVE-2 §4.3): before any link opens a socket, the session is bootstrapped (`POST /gs/api/session`) -- the
    links ask this port first. A development-identity build (and a build with no game server) needs no bootstrap.
@@ -35,6 +36,8 @@ installClientUpdatePort(createBrowserClientUpdatePort());
 /* LUDUM (§2.1): `?ludum=signin&return=<path>` -- the account dialog, then back to https://ludum.netadao.org<path> (at once
    when already signed in). Only a path matching `^/[a-z0-9/_-]{0,128}$`; anything else stays on Play. */
 handleLudumSignIn({ search: window.location.search, navigate: (url) => window.location.assign(url) });
+/* LUDUM v1.1: `?ludum=confirm&return=<path>` -- "Confirm it's you" here (the password is only typed on Play), then back. */
+handleLudumConfirm({ search: window.location.search, navigate: (url) => window.location.assign(url) });
 
 const ROOT_ELEMENT_ID = "root";
 
@@ -57,6 +60,7 @@ root.render(
       {/* P3-ACCT: Log in / Create account, opened by an action that needs an account (and resuming it), or by the
           homepage's own buttons; the Rules and Terms reading pages. Each is a NativeModal in the app's modal layer. */}
       <AccountPromptHost />
+      <LudumConfirmHost />
       <InfoPagesHost />
       {/* LIVE-2B: the explicit "Continue" decision when the server says the session ended (P3-ACCT: it leads back to
           the homepage, signed out, where Log in brings the account back). */}

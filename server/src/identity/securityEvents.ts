@@ -332,6 +332,8 @@ export function canonicalSecurityEvent(event: SecurityEvent): SecurityEvent {
       /* P3-ACCT: a schema-2 (PHASE 3 FINAL: or schema-3) profile carries its six fields too, in their stored order (a
          schema-1 one, none). */
       if (p.schema !== 1) for (const field of PROFILE_V2_FIELDS) profile[field] = (p as unknown as Record<string, unknown>)[field];
+      /* LUDUM: the one display-name change's time, when the profile carries it (never at creation). */
+      if (p.schema === 3 && p.name_changed_at !== undefined) profile.name_changed_at = p.name_changed_at;
       out[key] = profile;
     } else if (key === "family_ids") {
       out[key] = [...(value as string[])];

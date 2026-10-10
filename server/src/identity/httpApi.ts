@@ -26,7 +26,8 @@
 //                                                          account, its Authorization Wallet the CREATE text's signer: 201
 //                                                          {profile, username} + a FRESH session cookie (the temporary one
 //                                                          is `replaced`). 400 bad-username / bad-password {problem} /
-//                                                          bad-name; 409 username-taken / already-profiled; 403
+//                                                          bad-name; 409 username-taken / display-name-taken (LUDUM:
+//                                                          display names are unique) / already-profiled; 403
 //                                                          authorization-invalid; 409 authorization-used.
 //   POST /gs/api/account/login         {username, password}  200 {profile} + a fresh session cookie for the account's
 //                                                          principal. ONE answer for every wrong or unknown username or
@@ -760,6 +761,7 @@ async function serveAccount(
         json(response, 409, { error: "already-profiled", profile: { name: created.name } });
         return;
       case "username-taken":
+      case "display-name-taken":
       case "authorization-used":
         json(response, 409, { error: created.kind });
         return;

@@ -46,6 +46,7 @@ import {
 } from "./accountCredentials";
 import { createAuthorizationBook, verifyAuthorization, type AuthorizationBook, type AuthorizationClient, type AuthorizationOperation, type AuthorizationSignature } from "./authorizationWallet";
 import { sessionSetCookie, type SessionCookieRead } from "./cookies";
+import { cleanProfileName, displayNameKey } from "./profileName";
 import type { SensitiveAuthGrantStore } from "./grants";
 import {
   cryptoRandom,
@@ -216,11 +217,32 @@ export type CreateAccountOutcome =
   | { kind: "bad-password"; problem: PasswordProblem }
   /** The username is taken. (Account creation necessarily says so; it is budgeted like every creation.) */
   | { kind: "username-taken" }
+  /** LUDUM: the display name is held by another profile (`displayNameKey`). */
+  | { kind: "display-name-taken" }
   /** The Authorization Wallet's proof is missing, invalid, of another username, or already used. */
   | { kind: AuthorizationProblem }
   /** Too many password computations at once: try again in a moment. */
   | { kind: "busy" }
   | { kind: "unavailable" };
+
+/** LUDUM (display names): where a profile's display name stands. `seated`/`playing` come from the caller (the rooms). */
+export type DisplayNameState =
+  | { readonly kind: "changeable" }
+  | { readonly kind: "changed"; readonly at: number }
+  | { readonly kind: "locked-playing" }
+  | { readonly kind: "locked-seated" };
+
+/** LUDUM: the answer to the one display-name change. */
+export type DisplayNameChangeOutcome =
+  | { readonly kind: "ok"; readonly name: string }
+  | { readonly kind: "not-found" }
+  | { readonly kind: "bad-name" }
+  | { readonly kind: "unchanged" }
+  | { readonly kind: "taken" }
+  | { readonly kind: "already-changed" }
+  | { readonly kind: "locked-playing" }
+  | { readonly kind: "locked-seated" }
+  | { readonly kind: "unavailable" };
 
 export type LoginOutcome = CredentialOutcome | { kind: "busy" };
 
@@ -402,6 +424,8 @@ export class IdentityService {
   private readonly profileOfSelector = new Map<string, string>();
   /** P3-ACCT: a username's canonical key -> its profile. A username never changes or goes, so nothing is removed. */
   private readonly profileOfLogin = new Map<string, string>();
+  /** LUDUM: display-name key -> the profiles holding it (a set: two legacy profiles may already share one). */
+  private readonly profilesOfName = new Map<string, Set<string>>();
   /** P3-ACCT: the bound on concurrent password KDF computations. */
   private readonly kdf: KdfGate;
   /** LIVE-2E: link codes by digest. PHASE 3 FINAL: no code is issued or redeemed any more ("Link another device" is
@@ -503,6 +527,15 @@ export class IdentityService {
   private indexProfile(profile: Profile): void {
     const previous = this.profiles.get(profile.profile_id);
     if (previous !== undefined && previous.recovery_selector !== profile.recovery_selector) this.profileOfSelector.delete(previous.recovery_selector);
+    if (previous !== undefined && previous.display_name !== profile.display_name) {
+      const held = this.profilesOfName.get(displayNameKey(previous.display_name));
+      held?.delete(profile.profile_id);
+      if (held !== undefined && held.size === 0) this.profilesOfName.delete(displayNameKey(previous.display_name));
+    }
+    const nameKey = displayNameKey(profile.display_name);
+    const holders = this.profilesOfName.get(nameKey) ?? new Set<string>();
+    holders.add(profile.profile_id);
+    this.profilesOfName.set(nameKey, holders);
     this.profiles.set(profile.profile_id, profile);
     this.profileOfPrincipal.set(profile.principal_id, profile.profile_id);
     this.profileOfSelector.set(profile.recovery_selector, profile.profile_id);
@@ -1126,6 +1159,53 @@ export class IdentityService {
     return this.activeProfileOf(principalId)?.display_name ?? null;
   }
 
+  /** LUDUM: is this display name held by a profile other than `exceptProfileId`? (Every profile counts, any status:
+   *  a disabled account's name is not handed to someone else.) */
+  displayNameTaken(name: string, exceptProfileId: string | null = null): boolean {
+    const holders = this.profilesOfName.get(displayNameKey(name));
+    if (holders === undefined) return false;
+    for (const id of holders) if (id !== exceptProfileId) return true;
+    return false;
+  }
+
+  /** LUDUM: where this account's display name stands. `seat` is the rooms' answer: a seat at a table that has started
+   *  (`playing`), at one still waiting (`seated`), or none. */
+  displayNameState(principalId: string, seat: "none" | "seated" | "playing"): DisplayNameState | null {
+    const profile = this.activeProfileOf(principalId);
+    if (profile === null) return null;
+    if (profile.name_changed_at !== undefined) return { kind: "changed", at: profile.name_changed_at };
+    if (seat === "playing") return { kind: "locked-playing" };
+    if (seat === "seated") return { kind: "locked-seated" };
+    return { kind: "changeable" };
+  }
+
+  /** LUDUM (display names): the profile's ONE change, before its first game. Unique by `displayNameKey`; refused while
+   *  the account holds any seat (`seat`, from the rooms: the name is copied into a seat at the deal, so it never changes
+   *  under a table); written under the `profile-name` compare-and-swap, so two racing changes cannot both land. Not a
+   *  security change: no session ends and no security event is journaled (the name is presentation, never authority). */
+  async changeDisplayName(principalId: string, raw: unknown, seat: () => "none" | "seated" | "playing", now: number): Promise<DisplayNameChangeOutcome> {
+    const name = cleanProfileName(raw);
+    if (name === null || name !== raw) return { kind: "bad-name" };
+    return this.serial(async (): Promise<DisplayNameChangeOutcome> => {
+      const profile = this.activeProfileOf(principalId);
+      if (profile === null) return { kind: "not-found" };
+      if (profile.name_changed_at !== undefined) return { kind: "already-changed" };
+      const where = seat();
+      if (where === "playing") return { kind: "locked-playing" };
+      if (where === "seated") return { kind: "locked-seated" };
+      if (displayNameKey(name) === displayNameKey(profile.display_name) && name === profile.display_name) return { kind: "unchanged" };
+      if (this.displayNameTaken(name, profile.profile_id)) return { kind: "taken" };
+      const updated: Profile = { ...profile, display_name: name, name_changed_at: now };
+      try {
+        await this.commit({ expect: [{ kind: "profile-name", profile_id: profile.profile_id, display_name: profile.display_name }], profiles: [updated] }, "changing a display name");
+      } catch {
+        return { kind: "unavailable" };
+      }
+      this.indexProfile(updated);
+      return { kind: "ok", name };
+    });
+  }
+
   /** What the bootstrap may tell this session about its account. */
   accountView(principalId: string, sessionId: string, now: number): AccountView | null {
     const profile = this.activeProfileOf(principalId);
@@ -1424,6 +1504,7 @@ export class IdentityService {
     const earlyPrincipal = this.principals.get(early.principal_id) as Principal;
     if (earlyPrincipal.kind === "profile") return { kind: "already-profiled", name: this.profiles.get(earlyPrincipal.account_link as string)?.display_name ?? "" };
     if (this.profileOfLogin.has(key)) return { kind: "username-taken" };
+    if (this.displayNameTaken(input.displayName)) return { kind: "display-name-taken" };
     /* THE AUTHORIZATION WALLET: this session's CREATE operation, for THIS username, signed by its wallet. Taken (single
        use) before any KDF work; released only on a transient failure. */
     const taken = this.authorizations.take(input.authorization.operation, "create", { sessionId: early.session_id, familyId: early.family_id }, now);
@@ -1449,6 +1530,7 @@ export class IdentityService {
       const principal = this.principals.get(current.principal_id) as Principal;
       if (principal.kind === "profile") return { kind: "already-profiled" as const, name: this.profiles.get(principal.account_link as string)?.display_name ?? "" };
       if (this.profileOfLogin.has(key)) return { kind: "username-taken" as const };
+      if (this.displayNameTaken(input.displayName)) return { kind: "display-name-taken" as const };
       const profileId = mintUnique(() => mintProfileId(this.random), (id) => this.profiles.has(id));
       /* The internal credential epoch: random, never shown, never a credential (no recovery key exists to match it). */
       const epoch = mintUnique(() => mintRecoverySelector(this.random), (selector) => this.profileOfSelector.has(selector));

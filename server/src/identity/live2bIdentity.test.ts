@@ -868,7 +868,7 @@ describe("LIVE-2B adversarial-review regressions", () => {
   async function playerCookie(identity: IdentityService, now = 0): Promise<string> {
     const cookie = await guestCookie(identity, now);
     players += 1;
-    const made = await createAccountWith(identity, readSessionCookie(cookie), { username: `player${players}`, password: "correct horse battery", displayName: "Player", wallet: keplrAccount(`live2b/player${players}`) }, now);
+    const made = await createAccountWith(identity, readSessionCookie(cookie), { username: `player${players}`, password: "correct horse battery", displayName: `Player ${players}` /* LUDUM: display names are unique */, wallet: keplrAccount(`live2b/player${players}`) }, now);
     assert.equal(made.kind, "ok");
     return (made.kind === "ok" ? made.setCookie : "").split(";")[0];
   }

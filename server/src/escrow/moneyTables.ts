@@ -2052,6 +2052,8 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
      *  `Outcome.{bond_returned, bond_to_pool}`), and the case handler parses the raw answer itself. */
     ludumChain: {
       pin: (): { readonly contract: string; readonly chainId: string; readonly denom: string } => ({ contract, chainId: deps.pin.chain_id, denom: deps.pin.denom }),
+      /** LUDUM v1.1 (read-only): the chain intents this server relayed for a game -- their transaction hashes and phases. */
+      intents: (gameId: string): Promise<readonly ChainIntentRecord[]> => deps.service.intentsOf(gameId),
       async game(chainGameId: string): Promise<{ readonly game: unknown; readonly provenance: "chain-confirmed" | "chain-observed"; readonly height?: string; readonly observedAt: string } | null> {
         const query = QUERY.game(chainGameId);
         const observedAt = new Date(deps.now()).toISOString();

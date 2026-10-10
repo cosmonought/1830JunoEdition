@@ -1,8 +1,11 @@
 // ==================================================================
 //  LUDUM v1 -- POST case { chainGameId }: ONE ESCROW GAME'S DISPUTE CASE (§5 `CaseRecord`, PUBLIC)
 // ==================================================================
-//  A public read: `caller` is ignored, and the answer carries no account data -- no principal, no `g_…` game id, no
-//  display name, no log `player_id`. Chain seat wallets are public on chain already.
+//  A public read: `caller` is ignored, and the answer carries no account data -- no principal, no `g_…` game id, no log
+//  `player_id`. Chain seat wallets are public on chain already.
+//  v1.1 (owner, 2026-10-09): each seat's DISPLAY NAME -- the name the table showed every seat (the seat's nickname, frozen
+//  at the deal) -- mapped through the same frozen roster as `serverTerminal`; null where it cannot be mapped. And the
+//  transactions this server relayed for the game (`../transactions.ts`).
 //
 //  Every part is a §4 `Fact`:
 //    * escrow / seats / dispute / chainSettlement -- the chain's own answer, with the port's provenance
@@ -20,6 +23,7 @@ import type { LudumHandler, LudumPorts } from "../ports";
 import { parseGameResponse, type JunoGameResponse } from "../../escrow/juno/junoContract";
 import type { FinancialGameRecord } from "../../escrow/moneyLifecycle";
 import type { TerminalSettlementEvidence } from "../../escrow/settlementEvidence";
+import { transactionsOf } from "../transactions";
 
 type Answer = { status: number; json: unknown };
 type ChainRead = NonNullable<Awaited<ReturnType<LudumPorts["chainGame"]>>>;
@@ -106,17 +110,24 @@ export const caseRecord: LudumHandler = async (body, _caller, ports) => {
         });
 
   const serverTerminal = await serverTerminalOf(id, parsed, pin.contract, ports);
+  const local = await localGameOf(id, parsed, pin.contract, ports);
 
   const record: CaseRecord = {
     chainGameId: id,
     contract: pin.contract,
     chainId: pin.chainId,
     escrow: chainFact(game.state.toLowerCase()),
-    seats: game.seats.map((seat, chainSeatIndex) => ({ chainSeatIndex, wallet: seat.wallet, isChallenger: challenger !== null && seat.wallet === challenger })),
+    seats: game.seats.map((seat, chainSeatIndex) => ({
+      chainSeatIndex,
+      wallet: seat.wallet,
+      isChallenger: challenger !== null && seat.wallet === challenger,
+      displayName: local?.names.get(chainSeatIndex) ?? null,
+    })),
     dispute,
     chainSettlement,
     serverTerminal,
     evidenceMatches: evidenceMatchesOf(game.dispute?.evidence_hash ?? null, dispute, serverTerminal),
+    transactions: await transactionsOf(ports, local?.gameId ?? null),
   };
   return { status: 200, json: record };
 };
@@ -170,6 +181,42 @@ async function serverTerminalOf(id: string, parsed: JunoGameResponse, contract: 
     value: { logLen: evidence.log_len, logHash: evidence.log_hash, appraisalStateHash: evidence.appraisal_state_hash, reason: evidence.terminal_reason, totalsBySeat },
     provenance: "server-recorded",
   };
+}
+
+/** v1.1: this server's game for the chain game -- only when its record is bound to exactly this deployment and chain
+ *  game and its frozen roster names exactly the chain's seat wallets -- with each chain seat's display name (the game
+ *  record's seat nickname, by the roster's `player_id`). Null otherwise (the case still answers, without names). */
+async function localGameOf(id: string, parsed: JunoGameResponse, contract: string, ports: LudumPorts): Promise<{ gameId: string; names: Map<number, string> } | null> {
+  let financial: FinancialGameRecord | null;
+  try {
+    financial = await ports.financialByChainGameId(id);
+  } catch {
+    return null;
+  }
+  const escrow = financial?.binding?.escrow ?? null;
+  if (financial === null || escrow === null || escrow.chain_game_id !== id || financial.binding!.deployment.contract_address !== contract) return null;
+  const names = new Map<number, string>();
+  const roster = financial.roster?.roster ?? null;
+  const seats = parsed.game.seats;
+  if (roster === null || roster.length !== seats.length) return { gameId: financial.game_id, names };
+  let record = null;
+  try {
+    for (const candidate of ports.records()) {
+      if (candidate.game_id === financial.game_id) {
+        record = candidate;
+        break;
+      }
+    }
+  } catch {
+    return { gameId: financial.game_id, names };
+  }
+  for (let i = 0; i < seats.length; i += 1) {
+    const entry = roster.find((r) => r.chain_seat_index === i);
+    if (entry === undefined || entry.payout_address !== seats[i].wallet) return { gameId: financial.game_id, names: new Map() };
+    const seat = record?.seats.find((s) => s.player_id === entry.player_id);
+    if (seat !== undefined) names.set(i, seat.nickname);
+  }
+  return { gameId: financial.game_id, names };
 }
 
 /** The challenger's evidence hash against the server's own log hash and terminal board hash. */

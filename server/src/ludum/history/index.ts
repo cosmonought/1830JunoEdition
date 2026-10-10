@@ -21,6 +21,7 @@ import type { GamesResponse, GameSummary } from "../contract";
 import type { LudumHandler, LudumPorts } from "../ports";
 import { GAME_ID_PATTERN, type GameRecord, type Seat } from "../../rooms/gameRecord";
 import { detailOf, summaryOf } from "./projection";
+import { transactionsOf } from "../transactions";
 
 export const DEFAULT_LIMIT = 20;
 export const MAX_LIMIT = 50;
@@ -127,5 +128,7 @@ export const game: LudumHandler = async (body, caller, ports) => {
     return fail(503, "unavailable", "the game records could not be read");
   }
   if (found === null) return fail(404, "not-found");
-  return { status: 200, json: await detailOf(ports, found.record, found.seat) };
+  /* v1.1: the transactions this server relayed for the game (the docket's hashes). */
+  const detail = await detailOf(ports, found.record, found.seat);
+  return { status: 200, json: { ...detail, transactions: await transactionsOf(ports, found.record.money === null ? null : found.record.game_id) } };
 };

@@ -107,11 +107,14 @@ describe("LUDUM integration: the ledger sign convention", () => {
   });
 });
 
-/* Conduct / moderation boundary (behavioural constraint, reviewed at integration): nothing under server/src/ludum reads the
-   conduct store, its review routes or the trust facts -- so no Ludum answer can carry a conduct case, its count, its
-   outcome or a sanction. (The handlers' own tests pin their exact output keys.) */
-describe("LUDUM integration: no conduct data reaches a Ludum answer", () => {
-  test("no Ludum module imports conduct, trust facts or reviewer configuration", () => {
+/* Conduct / moderation boundary (behavioural constraint, reviewed at integration; v1.1 owner request 2026-10-09: the
+   conduct reviewers' routes now exist under this prefix). Only `moderation.ts` (the reviewer-only handlers) and
+   `wiring.ts` (which binds the service and the startup reviewers) may load conduct code; only `wiring.ts` may load the
+   trust facts; nothing reads the reviewer configuration itself. Every route served by `moderation.ts` is "reviewer"
+   access -- a public or profiled answer can never carry a conduct case, its count, its outcome or a sanction. (The
+   handlers' own tests pin their exact output keys.) */
+describe("LUDUM integration: no conduct data reaches a non-reviewer Ludum answer", () => {
+  test("only the reviewer handlers and the wiring load conduct code; only the wiring loads trust facts", () => {
     const root = path.join(__dirname);
     const files: string[] = [];
     const walk = (dir: string): void => {
@@ -124,8 +127,21 @@ describe("LUDUM integration: no conduct data reaches a Ludum answer", () => {
     walk(root);
     assert.ok(files.length >= 8, `found the compiled ludum modules (${files.length})`);
     for (const file of files) {
+      const name = path.relative(root, file).split(path.sep).join("/");
       const text = fs.readFileSync(file, "utf8");
-      assert.doesNotMatch(text, /require\("[^"]*conduct[^"]*"\)|require\("[^"]*trustFacts[^"]*"\)|GS_CONDUCT_REVIEWERS/, path.relative(root, file));
+      assert.doesNotMatch(text, /GS_CONDUCT_REVIEWERS/, name);
+      if (name !== "moderation.js" && name !== "wiring.js") assert.doesNotMatch(text, /require\("[^"]*conduct[^"]*"\)/, name);
+      if (name !== "wiring.js") assert.doesNotMatch(text, /require\("[^"]*trustFacts[^"]*"\)/, name);
     }
+  });
+
+  test("every route whose handler is a moderation handler is reviewer-only", async () => {
+    const { LUDUM_ROUTES } = await import("./registry");
+    const moderation = await import("./moderation");
+    const handlers = new Set<unknown>(Object.values(moderation).filter((value) => typeof value === "function"));
+    for (const route of Object.values(LUDUM_ROUTES)) {
+      if (handlers.has(route.handler)) assert.equal(route.access, "reviewer", route.name);
+    }
+    assert.equal(Object.values(LUDUM_ROUTES).filter((route) => route.access === "reviewer").length, 3);
   });
 });

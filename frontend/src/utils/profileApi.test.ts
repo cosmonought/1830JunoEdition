@@ -238,6 +238,7 @@ describe("results and the re-bootstrap (LIVE-2E, PHASE 3 FINAL)", () => {
       [400, { error: "bad-username" }, { ok: false, error: "bad-username" }],
       [400, { error: "bad-password", problem: "too-long" }, { ok: false, error: "bad-password", problem: "too-long" }],
       [409, { error: "username-taken" }, { ok: false, error: "username-taken" }],
+      [409, { error: "display-name-taken" }, { ok: false, error: "display-name-taken" }],
       [403, { error: "authorization-invalid" }, { ok: false, error: "authorization-invalid" }],
       [409, { error: "authorization-used" }, { ok: false, error: "authorization-used" }],
       [409, { error: "has-tables" }, { ok: false, error: "has-tables" }],
@@ -453,6 +454,7 @@ describe("the words (PHASE 3 FINAL)", () => {
     const codes: ProfileErrorCode[] = [
       "invalid-credential",
       "username-taken",
+      "display-name-taken",
       "bad-username",
       "bad-password",
       "authorization-invalid",

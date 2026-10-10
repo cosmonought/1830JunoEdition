@@ -75,7 +75,9 @@ export interface Profile {
   profile_id: string;
   /** Immutable: the one principal this profile controls. */
   principal_id: string;
-  /** Human-facing, 1-24 characters, never an authority key (duplicates are allowed). */
+  /** Human-facing, 1-24 characters, never an authority key. LUDUM (display names): a name chosen at creation or by
+   *  the one change is UNIQUE among profiles (`displayNameKey`, enforced by the single identity writer against its full
+   *  index); names two legacy profiles already shared stay as they are. */
   display_name: string;
   created_at: number;
   status: "active" | "disabled";
@@ -96,7 +98,13 @@ export interface Profile {
   password_set_at?: number | null;
   wallet_address?: string | null;
   wallet_verified_at?: number | null;
+  /** LUDUM (display names; schema 3 only): when the profile used its ONE display-name change. ABSENT until then (an
+   *  absent field, never null: every record written before this field existed reads exactly as before). */
+  name_changed_at?: number;
 }
+
+/** LUDUM: the optional schema-3 field recording the one display-name change. */
+export const PROFILE_NAME_CHANGED_FIELD = "name_changed_at";
 
 /** P3-ACCT: the fields a schema-2 profile adds, in their stored order. */
 export const PROFILE_V2_FIELDS = Object.freeze(["login_key", "login_name", "password_hash", "password_set_at", "wallet_address", "wallet_verified_at"] as const);
@@ -280,7 +288,10 @@ export type IdentityPrecondition =
    *  exactly this password hash. Every password hash is made with a fresh random salt, so the hash IS the generation:
    *  a change decided against a superseded password (a second writer, a racing change or reset) is refused by every
    *  store, in the same step as the write. */
-  | { readonly kind: "profile-password"; readonly profile_id: string; readonly password_hash: string };
+  | { readonly kind: "profile-password"; readonly profile_id: string; readonly password_hash: string }
+  /** LUDUM (display names): COMPARE-AND-SWAP of the ONE display-name change -- the profile is stored, is schema 3, holds
+   *  exactly this display name, and has not used its change (`name_changed_at` absent). Two racing changes: one wins. */
+  | { readonly kind: "profile-name"; readonly profile_id: string; readonly display_name: string };
 
 export interface IdentityChange {
   /** LIVE-3C: checked by the store in the same step that writes the change; any failure writes nothing. */
@@ -396,7 +407,10 @@ const HEX_64 = /^[0-9a-f]{64}$/;
 export function isProfile(value: unknown): value is Profile {
   if (!isRecordObject(value)) return false;
   if (value.schema === 2 || value.schema === 3) {
-    if (!exactKeys(value, [...PROFILE_KEYS, ...PROFILE_V2_FIELDS])) return false;
+    /* LUDUM: a schema-3 record may also carry `name_changed_at` (a time); no other record may. */
+    const renamed = value.schema === 3 && Object.prototype.hasOwnProperty.call(value, PROFILE_NAME_CHANGED_FIELD);
+    if (!exactKeys(value, [...PROFILE_KEYS, ...PROFILE_V2_FIELDS, ...(renamed ? [PROFILE_NAME_CHANGED_FIELD] : [])])) return false;
+    if (renamed && !isTime(value.name_changed_at)) return false;
     /* P3-ACCT: the login is all or nothing, and its key is its name's canonical form; the wallet is a pair. */
     const login = [value.login_key, value.login_name, value.password_hash, value.password_set_at];
     const noLogin = login.every((field) => field === null);
@@ -747,6 +761,10 @@ export function preconditionFailure(lookups: IdentityLookups, expect: readonly I
           const profile = lookups.profile(condition.profile_id);
           return profile === undefined || loginOf(profile)?.hash !== condition.password_hash;
         }
+        case "profile-name": {
+          const profile = lookups.profile(condition.profile_id);
+          return profile === undefined || profile.schema !== 3 || profile.display_name !== condition.display_name || profile.name_changed_at !== undefined;
+        }
         default:
           return true; // an unknown condition never holds
       }
@@ -800,6 +818,10 @@ const PRECONDITION_SHAPES: Readonly<Record<IdentityPrecondition["kind"], readonl
   "profile-password": [
     ["profile_id", PROFILE_ID_PATTERN],
     ["password_hash", isPasswordHash],
+  ],
+  "profile-name": [
+    ["profile_id", PROFILE_ID_PATTERN],
+    ["display_name", isDisplayName],
   ],
 };
 

@@ -874,7 +874,10 @@ describe("P3-N035 C: the evidence, the configuration and the boundary", () => {
       }
     };
     walk(root);
-    const allowed = new Set(["conduct", "gameServer.ts", "start.ts", "rooms/roomHost.ts", "aws/runtime/awsRuntime.ts", "aws/runtime/awsMain.ts", "aws/runtime/awsSubstrate.ts", "aws/game/dynamoConductStore.ts", "aws/deploy/deployVerify.ts", "persistence/conformance/subjects.ts", "persistence/conformance/conductStore.conformance.ts"]);
+    /* LUDUM v1.1 (owner request 2026-10-09): the conduct reviewers' routes under Ludum's prefix -- reviewer-only handlers
+       (`ludum/moderation.ts`), their port types and the wiring that binds the SAME service and startup reviewers. Pinned
+       to exactly those three by ludum/integration.test.ts. */
+    const allowed = new Set(["ludum/moderation.ts", "ludum/ports.ts", "ludum/wiring.ts", "conduct", "gameServer.ts", "start.ts", "rooms/roomHost.ts", "aws/runtime/awsRuntime.ts", "aws/runtime/awsMain.ts", "aws/runtime/awsSubstrate.ts", "aws/game/dynamoConductStore.ts", "aws/deploy/deployVerify.ts", "persistence/conformance/subjects.ts", "persistence/conformance/conductStore.conformance.ts"]);
     const offenders: string[] = [];
     for (const file of sources) {
       const relative = path.relative(root, file).split(path.sep).join("/");

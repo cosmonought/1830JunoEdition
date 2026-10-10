@@ -615,8 +615,16 @@ export async function accountBrowser(
   wallet: KeplrAccount = keplrAccount(`authorization/${username}`),
 ): Promise<AccountBrowser> {
   const before = await bootstrapCookie(port, origin);
-  const proof = await createAuthorization(port, before, username, wallet, origin);
-  const created = await apiRequest(port, "/gs/api/account/create", { cookie: before, body: { username, password, name, ...proof }, origin });
+  let created: ApiAnswer | null = null;
+  /* LUDUM (display names are unique): a test world that asks for one default name ("Player") for several accounts gets
+     it for the first; the others are suffixed, as a player choosing a free name would be. */
+  for (let attempt = 1; attempt <= 50; attempt += 1) {
+    const asked = attempt === 1 ? name : `${name.slice(0, 20)} ${attempt}`;
+    const proof = await createAuthorization(port, before, username, wallet, origin);
+    created = await apiRequest(port, "/gs/api/account/create", { cookie: before, body: { username, password, name: asked, ...proof }, origin });
+    if (!(created.status === 409 && created.body?.error === "display-name-taken")) break;
+  }
+  if (created === null) throw new Error("create account: no attempt was made");
   const cookie = cookieFromAnswer(created);
   if (created.status !== 201 || cookie === null) throw new Error(`create account: expected 201 + a cookie, got ${created.status} ${created.text}`);
   return { cookie, username, password, name: (created.body?.profile as { name: string }).name, wallet };

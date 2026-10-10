@@ -100,7 +100,7 @@ import { chainClockHooks, createConductClockFeed } from "./conduct/conductClockF
 import type { ConductCaseStore } from "./conduct/conductStore";
 import { createConductLimiter, handleConductHttp } from "./conduct/conductHttpApi";
 import { createLudumIpBudget, handleLudumHttp } from "./ludum/ingress";
-import { createLudumPorts } from "./ludum/wiring";
+import { createLudumMemberPorts, createLudumPorts } from "./ludum/wiring";
 import { ludumOriginProblem } from "./identity/mode";
 import type { MoneyTables } from "./escrow/moneyTables";
 import type { EscrowGameplaySeam } from "./rooms/roomHost";
@@ -1732,14 +1732,20 @@ export function createGameServer(options: GameServerOptions): {
   /* LUDUM v1 (docs/ludum/LUDUM_PLATFORM_ARCHITECTURE.md §2.1, §9): `/gs/api/ludum/v1/*` -- credentialed CORS for the
      Ludum ∪ Play origins on this prefix only, read-only, never a cookie; the real ports over the record index, the money
      layer's financial records and its chain reads. Dispatched BEFORE the money handler (below). */
-  const ludumIngress = {
-    corsOrigins: new Set<string>([...ludumOriginList, ...allowedOriginList]) as ReadonlySet<string>,
-    playOrigin: allowedOriginList[0],
-    trustedProxyHops: identityOptions.trustedProxyHops,
+  /* v1.1: the account's own page and the conduct reviewers' routes -- the SAME identity service, trust facts, conduct
+     service and startup-bound reviewers as Play's own routes (each reached lazily: `trustFacts` and `committedLogOf` are
+     made below, and are only called once the server serves). */
+  const ludumMembers = createLudumMemberPorts({
     identity,
-    limiter: identityLimiter,
-    ipBudget: createLudumIpBudget(identityNow, limits.identity),
-    ports: createLudumPorts({
+    records: () => ludumPorts.records(),
+    trustFacts: (principalId) => trustFacts.factsOf(principalId),
+    conduct: () => conduct,
+    reviewers: conductReviewers,
+    readLog: (gameId) => committedLogOf(gameId),
+    playOrigin: allowedOriginList[0],
+    now: identityNow,
+  });
+  const ludumPorts = createLudumPorts({
       records: () => host.records(),
       /* INTEGRATION: the index is the whole record set only once startup discovery finished without a store fault. */
       index: () => {
@@ -1750,7 +1756,16 @@ export function createGameServer(options: GameServerOptions): {
       },
       money: () => options.money?.() ?? null,
       now: identityNow,
-    }),
+      members: ludumMembers,
+    });
+  const ludumIngress = {
+    corsOrigins: new Set<string>([...ludumOriginList, ...allowedOriginList]) as ReadonlySet<string>,
+    playOrigin: allowedOriginList[0],
+    trustedProxyHops: identityOptions.trustedProxyHops,
+    identity,
+    limiter: identityLimiter,
+    ipBudget: createLudumIpBudget(identityNow, limits.identity),
+    ports: ludumPorts,
     now: identityNow,
     onError: (what: string, error: unknown) => {
       const ref = errorRef();

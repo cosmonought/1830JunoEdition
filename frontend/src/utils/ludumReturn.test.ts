@@ -4,7 +4,7 @@
 // once when already signed in; nothing for any other path (§2.1: not an open redirect).
 
 import { accountPromptState, accountSignedIn, closeAccountDialog, requireAccount, resetAccountPromptForTests } from "./accountPrompt";
-import { handleLudumSignIn, LUDUM_ORIGIN, ludumReturnTarget } from "./ludumReturn";
+import { closeLudumConfirm, handleLudumConfirm, handleLudumSignIn, LUDUM_ORIGIN, ludumConfirmTarget, ludumReturnTarget } from "./ludumReturn";
 import { readySessionPort } from "./sessionBootstrap";
 
 afterEach(() => resetAccountPromptForTests());
@@ -82,5 +82,49 @@ describe("LUDUM: handleLudumSignIn", () => {
     expect(handleLudumSignIn({ search: "?ludum=signin&return=//evil.example", navigate: (url) => went.push(url), requireAccount: ask })).toBe(false);
     expect(handleLudumSignIn({ search: "?table=ABCD", navigate: (url) => went.push(url), requireAccount: ask })).toBe(false);
     expect([went, asked]).toEqual([[], 0]);
+  });
+});
+
+/* LUDUM v1.1: `?ludum=confirm&return=<path>` -- "Confirm it's you" on Play, then back. */
+describe("LUDUM v1.1: handleLudumConfirm", () => {
+  it("the target: the same path rule, only for `confirm` (a sign-in link is not a confirmation, and back)", () => {
+    expect(ludumReturnTarget("?ludum=confirm&return=/moderation/", "confirm")).toBe("https://ludum.netadao.org/moderation/");
+    expect(ludumReturnTarget("?ludum=confirm&return=/moderation/")).toBeNull();
+    expect(ludumReturnTarget("?ludum=signin&return=/moderation/", "confirm")).toBeNull();
+    for (const bad of ["?ludum=confirm&return=//evil.example/", "?ludum=confirm&return=/moderation/?id=1", "?ludum=confirm&ludum=confirm&return=/x/"]) {
+      expect(ludumReturnTarget(bad, "confirm")).toBeNull();
+    }
+  });
+
+  it("signed in: opens Play's own 'Confirm it's you' for the checked Ludum URL -- it never leaves before the password", () => {
+    const went: string[] = [];
+    const opened: string[] = [];
+    const handled = handleLudumConfirm({ search: "?ludum=confirm&return=/moderation/", navigate: (url) => went.push(url), port: readySessionPort(), openConfirm: (target) => opened.push(target) });
+    expect(handled).toBe(true);
+    expect(opened).toEqual(["https://ludum.netadao.org/moderation/"]);
+    expect(went).toEqual([]);
+  });
+
+  it("the default host state: opened, then cancelled (stays on Play)", () => {
+    handleLudumConfirm({ search: "?ludum=confirm&return=/moderation/", navigate: () => undefined, port: readySessionPort() });
+    expect(ludumConfirmTarget()).toBe("https://ludum.netadao.org/moderation/");
+    closeLudumConfirm();
+    expect(ludumConfirmTarget()).toBeNull();
+  });
+
+  it("signed out: the sign-in dialog (a fresh sign-in is the grant), then back to Ludum", () => {
+    const went: string[] = [];
+    const visitor = { state: "unprofiled", account: null } as never;
+    const ask = (run: () => void, reason: string) => requireAccount(run, reason, { port: visitor });
+    expect(handleLudumConfirm({ search: "?ludum=confirm&return=/moderation/", navigate: (url) => went.push(url), port: visitor, requireAccount: ask, openConfirm: () => went.push("opened") })).toBe(true);
+    expect(accountPromptState()).toEqual({ open: true, mode: "login", reason: "Log in to continue to Ludum." });
+    accountSignedIn({ renew: () => undefined });
+    expect(went).toEqual(["https://ludum.netadao.org/moderation/"]);
+  });
+
+  it("not a confirmation request: nothing happens", () => {
+    let calls = 0;
+    expect(handleLudumConfirm({ search: "?ludum=signin&return=/me/", navigate: () => (calls += 1), port: readySessionPort(), openConfirm: () => (calls += 1) })).toBe(false);
+    expect(calls).toBe(0);
   });
 });

@@ -8,6 +8,8 @@ import type { CaseRecord } from "../contract";
 import type { LudumPorts } from "../ports";
 import type { FinancialGameRecord } from "../../escrow/moneyLifecycle";
 import type { TerminalSettlementEvidence } from "../../escrow/settlementEvidence";
+import type { ChainIntentRecord } from "../../escrow/chainIntents";
+import type { GameRecord } from "../../rooms/gameRecord";
 
 const CONTRACT = "juno19vd5hphghprl2m8agchctyav8pmeh6p4x3vud6cfhd2y6ulwtf0s0jrk7x";
 const CHAIN_ID = "uni-7";
@@ -110,6 +112,9 @@ interface Fakes {
   chainThrows?: boolean;
   financialThrows?: boolean;
   pin?: LudumPorts["escrowPin"] extends () => infer R ? R : never;
+  /** v1.1: the game records (seat nicknames) and the relayed chain intents. */
+  records?: GameRecord[];
+  intents?: Record<string, ChainIntentRecord[]>;
 }
 
 function ports(f: Fakes): LudumPorts {
@@ -117,7 +122,7 @@ function ports(f: Fakes): LudumPorts {
     throw new Error("the public case handler must not read account data");
   };
   return {
-    records: forbidden,
+    records: f.records !== undefined ? () => f.records! : forbidden,
     seatOf: forbidden,
     financial: forbidden,
     financialByChainGameId: async (id) => {
@@ -135,6 +140,7 @@ function ports(f: Fakes): LudumPorts {
     escrowPin: () => (f.pin === undefined ? { contract: CONTRACT, chainId: CHAIN_ID, denom: "ujunox" } : f.pin),
     product: () => ({ key: "project-18xx", name: "Project 18XX" }),
     now: () => DISPUTED_AT * 1000,
+    ...(f.intents !== undefined ? { chainIntents: async (gameId: string) => f.intents![gameId] ?? [] } : {}),
   };
 }
 
@@ -167,8 +173,8 @@ describe("ludum case: game kinds", () => {
     assert.equal(record.chainId, CHAIN_ID);
     assert.deepEqual(record.escrow, { value: "disputed", provenance: "chain-confirmed", observedAt: OBSERVED, height: "4242" });
     assert.deepEqual(record.seats, [
-      { chainSeatIndex: 0, wallet: W0, isChallenger: false },
-      { chainSeatIndex: 1, wallet: W1, isChallenger: true },
+      { chainSeatIndex: 0, wallet: W0, isChallenger: false, displayName: null },
+      { chainSeatIndex: 1, wallet: W1, isChallenger: true, displayName: null },
     ]);
     assert.deepEqual(record.dispute.value, {
       challenger: W1,
@@ -279,7 +285,7 @@ describe("ludum case: evidenceMatches", () => {
 });
 
 describe("ludum case: no account data", () => {
-  test("no principal, game id, player id or display name in any output", async () => {
+  test("no principal, game id, player id or account name in any output (v1.1: a seat's TABLE name only, below)", async () => {
     const p = ports({
       games: { "5": rawGame(5, "open"), "6": rawGame(6, "resolved", BOARD_HASH), "7": rawGame(7, "none") },
       financial: { "5": financialRecord("5"), "6": financialRecord("6"), "7": financialRecord("7") },
@@ -289,15 +295,62 @@ describe("ludum case: no account data", () => {
     for (const id of ["5", "6", "7", "999"]) answers.push(await ask(p, { chainGameId: id }, PRINCIPAL));
     answers.push(await ask(p, { chainGameId: "5", gameId: GAME_ID }, PRINCIPAL));
     const wire = JSON.stringify(answers);
-    for (const secret of [GAME_ID, PRINCIPAL, DISPLAY_NAME, ...PLAYER_IDS, "pr_", "pf_", "displayName", "principal", "username"]) {
+    for (const secret of [GAME_ID, PRINCIPAL, DISPLAY_NAME, ...PLAYER_IDS, "pr_", "pf_", "principal", "username"]) {
       assert.ok(!wire.includes(secret), secret);
     }
   });
 
   test("the record has exactly the §5 CaseRecord keys", async () => {
     const record = await caseOf(ports({ games: { "5": rawGame(5, "open") }, financial: { "5": financialRecord("5") } }), "5");
-    assert.deepEqual(Object.keys(record).sort(), ["chainGameId", "chainId", "chainSettlement", "contract", "dispute", "escrow", "evidenceMatches", "seats", "serverTerminal"]);
-    for (const seat of record.seats) assert.deepEqual(Object.keys(seat).sort(), ["chainSeatIndex", "isChallenger", "wallet"]);
+    assert.deepEqual(Object.keys(record).sort(), ["chainGameId", "chainId", "chainSettlement", "contract", "dispute", "escrow", "evidenceMatches", "seats", "serverTerminal", "transactions"]);
+    for (const seat of record.seats) assert.deepEqual(Object.keys(seat).sort(), ["chainSeatIndex", "displayName", "isChallenger", "wallet"]);
+  });
+});
+
+/* v1.1 (owner request 2026-10-09): each seat's table name, and the transactions this server relayed. */
+describe("ludum case v1.1: seat display names and relayed transactions", () => {
+  const seatsRecord = (names: string[]): GameRecord =>
+    ({ game_id: GAME_ID, seats: names.map((nickname, i) => ({ player_id: PLAYER_IDS[i], principal_id: `${PRINCIPAL}${i}`, nickname })) }) as unknown as GameRecord;
+  const hash = (c: string) => c.repeat(64);
+  const intent = (kind: string, over: Partial<ChainIntentRecord>): ChainIntentRecord =>
+    ({ intent_id: `i-${kind}`, game_id: GAME_ID, op: { kind }, status: "confirmed", created_at: 1, updated_at: 2, attempts: [], confirmation: null, ...over }) as unknown as ChainIntentRecord;
+
+  test("each chain seat carries its table name, mapped through the frozen roster -- never the principal or the player id", async () => {
+    const record = await caseOf(ports({ games: { "5": rawGame(5, "open") }, financial: { "5": financialRecord("5") }, records: [seatsRecord(["Marlowe", "Quill"])] }), "5");
+    assert.deepEqual(record.seats.map((seat) => seat.displayName), ["Marlowe", "Quill"]);
+    const wire = JSON.stringify(record);
+    for (const secret of [GAME_ID, PRINCIPAL, ...PLAYER_IDS]) assert.ok(!wire.includes(secret), secret);
+  });
+
+  test("no names when the roster does not match the chain, the record is unbound, or the index cannot be read", async () => {
+    const mismatch = await caseOf(ports({ games: { "5": rawGame(5, "open") }, financial: { "5": financialRecord("5", { rosterWallets: [W1, W0] }) }, records: [seatsRecord(["Marlowe", "Quill"])] }), "5");
+    assert.deepEqual(mismatch.seats.map((seat) => seat.displayName), [null, null]);
+    const unbound = await caseOf(ports({ games: { "5": rawGame(5, "open") }, financial: { "5": financialRecord("5", { contract: "juno1other" }) }, records: [seatsRecord(["Marlowe", "Quill"])] }), "5");
+    assert.deepEqual(unbound.seats.map((seat) => seat.displayName), [null, null]);
+    const unreadable = await caseOf(ports({ games: { "5": rawGame(5, "open") }, financial: { "5": financialRecord("5") } }), "5");
+    assert.deepEqual(unreadable.seats.map((seat) => seat.displayName), [null, null]);
+  });
+
+  test("relayed transactions: included (chain-observed, height) and broadcast (pending); failed and hashless ones left out", async () => {
+    const intents = [
+      intent("start", { created_at: 1, attempts: [{ phase: "included-success", tx_hash: hash("A"), inclusion: { height: "100" }, observed_at: 10 }] as never }),
+      intent("checkpoint", { created_at: 2, status: "in-flight", attempts: [{ phase: "dead", tx_hash: hash("B") }, { phase: "broadcast", tx_hash: hash("C") }] as never }),
+      intent("settle", { created_at: 3, confirmation: { how: "chain-state", tx_hash: null, height: null, detail: "", at: 5 } }),
+      intent("finalize", { created_at: 4, status: "superseded", attempts: [{ phase: "included-failure", tx_hash: hash("D") }] as never }),
+    ];
+    const record = await caseOf(ports({ games: { "5": rawGame(5, "open") }, financial: { "5": financialRecord("5") }, intents: { [GAME_ID]: intents } }), "5");
+    assert.equal(record.transactions?.provenance, "server-recorded");
+    const relayed = record.transactions!.value!.relayed;
+    assert.deepEqual(relayed.map((tx) => [tx.op, tx.txHash, tx.status.value, tx.status.provenance, tx.status.height ?? null]), [
+      ["start", hash("A"), "included", "chain-observed", "100"],
+      ["checkpoint", hash("C"), "broadcast", "pending", null],
+    ]);
+    assert.equal(record.transactions!.value!.walletSigned, "not-server-recorded");
+  });
+
+  test("no server record of the game: transactions unavailable, the rest still answers", async () => {
+    const record = await caseOf(ports({ games: { "5": rawGame(5, "open") }, intents: {} }), "5");
+    assert.equal(record.transactions?.provenance, "unavailable");
   });
 });
 

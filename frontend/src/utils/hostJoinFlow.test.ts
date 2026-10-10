@@ -114,7 +114,7 @@ describe("the table's terms (design note #1415)", () => {
   it("cannot pass on an empty, wrong or leaking region (negative controls)", () => {
     const real = roomSummaryRegion(serverSource("rooms/gameRecord.ts"));
     /* A LEAK IS SEEN. The real function with a principal and a PIN added to the object it returns. */
-    const leaking = real.replace("    nicknames: record.seats.map((seat) => seat.nickname),", "    nicknames: record.seats.map((seat) => seat.nickname),\n    principals: record.seats.map((seat) => seat.principal_id),\n    pin: record.join_pin,");
+    const leaking = real.replace("    nicknames: names,", "    nicknames: names,\n    principals: record.seats.map((seat) => seat.principal_id),\n    pin: record.join_pin,");
     expect(leaking).not.toBe(real);
     expect(summaryLeaks(leaking)).toEqual(expect.arrayContaining(["principal_id", "pin"]));
     /* A PRIVATE TABLE LISTED IS SEEN. */
@@ -235,7 +235,8 @@ function roomSummaryRegion(server: string): string {
  *  is a pass; each entry names what failed. */
 function summaryLeaks(summary: string): string[] {
   const failures: string[] = [];
-  for (const witness of ['record.visibility !== "public"', "nicknames: record.seats.map((seat) => seat.nickname),", "return {"]) {
+  /* PLAY LOBBY: a seat's public name is its ACCOUNT display name (`nameOf`), never the nickname its player set. */
+  for (const witness of ['record.visibility !== "public"', "const names = record.seats.map((seat) => nameOf(seat));", "nicknames: names,", "return {"]) {
     if (!summary.includes(witness)) failures.push(`witness: ${witness}`);
   }
   for (const secret of ["principal_id", "player_id,", "pin", "token"]) if (summary.includes(secret)) failures.push(secret);

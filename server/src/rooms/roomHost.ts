@@ -64,6 +64,7 @@ import {
   type GameRecord,
   type HoldKind,
   type LogFacts,
+  type PublicSeatName,
   type RoomSummary,
   myTableSummaryOf,
   type MyTableState,
@@ -962,6 +963,33 @@ export function createRoomHost(deps: RoomHostDeps) {
   }
 
   /* ---- the public list: coalesced ---- */
+  /* PLAY LOBBY: a seat's public name is its ACCOUNT display name (unique), never its cosmetic nickname; a seat whose
+     principal has no profile name reads "A player". With no identity wired (tests), the nickname. */
+  const publicSeatName: PublicSeatName = (seat) =>
+    deps.profileNameOf === undefined ? seat.nickname : (deps.profileNameOf(seat.principal_id) ?? "A player");
+  /* PLAY LOBBY: a listed table's deadline, from its clock record -- the controller's when it holds it, else read once
+     from the clock store (the list is pushed again when it arrives). Never guessed: unknown is left out. */
+  const lobbyClocks = new Map<string, NonNullable<RoomSummary["clock"]>>();
+  const lobbyClockReads = new Set<string>();
+  function lobbyClockOf(gameId: string): RoomSummary["clock"] | null {
+    if (clock === null) return null;
+    const held = clock.recordOf(gameId);
+    if (held !== null) return { deadline: held.policy.class, paceSecs: held.policy.class === "async-pace" ? held.policy.pace_secs : null };
+    const known = lobbyClocks.get(gameId);
+    if (known !== undefined) return known;
+    if (!lobbyClockReads.has(gameId)) {
+      lobbyClockReads.add(gameId);
+      clock.deadlineOf(gameId).then(
+        (read) => {
+          if (read === null) return;
+          lobbyClocks.set(gameId, { deadline: read.deadline, paceSecs: read.deadline === "async-pace" ? read.paceSecs : null });
+          scheduleList();
+        },
+        () => lobbyClockReads.delete(gameId),
+      );
+    }
+    return null;
+  }
   function summaries(): RoomSummary[] {
     const out: RoomSummary[] = [];
     for (const record of recordIndex.values()) {
@@ -975,9 +1003,16 @@ export function createRoomHost(deps: RoomHostDeps) {
       const facts = resident ? factsFromView(resident.view, record) : factsFromEntries([], false, false);
       const dealtFromRecord = record.started_at !== null || record.status === "active" || record.status === "completed";
       const stake = record.money === null ? null : (deps.money?.()?.stakeFor(record) ?? disabledStake(record));
-      const summary = roomSummaryOf(record, resident ? facts : { ...facts, dealt: dealtFromRecord, ended: record.status === "completed" }, now(), stake);
+      const summary = roomSummaryOf(record, resident ? facts : { ...facts, dealt: dealtFromRecord, ended: record.status === "completed" }, now(), stake, {
+        nameOf: publicSeatName,
+        clock: record.visibility === "public" ? lobbyClockOf(record.game_id) : null,
+      });
       if (summary !== null) out.push(summary);
     }
+    /* Only listed tables keep a remembered deadline. */
+    const listed = new Set(out.map((summary) => summary.gameId));
+    for (const gameId of [...lobbyClocks.keys()]) if (!listed.has(gameId)) lobbyClocks.delete(gameId);
+    for (const gameId of [...lobbyClockReads]) if (!listed.has(gameId) && !recordIndex.has(gameId)) lobbyClockReads.delete(gameId);
     return out.sort((a, b) => b.createdAtMs - a.createdAtMs);
   }
 
@@ -2656,6 +2691,8 @@ export function createRoomHost(deps: RoomHostDeps) {
     financialRecords: (): GameRecord[] => [...recordIndex.values()].filter((record) => settlement.retentionOf(record).kind === "financial"),
     /** LUDUM (Lane A, read-only): every record the index knows, as a snapshot (`ludum/wiring.ts`'s `LudumPorts.records`). */
     records: (): GameRecord[] => [...recordIndex.values()],
+    /** PLAY LOBBY: the public list as it would be pushed now (the player-history route answers only for these). */
+    publicRooms: (): RoomSummary[] => summaries(),
   };
 }
 

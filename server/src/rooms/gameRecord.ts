@@ -428,7 +428,21 @@ export interface RoomSummary {
   createdAtMs: number;
   /** ESCROW-4 (additive and optional): a real-money table's stake badge. Absent for a no-money table. */
   stake?: RoomStakeSummary;
+  /** PLAY LOBBY (additive, optional): the host's index in `nicknames` (seat order); absent when no seat is the host's. */
+  hostSeat?: number;
+  /** PLAY LOBBY (additive, optional): when the table was dealt (a playing table only). */
+  startedAtMs?: number;
+  /** PLAY LOBBY (additive, optional): the table's deadline as its clock record holds it -- absent until the server has
+   *  read it (never guessed). `paceSecs` is the async per-action allowance; null for live and no-deadline tables. */
+  clock?: { deadline: "live" | "async-pace" | "no-deadline"; paceSecs: number | null };
 }
+
+/** PLAY LOBBY: the PUBLIC name of a seat -- the seat's ACCOUNT display name (unique, server-side), never the seat's own
+ *  cosmetic nickname, which its player may set to anything (a public list must not let one player wear another's name). */
+export type PublicSeatName = (seat: Readonly<Seat>) => string;
+
+/** The seat nickname as the public name: only for a caller with no identity (tests, an embedded host). */
+export const SEAT_NICKNAME_AS_PUBLIC_NAME: PublicSeatName = (seat) => seat.nickname;
 
 /* ==================================================================
     LIVE-2F/3D (C9-01): "YOUR TABLES" -- the way back to a seat
@@ -516,17 +530,26 @@ export function roomViewFor(
 }
 
 /** A public list entry: public rooms in W or A only; names yes, ids no (beyond gameId and code). */
-export function roomSummaryOf(record: GameRecord, facts: LogFacts, now: number, stake: RoomStakeSummary | null = null): RoomSummary | null {
+export function roomSummaryOf(
+  record: GameRecord,
+  facts: LogFacts,
+  now: number,
+  stake: RoomStakeSummary | null = null,
+  extra: { readonly nameOf?: PublicSeatName; readonly clock?: RoomSummary["clock"] | null } = {},
+): RoomSummary | null {
   const lifecycle = effectiveStatus(record, facts, now);
   if (record.visibility !== "public" || record.join_code === null || record.archived_at !== null) return null;
   if (lifecycle !== "waiting" && lifecycle !== "active") return null;
-  const host = record.seats.find((seat) => seat.player_id === record.host_player_id);
+  const nameOf = extra.nameOf ?? SEAT_NICKNAME_AS_PUBLIC_NAME;
+  const hostSeat = record.seats.findIndex((seat) => seat.player_id === record.host_player_id);
+  const names = record.seats.map((seat) => nameOf(seat));
+  const playing = lifecycle !== "waiting";
   return {
     gameId: record.game_id,
     code: record.join_code,
-    status: lifecycle === "waiting" ? "waiting" : "playing",
-    hostNickname: host?.nickname ?? "",
-    nicknames: record.seats.map((seat) => seat.nickname),
+    status: playing ? "playing" : "waiting",
+    hostNickname: hostSeat >= 0 ? names[hostSeat] : "",
+    nicknames: names,
     readyCount: record.seats.filter((seat) => seat.ready).length,
     seated: record.seats.length,
     seatCap: record.seat_cap,
@@ -534,5 +557,8 @@ export function roomSummaryOf(record: GameRecord, facts: LogFacts, now: number, 
     variants: record.variants,
     createdAtMs: record.created_at,
     ...(record.money !== null && stake !== null ? { stake } : {}),
+    ...(hostSeat >= 0 ? { hostSeat } : {}),
+    ...(playing && record.started_at !== null ? { startedAtMs: record.started_at } : {}),
+    ...(extra.clock ? { clock: extra.clock } : {}),
   };
 }

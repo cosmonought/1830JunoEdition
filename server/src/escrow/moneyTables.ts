@@ -1197,7 +1197,9 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
     const entry = cache.get(record.game_id);
     if (entry === undefined || entry.ledger === null) return base;
     const claims = claimsOf(record, entry.ledger.grants, entry.chain?.response ?? null, hints.get(record.game_id));
-    return { ...base, funded: [...claims.bySeat.values()].filter((claim) => claim.funding === "funded").length };
+    /* PLAY LOBBY: each seat's funding as a yes / no in seat order -- never a wallet, a chain seat or an amount. */
+    const seatFunded = record.seats.map((seat) => claims.bySeat.get(seat.player_id)?.funding === "funded");
+    return { ...base, funded: seatFunded.filter(Boolean).length, seatFunded };
   }
 
   function myTableFor(record: GameRecord, principalId: string): MyTableMoneySummary | null {

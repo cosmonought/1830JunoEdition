@@ -99,14 +99,12 @@ describe("the footer mark can still see the room it keys against", () => {
   });
 
   it("relies on tree order rather than on a number", () => {
-    /* Appendix E step 8 paints `z-index: auto` and `z-index: 0` positioned boxes together, in tree order, and
-       the footer is the lobby root's LAST child while the scene is near its first. If the footer ever stops
-       being last, the words go back under the picture -- so the order is asserted, not assumed. */
+    /* PLAY LOBBY (approved design): the lobby's footer is its own Ludum footer now, and there is no photograph
+       behind the page for it to sit under -- but the order is still asserted, not assumed: the credit is the lobby
+       root's LAST child, after the tables region. The waiting room and the board keep AppFooter. */
     const lobby = SOURCES.Lobby;
-    expect(lobby.indexOf("styles.sceneClip")).toBeGreaterThan(-1);
-    expect(lobby.lastIndexOf('<AppFooter surface="meta" />')).toBeGreaterThan(
-      lobby.indexOf("styles.sceneClip"),
-    );
+    expect(lobby).not.toContain("<div style={styles.sceneClip}");
+    expect(lobby.lastIndexOf('<footer className="lb-footer" data-testid="lobby-footer">')).toBeGreaterThan(lobby.indexOf('data-testid="lobby-tables"'));
   });
 
   it("gives the waiting room's copy the same ground", () => {
@@ -164,33 +162,25 @@ describe("the lobby wordmark keeps the clearance #1132 won for it", () => {
   });
 
   it("constrains the boxes that are genuinely in between", () => {
-    /* `heroStage` and `titleAnchor` sit between the top region's group and the wordmark. They carry lengths only --
-       a width, a margin, `position: relative` for paint order -- never a transform, opacity, filter or z-index. */
-    expect(SOURCES.Lobby).toContain("<div style={styles.heroStage}>");
-    expect(SOURCES.Lobby).toContain("<div style={styles.titleAnchor}>");
-    const anchor = styleBlock("Lobby", "titleAnchor");
-    expect(anchor).not.toContain("transform:");
-    expect(anchor).not.toContain("opacity:");
-    expect(styleBlock("Lobby", "heroStage")).not.toContain("zIndex:");
+    /* PLAY LOBBY (approved design): the title is TEXT (Anton under a clipped gradient), not a keyed JPEG, so it
+       blends with nothing and there is no chain of intermediaries to keep clean. What this case guards now is that
+       the retired wordmark does not come back half-way: no keyed image and no blend in the header. */
+    expect(SOURCES.Lobby).not.toContain('className="lobby-wordmark"');
+    expect(SOURCES.Lobby).not.toContain("<div style={styles.heroStage}>");
+    expect(SOURCES.Lobby).not.toContain("<div style={styles.titleAnchor}>");
+    expect(SOURCES.Lobby).toContain('<h1 className="lb-lockup" id="lobby-title">');
   });
 
   it("keeps the photograph inside the group the title blends in", () => {
-    /* The group is the top region (a positioned box with a z-index); the photograph (`sceneClip` > `scene`) and the
-       stage are both inside it, the photograph first, so the wordmark keys against the room. */
-    const top = styleBlock("Lobby", "top");
-    expect(top).toContain('position: "relative"');
-    expect(top).toContain("zIndex: 1");
-    const clip = styleBlock("Lobby", "sceneClip");
-    expect(clip).toContain('position: "absolute"');
-    expect(clip).toContain("zIndex: 0");
-    // Design note #1294: the scene's cover arithmetic is spread per render from the live scale.
-    expect(SOURCES.Lobby).toContain("<div style={{ ...styles.scene, ...sceneSizeFor(uiScale) }} />");
-    const open = SOURCES.Lobby.indexOf('<div style={{ ...styles.top, ...topRegionVars(uiScale) }} data-testid="lobby-top">');
-    const painter = SOURCES.Lobby.indexOf("<div style={styles.sceneClip}");
-    const stage = SOURCES.Lobby.indexOf("<div style={styles.heroStage}>");
+    /* PLAY LOBBY (approved design): the drawing is a sibling of the title in the header's grid -- a masked figure,
+       hidden from assistive technology -- and the title needs no backdrop to key against. The top region still
+       opens before it and the boundary still follows it. */
+    const open = SOURCES.Lobby.indexOf('<div style={styles.topBand} data-testid="lobby-top">');
+    const title = SOURCES.Lobby.indexOf('<h1 className="lb-lockup" id="lobby-title">');
+    const art = SOURCES.Lobby.indexOf('<figure className="lb-hero-art" aria-hidden="true">');
     expect(open).toBeGreaterThan(-1);
-    expect(painter).toBeGreaterThan(open);
-    expect(stage).toBeGreaterThan(painter);
+    expect(title).toBeGreaterThan(open);
+    expect(art).toBeGreaterThan(title);
   });
 });
 

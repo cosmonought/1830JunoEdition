@@ -309,7 +309,7 @@ describe("account policy: routine play never asks for a wallet or a key", () => 
     await click(buttonNamed("Host game"));
     expect(byTestId("account-dialog")).toBeNull();
     expect(byTestId("host-body")).toBeTruthy();
-    await click(buttonNamed("Join game"));
+    await click(buttonNamed("Join by code"));
     expect(byTestId("account-dialog")).toBeNull();
     expect(server.calls.some((call) => /reauth|recover|reset|recovery-key|authorization/.test(call.path) || call.body.includes("rk_"))).toBe(false);
     expect(wallet.calls).toEqual([]);

@@ -154,25 +154,23 @@ describe("the stage that replaced the dashboard", () => {
      on it renders a room list and a staging table rather than a status card. That was #1123's real insight
      and it survives the layout that occasioned it. */
   it("anchors the controls to the picture instead of balancing two columns", () => {
-    /* Design note #1131 went one step past #1130: the stage was still a flow container, and the controls are
-       positioned against the scene now. So there is no column, no grid AND no stage. */
-    expect(LOBBY).toContain("styles.tableAnchor");
+    /* PLAY LOBBY (approved design): the header IS two columns again -- the text and the drawing (5fr / 7fr) -- but
+       not two cards: the doors sit under the title in the left column, and nothing is a panel. */
+    expect(LOBBY).toContain('<div className="lb-doors" data-testid="lobby-actions">');
     expect(LOBBY).not.toContain('gridTemplateColumns: "1fr 1fr"');
     expect(LOBBY).not.toContain("lobby-dashboard");
     expect(LOBBY).not.toContain("styles.stage}");
   });
 
   it("still keeps the room browser out of it -- and now there is none (LIVE-2D)", () => {
-    /* #1123's ONE SURVIVING CLAIM, through three layouts, was that the Web3 branch stays outside whatever holds
-       the sandbox controls. RUST-RETIRE-1 2B.3 deleted that branch -- the room browser, the staging table and
-       the flag -- so the claim closes as an absence. The only list on this screen is the public one, which is
-       flow content below the hero, never inside the anchored controls. */
-    const anchor = LOBBY.indexOf("styles.tableAnchor");
-    expect(anchor).toBeGreaterThan(-1);
+    /* #1123's ONE SURVIVING CLAIM: the room browser stays outside whatever holds the doors. RUST-RETIRE-1 deleted
+       that branch; the only list is the public one, the approved design's boards, below the header. */
+    const doors = LOBBY.indexOf('data-testid="lobby-actions"');
+    expect(doors).toBeGreaterThan(-1);
     expect(LOBBY).not.toContain("WEB3_LOBBY_ENABLED");
     expect(LOBBY).not.toContain("<RoomBrowser");
     expect(LOBBY).not.toContain("StagingRoom");
-    expect(LOBBY.indexOf("<LobbyRoomList")).toBeGreaterThan(anchor);
+    expect(LOBBY.indexOf("<LobbyBoards")).toBeGreaterThan(doors);
   });
 
   it("needs no breakpoint, and spends its stylesheet on the title instead", () => {

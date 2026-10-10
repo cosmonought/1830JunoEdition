@@ -86,6 +86,9 @@ export type SessionApiPath =
   /** P3-ACCT: the factual trust indicators (`trustApi.ts`); no id, username or wallet in any answer. */
   | "trust/table"
   | "trust/me"
+  /** PLAY LOBBY: a listed table's players and their public game history (`server/src/rooms/publicHistory.ts`); public,
+   *  read-only -- no id, username, wallet or amount in the answer. */
+  | "lobby/players"
   /** ESCROW-4: the real-money routes (`utils/../money/moneyApi.ts`); the session's own authority, closed bodies. */
   | "money/config"
   | "money/wallet-challenge"

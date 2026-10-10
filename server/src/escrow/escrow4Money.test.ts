@@ -108,7 +108,7 @@ describe("ESCROW-4: creating a real-money table", () => {
          field; a no-money table's carry none (`live2dCutover.test.ts`). */
       host.client.send({ kind: "rooms-watch", on: true });
       const rooms = (await host.client.next((frame) => frame.kind === "rooms", "the list")).rooms as Array<Record<string, unknown>>;
-      assert.deepEqual(rooms.find((room) => room.gameId === table.gameId)?.stake, { anteGross: STAKE, symbol: "JUNOX", exponent: 6, networkClass: "testnet", funded: 0, seats: 2 });
+      assert.deepEqual(rooms.find((room) => room.gameId === table.gameId)?.stake, { anteGross: STAKE, symbol: "JUNOX", exponent: 6, networkClass: "testnet", funded: 0, seats: 2, seatFunded: [false] });
       const mine = await host.client.op({ type: "my-tables" });
       const line = (mine.data as { tables: Array<Record<string, unknown>> }).tables.find((entry) => entry.gameId === table.gameId);
       assert.deepEqual(line?.money, { anteGross: STAKE, symbol: "JUNOX", exponent: 6, networkClass: "testnet", status: "link-wallet", actionNeeded: true });

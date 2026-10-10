@@ -73,7 +73,8 @@ describe("public is browsed, private is told (design note #1440)", () => {
   it("keeps the list on the page and the code box in the dialog", () => {
     /* THE DIALOG'S SIDE IS ASSERTED AS AN ABSENCE, which is the only way this claim can be held: a card that
        merely "does not show" a list today is one prop away from showing one again. */
-    expect(LOBBY).toContain("<LobbyRoomList");
+    /* PLAY LOBBY: the approved design's boards (`LobbyBoards`) read the same list. */
+    expect(LOBBY).toContain("<LobbyBoards");
     expect(LOBBY).toContain("rooms={publicRooms.rooms}");
     expect(LOBBY).toContain("const publicRooms = usePublicRooms();");
     expect(CARD).not.toContain("SandboxRoomSummary");
@@ -101,10 +102,11 @@ describe("public is browsed, private is told (design note #1440)", () => {
   });
 
   it("lets the picture fall into shadow rather than stop at a line", () => {
-    /* The hero is bounded now (#1440), so without this the photograph ends on a hard edge across the barons'
-       chests. The fade is on the CLIP because the crop line is the hero's; the scene runs past it. */
-    expect(LOBBY).toContain('<div style={styles.heroFade} aria-hidden="true" />');
-    expect(LOBBY).toContain("linear-gradient(rgba(8, 8, 8, 0), #080808)");
+    /* PLAY LOBBY (approved design): the drawing dissolves into the page by its own mask -- transparent at its left
+       14%, solid from 56% to 86%, transparent at its right edge; and top and bottom likewise -- so no edge shows. */
+    const css = readStripped("components/lobbyDesignCss.ts");
+    expect(css).toContain("mask-image: linear-gradient(90deg, transparent 0%, transparent 14%, #000 56%, #000 86%, transparent 100%)");
+    expect(css).toContain("mask-composite: intersect;");
   });
 
   it("a seat comes back with the session, not a PIN: no seat-PIN door survives anywhere (LIVE-2D)", () => {
@@ -406,17 +408,11 @@ describe("the three doors fit the window (design note #1441)", () => {
      the window, which in this box's own percentages is `50% − 50vw` -- the same "put both sides in one
      space" move #1144 made for the cover arithmetic itself. */
   it("keeps the action row inside the window by flow (P3-N028 retires the re-hanging)", () => {
-    /* #1441 re-hung an ABSOLUTE row on the viewport at narrow widths (`--lobby-actions-left/width` and two
-       `!important` rules). P3-N028 (reopened) made the row flow content of the top region: it is the region's
-       full width less a 16px gutter at every width, so it cannot start to the left of the screen -- the same
-       result, with nothing left to re-hang and no inline length to out-rank. */
-    expect(LOBBY).toContain('<div className="lobby-table-anchor" style={styles.tableAnchor} data-testid="lobby-actions">');
-    const anchor = LOBBY.slice(LOBBY.indexOf("\n  tableAnchor: {"));
-    const body = anchor.slice(0, anchor.indexOf("\n  },"));
-    expect(body).toContain('width: "100%"');
-    expect(body).toContain('boxSizing: "border-box"');
-    expect(body).toContain('padding: "0 16px"');
-    expect(body).not.toMatch(/position:|left:|top:|transform:/);
+    /* The doors are flow content of the header's left column (a wrapping flex row), so a narrow window wraps them
+       rather than starting them off-screen; nothing is re-hung, and no inline length out-ranks anything. */
+    expect(LOBBY).toContain('<div className="lb-doors" data-testid="lobby-actions">');
+    const css = readStripped("components/lobbyDesignCss.ts");
+    expect(css).toContain(".lb-doors { display: flex; gap: 10px; flex-wrap: wrap; }");
     expect(LOBBY).not.toContain("--lobby-actions-left");
     expect(LOBBY).not.toContain("--lobby-actions-width");
   });

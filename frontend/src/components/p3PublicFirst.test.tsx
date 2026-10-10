@@ -155,7 +155,7 @@ describe("P3-ACCT: a visitor gets the homepage, and an account only where one is
     await homepage(server.port);
     expect(byTestId("profile-gate")).toBeNull();
     expect(buttonNamed("Host game")).toBeTruthy();
-    expect(buttonNamed("Join game")).toBeTruthy();
+    expect(buttonNamed("Join by code")).toBeTruthy();
     expect(byTestId("lobby-rules")?.textContent).toBe("Rules");
     expect(byTestId("account-login")?.textContent).toBe("Log in");
     expect(byTestId("account-create")?.textContent).toBe("Create account");
@@ -188,11 +188,10 @@ describe("P3-ACCT: a visitor gets the homepage, and an account only where one is
   it("Join asks for an account too; closing the dialog drops the action (nothing joins later)", async () => {
     const server = fakeServer(null);
     await homepage(server.port);
-    await click(buttonNamed("Join game"));
-    /* No game server in this build: the code box is inline -- its Join is the gated door. */
-    const code = all().querySelector('input[aria-label="Room code"]') as HTMLInputElement | null;
-    type(code, "JUNO-AAAA-BBBB");
-    await submit(code?.closest("form") ?? null);
+    /* PLAY LOBBY (approved design): "Join by code" is the gated door itself -- it asks for an account before the code
+       box opens, as the configured build always did (the inline code box of a build with no game server is retired). */
+    await click(buttonNamed("Join by code"));
+    expect(all().querySelector('input[aria-label="Room code"]')).toBeNull();
     expect(byTestId("account-reason")?.textContent).toBe("Log in or create an account to join a game.");
     await click(byTestId("account-dialog")?.querySelector('button[aria-label="Close"]'));
     expect(byTestId("account-dialog")).toBeNull();

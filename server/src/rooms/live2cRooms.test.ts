@@ -992,11 +992,16 @@ describe("LIVE-2C reads and access loss", () => {
       const rooms = first.rooms as Array<Record<string, unknown>>;
       assert.deepEqual(rooms.map((room) => room.gameId), [open.gameId]);
       /* ESCROW-4: additive only -- an ordinary table's entry is exactly as before (no `stake` key). */
-      assert.deepEqual(Object.keys(rooms[0]).sort(), ["code", "createdAtMs", "gameId", "hostNickname", "nicknames", "playerCount", "readyCount", "seatCap", "seated", "status", "variants"]);
+      assert.deepEqual(Object.keys(rooms[0]).sort(), ["code", "createdAtMs", "gameId", "hostNickname", "hostSeat", "nicknames", "playerCount", "readyCount", "seatCap", "seated", "status", "variants"]);
       for (let n = 0; n < 5; n += 1) await op(open.host, { type: "set-profile", nickname: `Hana${n}` }, open.gameId);
       await sleep(450);
       assert.ok(lister.of("rooms").length <= 4, `five changes, coalesced (${lister.of("rooms").length} lists)`);
-      assert.equal((lister.of("rooms").pop()?.rooms as Array<{ hostNickname: string }>)[0].hostNickname, "Hana4");
+      /* PLAY LOBBY: the public list names a seat by its ACCOUNT display name, never the nickname its player chose -- so
+         "Hana4" (anything a player types) cannot change what the public sees. */
+      const listed = (lister.of("rooms").pop()?.rooms as Array<{ hostNickname: string; nicknames: string[] }>)[0];
+      assert.equal(listed.hostNickname, first.rooms && (rooms[0].hostNickname as string));
+      assert.notEqual(listed.hostNickname, "Hana4");
+      assert.deepEqual(listed.nicknames, rooms[0].nicknames);
       assertNoPrincipalIds([lister, open.host, hidden.host]);
       await Promise.all([open.host, hidden.host, lister].map((who) => who.close()));
     } finally {

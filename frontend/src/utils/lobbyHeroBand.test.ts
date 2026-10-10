@@ -25,6 +25,8 @@ const WAITING = readStripped("components/SandboxWaitingRoom.tsx");
 const FOOTER = readStripped("components/AppFooter.tsx");
 const APP_STYLES = readStripped("styles/appStyles.ts");
 const CONTROLS_BAR = readStripped("components/SandboxRoomBar.tsx");
+/* PLAY LOBBY (approved design, "play-lobby-handoff"): the header, boards and footer's stylesheet. */
+const DESIGN_CSS = readStripped("components/lobbyDesignCss.ts");
 
 const PUBLIC_DIR = path.join(__dirname, "..", "..", "public");
 
@@ -55,46 +57,24 @@ describe("the two boardrooms stay on their own screens", () => {
 });
 
 describe("the room is the page, and the text carries its own ground", () => {
-  it("puts the picture on the page rather than in a band", () => {
+  it("PLAY LOBBY: the header is the approved design's two columns -- the lockup beside the boardroom, masked into the page", () => {
     /* ==================================================================
-        DESIGN NOTE 1129 SUPERSEDES #1124 ON PLACEMENT
+        THE APPROVED DESIGN SUPERSEDES #1129 / #1131 / #1144 ON THE PICTURE
        ==================================================================
-       THE THREE CASES HERE USED TO ASSERT A BAND -- a 0.70/0.82 scrim, a `#1c1c1c` fallback, and "exactly one
-       background image, because the body stays on flat tokens". All three were right about a header strip and
-       all three describe a design that could not work: a header is ~15:1 on a wide window against a 5.3:1
-       band, so `cover` kept the middle third and the middle third is foreheads.
-       THE BODY-ON-FLAT-TOKENS RULE IS THE ONE WORTH RE-EXAMINING, since it was my argument against exactly
-       this change. It was about CONTRAST, and the cards answer it a different way now: they are 0.92-opaque
-       over the scrimmed photo, and the ink was re-measured against that blend rather than against the token
-       (title 8.87:1, note 6.15:1). The rule held; the way of satisfying it moved. */
-    expect(LOBBY).toContain("linear-gradient(rgba(8, 8, 8, 0.48), rgba(8, 8, 8, 0.48))");
-    /* Design note #1131: `backgroundAttachment: fixed` is GONE with the background itself -- the picture is
-       an element now, sized as `cover` would compute it, so that children can be anchored to it.
-       ==================================================================
-        DESIGN NOTE 1144 SUPERSEDES THE SPELLING OF THIS ASSERTION, NOT ITS CLAIM
-       ==================================================================
-       IT READ `'width: "max(100%, calc(100vh * 1920 / 1072))"'` -- the whole declaration, quotes and all --
-       and #1144 broke it by putting the viewport terms in the chrome's zoom space, where `100vh` had stopped
-       meaning the viewport. The ratio is untouched; the units moved. That is the third time this harness has
-       gone red over an expression rather than a property (see `stepJumpButton.test.ts` #859 for the same
-       lesson learned on a `<div>`), so this now asserts the two things #1131 actually argues for:
-         the box is `cover`'s OWN arithmetic, ratio and all -- not `background-size: cover` on a parent;
-         and it is the max of a proportional term and a viewport term, which is what makes it an ELEMENT
-         children can be anchored inside.
-       THE `1920 / 1072` IS THE LOAD-BEARING PART and is asserted exactly, because it is the photograph's real
-       aspect: a wrong ratio here is a stretched room, and no other test in this file would notice. */
-    expect(LOBBY).toContain("* 1920 / 1072");
-    expect(LOBBY).toContain("* 1072 / 1920");
-    expect(LOBBY).toMatch(/width: `max\(100%, calc\(\$\{[^}]+\}vh \* 1920 \/ 1072\)\)`/);
-    /* Design note #1144: and the units are in ONE space. A bare `100vh` surviving here is the specific bug
-       that would leave the photograph letterboxed on a tall window -- see `uiScale.test.ts`, which owns the
-       reasoning; this line is the tripwire on the file that would show it. */
-    expect(LOBBY).not.toContain("calc(100vh *");
-    /* The other half of the same box, re-anchored for the same reason. Both axes are asserted rather than
-       one, because `cover` is the MAX of the two fits and a box with one correct axis is not cover -- it is a
-       picture that happens to be right on wide windows. */
-    expect(LOBBY).toMatch(/height: `max\(\$\{[^}]+\}vh, calc\(\$\{[^}]+\}vw \* 1072 \/ 1920\)\)`/);
-    expect(LOBBY).not.toContain("max(100vh,");
+       The full-page photograph (`sceneClip` > `scene`, cover arithmetic in zoom space) is no longer mounted. The
+       header is two columns (5fr text, 7fr picture); the picture is Ludum's boardroom drawing, as tall as the text,
+       cropped to its top 10-70%, the man at the head of the table held 96px from the box's right edge, and masked
+       so no rectangle shows (design handoff §2). On phones it is a 170px banner above the title. */
+    expect(LOBBY).toContain('<section className="lb-hero" aria-labelledby="lobby-title">');
+    expect(LOBBY).toContain("/images/p18-board-meeting.webp");
+    expect(LOBBY).not.toContain("<div style={styles.sceneClip}");
+    expect(DESIGN_CSS).toContain("grid-template-columns: minmax(0, 5fr) minmax(0, 7fr)");
+    expect(DESIGN_CSS).toContain("linear-gradient(90deg, transparent 0%, transparent 14%, #000 56%, #000 86%, transparent 100%)");
+    expect(DESIGN_CSS).toContain("linear-gradient(180deg, transparent 0%, #000 14%, #000 78%, transparent 100%)");
+    expect(DESIGN_CSS).toContain("height: calc(100cqh / .6); top: calc(100cqh / .6 * -.1)");
+    expect(DESIGN_CSS).toContain("filter: brightness(.94) contrast(1.22)");
+    expect(DESIGN_CSS).toContain("--d: 64px; order: -1; height: 170px;");
+    expect(fs.existsSync(path.join(PUBLIC_DIR, "images", "p18-board-meeting.webp"))).toBe(true);
   });
 
   it("needs no plate, because the title sits where the room is darkest", () => {
@@ -124,20 +104,19 @@ describe("the room is the page, and the text carries its own ground", () => {
     expect(LOBBY).toContain('backgroundClip: "text"');
   });
 
-  it("draws the wordmark by keying it, and keeps a title when it fails", () => {
-    /* ==================================================================
-        DESIGN NOTE 1130: TWO FAILURE MODES, BOTH SILENT WITHOUT THIS
-       ==================================================================
-       An `<img>` that 404s renders nothing, and the heading beside it is clipped for screen readers -- so a
-       missing asset would have produced a lobby with no visible title at all. `onError` is what turns that
-       into the CSS gilt instead.
-       AND THE BLEND IS LOAD-BEARING: without `screen` the artwork is a black rectangle pasted on the room,
-       because the file is a JPEG and has no alpha to cut it out with. */
-    expect(LOBBY).toContain('mixBlendMode: "screen"');
-    expect(LOBBY).toContain("onError={() => setTitleArtFailed(true)}");
-    expect(LOBBY).toContain("titleArtFailed ? styles.brandTitle : styles.srOnlyTitle");
-    // The name stays in the document either way -- an image cannot be selected, searched, or spoken.
-    expect(LOBBY).toContain("<h1 style={titleArtFailed");
+  it("PLAY LOBBY: the title is text -- PROJECT and 18XX in Anton, the numerals under the gilt -- so it cannot fail to draw", () => {
+    /* The keyed JPEG wordmark (and the `screen` blend it needed, and the `onError` fallback to CSS gilt) is retired:
+       the lockup is the heading's own text, in Anton, with the gilt gradient clipped to 18XX and a solid gold `color`
+       under it for a browser without the clip. The numerals carry `.06em` of block padding so Anton's round tops
+       and bottoms are inside the gradient (handoff §2). One heading, read once: "Project 18XX". */
+    expect(LOBBY).toContain('<h1 className="lb-lockup" id="lobby-title">');
+    expect(LOBBY).toContain('<span className="lb-name">Project</span>{" "}');
+    expect(LOBBY).toContain('<span className="lb-num">18XX</span>');
+    expect(DESIGN_CSS).toContain("linear-gradient(180deg, var(--lb-gilt) 0%, var(--lb-gold) 42%, var(--lb-deep) 58%, var(--lb-gold) 74%, var(--lb-gilt) 100%)");
+    expect(DESIGN_CSS).toContain("padding-block: .06em; margin-block: -.06em;");
+    expect(DESIGN_CSS).toContain("-webkit-text-fill-color: transparent; color: var(--lb-gold);");
+    expect(DESIGN_CSS).toContain('font-family: "Anton"; src: url(');
+    expect(LOBBY).not.toContain('className="lobby-wordmark"');
   });
 
   it("ships the wordmark, keyed to true black and small enough to sit beside the room", () => {
@@ -310,33 +289,27 @@ describe("the room is the page, and the text carries its own ground", () => {
   });
 
   it("bounds the picture to the top region and puts the list under it", () => {
-    /* ==================================================================
-        DESIGN NOTE 1440, AND P3-N028 (REOPENED) ON TOP OF IT
-       ==================================================================
-       #1440 bounded the photograph to a hero WINDOW (`min(100vh, max(520px, 74vh))`) and anchored the scene to the
-       window's TOP rather than centring it, so the title and the doors stayed where #1131 put them while the picture
-       stopped above the fold. Both survive. What changed is where the window lives: it is the TOP REGION's floor
-       (`minHeight`) now, and the photograph is that region's background (`sceneClip`, `bottom: 0` of the region) --
-       not an absolute layer over the page with an empty spacer (`heroFlow`) reserving its height from a measurement.
-       The list is flow content after an explicit boundary; the region's height is its content's. */
-    expect(LOBBY).toContain('minHeight: "var(--lobby-hero-window)"');
-    expect(LOBBY).toContain('"--lobby-hero-window": `min(${100 / scale}vh, max(${HERO_MIN_PX}px, ${HERO_SHARE / scale}vh))`');
+    /* P3-N028's boundary survives the approved design: the corner and the header are the top region, the tables
+       region follows it after the explicit boundary, and the drawing lives inside the header's own grid -- it is
+       no longer a layer over anything, so it has nothing to be bounded against. */
+    expect(LOBBY).toContain('<div style={styles.topBand} data-testid="lobby-top">');
     expect(LOBBY).toContain('<div style={styles.boundary} role="presentation" aria-hidden="true" data-testid="lobby-boundary" />');
+    const top = LOBBY.indexOf('data-testid="lobby-top"');
+    const art = LOBBY.indexOf('<figure className="lb-hero-art" aria-hidden="true">');
+    const boundary = LOBBY.indexOf("<div style={styles.boundary}");
+    expect(art).toBeGreaterThan(top);
+    expect(boundary).toBeGreaterThan(art);
     expect(LOBBY).not.toContain("styles.heroFlow");
-    expect(LOBBY).toMatch(/top: `calc\(max\(\$\{[^}]+\}vh, calc\(\$\{[^}]+\}vw \* 1072 \/ 1920\)\) \/ 2\)`/);
-    // The scene is not centred on the window, which is the value that would undo all of the above.
-    expect(LOBBY).not.toContain('top: "50%"');
-    expect(LOBBY).not.toContain('padding: "0 0 40px"');
   });
 
   it("puts the public list on the page, below the two doors", () => {
-    /* Design note #1440: the list is FLOW CONTENT in the width-capped column -- not a second absolutely-placed layer
-       over the photograph, and not inside the join dialog it came from. P3-N028: after the top region's boundary.
-       The order is the assertion: doors, boundary, tables region, list. */
+    /* Design note #1440: the list is FLOW CONTENT in the width-capped column, after the top region's boundary. The
+       approved design draws it as two boards (`LobbyBoards`); the order is the assertion: doors, boundary, tables
+       region, boards. */
     const doors = LOBBY.indexOf('data-testid="lobby-actions"');
     const boundary = LOBBY.indexOf('<div style={styles.boundary}');
     const region = LOBBY.indexOf('<div style={styles.content} data-testid="lobby-tables">');
-    const list = LOBBY.indexOf("<LobbyRoomList");
+    const list = LOBBY.indexOf("<LobbyBoards");
     expect(doors).toBeGreaterThan(-1);
     expect(boundary).toBeGreaterThan(doors);
     expect(region).toBeGreaterThan(boundary);
@@ -355,17 +328,12 @@ describe("the room is the page, and the text carries its own ground", () => {
   });
 
   it("has no card left in the middle of the screen", () => {
-    /* Design note #1130 SUPERSEDES #1123's GRID: one centred stage, no panel around it, and the two-column
-       breakpoint gone with the second card. The `sandboxStrip` style survives because `StagingRoom` still
-       uses it -- so this asserts the LAYOUT is gone, not the token. */
+    /* Design note #1130 SUPERSEDES #1123's GRID, and the approved design keeps that: the title, the line and the two
+       doors sit on the page in the header's left column, with no panel around them. */
     expect(LOBBY).not.toContain("lobby-dashboard");
     expect(LOBBY).not.toContain("styles.dashboardColumn");
-    // Design note #1131: `styles.stage` (the old card's column) went too. P3-N028 (reopened) puts the title and the
-    // controls back in a flow column -- `styles.heroStage`, inside the top region and with no panel -- because a
-    // control that owns no height is how the list came to cover it; the card does not come back with it.
     expect(LOBBY).not.toContain("styles.stage}");
-    expect(LOBBY).toContain("<div style={styles.heroStage}>");
-    expect(LOBBY).toContain("styles.tableAnchor");
+    expect(LOBBY).toContain('<div className="lb-doors" data-testid="lobby-actions">');
   });
 
   it("has no display-name field: its only readers went with the staging lobby (LIVE-2D)", () => {

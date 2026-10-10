@@ -36,14 +36,12 @@ import {
   SANDBOX_TEXT,
   SANDBOX_TITLE,
 } from "../styles/palette";
-import AppFooter from "./AppFooter";
 import { chromeZoomFor } from "../styles/appStyles";
 /* Design note #1294: the chrome scale, live, for the root's zoom and the scene's viewport arithmetic. */
 import { useUiScale } from "../utils/useUiScale";
 /* W1-O (AUD-16.05): breakpoints asked in the zoomed root's own pixels. */
 import { zoomAwareMediaCss } from "../utils/uiScale";
 // Design note #524: the sandbox lobby lives on this screen now.
-import SandboxRoomBar from "./SandboxRoomBar";
 import { createHostedGame, gameIdOf, joinHostedGame, type RoomSetup } from "../utils/sandboxRoom";
 /* LIVE-2E: the profile chip (link a device, rotate the key, sign out), and the profile's name as the host's seat name.
    P3-ACCT (public first): signed out, the same corner offers Log in and Create account. */
@@ -57,7 +55,8 @@ import { openInfoPage } from "../utils/infoPages";
 // the join card, the code box for an unlisted table.
 import { HostSetupCard } from "./HostSetupCard";
 import { JoinGameCard } from "./JoinGameCard";
-import { LobbyRoomList } from "./LobbyRoomList";
+import { LobbyBoards } from "./LobbyBoards";
+import { LOBBY_DESIGN_CSS } from "./lobbyDesignCss";
 import { roomLinkAvailable } from "../utils/roomLink";
 import { JOIN_CODE_EXAMPLE, parseJoinCode, refusalMessage, supportRefOf } from "../utils/roomProtocol";
 import { CONTROL_PADDING, FONT_FAMILY, FONT_FAMILY_MONO, FONT_SIZE, LINE_HEIGHT, RADIUS } from "../styles/typography";
@@ -101,8 +100,9 @@ export interface LobbyProps {
    `bind-chain-game-id`, the wallet-keyed seats and heartbeats. Money tables return through the escrow contract
    (ESCROW-3), not through this path. The wallet furniture in the corner stays -- Keplr connect is kept. */
 
-/** Design note #1144's cover arithmetic (see `scene`), as a function of the live scale (#1294): every viewport
- *  term is divided by the zoom, so both sides of each `max()` are in layout space. */
+/* PLAY LOBBY (approved design): the photograph scene and its cover arithmetic (#1131 / #1144 / #1440) are gone with
+   the full-page picture -- the header is the design's two columns, and the boardroom drawing sits in its own masked
+   box (`lobbyDesignCss.ts`). The notes below record why the scene was built the way it was. */
 /* ==================================================================
     DESIGN NOTE 1440: THE PICTURE IS TOP-ANCHORED, BECAUSE THE PAGE NOW HAS A BOTTOM
    ==================================================================
@@ -120,13 +120,6 @@ export interface LobbyProps {
    NOTHING ELSE MOVES. The scene is at least the viewport tall (both `max()`s), so on a one-screen lobby the
    photograph, the title and the buttons are where they were; the hero window below simply stops the picture
    above the fold instead of below it. */
-function sceneSizeFor(scale: number): React.CSSProperties {
-  return {
-    width: `max(100%, calc(${100 / scale}vh * 1920 / 1072))`,
-    height: `max(${100 / scale}vh, calc(${100 / scale}vw * 1072 / 1920))`,
-    top: `calc(max(${100 / scale}vh, calc(${100 / scale}vw * 1072 / 1920)) / 2)`,
-  };
-}
 
 /* ==================================================================
     DESIGN NOTE 1440: THE HERO IS A WINDOW ON THE PICTURE, NOT THE WHOLE PAGE
@@ -344,7 +337,6 @@ export function Lobby({ onEnterSandbox, onWatchSandbox }: LobbyProps) {
   const chainError = chainConfigError();
   const backendError = backendConfigError();
 
-  const [titleArtFailed, setTitleArtFailed] = useState(false);
 
   /* ---------------- Render ---------------- */
 
@@ -364,7 +356,8 @@ export function Lobby({ onEnterSandbox, onWatchSandbox }: LobbyProps) {
           One normal-flow block that owns its height (at least the hero window): the account corner, then the
           stage (title, Host / Join), with the photograph as its background only. It ends at `lobby-boundary`;
           the tables region is the next thing in the column. See `topRegionVars`. */}
-      <div style={{ ...styles.top, ...topRegionVars(uiScale) }} data-testid="lobby-top">
+      <style>{zoomAwareMediaCss(LOBBY_DESIGN_CSS, uiScale)}</style>
+      <div style={styles.topBand} data-testid="lobby-top">
       {/* ==================================================================
            DESIGN NOTE 1130: THE UTILITY ROW LEAVES THE TITLE ALONE
           ==================================================================
@@ -430,67 +423,41 @@ export function Lobby({ onEnterSandbox, onWatchSandbox }: LobbyProps) {
           flow content of the top region (below), aimed at 0.4 and 0.7 of this same box by CSS arithmetic, so the
           picture is decoration that can position nothing and cover nothing. `sceneClip` is the region's own size
           (`inset: 0`), clipped to it, `pointerEvents: none`, and painted beneath the region's flow content. */}
-      <div style={styles.sceneClip} aria-hidden="true">
-        <div style={{ ...styles.scene, ...sceneSizeFor(uiScale) }} />
-        {/* Design note #1440: the room falls into shadow rather than being cut off. A hard edge across the
-            barons' chests is what a bounded hero looks like without this; the fade is on the CLIP, not the
-            scene, because the crop line is the region's and the scene runs past it. Painted under the doors now. */}
-        <div style={styles.heroFade} aria-hidden="true" />
-      </div>
-
-      {/* P3-N028 (reopened): THE STAGE -- the title and the doors, in flow, under the corner. Positioned (so it paints
-          above `sceneClip`) but with no z-index, transform or opacity: the wordmark's `screen` blend keys against the
-          photograph inside the top region's group (`blendIsolation.test.ts`). */}
-      <div style={styles.heroStage}>
-        {/* Design note #1131: "at the lowest" is the title's FOOT at 0.4 of the scene -- now a flow margin that aims
-            it there (`TITLE_MARGIN_TOP`) and never lets it nearer the corner than 16px (#1354's safe line). The
-            width sets the size: 20% of the scene, at least 230px. */}
-        <div style={styles.titleAnchor}>
-          {/* ==================================================================
-               DESIGN NOTE 1130: THE CSS GILT SURVIVES AS THE FALLBACK
-              ==================================================================
-              AN `<img>` THAT 404s LEAVES NOTHING BEHIND IT, and the heading beside it is clipped for screen
-              readers -- so a missing asset would leave this lobby with no visible title at all, a worse
-              version of the failure #1129's `color`-before-clip guard was written to prevent. The gilt
-              gradient it replaced is still here, still measured, and stands in when the artwork does not
-              arrive. `onError` covers a 404, a decode failure and an offline cache miss alike.
-              ONE HEADING IN BOTH BRANCHES, so a screen reader hears "Project 18XX" exactly once whichever
-              renders: clipped while the artwork carries the name, visible when it cannot. */}
-          <h1 style={titleArtFailed ? styles.brandTitle : styles.srOnlyTitle}>Project 18XX</h1>
-          {!titleArtFailed && (
-            <img
-              className="lobby-wordmark"
-              src={`${process.env.PUBLIC_URL ?? ""}/images/title-project18xx.jpg`}
-              alt=""
-              onError={() => setTitleArtFailed(true)}
-              style={styles.brandWordmark}
-            />
-          )}
-        </div>
-
-        {/* ==================================================================
-             THE DOORS (#1131 / #1423 / #1441), IN FLOW (P3-N028)
-            ==================================================================
-            #1131 put them on the table at 0.7; #1423 centred the group with a gap; #1441 kept them inside a narrow
-            window. All three hold by flow now: the row is the stage's full width less a 16px gutter (so it can
-            never start off-screen, #1441), the bar centres its buttons (#1423), and `ACTIONS_MARGIN_TOP` aims the
-            row's centre at 0.7 of the scene, clamped into the hero window (P3-ACCT). A row that wraps, an error
-            under it or a larger text size makes the top region taller; nothing below can rise into it. */}
-        <div className="lobby-table-anchor" style={styles.tableAnchor} data-testid="lobby-actions">
-          {/* Design note #1083: `appliedCount={0}` and `onLeave={() => undefined}` are GONE with the props
-              they fed. Both were placeholders this surface had no use for -- the lobby is never in a room --
-              and a required prop satisfied by a stub is a prop the component did not need. */}
-          <SandboxRoomBar
-            bare
-            roomCode={null}
-            available={isBackendConfigured()}
-            error={sandboxRoomError}
-            busy={sandboxRoomBusy}
-            onHost={openHost}
-            onJoin={(raw) => void requireAccount(() => void handleJoinSandboxRoom(raw), "Log in or create an account to join a game.")}
-            onOpenJoin={roomLinkAvailable() ? openJoin : undefined}
-          />
-        </div>
+      {/* ==================================================================
+           PLAY LOBBY (approved design, "play-lobby-handoff" §2): THE HEADER
+          ==================================================================
+          Ludum's lockup for Project 18XX -- PROJECT in Anton, 18XX in Anton under the gilt gradient -- the line, and
+          the two doors (Host game, Join by code: the same handlers as before, account first), beside Ludum's boardroom
+          drawing, masked into the page. On phones the drawing is a banner above the title. The doors' refusal shows
+          under them, as the bar did. */}
+      <div className="lb" style={styles.heroWrap}>
+        <section className="lb-hero" aria-labelledby="lobby-title">
+          <div className="lb-hero-l">
+            <h1 className="lb-lockup" id="lobby-title">
+              <span className="lb-name">Project</span>{" "}
+              <span className="lb-num">18XX</span>
+            </h1>
+            <p className="lb-dek">Railroads, a stock market, and the people who run both. Take a seat at a table below, or open one of your own.</p>
+            {isBackendConfigured() ? (
+              <div className="lb-doors" data-testid="lobby-actions">
+                <button type="button" className="lb-btn lb-primary" onClick={openHost} disabled={sandboxRoomBusy} data-testid="lobby-host">
+                  Host game
+                </button>
+                <button type="button" className="lb-btn" onClick={openJoin} disabled={sandboxRoomBusy} data-testid="lobby-join-code">
+                  Join by code
+                </button>
+              </div>
+            ) : null}
+            {sandboxRoomError !== null && !joinOpen && !hostSetup && (
+              <p className="lb-door-error" role="alert" data-testid="lobby-door-error">
+                {sandboxRoomError}
+              </p>
+            )}
+          </div>
+          <figure className="lb-hero-art" aria-hidden="true">
+            <img alt="" src={`${process.env.PUBLIC_URL ?? ""}/images/p18-board-meeting.webp`} />
+          </figure>
+        </section>
       </div>
       {/* The top region ends here (`lobby-top`). */}
       </div>
@@ -570,22 +537,22 @@ export function Lobby({ onEnterSandbox, onWatchSandbox }: LobbyProps) {
       {/* LIVE-2F/3D (C9-01): "Your tables" above the public list -- a private table is in no list but this one, and
           after the deal its code no longer opens it. Hidden when there is nothing to show. */}
       {signedIn ? <MyTablesList tables={myTables.tables} error={myTables.error} onOpen={(gameId) => onEnterSandbox(gameId)} /> : null}
-      <LobbyRoomList
-        rooms={publicRooms.rooms}
-        loading={publicRooms.loading}
-        error={publicRooms.error}
-        available={publicRooms.available}
-        busy={sandboxRoomBusy}
-        refusal={roomRefusal}
-        onJoin={joinListed}
-        /* LIVE-2D: Watch needs no op -- a public table is readable by any signed-in profile; the shell opens its
-           RoomView and log by game id, and the viewer holds no seat and is never given one.
-           PHASE 3 W3-J (OD-19): its OWN door, so "never given one" holds for a principal who IS seated there too --
-           the shell opens a read-only spectator view. "Your tables" above stays the way back to a seat. */
-        onWatch={(gameId) => (onWatchSandbox ?? onEnterSandbox)(gameId)}
-        /* PHASE 3 FINAL (§13): every player game is anted -- a no-ante table is Watch only (`utils/tablePolicy.ts`). */
-        noAnteSeats={FREE_TABLES_OFFERED}
-      />
+      <div className="lb">
+        <LobbyBoards
+          rooms={publicRooms.rooms}
+          loading={publicRooms.loading}
+          error={publicRooms.error}
+          available={publicRooms.available}
+          busy={sandboxRoomBusy}
+          refusal={roomRefusal}
+          onJoin={joinListed}
+          /* LIVE-2D: Watch needs no op -- a public table is readable by any profile; the shell opens its RoomView and log
+             by game id, and the viewer holds no seat. PHASE 3 W3-J (OD-19): its OWN door (`onWatchSandbox`). */
+          onWatch={(gameId) => (onWatchSandbox ?? onEnterSandbox)(gameId)}
+          /* PHASE 3 FINAL (§13): every player game is anted -- a no-ante table is Watch only (`utils/tablePolicy.ts`). */
+          noAnteSeats={FREE_TABLES_OFFERED}
+        />
+      </div>
 
       {/* Honest, specific banners -- never a silently empty screen. Each
           names what is missing and what still works without it. */}
@@ -689,7 +656,18 @@ export function Lobby({ onEnterSandbox, onWatchSandbox }: LobbyProps) {
           one. Same component, same words, same logo, both screens. */}
       </div>
 
-      <AppFooter surface="meta" />
+      {/* PLAY LOBBY (approved design §2.5): the Ludum footer -- the wordmark and "Project 18XX on Ludum", a hairline, and
+          the Neta DAO credit (still the link to netadao.org it always was). */}
+      <footer className="lb-footer" data-testid="lobby-footer">
+        <a href="https://ludum.netadao.org/projects/project-18xx/" target="_blank" rel="noopener noreferrer">
+          <b className="lb-lw">LUDUM</b>
+          <span>Project 18XX on Ludum ↗</span>
+        </a>
+        <i className="lb-sep" aria-hidden="true" />
+        <a href="https://netadao.org" target="_blank" rel="noopener noreferrer" title="Neta DAO — opens netadao.org in a new tab">
+          <span>Powered by Neta DAO</span>
+        </a>
+      </footer>
     </div>
   );
 }
@@ -831,6 +809,17 @@ const styles: Record<string, React.CSSProperties> = {
      `position: relative` makes it `sceneClip`'s containing block; `zIndex: 1` makes it one group (the wordmark's
      blend happens inside it) that paints above the column's later flow -- so the account menu's dropdown overhangs
      the tables rather than sliding under them. Its box never overlaps the tables region: that one starts after it. */
+  /* PLAY LOBBY: the corner and the header, in flow; no photograph behind them any more. */
+  topBand: {
+    position: "relative",
+    zIndex: 1,
+    display: "flex",
+    flexDirection: "column",
+    flexShrink: 0,
+  },
+  heroWrap: {
+    padding: "0 16px",
+  },
   top: {
     position: "relative",
     zIndex: 1,
@@ -1187,7 +1176,8 @@ const styles: Record<string, React.CSSProperties> = {
        over the column; the scene is the top region's background now and ends where the region does, so nothing is
        painted here to rise above -- and the tables region carries nothing that could move it out of the flow. */
     width: "100%",
-    maxWidth: "1040px",
+    /* PLAY LOBBY: the design's 1200px column (the boards' frame takes 7px each side). */
+    maxWidth: "1232px",
     margin: "0 auto",
     display: "flex",
     flexDirection: "column",

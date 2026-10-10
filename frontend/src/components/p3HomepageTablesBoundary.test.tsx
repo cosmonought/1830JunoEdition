@@ -156,7 +156,7 @@ describe("P3-N028 (reopened): the tables region follows the top region in normal
 
     /* 1. THE TOP REGION OWNS THE CORNER, THE TITLE AND THE DOORS. */
     const buttons = Array.from(actions!.querySelectorAll("button")).map((b) => b.textContent?.trim());
-    expect(buttons).toEqual(expect.arrayContaining(["Host game", "Join game"]));
+    expect(buttons).toEqual(expect.arrayContaining(["Host game", "Join by code"]));
     expect(top!.contains(actions)).toBe(true);
     expect(top!.contains(byTestId("lobby-rules"))).toBe(true);
     expect(top!.querySelector("h1")?.textContent).toBe("Project 18XX");
@@ -201,19 +201,21 @@ describe("P3-N028 (reopened): the tables region follows the top region in normal
     expect(top!.style.height).toBe("");
     expect(top!.style.maxHeight).toBe("");
     expect(top!.style.overflow).toBe("");
-    expect(top!.style.minHeight).toBe("var(--lobby-hero-window)");
+    /* PLAY LOBBY (approved design): no photograph to hold open -- the top region's height is the header's own. */
+    expect(top!.style.minHeight).toBe("");
     const title = top!.querySelector("h1")!.parentElement as HTMLElement;
     for (let el: HTMLElement | null = actions; el && el !== top; el = el.parentElement) expect([el.className, flowProblems(el)]).toEqual([el.className, []]);
     for (let el: HTMLElement | null = title; el && el !== top; el = el.parentElement) expect(flowProblems(el)).toEqual([]);
 
-    /* 6. THE PHOTOGRAPH IS DECORATION: inside the top region, hidden from assistive tech, click-through, and holding no
-       control, heading or table content. */
-    const layers = Array.from(top!.children).filter((child) => (child as HTMLElement).style.position === "absolute") as HTMLElement[];
-    expect(layers).toHaveLength(1);
-    const [scene] = layers;
+    /* 6. THE PICTURE IS DECORATION (PLAY LOBBY, approved design: the boardroom drawing in the header's grid): inside
+       the top region, hidden from assistive tech, and holding no control, heading or table content. Nothing in the top
+       region is positioned out of the flow any more. */
+    const pictures = Array.from(top!.querySelectorAll("figure.lb-hero-art")) as HTMLElement[];
+    expect(pictures).toHaveLength(1);
+    const [scene] = pictures;
     expect(scene.getAttribute("aria-hidden")).toBe("true");
-    expect(scene.style.pointerEvents).toBe("none");
     expect(scene.querySelector("button, a, input, h1, h2, section, li, [data-testid]")).toBeNull();
+    expect(Array.from(top!.children).filter((child) => (child as HTMLElement).style.position === "absolute")).toHaveLength(0);
   });
 });
 
@@ -229,7 +231,7 @@ describe("P3-N028 (reopened): nothing on the homepage is measured", () => {
   });
 
   it("keeps the table lists free of positioning that could lift them", () => {
-    for (const file of ["components/MyTablesList.tsx", "components/LobbyRoomList.tsx"]) {
+    for (const file of ["components/MyTablesList.tsx", "components/LobbyRoomList.tsx", "components/LobbyBoards.tsx"]) {
       const source = readStripped(file);
       expect([file, /position: "(absolute|fixed|sticky)"/.test(source)]).toEqual([file, false]);
       expect([file, /margin(Top)?: "-/.test(source)]).toEqual([file, false]);

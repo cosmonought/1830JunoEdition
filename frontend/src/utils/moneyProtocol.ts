@@ -238,6 +238,9 @@ export interface RoomStakeSummary {
   networkClass: MoneyNetworkClass;
   funded: number;
   seats: number;
+  /** PLAY LOBBY (additive, optional): each seat's ante funded or not, in seat order (`RoomSummary.nicknames`). Absent
+   *  when the server has not observed the escrow yet. A yes / no only: no wallet, chain seat or amount. */
+  seatFunded?: boolean[];
 }
 
 /** "Your tables": a money table's line. */

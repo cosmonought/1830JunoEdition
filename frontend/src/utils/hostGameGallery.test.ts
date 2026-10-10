@@ -101,7 +101,9 @@ describe("the game-selection step ships one canvas for three logos (design note 
       expect([source, fs.existsSync(path.join(PUBLIC_DIR, "images", source))]).toEqual([source, false]);
     }
     const lobby = readStripped("components/Lobby.tsx");
-    expect(lobby).toContain("/images/title-project18xx.jpg");
+    /* PLAY LOBBY (approved design): the lobby's title is text now; the wordmark file stays shipped (the intro and the
+       share card may use it), and it is still never a game type's art. */
+    expect(lobby).not.toContain("/images/title-project18xx.jpg");
     expect(fs.existsSync(path.join(PUBLIC_DIR, "images", "title-project18xx.jpg"))).toBe(true);
     expect(Object.values(GAME_TYPE_ART)).not.toContain("title-project18xx.jpg");
   });

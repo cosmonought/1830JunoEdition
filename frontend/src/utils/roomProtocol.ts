@@ -104,6 +104,12 @@ export interface RoomSummary {
   createdAtMs: number;
   /** ESCROW-4 (additive, optional): a real-money table's stake badge. Absent for a no-money table. */
   stake?: RoomStakeSummary;
+  /** PLAY LOBBY (additive, optional; `server/src/rooms/gameRecord.ts`): the host's index in `nicknames`. */
+  hostSeat?: number;
+  /** PLAY LOBBY: when a playing table was dealt. */
+  startedAtMs?: number;
+  /** PLAY LOBBY: the table's deadline, once the server has read it. */
+  clock?: { deadline: "live" | "async-pace" | "no-deadline"; paceSecs: number | null };
 }
 
 /** LIVE-2F/3D (C9-01): one of the caller's own tables ("Your tables"), answered to `room-op {type:"my-tables"}` on the

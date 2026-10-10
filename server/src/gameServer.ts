@@ -100,6 +100,9 @@ import { chainClockHooks, createConductClockFeed } from "./conduct/conductClockF
 import type { ConductCaseStore } from "./conduct/conductStore";
 import { createConductLimiter, handleConductHttp } from "./conduct/conductHttpApi";
 import { createLudumIpBudget, handleLudumHttp } from "./ludum/ingress";
+import { createPublicHistory, handleLobbyHttp } from "./rooms/publicHistory";
+import { serverPrefixReplay } from "./escrow/settlementEvidence";
+import { IpBuckets } from "./ingress/limits";
 import { createLudumMemberPorts, createLudumPorts } from "./ludum/wiring";
 import { ludumOriginProblem } from "./identity/mode";
 import type { MoneyTables } from "./escrow/moneyTables";
@@ -1815,6 +1818,26 @@ export function createGameServer(options: GameServerOptions): {
       return null;
     }
   };
+  /* PLAY LOBBY: the public game history of a listed table's players (`rooms/publicHistory.ts`): read-only, no session,
+     Play's own origin rules, its own per-address budget (a burst of 30, then one every two seconds). */
+  const lobbyHttp = {
+    allowedOrigins,
+    trustedProxyHops: identityOptions.trustedProxyHops,
+    history: createPublicHistory({
+      records: () => host.records(),
+      publicRooms: () => host.publicRooms(),
+      readLog: (gameId) => committedLogOf(gameId),
+      replay: serverPrefixReplay(options.build),
+      now: identityNow,
+    }),
+    budget: new IpBuckets({ capacity: 30, refillPerSecond: 0.5 }, identityNow, limits.identity.ipv6AggregateFactor, limits.identity.maxTrackedKeys),
+    onError: (what: string, error: unknown) => {
+      const ref = errorRef();
+      // eslint-disable-next-line no-console
+      console.error(`  lobby: ${what} failed (ref ${ref}) -- ${excerpt(error instanceof Error ? error.message : String(error), 300)}`);
+      return ref;
+    },
+  };
   const trustFacts = createTrustFacts({
     profileFacts: (principalId) => (principalId.startsWith(DEV_PRINCIPAL_PREFIX) ? null : identity.trustProfileFacts(principalId)),
     tablesOf: (principalId) => host.tablesOf(principalId),
@@ -1828,6 +1851,8 @@ export function createGameServer(options: GameServerOptions): {
     if (options.edgeDiagnostic !== undefined && handleEdgeDiagnostic(req, res, options.edgeDiagnostic)) return;
     /* LUDUM v1: its own prefix, before every other `/gs/api/*` handler. */
     if (handleLudumHttp(req, res, ludumIngress)) return;
+    /* PLAY LOBBY: `/gs/api/lobby/players` (public, read-only). */
+    if (handleLobbyHttp(req, res, lobbyHttp)) return;
     if (
       handleMoneyHttp(
         req,

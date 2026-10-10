@@ -90,6 +90,9 @@ const SUMMARY_KEYS: Record<keyof ClientRoomSummary, true> = {
   variants: true,
   createdAtMs: true,
   stake: true,
+  hostSeat: true,
+  startedAtMs: true,
+  clock: true,
 };
 const YOU_KEYS: Record<keyof ClientRoomView["you"], true> = { role: true, playerId: true, kicked: true, canStart: true };
 /* ESCROW-4 (additive and optional, the LIVE-4 amendment): carried only by a real-money table, so a no-money table's view
@@ -97,7 +100,9 @@ const YOU_KEYS: Record<keyof ClientRoomView["you"], true> = { role: true, player
    `holdReason` likewise -- carried only by a view whose `holdKind` is `incompatible` (`live4ClientCompatibility`). */
 /* Phase 3 final clocks (additive and optional): `clock` is carried only by a table whose clock the server keeps. */
 const OPTIONAL_VIEW_KEYS: ReadonlySet<string> = new Set(["money", "holdReason", "clock"]);
-const OPTIONAL_SUMMARY_KEYS: ReadonlySet<string> = new Set(["stake"]);
+/* PLAY LOBBY (additive and optional): `hostSeat` when a seat is the host's, `startedAtMs` on a playing table, `clock` once
+   the server has read the table's deadline. */
+const OPTIONAL_SUMMARY_KEYS: ReadonlySet<string> = new Set(["stake", "hostSeat", "startedAtMs", "clock"]);
 
 /* ==================================================================
     FIXTURES
@@ -341,7 +346,8 @@ describe("LIVE-2D: the legacy room protocol is gone", () => {
       alice.send({ kind: "rooms-watch", on: true });
       const rooms = (await alice.next((f: Frame) => f.kind === "rooms")).rooms as Array<Record<string, unknown>>;
       assert.equal(rooms.length, 1);
-      assert.deepEqual(Object.keys(rooms[0]).sort(), Object.keys(SUMMARY_KEYS).filter((key) => !OPTIONAL_SUMMARY_KEYS.has(key)).sort());
+      assert.deepEqual(Object.keys(rooms[0]).filter((key) => !OPTIONAL_SUMMARY_KEYS.has(key)).sort(), Object.keys(SUMMARY_KEYS).filter((key) => !OPTIONAL_SUMMARY_KEYS.has(key)).sort());
+      for (const key of Object.keys(rooms[0])) assert.ok(Object.prototype.hasOwnProperty.call(SUMMARY_KEYS, key), `declared: ${key}`);
       assert.equal(/pr_dev_/.test(JSON.stringify(alice.frames)), false, "no principal id on the wire");
       await alice.close();
     } finally {

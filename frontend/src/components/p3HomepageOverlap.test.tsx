@@ -94,7 +94,9 @@ describe("P3-N028: the homepage overlap, the mechanism", () => {
       );
       const top = container.querySelector('[data-testid="lobby-top"]') as HTMLElement;
       const actions = container.querySelector('[data-testid="lobby-actions"]') as HTMLElement;
-      expect(top.style.minHeight).toBe("var(--lobby-hero-window)");
+      /* PLAY LOBBY (approved design): the header is flow content with no photograph to hold open, so the top region
+         has no inline floor any more -- its height is the header's (the drawing's own 240px minimum is in its CSS). */
+      expect(top.style.minHeight).toBe("");
       expect(top.style.height).toBe("");
       expect(actions.style.position).toBe("");
       expect(actions.style.top).toBe("");

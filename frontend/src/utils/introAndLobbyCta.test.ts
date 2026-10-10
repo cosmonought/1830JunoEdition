@@ -109,7 +109,8 @@ describe("the intro sequence gains a beginning and an end", () => {
     expect(INTRO).not.toContain("TITLE_FADE_MS");
     /* The ASSET stays. The Lobby still draws it (#1131), and deleting a file two surfaces share to tidy one
        of them is how the other breaks. */
-    expect(readStripped("components/Lobby.tsx")).toContain("title-project18xx.jpg");
+    /* PLAY LOBBY (approved design): the lobby's title is the Anton lockup, as text -- the film carries the intro's. */
+    expect(readStripped("components/Lobby.tsx")).toContain('<h1 className="lb-lockup" id="lobby-title">');
   });
 
   it("does not gamble on a delayed play()", () => {

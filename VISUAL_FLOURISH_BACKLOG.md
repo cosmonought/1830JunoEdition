@@ -18,6 +18,13 @@ choice recorded so it is never mistaken for an oversight. `RESOLVED` — closed;
 (`RULES_HARDENING_BACKLOG.md` Part F). A flourish judged against a board that is still changing is judged
 twice.
 
+**W3-F status reconciliation (2026-10-10; Phase-3 matrix AUD-25.14, closure contract item 12).** Every entry's header
+now agrees with its `VF/*` row in `docs/phase3/phase3_accounting.json`. Every `PLAYTEST` entry (48, each a matrix
+disposition-D row, VF/D-17 included) is a **Phase-4 playtest observation**: Phase 3 built it and the visual judgement is
+owed at the Phase-4 baseline, by the procedure in `docs/phase3/PHASE4_PLAYTEST_CHECKLIST.md`. `OWNER DECISION` entries are the
+matrix's F rows (re-tuned only by a new owner ruling). Changed by W3-F: D-18 and D-22 `OPEN` → `RESOLVED` (OD-17, no
+change); G-1 and G-7 `OPEN` → `RESOLVED` (ruled by OD-14(f) / OD-14(g); no work); D-35 annotated INTEGRATED. Earlier text is kept.
+
 ---
 
 ## Part A — Standing constraints
@@ -85,6 +92,9 @@ something costs, or whether anything was legal. Established by #1451; enforced a
 | VF-8 | Train-limit discard — clean cut / transfer to Bank Pool | **IMPLEMENTATION COMPLETE — awaiting audiovisual playtest after rules hardening** |
 | WM | Warning-mark pass — static semantic identifiers (not a flourish) | **IMPLEMENTATION COMPLETE — awaiting visual playtest** |
 | AW | Audio wiring — Bank Break, Rust, Train-Limit cues (not a flourish) | **IMPLEMENTATION COMPLETE — awaiting audiovisual playtest** |
+
+*(W3-F, 2026-10-10)* "Awaiting visual playtest after rules hardening" now means the Phase-4 human playtest: the
+Phase-3 rows are closed, and each batch's `PLAYTEST` entries are observed by `docs/phase3/PHASE4_PLAYTEST_CHECKLIST.md`.
 
 ### VF-1 — Stock transactions / presidency flourish
 
@@ -1250,6 +1260,7 @@ not included). Numbers: `docs/phase3/evidence/w3h/d16_handover_pixels.json` (per
 `entries/d16.tsx`, `d16.mjs`.
 
 ### D-17 · `PLAYTEST` · Whole-board repaint while a flourish runs
+*(W3-F, 2026-10-10)* Matrix VF/D-17, disposition D: a Phase-4 performance observation (`docs/phase3/PHASE4_PLAYTEST_CHECKLIST.md`).
 **OWNER DIRECTION (2026-10-05, the Phase-3 consolidated-integration brief) -- header `OPEN` → `PLAYTEST`:** not an implementation requirement before Phase 4 and not an owner-policy question. W3-H's throttled trace (below) suggests optimisation may be possible but does not show that the normal product is visibly bad on ordinary hardware. Phase 4 observes tile-lay animation smoothness on realistic desktop / browser hardware and any visible whole-board hitch / repaint; only if real playtesting shows visible jank may a later fix reduce the repaint scope or cache the static board. No speculative repaint optimisation.
 
 The frame clock (#463's pattern) repaints the whole board canvas every animation frame while any transition runs
@@ -1287,11 +1298,15 @@ Artifacts: `docs/phase3/evidence/w3h/d17_flourish_frame_times.json` (every run, 
 Long Animation Frame counts), `d17_trace_summary_rate4.json`, `d17_trace_summary_rate6.json` (raw traces ~2 MB
 each, not committed; `d17trace.mjs` regenerates them); harness `entries/d17.tsx`, `d17.mjs`, `d17trace.mjs`.
 
-### D-18 · `OPEN` · Rules cross-reference: New York's four-slot city
+### D-18 · `RESOLVED` (OD-17, 2026-10-03: no change; header was `OPEN`, reclassified by W3-F 2026-10-10) · Rules cross-reference: New York's four-slot city
 The brief described "two two-station cities → one four-station city". The four-slot #883 (Brown) is offered by
 the sandbox filter over the green #54 — two one-slot cities — while #62 (Brown, two two-slot cities) → #883,
 the upgrade #1315 plans token moves for in `utils/nyMerge.test.ts`, is not offered, being the same tier. Both
 play as one merge; which one is legal belongs to rules hardening.
+
+**W3-F (2026-10-10):** answered by rules hardening — matrix VF/D-18, RULED by OD-17 (owner, 2026-10-03): no engine
+change. V13_SCOPE_VERIFICATION §6.1 found the cross-reference INVALID (the printed T-09 upgrade path): tile-upgrade
+legality is the printed rule. Nothing to build.
 
 ### D-19 · `RESOLVED` (Stage 9.2, `17616c8`) · Rules cross-reference: printed track severed on the expanded boards
 On the expanded and LPF boards the sandbox filter offers #53 (and #592 on expanded) on Baltimore (I15) at facings
@@ -1395,7 +1410,7 @@ old answer was equally the rounding's. Pinned by `components/w3hTileFlourish.tes
 facings keep today's pairing, and seeded noise of up to 2e-7 per coordinate on the printed centres — which flips
 raw nearest-first — does not flip it).
 
-### D-22 · `OPEN` · Rules cross-reference: #59 → brown OO facings that break fixed OO
+### D-22 · `RESOLVED` (OD-17, 2026-10-03: no change; header was `OPEN`, reclassified by W3-F 2026-10-10) · Rules cross-reference: #59 → brown OO facings that break fixed OO
 This implementation plays fixed OO; the optional Variable OO Cities rule is not used and was never requested.
 Old #59's two cities are distinct single-station cities on disconnected track, and each brown OO upgrade is
 again two distinct single-station cities, so an upgrade carries each #59 city into its own brown city. The
@@ -1408,6 +1423,11 @@ not evidence for the merge classifier (D-21). Handed such a pair, the correspond
 reads — one brown city with both sources, one emerging — and it was not altered to describe an invalid
 transition differently. The game's token planner accepts the same facings (a token from either #59 city lands in
 the joined city; tokens in both are refused for capacity), which belongs to the same rules question.
+
+**W3-F (2026-10-10):** answered — matrix VF/D-22, RULED by OD-17 (owner, 2026-10-03): no engine change.
+V13_SCOPE_VERIFICATION §6.2 found it ALREADY CORRECT: the placement filter enforces Stage 9.3 rule 5b (rules v7), so 0
+such transitions are accepted today; the 256 above reproduce only with rule 5b removed. The text above is the
+pre-rule-5b record, kept for history.
 
 ### D-23 · `PLAYTEST` · The construction wave
 New rail is revealed by a front travelling from its origin along the rail's own geometry. Behind the front each
@@ -1565,6 +1585,10 @@ travelling reads as a target or as a second token.
 
 ### D-35 · `RESOLVED` (lane B, 2026-10-05) · An OO home's reservation has no city to ride
 **RESOLVED on `phase3/preplaytest-d35-oo-marker` (from `b8d5246`; presentation only; no gameplay, state, rules, legality or version change; NOT integrated).** Root cause: the renderer paired each old reservation marker with the NEAREST new place -- a second, geometric city matcher -- and the board drew a laid OO home's reservation only in the tile's artwork second city. The plan's own correspondence (`plan.cities[*].sources`, #1462) carries #59's second city into the green tile's FIRST city at every accepted facing, and #64 / #66 / #67 / #984's second city into #167's first, so 90 of 156 standard markers (156 of 270 per Plus / LPF OO home) left their city and crossed the hex. No fixed per-facing choice of ONE city can follow identity and draw the same board after a reload (#59@0 and #59@1 both upgrade to #66@0 with opposite correspondences -- odd cycles in the constraint graph). **Owner ruling (2026-10-05, on that finding): a laid OO home is reserved in BOTH its cities**, one marker per city, as #1283 already drew both printed circles (ERIE's and PMQ's home is either city whatever is laid, `homeSlotsAreOpen`). `homeReservationPoints` returns every city anchor of a laid OO home tile (`tileCityAnchors`); `reservationPlaceFor` pairs each marker with the place drawn in the city its own city becomes, by the plan's correspondence, falling back to the nearest place only where no city can be read (every non-OO home: one place, unchanged). Each marker then rides its own city's seat exactly as before (`reservationPositionAt`), and is exactly on that city's place at commit. Swept over every accepted transition on E11 (standard, Plus, LPF) and E5 (LPF): 960 markers, 546 of them changing artwork city index, every one paired with its own city's successor one-to-one, exact at both ends and inside its own city's drawn station in every 8 ms frame (`tileTransitionD35.test.ts`); the mounted board drives #59@0 -> #64@2 frame by frame (`tileTransitionD35Board.test.tsx`). **Watch (Phase 4, real browser):** two muted ERIE / PMQ markers on a laid OO home reading as "either city is reserved" (as on the printed hex); the pair riding through a brown #167 upgrade; a reservation marker drawn under another corporation's token in one of the two cities (unchanged in kind from the one-marker rule, which could stand under a token in the second city). **Recorded residual (independent review, LOW):** one-to-one pairing rests on the plan never folding both OO cities into one while another emerges; no accepted tray does (the sweep proves it), and a future tray that did would show two markers on one place until the commit.
+
+**INTEGRATED (W3-F record, 2026-10-10):** matrix VF/D-35 IMPLEMENTED (lane B) and integrated 2026-10-07 on
+`phase3/consolidated-final-preplaytest-integration` (lane E `aa85a94`, merge `80447ca`). The real-browser watch named
+above is a Phase-4 playtest observation (`docs/phase3/PHASE4_PLAYTEST_CHECKLIST.md`).
 
 **Superseded record (kept for provenance):**
 **OWNER DIRECTION (2026-10-05, the Phase-3 consolidated-integration brief) -- stays `OPEN`, now REQUIRED PHASE-3 FLOURISH IMPLEMENTATION (pre-Phase-4 lane B), not an owner-design question and not a Phase-4 watch:** the visual-flourish design already established that a station / reservation marker moves WITH its city's geometry during a tile transition and resolves to the correct final city position at commit. The OO edge case below is a correspondence problem -- an OO tile holds two distinct city identities, so the transition must keep which city the reservation marker belongs to. Presentation only: no gameplay, state or rules change to animate it. (The W3-H analysis below, which proposed a Phase-4 watch, is superseded on that point.)
@@ -1808,7 +1832,7 @@ document hidden / board off screen → none; resumes on return); each fails with
 
 ## Part G — Open review items (VF-4)
 
-### G-1 · `OPEN` · Audio is unanswered, and the flip is silent until it is
+### G-1 · `RESOLVED` (OD-14(f), ruled: no phase-change sound, no work; header was `OPEN`, reclassified by W3-F 2026-10-10) · Audio is unanswered, and the flip is silent until it is
 The brief allows a cue only if "an existing suitable mechanical cue already exists and can be reused
 cleanly", and rules out a generic cinematic boom or whoosh. The three clips in `public/audio` that could pass
 for a mechanical plate — `telegraph.mp3`, `watch-wind.mp3`, `steam_hiss.mp3` — are all owned by
@@ -1860,7 +1884,7 @@ than as sequencing, especially on the client that dispatched. **What to watch:**
 beat or like a stall; if it stalls, the modal can move to the `faceSwapped` milestone (what the era toast
 uses) and still satisfy the ruling — a one-word change now that the holds are named rather than numbered.
 
-### G-7 · `OPEN` · A phase change while the bar is unmounted
+### G-7 · `RESOLVED` (OD-14(g), ruled: no stale replay, no work; header was `OPEN`, reclassified by W3-F 2026-10-10) · A phase change while the bar is unmounted
 The event is held for `PHASE_BADGE_TOTAL_MS` and then cleared, whoever is watching. A player on a tab where
 the action bar is not mounted misses the flip entirely and sees the new phase already settled when they
 return — which is correct (the badge is authoritative and the flourish is not), and the same shape as C-7 and

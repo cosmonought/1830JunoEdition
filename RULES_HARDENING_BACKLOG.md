@@ -399,6 +399,13 @@ Status `DEFERRED` (cleanup, no rule change). `utils/runTrainsRules.ts`, `routeWa
 #1184's shape. Detail: make the draft-time checks read the evaluator's refusal (a per-draft
 `evaluateRouteSet` on the single route) and delete the halves it makes redundant; keep only what a
 half-drawn route needs (rule 2–6 of `editRouteDraft`). Replay: none.
+*(W3-F, 2026-10-10 — matrix reconciliation, AUD-25.14)* The `DEFERRED` tag above is superseded in part. Phase 3 closed the
+player-facing parity: the `RoutePlannerPanel` duplicate validators are retired (matrix AUD-07.04, W1-G `a8b9f27` +
+`bee2717`, IMPLEMENTED), and a route-oracle property test proves every exact Auto Route draft survives the shell's
+`runnableDrafts` filter and that the set `handleRunTrains` sends passes `routeSetRefusal` (matrix AUD-25.09 / U-54, W3-J
+`28fbd85`, IMPLEMENTED; no defect found). The structural cleanup (retiring the shell's local draft rules and
+`editRouteDraft`'s click rules) stays open as GitHub issue #1; the matrix row AUD-25.09 places it in "Phase 7" without citing
+an owner ruling (the owner's roadmap puts the frontend refactor in Phase 5) — recorded, not resolved, here.
 
 **S6-15. Hosted ingress route legality can judge a table's routes against the STANDARD board.**
 Status `OPEN` — **pre-registered BLOCKER: must be fixed before any substantive G5 / Level Playing Field route playtest**
@@ -4261,67 +4268,93 @@ Sources: `UI_ACTION_PLAN_2026-09-07.md`, `TRIAGE_2026-09-05/06/08.md`, `TRIAGE_2
 code-marker sweep. Everything on the 7–8 September lists that is not below was done (design notes #1257–#1273,
 #1274–#1299, #1331–#1347).
 
+**W3-F reconciliation (2026-10-10; matrix AUD-25.14, closure contract item 12).** Every item below now carries a dated
+`(W3-F, 2026-10-10 …)` line that states its status as the Phase-3 matrix (`docs/phase3/phase3_accounting.json`) records it,
+citing the matrix row(s) and slice, or the owner ruling (OD-n) that places it. Earlier tags are kept as history and are
+superseded where the W3-F line says so. Items in matrix disposition D are Phase-4 playtest observations, with their
+procedures in `docs/phase3/PHASE4_PLAYTEST_CHECKLIST.md`. The Phase-3 owner rulings OD-0 … OD-19 are recorded in Part D.
+Items with no matrix row are flagged as such and keep their earlier status: U-18, U-31 and the `sellableHoldings` half of
+U-39.
+
 **U-1.** Batch 0 retest of #1237 / #1238 on a freshly rebuilt server (live-vs-history frame read; the
 train-purchase toast) — owed by the owner since 7 September. `OPEN`.
+*(W3-F, 2026-10-10 — matrix reconciliation, AUD-25.14; closure item 12)* **Status: `PHASE-4 PLAYTEST`** — matrix AUD-24.01, disposition D: one of the audit's own playtest items (closure item 6), not a Phase-3 defect; its observation procedure is in `docs/phase3/PHASE4_PLAYTEST_CHECKLIST.md`. The `OPEN` tag above is superseded.
 **U-2.** Item 18 (2026-09-08) turn-gate observation: C&O's bar stayed on Lay Track after a derived advance
 (130–132 in JUNO-CV4); reproduce with the console on `turn-gate` and the frame kind logged. `OPEN`.
+*(W3-F, 2026-10-10 — matrix reconciliation, AUD-25.14; closure item 12)* **Status: `PHASE-4 PLAYTEST`** — matrix AUD-04.05 (with the R1 / H-01 reload-during-hold probes), disposition D: one of the audit's own playtest items (closure item 6), not a Phase-3 defect; its observation procedure is in `docs/phase3/PHASE4_PLAYTEST_CHECKLIST.md`. The `OPEN` tag above is superseded.
 **U-3.** Stock Round UX (named in Batch 4.6's scope notes as deferred): the Sell-Buy-Sell turn's controls
 (#1443 / #1447), Auto-Pass / Auto-Buy graduation (#1333 / #1335 done; source, cap and presidency guard exist —
 verify against the forced-sale hold), the first-SR ban surfaced only in the Rules Reference. `DEFERRED`.
+*(W3-F, 2026-10-10 — matrix reconciliation, AUD-25.14; closure item 12)* **Status: `IMPLEMENTED`** (+ one Phase-4 observation). No matrix row cites U-3 by id; its parts are carried by: the Sell-Buy-Sell turn's controls → one-click "Pass Turn" (AUD-03.04, SBS-1 / SBS-2: W3-K rules v13 + W2-B, under OD-2 and OD-10(a)); Auto-Buy's cash check and must-sell order (AUD-03.05 K-12, AUD-03.06 SBS-5: W1-A `82c1de9`); the first-SR ban read from `stockSaleRefusal` with its tooltip corrected (AUD-03.01, U-23: W1-A). Whether Auto-Buy without cash still stalls is a Phase-4 observation (AUD-24.03, D; `docs/phase3/PHASE4_PLAYTEST_CHECKLIST.md`). The `DEFERRED` tag above is superseded.
 **U-4.** Emergency-funding UI (Batch 5 §11 shipped minimal): the modal lists legal bundles with the reducer's
 restriction sentences, a private-offer section and the Declare button; no styling / animation; the money
 machines do not narrate a forced sale or the president's contribution as such; the Game Over modal reads
 `bankrupt_president` from state. Polish pass owed. `DEFERRED`.
+*(W3-F, 2026-10-10 — matrix reconciliation, AUD-25.14; closure item 12)* **Status: `IMPLEMENTED`** — matrix AUD-09.07: W2-G, reconciled to the v13 automatic emergency funding (OD-4: no player Declare; DeclareBankruptcy refused on v13), `112fa71` + review fixes `02d73b8`, integrated (merge `b84247f`); W3-G found the Batch-5 emergency surfaces PASS (AUD-22.01). The `DEFERRED` tag above is superseded.
 **U-5.** Discard UI (Batch 4.6 §6 shipped minimal): `TrainDiscardPrompt` in the trade-prompt slot; no modal;
 the deferred "train limit" notice (#896) no longer fires for discards (the president's own action is narrated);
 rust notices unchanged. `DEFERRED` — fold into U-6.
+*(W3-F, 2026-10-10 — matrix reconciliation, AUD-25.14; closure item 12)* **Status: `IMPLEMENTED`** — matrix AUD-09.08: W2-F `5a0bf37` + `8d4e9f5` under OD-1 (the discard prompt's one waiting line, on every seat), integrated (merge `dfe6d13`). The `DEFERRED` tag above is superseded.
 **U-6.** Pending-offer UX: one consistent "the table is waiting on X" surface for trade offers, funding offers,
 discards and consent answers (`TrainPurchasePanel.tsx` prompt slot, `PrivateTradePanel.tsx`); the off-turn
 dispatch rule (#701) for every answer; a visible withdrawal for every proposer; refusal reasons from
 `refusedAction.ts` surfaced in place (the shell's REFUSED receipt is dead in room play — S10-1). `DEFERRED`.
+*(W3-F, 2026-10-10 — matrix reconciliation, AUD-25.14; closure item 12)* **Status: `IMPLEMENTED`** — matrix AUD-09.09 (one "waiting on X" line in every consent prompt: W2-F `5a0bf37` + `8d4e9f5`, under OD-1); the proposer's withdrawal AUD-09.04 (K-05: W1-D `94e5df1` + `3dbf02b`); refusal reasons in place AUD-14.03 / AUD-14.04 (W1-H) and the W3-C refusal display. The `DEFERRED` tag above is superseded.
 **U-7.** `TECH_DEBT.md` residue: TD-8 disabled family at 3.25:1 (deliberate); turn-order neutral ink 2.58:1
 (deliberate, #1092); Brick seat colour 12.9 dE from CPR (exempted by name in `seatColor.test.ts`); the
 player-card wash (#1347) not yet reaching the cash slide-out and the payout modal — owner to say. `DEFERRED`.
 **Owner ruling OD-14(b) (transcribed 2026-10-04 from the owner's owner-decision reconciliation brief; supplied in an earlier owner conversation, never transcribed):** use the cash/payout player-color wash — ruled in (Phase 3, W3-H; AUD-12.05).
+*(W3-F, 2026-10-10 — matrix reconciliation, AUD-25.14; closure item 12)* **Status: `RESOLVED`** for the wash — matrix AUD-12.05, RULED by OD-14(b); W3-H found the wash ALREADY IMPLEMENTED (#1347: `washedPlayerSurface` on the cash slide-out's player kind and the payout modal's player cards, so "not yet reaching" above was stale) and pinned it (`a2aaa31`). The other three residue items (TD-8 at 3.25:1, the turn-order neutral ink, the Brick seat colour) are deliberate, recorded exemptions with no matrix row; unchanged.
 **U-8.** Seven-seat LPF wraps the six-colour palette (#1344 added Raspberry; contrast/livery separation of a
 widened palette is a `seatColor.test.ts` question). `DEFERRED`.
 **Owner ruling OD-14(c) (transcribed 2026-10-04 from the owner's owner-decision reconciliation brief; supplied in an earlier owner conversation, never transcribed):** give the seventh LPF player a distinct color — ruled in (Phase 3, W3-H; AUD-12.06).
+*(W3-F, 2026-10-10 — matrix reconciliation, AUD-25.14; closure item 12)* **Status: `RESOLVED`** — matrix AUD-12.06, RULED by OD-14(c); W3-H found it ALREADY IMPLEMENTED (#1344 Raspberry; seven-wide guards in `seatColor.test.ts`) and pinned a seven-seat table (`a2aaa31`). The `DEFERRED` tag above is superseded.
 **U-9.** #1292 mirror instrumentation: item 25 (two tabs, different subpanel prices) not reproduced; a console
 `[mirror]` line names any corporation whose subpanel price disagrees with state — send it with the next report.
 `OPEN` (awaiting a report).
+*(W3-F, 2026-10-10 — matrix reconciliation, AUD-25.14; closure item 12)* **Status: `PHASE-4 PLAYTEST`** — matrix AUD-24.02, disposition D: one of the audit's own playtest items (closure item 6), not a Phase-3 defect; its observation procedure is in `docs/phase3/PHASE4_PLAYTEST_CHECKLIST.md`. The `OPEN` (awaiting a report) tag above is superseded.
 **U-10.** Clock / Live-vs-Async UX (DECISIONS B1/B2): the offer answerer on the clock, auto-decline, pause cap —
 the UI half of S10-10's 2.5g. ~~`DEFERRED`~~ (see the 2026-10-05 ruling below: `OPEN`, Phase 3).
 **Owner ruling OD-18 (transcribed 2026-10-04 from the owner's owner-decision reconciliation brief; supplied in an earlier owner conversation, never transcribed):** do NOT add at this stage a move clock, automatic forfeit, automatic trade decline or host succession; reconsider only after Phase-4 human playtesting (AUD-11.04, AUD-19.04). The "pause cap" is not named by the ruling; the owner may confirm whether it falls under this later placement.
 **Owner ruling OD-18 SUPERSEDED IN PART (2026-10-05, the Phase-3 consolidated-integration brief):** the clock system is BUILT IN PHASE 3 so Phase 4 can playtest it -- Live vs Async clock / timing infrastructure, visible clock state, the pause / resume semantics that model needs (the "pause cap" is part of that design), durable timing state, reconnect / reload behaviour, server-authoritative timing where required, Phase-4 instrumentation (AUD-11.04, pre-Phase-4 lane A). Still deferred pending Phase-4 validation: the automatic forfeit consequence, automatic trade decline, host succession (AUD-19.04). A clock reaching zero creates no forfeiture settlement; no Forfeit / Clemency settlement payload until those semantics are validated and authorised. U-10 `OPEN` (Phase 3).
+*(W3-F, 2026-10-10 — matrix reconciliation, AUD-25.14; closure item 12)* **Status: `IMPLEMENTED`** — matrix AUD-11.04: pre-Phase-4 lane A (`phase3/preplaytest-final-clocks-remedies`), under OD-18 as superseded in part (2026-10-05) and the owner's final clocks brief (2026-10-06, last correction 2026-10-07): Live / Timed Async / No-deadline clocks, the pause / resume semantics (U-10's "pause cap"), the Live offer response timer; integrated 2026-10-07 on `phase3/consolidated-final-preplaytest-integration`. Still deferred by OD-18: host succession and any Forfeit / Clemency settlement payload (AUD-19.04, E). The `OPEN` (Phase 3) tag above is superseded. Live / Async behaviour at real tables is a Phase-4 observation (`docs/phase3/PHASE4_PLAYTEST_CHECKLIST.md`).
 **U-11.** Rules Reference (`RulesReference.tsx`, `rulesOverview.test.tsx`) is the owner's own in-progress work;
 the sub-phase label table there is hand-copied (S10-14). Not a Claude batch item; listed for the copy.
+*(W3-F, 2026-10-10 — matrix reconciliation, AUD-25.14; closure item 12)* No matrix row cites U-11 (the owner's own Rules Reference work; not a Claude item). Its hand-copied sub-phase label table is S10-14 → matrix AUD-21.08, E: placed in Phase 5 by the owner's fixed roadmap (plan §1; W1-L added a parity test so the copy cannot drift). Status unchanged.
 **U-12.** (migrated, TRIAGE_2026-09-06 §2.1) A purchase made at Buy Trains was once stamped `[OR 1.1—Lay Track]`
 in the Activity Log; #1178 made the round stamp read the synchronous ref, but the observation post-dates it.
 Watch for a wrong step in a single purchase's round tag in the next playtest (`orSubPhase`, #958). `OPEN`
 (unverified).
+*(W3-F, 2026-10-10 — matrix reconciliation, AUD-25.14; closure item 12)* **Status: `PHASE-4 PLAYTEST`** — matrix AUD-04.06, disposition D: one of the audit's own playtest items (closure item 6), not a Phase-3 defect; its observation procedure is in `docs/phase3/PHASE4_PLAYTEST_CHECKLIST.md`. The `OPEN` (unverified) tag above is superseded.
 **U-13.** (migrated, TRIAGE_2026-09-06 §2.2) "A laid tile appears, then vanishes; the action bar stays on Lay
 Track" — plausibly the unseated-auction divergence (#1227) or the render-free-rebuild legality read (#1279),
 both since fixed; never re-tested on the corrected server. Re-test; if it recurs the alarm names the field and
 the server window names the refusal. `OPEN` (retest).
+*(W3-F, 2026-10-10 — matrix reconciliation, AUD-25.14; closure item 12)* **Status: `PHASE-4 PLAYTEST`** — matrix AUD-04.07, disposition D: one of the audit's own playtest items (closure item 6), not a Phase-3 defect; its observation procedure is in `docs/phase3/PHASE4_PLAYTEST_CHECKLIST.md`. The `OPEN` (retest) tag above is superseded.
 **U-14.** (migrated, HANDOFF_2026-09-05 §5c, `logExport.ts` #1160) Unreproduced report: "PRR ran for $30
 ($3/share); Undo from Buy Trains returned to Dividends showing 'Pay Dividends ($1/share)'." Five mechanisms ruled
 out by running the reducer; the log exporter was built for it and has never been pointed at a failing room.
 `OPEN` (awaiting a log).
+*(W3-F, 2026-10-10 — matrix reconciliation, AUD-25.14; closure item 12)* **Status: `PHASE-4 PLAYTEST`** — matrix AUD-08.02, disposition D: one of the audit's own playtest items (closure item 6), not a Phase-3 defect; its observation procedure is in `docs/phase3/PHASE4_PLAYTEST_CHECKLIST.md`. The `OPEN` (awaiting a log) tag above is superseded.
 **U-15.** (migrated, HANDOFF §5c) Owner-deferred cosmetics: a Keplr logo SVG in the wallet connect surface (no
 asset in the tree as of 2026-09-15). The "Join Game modal listing active games" half is done (`JoinGameCard.tsx`).
 `DEFERRED` (owner).
 **Owner ruling OD-9(b) (transcribed 2026-10-04 from the owner's owner-decision reconciliation brief; supplied in an earlier owner conversation, never transcribed):** use the official Keplr branding/logo asset; do not fabricate/redraw/fake it. ASSET PENDING (W2-K's empty `KeplrMark` slot) — waiting on the official file, not on a decision.
+*(W3-F, 2026-10-10 — matrix reconciliation, AUD-25.14; closure item 12)* **Status: `RESOLVED` in source on this head** (OD-9(b): the official asset only): the official Keplr brand-kit SVGs are integrated byte for byte (`03b755a2`) — `keplr-icon-radii.svg` as `frontend/src/components/money/brand/keplr-icon.svg` and `keplr-logo-icon.svg` as `frontend/src/components/money/brand/keplr-wordmark.svg` (`-text` in git), wired through `KeplrMark.tsx`; the asset-pending fallback is removed. Nothing was drawn or approximated. **Tracking note:** the matrix row AUD-18.05 still reads `OPEN — ASSET PENDING` (and `docs/phase3/README.md` lists it ASSET PENDING); those records are the integrator's to close. The `DEFERRED` (owner) tag above is superseded.
 **U-16.** (sweep) `panels/ContextualActionBar.tsx` `useStickyFitProbe` (#813) is a self-described *temporary
 instrument* — a fit readout rendered outside the action bar to decide whether the step panels can move back
 into it. Decide, then remove it either way. `RESOLVED` on a Phase-3 slice branch, not yet integrated — OD-14(a) RULED by the owner
 2026-10-04 (keep the step-panel placement; no relocation; W1-I-b not opened) and the probe removed by W1-I `1b76512`
 (`phase3/w1-i-completion`; AUD-01.01 IMPLEMENTED, AUD-01.02 resolved). **Consolidated integration (2026-10-05):** W1-I INTEGRATED on `phase3/consolidated-pre-playtest-integration`; OD-14(a) restated by the owner -- preserve the CURRENT placement, which is INSIDE the sticky action bar (the "panels outside the bar" wording some records carried was wrong). `RESOLVED`.
+*(W3-F, 2026-10-10 — matrix reconciliation, AUD-25.14; closure item 12)* Agrees with the matrix: AUD-01.01 IMPLEMENTED (W1-I `1b76512` + `195755a`), AUD-01.02 RULED by OD-14(a) (the step panels stay INSIDE the sticky action bar), both integrated 2026-10-05. The "not yet integrated" wording above is historical. `RESOLVED`.
 **U-17.** (sweep) `gameEngine/cityBypass.ts` #808 known debt: no control lets a corporation that *could* enter a
 one-slot city choose to bypass it (the PRR skipping its own home to save a stop) — new UI on one waypoint. The
 reducer half is done (Batch 6: a `bypass: true` waypoint is honoured wherever the rails offer a bow, shut city or
 not); only the control is missing. `DEFERRED`.
+*(W3-F, 2026-10-10 — matrix reconciliation, AUD-25.14; closure item 12)* **Status: `IMPLEMENTED`** — matrix AUD-07.03: W3-E `07454d0` + `6d7cfa1`, integrated `a860178`, under OD-11 (manual route only; automatic route optimality unchanged; Stop / Bypass only where the exact crossing supports both arms; a forced bypass stays forced; `routeSetRefusal` authoritative). The `DEFERRED` tag above is superseded.
 **U-18.** (sweep) The "reservation" vocabulary (`privateReservations.ts`, seven exported symbols across four
 files) is a recorded misnomer; rename mechanically when nothing else is in flight. `DEFERRED` (naming only).
+*(W3-F, 2026-10-10 — matrix reconciliation, AUD-25.14; closure item 12)* No matrix row (naming only; not an audit item and not owner-placed). Status unchanged: `DEFERRED` (naming only).
 
 **UI-parity entries from the Batch 7 design pass (2026-09-15; design §12b; owner's standing requirement).** Each is
 `OPEN` until fixed, verified obsolete or adjudicated — the Playtest Readiness gate (Part F) holds them.
@@ -4347,6 +4380,7 @@ counterparty (`tradeCounterparty`) Accept / Reject, points to the card from the 
 five events. Every control reads the authority's predicates; the three messages are sent unchanged. The Rules Reference
 sentence already existed (D-24). Evidence: `phase65bPrivateTradeRoom` (18), `phase65bPrivateCompaniesSection` (14).
 `RESOLVED` — Phase 6.5-B (K-01).
+*(W3-F, 2026-10-10 — matrix reconciliation, AUD-25.14; closure item 12)* Agrees with the matrix: AUD-03.13, disposition F (fixed before Phase 3, Phase 6.5-B K-01). `RESOLVED`.
 
 **U-20.** (S7-6 / S7-7 / S7-12 / D-18) **Ordinary player → corporation private purchase — LEGALITY SYNC + NEW ACTION +
 STATE VISIBILITY.** Verified: the `ProposePrivatePurchase` panel opens for the acting president in phases 3–4 at any
@@ -4370,6 +4404,7 @@ private's CURRENT owner (`currentPrivateOwner`), because that is who the engine 
 answering seat (`viewerIsOwner`, as Accept already was), with the disabled look and "Only X can answer this offer."
 (`phase65bConsentPrompts`). The rest of this item stands (K-05: no proposer Rescind).
 `OPEN` (UI only).
+*(W3-F, 2026-10-10 — matrix reconciliation, AUD-25.14; closure item 12)* **Status: `IMPLEMENTED`** — matrix AUD-09.03: W2-C `e629687` + `0975c04` (card availability and the submit ask `proposePrivatePurchaseRefusal`; corporation-owned privates not offered), integrated (merge `904598a`); the proposer's Rescind AUD-09.04 (K-05: W1-D); the hold AUD-04.01 (U-22: W2-A). The `OPEN` (UI only) tag above is superseded.
 
 **U-21.** (S7-5 / S7-8 / S7-12 / D-18 / D-20 / D-23) **Intercorporate train sale — LEGALITY SYNC + NEW ACTION +
 STATE VISIBILITY.** Verified: the proposal panel renders at `Hardware` only (timing already right); price ≥ $1,
@@ -4389,6 +4424,7 @@ CURRENT president (`sellerPresident`), not `train_purchase_offer.seller_presiden
 **Phase 6.5-B outcome (K-09; `ddf4bc8`):** `TrainTradePrompt` now offers Reject only to the answering seat
 (`viewerIsSeller`, as Accept already was), with the disabled look and "Only X can answer this offer."
 (`phase65bConsentPrompts`). The rest of this item stands (K-05: no proposer Rescind). `OPEN` (UI only).
+*(W3-F, 2026-10-10 — matrix reconciliation, AUD-25.14; closure item 12)* **Status: `IMPLEMENTED`** — matrix AUD-09.01 (the room's withdraw sends `RescindTrainPurchase`; W1-D `94e5df1` + `3dbf02b`), AUD-09.02 (the panel asks `proposeTrainPurchaseRefusal` / `trainSaleRefusal`; W2-C `e629687` + `0975c04`), AUD-09.04 (K-05 Rescind: W1-D). The `OPEN` (UI only) tag above is superseded.
 
 **U-22.** (S7-8 / S7-14 / D-19) **Pending-offer global hold — STATE VISIBILITY.** While an ordinary offer of any
 kind waits, End Turn / Pass / Skip / every purchase control must be disabled on every seat with the hold's sentence
@@ -4404,6 +4440,7 @@ accepted-awaiting-settlement state (momentary on the server path) and the rescin
 **Phase 6.5-B outcome (K-01's offer only; `ddf4bc8`):** while a player↔player private offer stands, Pass, every share
 control and the M&H chip are greyed with the hold's sentence, and the offer's own Rescind / Accept / Reject are not held.
 The Operating Round offers are still refused at ingress rather than disabled (K-13). `OPEN` (UI only).
+*(W3-F, 2026-10-10 — matrix reconciliation, AUD-25.14; closure item 12)* **Status: `IMPLEMENTED`** — matrix AUD-04.01: W2-A `e5fcfcc` under OD-1 (Skip / End Turn / Pay / Withhold / Run / depot Buy / proposals greyed with the authority's hold sentence on every seat); the waiting line AUD-09.09 (W2-F). The `OPEN` (UI only) tag above is superseded.
 
 **U-23.** (S8-7) **First-Stock-Round sale ban — LEGALITY SYNC + RULES REFERENCE.** Sell is disabled in SR1 by the
 panel's own `macroRoundNumber === 1` (#356) — a local restatement that must become a read of `stockSaleRefusal`
@@ -4417,6 +4454,7 @@ as an ordinary one (`stockTransactionAuthority.test.ts`). The ENGINE half of thi
 racing client is refused with a sentence; what remains is the panel's own `macroRoundNumber === 1` restatement
 becoming a read of `stockSaleRefusal`, and the tooltip/Rules Reference copy correction (§5.1 is a rulebook rule,
 not a Project 18XX house variant). `OPEN` (UI only).
+*(W3-F, 2026-10-10 — matrix reconciliation, AUD-25.14; closure item 12)* **Status: `IMPLEMENTED`** — matrix AUD-03.01: W1-A `82c1de9`. The `OPEN` (UI only) tag above is superseded.
 
 **U-24.** (S8-8) **Unparred-share sale ban — LEGALITY SYNC.** The Sell control is live for the holder of a C&A/M&H
 granted share before the corporation is parred (no price to quote, the button still dispatches); it must read
@@ -4431,6 +4469,7 @@ with no par, the shell's Sell verdict is the sale authority's own (`unstartedCor
 `stockSaleRefusal` with the viewer as seller), so the C&A's PRR share with PRR unparred is greyed with the server's
 sentence; the shared `shareSaleBlock` is unchanged. Evidence: `phase65bUnparredSale` (5).
 `RESOLVED` — Phase 6.5-B (K-08).
+*(W3-F, 2026-10-10 — matrix reconciliation, AUD-25.14; closure item 12)* Agrees with the matrix: AUD-03.14, disposition F (Phase 6.5-B K-08). `RESOLVED`.
 
 **U-25.** (S8-9 / S7-1 / S7-13 / S7-16 / S7-18 / D-17 / D-22 / D-25) **Par ladder, president's cost, affordability,
 empty source, Brown-zone same-corporation continuation, bundle sizes — LEGALITY SYNC.** `PAR_BOX_PRICES`, the
@@ -4457,6 +4496,7 @@ in the refusal) and the bundle sizes (`percentage % 10`). **No frontend file was
 concrete substitutions that remain: `App.purchaseBlockFor` (8577) and `App.saleBlockFor` (8612) become thin
 wrappers over the two predicates; `StockRoundPanel`'s `PAR_VALUE_LADDER` / `cannotAfford` (#357) / `multiBuyMax` /
 source toggle stop computing what the reducer now owns; and a 0 % source must stop offering Buy. `OPEN` (UI only).
+*(W3-F, 2026-10-10 — matrix reconciliation, AUD-25.14; closure item 12)* **Status: `IMPLEMENTED`** — matrix AUD-03.02: W1-A `82c1de9`. The `OPEN` (UI only) tag above is superseded.
 
 **U-26.** (S7-2 / S7-3 / S7-4 / S7-15 / D-16 / D-21) **Auction — LEGALITY SYNC + STATE VISIBILITY + RULES
 REFERENCE.** Verified NONE: escrow-aware affordability and minimum raise (`auctionFunds` / `bidRejectionReason` /
@@ -4495,6 +4535,7 @@ sentence, and the items below are what the dashboard still states for itself:
     reducer's, and this module is presentation synchronised with the authoritative board. No UI work remains
     and no separate Part C item is owed for it.
 `OPEN` (UI only).
+*(W3-F, 2026-10-10 — matrix reconciliation, AUD-25.14; closure item 12)* **Status: `IMPLEMENTED`** — matrix AUD-02.01 (the own-standing-bid raise, K-02), AUD-02.02 (the mini-auction pass, K-15), AUD-02.03 (the contest freeze explained; `passes_since_raise` shown): W1-B `f0a7183` + `76056b7`; the all-pass narration AUD-02.11 (F). The Rules Reference auction text is the owner's (U-11). The `OPEN` (UI only) tag above is superseded.
 
 **U-27.** (S7-10 / S7-20 / D-15) **Bank crediting, signed bank, bank-break latch — badge NONE (confirmed); narrow
 STATE VISIBILITY + RULES REFERENCE.** Verified: `App.tsx` 12548 renders the "bank broken" badge from the shared
@@ -4510,6 +4551,7 @@ against the signed bank: `utils/bankBreak.ts` `bankBreakWarning` clamps with `Ma
 bank has broken; `components/FinancialLedger.tsx` 184 prints `$-20` and its "Paid Out So Far" percentage (160)
 exceeds 100%. Render "Bank broken — owes $N" in both, and check the Rules Reference's bank-break timing text.
 `OPEN` (narrow).
+*(W3-F, 2026-10-10 — matrix reconciliation, AUD-25.14; closure item 12)* **Status: `IMPLEMENTED`** — matrix AUD-12.01 (K-23): W1-I L5 `82b93ca` ("Bank broken" in the ledger, no `$-20`, no >100 %). The `OPEN` (narrow) tag above is superseded.
 
 **U-28.** (Playtest Readiness task; owner, 2026-09-15) **Retrospective Batch 1–6 UI-parity audit.** Not performed in
 the Batch 7 design session. Inspect the completed Batch 1 … 6 reports (`BATCH1_…` through `BATCH6_…`) and the
@@ -4518,6 +4560,7 @@ and add every missed Part C item — including board legality such as the privat
 Batch-3 station gate, the Batch-4/4.6 train-limit and discard flows, the Batch-5 emergency surfaces (U-4) and the
 Batch-6 route refusals (S6-13's duplicated validators). `OPEN` (gate item).
 **Phase 3 W3-G (2026-10-04, at `c0a44d7`): AUDITED** -- findings filed as U-46 … U-55 (matrix AUD-25.01 … AUD-25.15; owner-observed follow-up U-56 / AUD-25.16, 2026-10-04); S6-7, the Batch-3 station gate (but U-53), the Batch-4/4.6 limit and discard flows, the Batch-5 surfaces (U-4, superseded by v13 / W2-G) and the Batch-6 route refusals (but U-54) PASS. The gate closes when each finding is fixed (W3-J), proven obsolete or owner-ruled. **Owner review ACCEPTED (2026-10-04):** AUD-25.11 (GR-1b) CLOSED — OBSOLETE / UNREACHABLE ARCHITECTURE (rooms require the game server); AUD-25.13's carried LOWs ruled item by item (FIX IN W3-J / RECORDED RESIDUAL / OBSOLETE; no "polish later"); OD-3, OD-13, OD-14(d), OD-14(i) transcribed (AUD-25.15). U-46 (W3-B) RESOLVED at the W3-B AUD-25.01 integration (2026-10-04, merge `00b2b3c`); U-47 … U-55 (W3-J) stay OPEN. `AUDITED — owner review accepted; findings open`. **Consolidated integration (2026-10-05):** W3-J (U-47 … U-56) INTEGRATED on `phase3/consolidated-pre-playtest-integration`, every finding fixed (AUD-25.02 … 25.10, 25.12, 25.16 IMPLEMENTED; AUD-25.02's copy corrected again, copy-only, to tell B-20 from F-16); the per-entry `OPEN` tags below are W3-F's closure bookkeeping (AUD-25.14). New REQUIRED Phase-3 bugfix from W3-J: the emergency `train-offer` stage's third-seat duplicate prompt (matrix P3-N027).
+*(W3-F, 2026-10-10 — matrix reconciliation, AUD-25.14; closure item 12)* **Status: `COMPLETE`** — matrix AUD-22.01 IMPLEMENTED (W3-G at `c0a44d7`; owner review accepted 2026-10-04). Every finding is closed: U-46 … U-56 (AUD-25.01 … AUD-25.10, AUD-25.16) IMPLEMENTED and integrated; AUD-25.11 CLOSED — OBSOLETE (owner); AUD-25.13 RULED item by item (its FIX items IMPLEMENTED by W3-J; the third-seat residual is P3-N027, IMPLEMENTED and integrated 2026-10-07); AUD-25.15 resolved; AUD-25.14 is this pass. The `OPEN` (gate item) and "AUDITED — findings open" tags above are superseded.
 
 **U-29.** (S7-1 / S7-10 / S7-12 / D-15; filed by Batch 7.1) **A ledger refusal is invisible — STATE
 VISIBILITY.** Batch 7.1 turned four silent money faults into silent refusals: an unaffordable stock purchase,
@@ -4536,6 +4579,7 @@ and `SetBoPar` with the same predicates the reducer refuses by, inside a `withRu
 one chart, so every stock refusal a live client can provoke reaches the room banner with a sentence. What the
 ingress layer still cannot reach is a refusal met during REPLAY of a stored entry — that is U-30. The private
 and train halves stay 7.4's. `OPEN` (narrowed to 7.4 + U-30).
+*(W3-F, 2026-10-10 — matrix reconciliation, AUD-25.14; closure item 12)* **Status: `IMPLEMENTED`** — matrix AUD-14.04: W1-H `2e0700b` + `cb0c49c`. The `OPEN` (narrowed) tag above is superseded.
 
 **U-30.** (S7-13 / S7-16 / S7-18 / S8-7 / S8-8 / S8-9; filed by Batch 7.2) **The Activity Log cannot say WHY a
 stock transaction was refused — LEGALITY SYNC.** `utils/refusedAction.ts` (#778) is the one place that turns "the
@@ -4549,6 +4593,7 @@ The fix is two substitutions —
 and the sale's equivalent — deliberately not made in Batch 7.2, whose brief excludes frontend work. Scope note:
 this is about REPLAYED entries and legacy logs; a live refusal reaches the room banner from ingress, which 7.2
 does supply. `OPEN`.
+*(W3-F, 2026-10-10 — matrix reconciliation, AUD-25.14; closure item 12)* **Status: `IMPLEMENTED`** — matrix AUD-14.03: W1-H `2e0700b` + `cb0c49c`. The `OPEN` tag above is superseded.
 
 **U-31.** (S7-13 / D-17; filed by Batch 7.2) **`SandboxActionContext.parValue` is inert and still supplied — NONE
 (tech debt, recorded so it is not mistaken for a rule).** Batch 7.2 removed the last reader of `ctx.parValue`
@@ -4557,6 +4602,7 @@ field — `App.tsx` 6357 and 8839, `replayLog` 447 — and #777's warning applie
 authority can never receive is worse than no option: it reads at the call site as a rule that is being enforced."
 The field is annotated in place rather than removed, because deleting it is a signature change across three
 callers for no rules reason. Retire it with S10-8's type cleanup. `OPEN` (no user-visible effect).
+*(W3-F, 2026-10-10 — matrix reconciliation, AUD-25.14; closure item 12)* No matrix row (tech debt with no user-visible effect; not an audit item and not owner-placed). Status unchanged: `OPEN` (no user-visible effect), to retire with S10-8's type cleanup.
 
 **U-32.** (S8-5 / S8-6 / S8-12 / S8-13; filed by the Stage-8 design pass, 2026-09-16 — engine side landed in Slice 8.2,
 2026-09-16) **Home station at the start of the corporation's first OR turn — STATE VISIBILITY + LEGALITY SYNC + RULES
@@ -4576,6 +4622,7 @@ Cleveland and / or Richmond as each is currently legal — Richmond reserved, Cl
 E19 / E5). The Rules Reference's home-station paragraph must say "at the start of its first operating turn" and drop
 any "when it floats" wording. See U-37 for the float's Activity Log line. `OPEN` (UI verification and polish; engine side
 done in Slice 8.2).
+*(W3-F, 2026-10-10 — matrix reconciliation, AUD-25.14; closure item 12)* **Status: `IMPLEMENTED`** — matrix AUD-06.01 (the prompt's timing-true copy, no "has floated": W2-H `3b7f23b` + `461d4f0`) and AUD-21.05 (the Rules Reference's home-station timing: W1-L `de22084` + `8d6f1e9`); the float's own line is U-37. The `OPEN` tag above is superseded.
 
 **U-33.** (S8-2; filed by the Stage-8 design pass — **engine side landed in Slice 8.3, 2026-09-17; the UI half is
 unbuilt and unchanged by it**) **Presidency clockwise tie-break — STATE
@@ -4584,6 +4631,7 @@ line says who took it and why ("closest clockwise from the former president", U-
 Reference §5.4 paragraph states the tie rule. The printed reason to state is "closest clockwise from the FORMER
 president" — the displaced incumbent's seat is the origin even once their percentage has fallen below 20 % (#1620).
 `OPEN` (UI; Slice 8.3 built none of it, by its brief's §15).
+*(W3-F, 2026-10-10 — matrix reconciliation, AUD-25.14; closure item 12)* **Status: `IMPLEMENTED`** — matrix AUD-10.01 (the presidency-change line and §5.4's clockwise tie-break: W2-J `464dfbe` + `5f5ddd2`) and AUD-21.06 (the Rules Reference tie rule: W1-L). The `OPEN` tag above is superseded.
 
 **U-34.** (S8-1 / S8-3 / S8-4; filed by the Stage-8 design pass — engine side landed in Slice 8.1, 2026-09-16) **Dynamic operating order —
 STATE VISIBILITY.** The turn-order strip, the "next corporation" read (`App.tsx` 1300) and the market-token operated
@@ -4594,6 +4642,7 @@ Corporations table (`utils/operatingOrderView.ts` `operatingOrderRanks`, `Contex
 the order from `active_operating_order`, so they follow the settle with no second rule; #753's note there ("that queue
 is frozen for the whole round") is now true of the operated / operating prefix only and wants its wording refreshed with
 the UI pass. See also U-36 (the rise's Activity Log line). `OPEN` (UI verification).
+*(W3-F, 2026-10-10 — matrix reconciliation, AUD-25.14; closure item 12)* **Status: `PHASE-4 PLAYTEST`** — matrix AUD-11.06 (pre-work done by W1-I; #753's note refreshed by P3-N016, W1-I `3904533`), disposition D: one of the audit's own playtest items (closure item 6), not a Phase-3 defect; its observation procedure is in `docs/phase3/PHASE4_PLAYTEST_CHECKLIST.md`. The `OPEN` (UI verification) tag above is superseded.
 
 **U-35.** (S8-10; filed by the Stage-8 design pass — pending Slice 8.4) **M&H exchange window and source — LEGALITY
 SYNC + RULES REFERENCE / GOTCHA + STATE VISIBILITY (+ NEW ACTION under ruling R2).** The powers panel / flow modal must ask the reducer's
@@ -4640,6 +4689,7 @@ transition (the private closes, the share arrives, `pending_mh_exchange` clears)
 request clears and nothing else moves, so the REASON cannot be represented without new event/notification machinery.
 The authority is deterministic and the pending state clears correctly either way; representing the reason is U-35's,
 and 8.4 deliberately did not build it. (v) the Rules Reference gotcha card above.
+*(W3-F, 2026-10-10 — matrix reconciliation, AUD-25.14; closure item 12)* **Status: `IMPLEMENTED`** — matrix AUD-10.02 ((i) the panel asks `mhExchangeRequestRefusal`, (ii) the owner chooses the source: W1-C `91b537f`), P3-N003 ((iii) the off-turn request: W2-D `db50c38`), AUD-10.06 ((iv) the requester toast, table marker and OD-3's generic "expired" line: W2-E `4f998b8`), AUD-10.07 ((v) the Rules Reference gotcha, RR-6: W2-E `91037ce`). The `OPEN` tag above is superseded.
 
 **U-36.** (S8-4 / #1211; found by Slice 8.1, 2026-09-16, by reading the code — not reproduced in a browser) **The
 sold-out-rise Activity Log line is built from the chart AFTER the rise was committed — STATE VISIBILITY.** In
@@ -4650,6 +4700,7 @@ its RISEN cell, so the sentence describes a further, hypothetical rise one row h
 of its column is not narrated at all). The board is right; the sentence is not. Shell fix: narrate from
 `before.market_positions`, or from the before / after position diff, not from the live mirror. Slice 8.1 changed only the
 ORDER of that list (highest-priced first). `OPEN` (UI; `App.tsx` is owner-modified and was not touched by 8.1).
+*(W3-F, 2026-10-10 — matrix reconciliation, AUD-25.14; closure item 12)* **Status: `IMPLEMENTED`** — matrix AUD-03.08: W2-J `b328e53` (its own OD-12 RED R2 commit: the line reads the board the reducer was handed). The `OPEN` tag above is superseded.
 
 **U-37.** (S8-5 / #1343; found by Slice 8.2, 2026-09-16, by reading the code — not reproduced in a browser) **A Stock
 Round float is narrated only at the corporation's first Operating turn — STATE VISIBILITY.** #1343 writes one Activity Log
@@ -4659,6 +4710,7 @@ Stock Round now leaves no Activity Log line until its home goes down an Operatin
 narration moved with the placement. The Corporation Floated visual flourish owns the float presentation (U-32); decide
 whether the Activity Log should also say "floated" at the float and "placed its home" at the first turn. `OPEN` (UI;
 `actionLog.ts` / `describeFloat` untouched by 8.2).
+*(W3-F, 2026-10-10 — matrix reconciliation, AUD-25.14; closure item 12)* **Status: `IMPLEMENTED`** — matrix AUD-03.09: W2-J `8a448d2` + `99b5651` under OD-8 Option A ("<CORP> has floated. It received $<AMOUNT>." at the float; "<CORP> placed its home station on <HEX>." at the first turn). The `OPEN` tag above is superseded.
 
 ---
 
@@ -4681,6 +4733,7 @@ returns the identical `` `#${tileId}` `` string for the other 73 tiles, so no ot
 receipt is the sharpest case: it exists *because of* #626 and currently names it by the number the errata voids.
 **No reducer change, no replay effect, no golden.** Blocked only on the owner's files being free; the engine and
 catalog half is done and test-pinned (`utils/stage93TileAuthority.test.ts`).
+*(W3-F, 2026-10-10 — matrix reconciliation, AUD-25.14; closure item 12)* **Status: `IMPLEMENTED`** — matrix AUD-05.01: W1-E (the receipt and ring labels, `43a641f`, `8dc79e0`) + W1-L (the Tiles tab, `de22084`). (No status tag was recorded above.)
 
 **U-39.** (S9-8; filed by Stage 9.5, 2026-09-19) **Two derived readers still express Bank Pool room in percent —
 LEGALITY SYNC, conservative, LPF only.** The authority counts five physical certificates (#1670,
@@ -4696,6 +4749,7 @@ an illegal sale and there is no authority hole. Not fixed at Stage 9.5 on purpos
 President's Certificate by percentage and the owner's S9-8 ruling says presidency rules remain unchanged, so the
 projection wants its own small decision rather than a mechanical substitution. **No reducer change, no replay
 effect, no golden.**
+*(W3-F, 2026-10-10 — matrix reconciliation, AUD-25.14; closure item 12)* **Status: PARTLY `IMPLEMENTED`** — the panel half (`StockRoundPanel`'s own 50 % cap) is matrix AUD-03.03: W1-A `82c1de9`. The `gameEngine/endgame.ts` `sellableHoldings` projection half has NO matrix row; on this head it still computes `BANK_POOL_CAP_PERCENT - bank_pool_percentage` (conservative: it can only under-report). That half is tagged `OPEN` here (conservative; its own small decision, as recorded above; the entry had no tag) and is listed as unreconciled for the owner.
 
 **U-40.** (S9-4; filed by Stage 9.5, 2026-09-19, on the owner's project-authority ruling) **Player-facing naming
 and the Rules Reference's standing — READINESS, no broad rename now.** The game is **Project 18XX**; the expanded
@@ -4712,6 +4766,7 @@ The readiness pass checks:
 
 Deliberately NOT a Stage-9 rules item: S9-4's rules-authority question is closed (the implemented board is
 correct as Project 18XX+). **No reducer change, no replay effect, no golden.**
+*(W3-F, 2026-10-10 — matrix reconciliation, AUD-25.14; closure item 12)* **Status: `IMPLEMENTED`** — matrix AUD-18.04: W1-L `de22084` + `8d6f1e9` (the Project 18XX naming pass and the Rules Reference's standing). (No status tag was recorded above.)
 
 **U-41.** (filed 2026-09-24 by the GR-4 U-9 review; **pre-existing since #1530, NOT Gentle-Rust-specific**) **Post-game
 statistics do not record a train-limit discard — DERIVED STATISTICS, standard games too.** When a president discards a
@@ -4735,6 +4790,7 @@ log's adapter-supplied discards are still booked once, by the fleet-loss diff at
 destruction-time accounting (#1704) unchanged: only an unmarked train can be discarded. The GR-4 certification game's
 pins (`gentleRustCertificationStats.test.ts`) now carry the three limit discards (P3 credited $930). Evidence:
 `postgameStatisticsResiduals.test.ts`. Derived statistics only.)*
+*(W3-F, 2026-10-10 — matrix reconciliation, AUD-25.14; closure item 12)* Agrees with the matrix: AUD-12.02 IMPLEMENTED (W2-L `e16aa5a`), ratified by OD-13. `RESOLVED`.
 
 **U-42.** (UR-4, 2026-09-25 — the UI-parity classification of UR-F21 / UR-F22; S9-7) **The Blood Price's copy choice and
 the buyer's warning — `RESOLVED` in UR-4 (the two surfaces), with two copy items routed to UR-6** *(both `RESOLVED` in UR-6,
@@ -4755,6 +4811,7 @@ cured; an ordinary copy beside it says "not the gold-trimmed one, so no Blood Pr
 as before; the Rules Reference states the Blood Price (UR-F13). And the independent UR-4 review's **D1**, the same
 class: the consent prompt and the pending-offer view now disclose the Blood Price for an UNNAMED offer the authority
 settles as one (`unpredictableRevenueDisclosure`).)*
+*(W3-F, 2026-10-10 — matrix reconciliation, AUD-25.14; closure item 12)* Agrees with the matrix: AUD-02.12, disposition F (fixed before Phase 3: UR-4 / UR-6). `RESOLVED`.
 
 **U-43.** (filed 2026-09-25 by UR-5; **pre-existing, NOT Unpredictable-Revenue-specific — standard games too**) **Four
 post-game statistics residuals in `utils/gameHistory.ts`, found while classifying every statistic for OD-UR-6 — DERIVED
@@ -4785,40 +4842,56 @@ trains the log does not name -- one booking per turn, at the turn's cumulative f
 prints no line. Each tally keeps its old key order (`reserve`) so accolade ties break as before. Evidence:
 `postgameStatisticsResiduals.test.ts`. S10-21's non-UR remainder (Bagholder / Little Engine formats, >10-OR timeline) is
 NOT taken by W2-L and stays open.)*
+*(W3-F, 2026-10-10 — matrix reconciliation, AUD-25.14; closure item 12)* Agrees with the matrix: AUD-12.03 IMPLEMENTED (W2-L `e16aa5a`), ratified by OD-13 (OD-14(d): "traded"). `RESOLVED`. S10-21's non-UR remainder stays with S10-21 (Part B), not with this item.
 
 **U-44.** (filed 2026-09-28 by ESCROW-4) **Money-surface times.** The server's money sentences say "HH:MM UTC" (seat locks,
 the Start grace); the money panel, band and review card show local "HH:MM" unlabelled. Pick one convention (local with the zone,
 say) in the copy / UX pass. Also for that pass: the money panel's styling is functional only (the waiting room's ink palette,
 `moneyStyles.ts`); the Keplr logo is still U-15. **No reducer change, no replay effect.** `DEFERRED`.
+*(W3-F, 2026-10-10 — matrix reconciliation, AUD-25.14; closure item 12)* **Status: `IMPLEMENTED`** — matrix AUD-20.01: W2-K `e223f64`, integrated `fb4eee5`, under OD-9(a) (persistent player UI: local absolute time + explicit zone; server refusal copy: relative duration; machine evidence UTC). The money panel's styling: the bounded consistency pass of OD-14(i) (W2-K). The Keplr logo: U-15 (now integrated). The `DEFERRED` tag above is superseded.
 **U-45.** (filed 2026-09-28 by ESCROW-4) **Two tabs can both reach Keplr for one CreateGame.** The single-flight check reads the
 browser's pending-transaction record, which exists only once Keplr has signed; two tabs pressing "Open the table on Juno"
 before either signs both open Keplr, and approving both makes a duplicate escrow (it is listed in "Your deposits" with Cancel;
 its fee is not refunded). A cross-tab lock (a `BroadcastChannel` or a storage lock taken before Keplr opens) would close it.
 `DEFERRED`.
+*(W3-F, 2026-10-10 — matrix reconciliation, AUD-25.14; closure item 12)* **Status: `IMPLEMENTED`** — matrix AUD-19.02: W3-L `9afc74a` (`money/keplrLock.ts`: the Web Locks API, a localStorage lease fallback, then the page's own single flight), integrated 2026-10-07 on `phase3/consolidated-final-preplaytest-integration` (lane A+B `0d42a0c`, merge `610e26b`). The `DEFERRED` tag above is superseded.
 
 **UI-parity findings of the U-28 retrospective audit (Phase 3 W3-G, 2026-10-04).** Filed under the standing rule; each `OPEN` until fixed, verified obsolete or adjudicated (Part F). AUD-25.11 (GR-1b), AUD-25.12 … AUD-25.15 are matrix-only (owner review / W3-F bookkeeping). Owner review ACCEPTED 2026-10-04: AUD-25.11 CLOSED — OBSOLETE; AUD-25.13 ruled item by item (its FIX items go to W3-J); AUD-25.15 resolved.
+*(W3-F, 2026-10-10)* Every finding below is closed in the matrix: U-46 … U-56 IMPLEMENTED and integrated (2026-10-04 /
+2026-10-05); AUD-25.14 (this bookkeeping) is carried by the W3-F lines in this Part and Part D's OD record.
 
 **U-46.** (Phase 3 W3-G, 2026-10-04; matrix AUD-25.01; MEDIUM) The shell's action latch releases after 6 s while the room link still holds the submission; only the par prompt and the three offer forms read the link queue, so the OR bar, the Stock Round buy/sell/pass, the consent prompts and the W2-G emergency modal re-arm and a second press can queue a duplicate (a second sale can legally land). Evidence: CONFIRMED — `App.tsx`:900 `ACTION_LATCH_BACKSTOP_MS`, 4426 `actionInFlight = pendingAppendIndex !== null`, 4436-4440 backstop; `await link.submit` does not settle while the link is down; W3-I wired `linkQueue` only into `AuctionPromptModal` and the offer forms; `EmergencyTrainPurchaseModal.tsx`:196-229 own 4 s latch. Owner: W3-B. Cross-slice (W3-I x #1173 latch x W2-G). Remedy: one derived busy reason, e.g. `actionInFlight = pendingAppendIndex !== null || linkQueue.unsettled > 0`, read by every control including the emergency modal; also resolves the two disagreeing busy lines (AUD-25.10). *(Phase 3 W3-B, 2026-10-04 -- **`RESOLVED`**: `utils/actionLatch.ts` bounds the latch by the room link's queue -- busy while a press is latched or the link holds this tab's submission, and the 6 s backstop waits for the link; every named surface reads it; slice `phase3/w3-b-action-latch-linkqueue` @ `7efda71`, integrated on `phase3/wave3-i-w2i-w2j-w3c-w3g-w3b-v13cert-integration` (merge `00b2b3c`). Accepted LOW residue (RED R5): if another seat's move lands while this tab's press remains held, the controls may briefly re-arm once this tab's own move lands. The two busy lines stay U-55 / AUD-25.10 (W3-J).)* `RESOLVED`.
+*(W3-F, 2026-10-10 — matrix reconciliation, AUD-25.14; closure item 12)* Agrees with the matrix: AUD-25.01 IMPLEMENTED (W3-B), integrated (`00b2b3c`). `RESOLVED`.
 
 **U-47.** (Phase 3 W3-G, 2026-10-04; matrix AUD-25.02; MEDIUM) The Rules Reference says "The CSL and DH exception hexes are not reserved: any corporation may tile them"; the authority bars the C&SL's B20 while a player owns it (only the D&H's F16 is excepted, #1694a). Evidence: CONFIRMED — `RulesReference.tsx`:1847 (and the Track watch line at :2214 that reuses it) vs `privateReservations.ts`:82-83 and `layTileAuthority.ts` `privateHexRefusal`; the correct sentence is already at `RulesReference.tsx`:453. Owner: W3-J. S6-7 parity: the board path is correct (glow, click refusal, hex markers); only the copy contradicts it. Copy-only fix. `OPEN`. **Fixed by W3-J and INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05); this entry's tag closes at W3-F (AUD-25.14).**
+*(W3-F, 2026-10-10 — matrix reconciliation, AUD-25.14; closure item 12)* **Status: `IMPLEMENTED`** — matrix AUD-25.02: W3-J, integrated on `phase3/consolidated-pre-playtest-integration` (2026-10-05). The `OPEN` tag above is closed.
 
 **U-48.** (Phase 3 W3-G, 2026-10-04; matrix AUD-25.03; LOW) A refusal is not retired when a later AUTOMATIC-flagged player decision lands (B&O par, home station, M&H exchange, Undo): `submission-landed` fires only for `automatic !== true`, so the P3-N004 symptom survives on those paths. Evidence: CONFIRMED — `App.tsx`:6692 (RED R1) gate `options?.automatic !== true`; the par (9809), `PlaceHomeStation` (9769), `ExchangePrivate` (6115) and `RevertTo` (9347) are sent `automatic: true`. Owner: W3-J. One-line RED R1 change (gate on `derived !== true`), its own reviewed commit. `OPEN`. **Fixed by W3-J and INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05); this entry's tag closes at W3-F (AUD-25.14).**
+*(W3-F, 2026-10-10 — matrix reconciliation, AUD-25.14; closure item 12)* **Status: `IMPLEMENTED`** — matrix AUD-25.03: W3-J, integrated on `phase3/consolidated-pre-playtest-integration` (2026-10-05). The `OPEN` tag above is closed.
 
 **U-49.** (Phase 3 W3-G, 2026-10-04; matrix AUD-25.04; LOW) The free station placement (home / D&H) neither awaits nor rolls back: a refused D&H station leaves `dh-token` in the shell's fallback set (the power reads used), and the President's home-station prompt re-pops for the whole round trip (and any outage), inviting a second `PlaceHomeStation`. Evidence: CONFIRMED by reading — `commitFreeStationPlacement` (`App.tsx`:9747-9790); `HomeStationPrompt` mount `pending={homeStationPlacement ? null : pendingHomeToken}` (`App.tsx`:14001); the path is `automatic`, so it never arms the latch. Owner: W3-J. Extends P3-N020's rollbacks (W3-C covered lay and run only); the latch half is W3-B's P3-N021. `OPEN`. **Fixed by W3-J and INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05); this entry's tag closes at W3-F (AUD-25.14).**
+*(W3-F, 2026-10-10 — matrix reconciliation, AUD-25.14; closure item 12)* **Status: `IMPLEMENTED`** — matrix AUD-25.04: W3-J, integrated on `phase3/consolidated-pre-playtest-integration` (2026-10-05). The `OPEN` tag above is closed.
 
 **U-50.** (Phase 3 W3-G, 2026-10-04; matrix AUD-25.05; LOW) Other optimistic shell state a refused move leaves behind: the committed lay ghost and the station picture (held until their 4 s clocks), the token handler's step/target writes, End Turn's tutorial navigation; and the client's own pre-send gates (turn, catching-up, link-down) answer `undefined`, so a lay or run pressed during the reload replay keeps its disarmed JK / spent key or its `ran:true` mark. Evidence: CONFIRMED by reading — `App.tsx`:12040-12043, 12202, 12279-12288 (ghost), 11066-11099 (token), 11968-11980 (End Turn); pre-send gates 6524-6530, 6576-6577, 6637-6639 return `undefined` (W3-C accepted LOW (a), still reachable via the catching-up gate). Owner: W3-J. The pre-send half needs RED R1 lines (return `false`); the rest is outside RED. `OPEN`. **Fixed by W3-J and INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05); this entry's tag closes at W3-F (AUD-25.14).**
+*(W3-F, 2026-10-10 — matrix reconciliation, AUD-25.14; closure item 12)* **Status: `IMPLEMENTED`** — matrix AUD-25.05: W3-J, integrated on `phase3/consolidated-pre-playtest-integration` (2026-10-05). The `OPEN` tag above is closed.
 
 **U-51.** (Phase 3 W3-G, 2026-10-04; matrix AUD-25.06; LOW) A resync puts two contradictory sentences on the strip -- the stale refusal ("... this tab has caught up. Try that again.") beside the resync notice ("... reloading the room's history.") -- and the resync notice is retired only by this tab's own landed move, so a seat not on turn keeps it. Evidence: CONFIRMED — `serverLink.ts`:478-479 calls `onStale` then `onResync`; `roomNotices.ts` retires `resync` only on `submission-landed`; the drain's `finally` retires only `catching-up`. Combines with W3-C accepted LOW (b) (a resync can roll back a landed move's shell state). Owner: W3-J. Retire `resync` when the rebuild's drain settles (RED R5) and skip `onStale` when `onResync` fires (`serverLink.ts`). `OPEN`. **Fixed by W3-J and INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05); this entry's tag closes at W3-F (AUD-25.14).**
+*(W3-F, 2026-10-10 — matrix reconciliation, AUD-25.14; closure item 12)* **Status: `IMPLEMENTED`** — matrix AUD-25.06: W3-J, integrated on `phase3/consolidated-pre-playtest-integration` (2026-10-05). The `OPEN` tag above is closed.
 
 **U-52.** (Phase 3 W3-G, 2026-10-04; matrix AUD-25.07; LOW) A server `internal` error during a submit carries no `inReplyTo`, so the submission stays pending until the next reconnect: the queue-aware forms and the par prompt stay held ("Sending your last action") and the strip shows a `transport` notice no landed move retires. Evidence: CONFIRMED by reading — `server/src/routerServer.ts`:460 `error` without `inReplyTo`; `serverLink.ts`:940-941 settles only `answers`. Supersedes W3-C accepted LOW (c) (an answering `error` frame is never sent; downgraded to NIT). Owner: W3-J. Server frame field only (no rule, no settlement): attach `inReplyTo` to a submit's internal error. `OPEN`. **Fixed by W3-J and INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05); this entry's tag closes at W3-F (AUD-25.14).**
+*(W3-F, 2026-10-10 — matrix reconciliation, AUD-25.14; closure item 12)* **Status: `IMPLEMENTED`** — matrix AUD-25.07: W3-J, integrated on `phase3/consolidated-pre-playtest-integration` (2026-10-05). The `OPEN` tag above is closed.
 
 **U-53.** (Phase 3 W3-G, 2026-10-04; matrix AUD-25.08; LOW) While the D&H's free station keeps Tokens open, the paid "Place Station Token for $X" control skips the treasury check, so a poor treasury can stage a paid token the server refuses. Evidence: CONFIRMED by reading — `stationTokens.ts`:707-713 returns before the treasury check; `ContextualActionBar.tsx`:1955-1967 has no `disabled`; the click asks only `evaluateStationPlacement` (no treasury arm). Owner: W3-J. Batch-3 station gate parity. Ask `stationPlacementRefusal` (or its treasury and allowance arms) for the paid control and the click. `OPEN`. **Fixed by W3-J and INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05); this entry's tag closes at W3-F (AUD-25.14).**
+*(W3-F, 2026-10-10 — matrix reconciliation, AUD-25.14; closure item 12)* **Status: `IMPLEMENTED`** — matrix AUD-25.08: W3-J, integrated on `phase3/consolidated-pre-playtest-integration` (2026-10-05). The `OPEN` tag above is closed.
 
 **U-54.** (Phase 3 W3-G, 2026-10-04; matrix AUD-25.09; LOW) S6-13 remainder: the shell's `runnableDrafts` filter and `editRouteDraft`'s click rules still judge route drafts locally; nothing proves they accept every route the v12 authority accepts (if an Auto Route draft were wrongly dropped while Skip is withdrawn, the turn would stick). Evidence: CONFIRMED by reading — `App.tsx`:4900-4985, 10355; `routeDraftEdit.ts`:145-250. W1-G (AUD-07.04) retired only the `RoutePlannerPanel` duplicate. Owner: W3-J. Phase-3 part: a property test over the route-oracle corpus (every exact Auto Route draft survives the filter) or judge drafts with `evaluateRouteSet`. The structural cleanup stays Phase 7 (GitHub issue #1, S6-13). `OPEN`. **Fixed by W3-J and INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05); this entry's tag closes at W3-F (AUD-25.14).**
+*(W3-F, 2026-10-10 — matrix reconciliation, AUD-25.14; closure item 12)* **Status: `IMPLEMENTED` (the Phase-3 player-facing parity portion)** — matrix AUD-25.09: W3-J `28fbd85` (+ `1495c42`): the route-oracle parity property test (every exact Auto Route draft survives `runnableDrafts`; the set `handleRunTrains` sends passes `routeSetRefusal`); no defect found, no production change; integrated 2026-10-05. The structural cleanup stays S6-13 / GitHub issue #1, which the matrix row places in "Phase 7" without citing an owner ruling (listed as unreconciled). The `OPEN` tag above is closed.
 
 **U-55.** (Phase 3 W3-G, 2026-10-04; matrix AUD-25.10; NIT) UI-parity NITs found by the retrospective: the depot purchase panel copies the purchase rule instead of asking `trainPurchaseRefusal`; the off-turn funding-offer Accept does not ask `fundingPrivateAnswerRefusal`; two busy lines disagree for one held submission (`PrivateCompaniesSection` "Queued" vs `StockRoundPanel` "Sending"); "queued" means two things (M&H toast vs W3-I note); the Rules Reference ticks the delayed auction done when it was cancelled; the link-down pre-send line can repeat the reconnecting banner; stale `RunManualRoute` comments. Evidence: CONFIRMED by reading — `TrainPurchasePanel.tsx`:557-590, 1814-1870; `PrivateCompaniesSection.tsx`:121-129 vs `StockRoundPanel.tsx`:3282; `mhQueuedExchange.ts`:167-170; `RulesReference.tsx`:2871; `App.tsx`:6637, 4555, 4717, 10348. Owner: W3-J. Each a small, local fix; none blocks play. `OPEN`. **Fixed by W3-J and INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05); this entry's tag closes at W3-F (AUD-25.14).**
+*(W3-F, 2026-10-10 — matrix reconciliation, AUD-25.14; closure item 12)* **Status: `IMPLEMENTED`** — matrix AUD-25.10: W3-J, integrated on `phase3/consolidated-pre-playtest-integration` (2026-10-05). The `OPEN` tag above is closed.
 
 **U-56.** (Phase 3 W3-G follow-up, owner-observed 2026-10-04; matrix AUD-25.16; HIGH) Signed in as a seated player, the owner pressed the Lobby's public-list Watch on their own game: the table opened in their seat, one turn behind the game, offering their turn from the stale board. (a) Watch and "Your tables" are one door and no watch intent exists, so a participant is seated despite "You will not have a seat" (OD-19); (b) the drain counts an entry applied before dispatching it (no catch, no retry) and the first board comparison of a session is console-only, so a board can rest behind with no notice; (c) the turn gate reads that board and the link stamps a click with the received tip, so the server's staleness guard does not fire -- the click is refused by authority or lands on a board the player never saw. Evidence: CONFIRMED by source and in-memory tests (`phase3W3GWatchDefect.test.tsx`); the exact trigger of the owner's stale entry is not proven (console distinguishes a reducer no-op from a replay throw). Owner: W3-J. **OD-19 RULED 2026-10-04:** (a) RESOLVED -- Watch is a read-only spectator view, always, even for a seated principal; reopening a seat is "Your tables" / Open / Rejoin; the control keeps "Watch this game. You will not have a seat." (b) `OPEN`; (c) `OPEN`, HIGH safety defect. Stale-board safety requirement: a client whose APPLIED board is behind the authoritative state must never submit as though current -- W3-J fixes the client (non-actionable controls while replay / catch-up / divergence is unresolved) AND the submission (bound to the APPLIED log position; the server rejects a mismatch with the authoritative pre-action position). `OPEN` (HIGH). **Fixed by W3-J and INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05); this entry's tag closes at W3-F (AUD-25.14).**
+*(W3-F, 2026-10-10 — matrix reconciliation, AUD-25.14; closure item 12)* **Status: `IMPLEMENTED`** — matrix AUD-25.16: W3-J under OD-19 ((a) the read-only Watch door; (b) a board that is behind is never silently current; (c) every submission bound to the APPLIED board position, the server's staleness guard rejecting a mismatch), integrated 2026-10-05. The `OPEN` (HIGH) tags above are closed.
 
 **Phase 6.5 register — the six fix-before items, the RR-2 copy and the integration findings (closed 2026-09-28).**
 The ids are the corrected register's (`claude/PHASE6_5A_CORRECTIONS_H01_2026-09-28.md` §6–7). Delivered by Phase 6.5-B
@@ -4860,6 +4933,16 @@ closure (`claude/INTEGRATED_CLOSURE_ESCROW4_65B_APP0A_2026-09-28.md`). All UI-on
   passed `board={gameState}`, so a Dispute pressed mid-scrub sent a past round's `terminalStateHashV1` as its evidence.
   Both now pass `board={liveState}`; `components/money/settlementEvidenceBoard.test.tsx`. `RESOLVED` — the integrated
   closure.
+
+*(W3-F, 2026-10-10 — matrix reconciliation of this register, AUD-25.14)* The `RESOLVED` entries agree with the matrix's
+F rows (fixed before Phase 3): K-01 AUD-03.13, K-08 AUD-03.14, K-10 AUD-03.15, H-02 AUD-02.10, RR-2 AUD-05.05, I-4
+AUD-20.11; K-09's outcome is carried on U-20 / U-21 (its K-05 half: AUD-09.04, W1-D, IMPLEMENTED); H-01a / SI-H01 stands,
+with the reload-during-hold probe a Phase-4 observation (AUD-04.05, D). The `DEFERRED` entries are now **`IMPLEMENTED`** in
+Phase 3 (no longer Phase 9/10): **R4** → AUD-03.11 (W3-I `5c6d7f8` + `d663b1c`: the offer form is kept until the proposal
+lands); **I-1** → AUD-02.05 (W3-I: the par prompt never releases its press while the link holds it); **I-2** → AUD-02.06
+(W3-I: "not reached the table yet" only after the link settles the press not applied); **I-3** → AUD-03.10 (W2-F
+`5a0bf37` + `8d4e9f5`: the trade pointer stands aside from the Private Companies section). RR-2c (the `terrainFeeOnce`
+fixture's framing) has no matrix row.
 
 ## Part D — Deliberate rules deviations and owner decisions (never to be "fixed" as bugs)
 
@@ -5344,6 +5427,202 @@ consequence for DA-5 (D-58 with D-59, not a new decision): D-58 forbids a volunt
 incurable excess, and D-59 exempts only involuntary intervening changes, so the acceptance-time check must count the
 player's other standing bids as potential wins; otherwise the player's own later awards could create the excess D-58
 forbids. Closes OD-DA-2d; no Delayed Auction owner decision remains open. *Implemented 2026-09-25 — DA-5.* `OWNER DECISION`.
+
+**Phase-3 owner decisions OD-0 … OD-19 (recorded here by W3-F, 2026-10-10; closure contract item 3; matrix AUD-25.14).** Transcribed from `docs/phase3/phase3_accounting.json` `owner_rulings` (the same text as `docs/phase3/PHASE3_EXECUTION_PLAN.md` §7.3), in the owner's words; each entry names its date and source, and where an older transcription was superseded, both are kept. The status lines are W3-F's (2026-10-10), from the matrix. `OWNER DECISION` — none is to be "fixed" as a bug. Owner-decision rule: owner decisions require explicit owner approval; recommendations, planning defaults and inferred choices are not rulings.
+
+**OD-0 — PHASE-3 SOURCE PIN — SUPERSEDED / RULED BY THE CURRENT INTEGRATION LINEAGE.** Ruled 2026-10-05. Source: the owner's Phase-3 consolidated-integration brief (2026-10-05).
+- The old OD-0 question has been superseded by the actual Phase-3 integration history.
+- The authoritative Phase-3 source line is the current Phase-3 integration lineage.
+- For the consolidated integration: 9ebca03 is the integration base; the new combined integration HEAD becomes its successor.
+- Do NOT rewind Phase 3 to an old main; do NOT rebase Phase 3 onto 8f33f0f; do NOT rewrite historical integration commits; do NOT run a retroactive "which old SHA should have been the base?" exercise.
+
+*Status (W3-F, 2026-10-10):* RULED. No retroactive base pin, rebase or history rewrite; the Phase-3 source line is the integration lineage. `OWNER DECISION`.
+
+**OD-1 — AUTHORITATIVE HOLD PRESENTATION.** Ruled 2026-10-03. Source: the owner's Wave-1 integration brief (2026-10-03).
+- Ordinary non-active-player behavior remains as it already was.
+- Important deliberate exception: during Run Routes and Dividends, non-active players continue to see the active corporation's route/train information and dividend choices/consequences.
+- When an initiated trade/offer creates an authoritative hold: every player gets a clear Waiting on X / what is being decided status; the legitimate answerer retains Accept/Reject controls; the proposer retains Rescind where legal; unrelated controls do not pretend play can continue.
+- Emergency train purchase: the obligated president gets the interactive emergency controls; everyone else gets a simplified status/notification that the named player / corporation is resolving an emergency train purchase.
+- Do not accidentally remove the Routes/Dividends informational visibility.
+
+*Status (W3-F, 2026-10-10):* RULED and IMPLEMENTED: W2-A (AUD-04.01), W2-F (AUD-09.08, AUD-09.09), with W2-G and W2-H taking its viewer scope; the Routes / Dividends spectator visibility kept. `OWNER DECISION`.
+
+**OD-2 — STOCK ROUND PASS.** Ruled 2026-10-03. Source: the owner's Wave-1 integration brief (2026-10-03).
+- RESOLVED. The intended Stock Round model is: Sell whenever legal; take at most one Buy action; after buying, Buy is unavailable but Sell remains available; the player-facing button is named "Pass Turn"; Pass Turn ends the player's turn in ONE click.
+- The old Sell → Buy → Sell stage-walking model is superseded.
+- Because changing PassTurn replay semantics is a rules-engine change, the actual implementation is scheduled for the dedicated v13 rules slice and its settlement certification.
+- Wave-1's sellBuySell pins/comments are not the final desired behavior; they are preserved only until the v13 slice replaces them.
+- The separate SBS-4 / "Brown IPO first purchase opens Pool continuation" item is NOT resolved. Owner's observation: a corporation's first-ever IPO purchase starts it at a PAR space, not a Brown zone, so the audit wording is internally suspect. SBS-4: NEEDS PRECISE REPRODUCTION / CLARIFICATION. Do not implement a rule from the current wording.
+
+**Restatement (closure contract item 3).** The plan's OD-2 asked for the recorded OD-A-2 and OD-A-4 rulings (whose text was in neither the repository nor the Project docs) to be restated. Their text, as the owner gave it on 2026-10-03, is the ruling above: OD-A-2 -- a Stock Round "Pass Turn" ends the player's turn in ONE click (Sell whenever legal; at most one Buy; after buying, Sell remains), as a v13 rules change; OD-A-4 / SBS-4 -- "Brown IPO first purchase opens Pool continuation" was NOT resolved by this ruling (needs precise reproduction; nothing implemented from that wording) and was later settled inside the v13 batch (OD-10(a); P3-N024).
+
+*Status (W3-F, 2026-10-10):* RULED and IMPLEMENTED: the one-click "Pass Turn" is rules v13 (W3-K, one `PassTurn` ends the Stock Round turn; certified) presented by W2-B (AUD-03.04, SBS-1 / SBS-2). SBS-4, left NOT resolved by this ruling, was then taken into the v13 batch by OD-10(a): P3-N024 IMPLEMENTED (only a Brown-zone Bank Pool purchase opens the continuation; IPO -> Pool and Pool -> IPO refused). `OWNER DECISION`.
+
+**OD-3 — M&H QUEUED REQUEST CANCELLATION (W2-E).** Ruled 2026-10-04. Source: the owner's W3-G owner-review brief (2026-10-04; AUD-25.15), as applied by W2-E.
+- Generic expiry is sufficient for the M&H queued request.
+- No forensic engine reason is required.
+
+*Status (W3-F, 2026-10-10):* RULED; W2-E's generic "expired" line stands (AUD-10.03, AUD-10.06 IMPLEMENTED); no engine work. `OWNER DECISION`.
+
+**OD-4 — EMERGENCY FUNDING (AUTOMATIC BANKRUPTCY).** Ruled 2026-10-03. Source: the owner's W3-K rules-v13 brief (2026-10-03); rulings 1, 4 and 5 from the W3-K continuation brief (2026-10-04).
+- Emergency funding becomes automatic in the v13 rules batch (owner sub-rulings O-1 to O-6 of V13_SCOPE_VERIFICATION §3.6).
+- O-1: the intercorporate trade window is budgeted at the treasury plus the president's cash before any liquidation; a ForgoTrainTrade message closes it; it never reopens.
+- O-3: a liquidation-funded intercorporate trade is illegal.
+- The treasury-plus-cash commitment and the purchase are automatic, through the derived-action machinery with durable keys.
+- Share raising is one atomic EmergencySellPortfolio: the submitted order is preserved; the whole portfolio is validated, simulated and proven legal; any failure returns the original board; ordinary sale law is reused.
+- O-4: "only enough" applies to the whole portfolio, and the smallest legal overshoot is allowed.
+- O-5: no self-created bankruptcy: an insufficient portfolio is refused. The insolvency oracle must be exact.
+- O-2: private funding stays optional; fundingPrivateOfferRefusal is preserved and ForgoPrivateFunding is added.
+- Bankruptcy is automatic, with no player Declare: liquidate as far as legally possible, apply the cash to the obligated corporation, then GameEnd with bankrupt_president. DeclareBankruptcy is refused on v13.
+- O-6: shares that could not be sold are scored as the bankrupt's shares.
+- Expose the authority W2-G needs. Not in this batch: DH-1, GR-1 / S10-27, GR-1b, D-18, D-22, RR-4, V-6.3.
+- Owner ruling 1 (2026-10-04): KEEP the portfolio rule. "Only enough" means no redundant leg and no unnecessarily large percentage within a leg when a smaller LEGAL bundle of that same holding would still fund; the smallest legal indivisible bundle may overshoot. It does NOT mean the globally smallest dollar overshoot: with $50 short, { B 10% } raising $100 and { C 10% } raising $60 are both legal and the player chooses.
+- Owner ruling 4 (2026-10-04): KEEP the refusal. EmergencySellPortfolio may contain each corporation at most once; 20% of PRR is one 20% leg, never two 10% legs.
+- Owner ruling 5 (2026-10-04): private-funding relevance is EXACT. The question is whether at least one legally valid private-funding path (one sale or a legal sequence, assuming buyer consent, under the existing #1541 authority) could contribute to a complete rescue. An upper bound may be used only to prune; if exact authority proves no legal private path can rescue, bankruptcy does not wait.
+- Review findings fixed (2026-10-04): the automatic bankruptcy is narrated as an outcome; the no-server shell forwards the keyed automatic emergency purchase through #1247's derived-action path; the Rules Reference trade-window and bankruptcy-warning copy; the v13 changelog wording.
+
+*Status (W3-F, 2026-10-10):* RULED and IMPLEMENTED: rules v13 (W3-K) and W2-G reconciled to it (AUD-09.05 / 09.06 / 09.07); the v13 settlement certification PASS (bankruptcy vectors included). `OWNER DECISION`.
+
+**OD-5 — NOTICES, FOCUS AND TUTORIALS.** Ruled 2026-10-05 (the owner's consolidated-integration ruling; it supersedes the earlier OD-5 transcriptions where they differ). Source: the owner's Phase-3 consolidated-integration brief (2026-10-05; canonical), superseding the W3-A OD-5 brief and the owner-decision reconciliation transcription (both 2026-10-04) where they differ.
+- (A) Tutorial architecture: the eventual tutorial design is contextual whitebox / spotlight work. It is built LAST, after the gameplay shell/UI is stable. The tutorial redesign is not done in the integration.
+- (B) One-shot notices: acknowledgement persists per user / per game, so an acknowledged historical notice does not replay merely because of reload, reconnect, remount or a new tab. Late joiners do not receive a backlog of historical one-shot notices.
+- (C) Focus: after the forced-notice chain finishes, focus returns once to a stable, accessible game-screen heading. Ordinary gameplay must not repeatedly steal focus.
+- (D) Forced-notice order: 1. Emergency 2. Fleet Loss 3. Private Revenue 4. Phase Three 5. Herald. Only one is shown at a time. Tutorial is NOT part of this forced-notice chain. Tutorial behaviour remains deferred to the final tutorial/UI pass.
+- *Superseded transcription (kept for history):* Owner-decision reconciliation (`26bca3b`, 2026-10-04): "tutorial ORDERING only; the three policy questions stay OPEN" -- superseded: (B) and (C) answer persistence and focus; the tutorial re-arm policy belongs to the final tutorial pass.
+- *Superseded transcription (kept for history):* W3-A's OD-5 brief transcription (`9962745`, 2026-10-04): its (a) persistence, (b) focus and (c) order map to (B), (C) and (D) and stand, EXCEPT (c)'s sixth entry "6. Tutorial" and item (d) "tutorials automatically arm ONCE PER PROFILE" -- the owner states both exceed the approved ruling (2026-10-05). W3-A's code comments cite its own letters (a)-(c).
+
+*Status (W3-F, 2026-10-10):* RULED and IMPLEMENTED: W3-A's notice ledger, heading focus and five-notice chain (AUD-01.03, AUD-11.02, AUD-13.02, AUD-13.07, P3-N019); Tutorial removed from the chain at the integration (`15fd1d0`); the final Play tutorial (AUD-13.04, P3-N036; `8c4dca93`) is on this head. `OWNER DECISION`.
+
+**OD-6 — GAME ID / BUILD ID / RULES VERSION PLACEMENT (W2-I).** Ruled 2026-10-04. Source: the owner's W2-I decision (2026-10-04).
+- OPTION A. Keep `game_id` OFF SCREEN. The LIVE-2 identity rule remains authoritative: `game_id` is the server key, not the player's game name, and the interface must not display it.
+- The human-visible table identity remains: the room code where visible; "Private game" where the room code is intentionally hidden; the existing on-chain game number only on the old on-chain path.
+- For W2-I diagnostics: keep the existing build ID in the Rules Reference header and add the authoritative rules version on that same line ("Build <id> · Rules v13"); the rules version from the board's authoritative `rules_engine_version`, the build ID from the existing build-ID source; do not duplicate either value in the top bar; no new persistent gameplay chrome.
+- AUD-01.07 closes as an explicit product decision: DECIDED / IMPLEMENTED — opaque game_id intentionally not displayed.
+
+*Status (W3-F, 2026-10-10):* RULED and IMPLEMENTED: W2-I (AUD-01.07): `game_id` not displayed; "Build <id> · Rules v13" on the Rules Reference line. `OWNER DECISION`.
+
+**OD-7 — FORCED TRAIN PURCHASE.** Ruled 2026-10-03. Source: the owner's Wave-1 integration brief (2026-10-03).
+- If the corporation can fund a normal legal train purchase from its own treasury, ordinary train-purchase choice applies.
+- The "must buy the cheapest train" restriction belongs to the emergency purchase/funding situation, where the corporation cannot afford a train from its own treasury and president/emergency funding becomes necessary.
+- Apply to player-facing Rules Reference copy only. Do NOT change engine behavior. Do NOT create v13 for OD-7.
+- After the correction, the Rules Reference may continue to state that it is the final player-facing authority.
+
+**Restatement (closure contract item 3).** The plan's OD-7 asked for the RR-4 ruling the 6.5-B report says was recorded to be restated for Part D. Its text, as the owner gave it on 2026-10-03, is the ruling above: when the treasury can fund a normal legal train purchase, ordinary purchase choice applies; "must buy the cheapest train" belongs only to the emergency purchase / funding situation. A deliberate reading, never to be "fixed" in the engine.
+
+*Status (W3-F, 2026-10-10):* RULED and IMPLEMENTED as copy only (`ca73834`; AUD-09.10): every RR-4 site in the Rules Reference corrected; no engine change, no v13 for OD-7. `OWNER DECISION`.
+
+**OD-8 — FLOAT NARRATION (W2-J).** Ruled 2026-10-04. Source: the owner's W2-J decision (2026-10-04).
+- OPTION A. The narration must follow the actual event timing.
+- At the share purchase that causes the corporation to float, log: "<CORP> has floated. It received $<AMOUNT>."
+- At the corporation's later first operating turn, when its home station is actually placed, log: "<CORP> placed its home station on <HEX>."
+- Do NOT keep the current combined delayed line.
+- Reason: the float and capitalization occur at the purchase, while home-station placement now occurs later; narration should report each event when it actually happens.
+
+*Status (W3-F, 2026-10-10):* RULED and IMPLEMENTED: W2-J (AUD-03.09; U-37). `OWNER DECISION`.
+
+**OD-9 — MONEY TIME / COPY CONVENTIONS (W2-K).** Ruled 2026-10-03. Source: (a) the owner's safe Wave-2 integration brief (2026-10-03); (b) the owner's owner-decision reconciliation brief (transcribed 2026-10-04; original date not recorded), restated 2026-10-05.
+- APPROVED convention: persistent player UI: local absolute time + explicit time zone;
+- server refusal copy: relative duration is acceptable because the server has no player time zone;
+- machine evidence remains UTC.
+- Official Keplr logo remains ASSET PENDING; do not fabricate one.
+- (b) Use the official Keplr branding/logo asset. Do not fabricate/redraw/fake the Keplr logo. (Transcribed 2026-10-04 from the owner's owner-decision reconciliation brief.)
+
+*Status (W3-F, 2026-10-10):* (a) RULED and IMPLEMENTED: W2-K (AUD-20.01; U-44). (b) RULED (policy); the official brand-kit SVGs are now integrated byte for byte (`03b755a2`: `keplr-icon-radii.svg` -> `frontend/src/components/money/brand/keplr-icon.svg`, `keplr-logo-icon.svg` -> `.../brand/keplr-wordmark.svg`); the matrix row AUD-18.05 still reads ASSET PENDING (the integrator's record to close). `OWNER DECISION`.
+
+**OD-10 — V13 RULES BATCH IN PHASE 3.** Ruled 2026-10-03. Source: (a) the owner's W3-K rules-v13 brief (2026-10-03), rulings 2 and 3 from the W3-K continuation brief (2026-10-04); (b) the owner's consolidated-integration brief (2026-10-05).
+- (a) One consolidated v13 rules batch is allowed inside Phase 3 (W3-K): OD-2, SBS-3, SBS-4 and OD-4, with the official/default Brown rule. V-6.3 "Buy All" is not implemented.
+- One RULES_ENGINE_VERSION bump (12 → 13), one changelog entry, no speculative rules. The live list is [13] only; no dual v12 support (pinned v12 rooms are drained or abandoned before deployment).
+- The settlement-certified literal stays [10, 11, 12]; 13 is added only by its own certification pass. The future v13 certification vectors, including bankruptcy terminal states, are documented.
+- DH-1 and GR-1 / S10-27 (derivation-only), GR-1b (UI only), D-18 and D-22 are not in the batch.
+- Owner ruling 2 (2026-10-04): the Brown Bank Pool continuation is one contiguous multi-certificate purchase by the ACTIVE Stock Round player. Any accepted state-changing turn action by that player which is not another qualifying Brown Bank Pool purchase closes it (a sale, an accepted private trade, an M&H exchange, Pass Turn, any other stock-turn action). Another player's off-turn consent or answer, and derived / system bookkeeping, do not. Decided from actor / turn semantics, not log adjacency; a refused or no-op message closes nothing.
+- Owner ruling 3 (2026-10-04): KEEP the existing Stock Round semantics for the M&H exchange: it is not a stock purchase or sale for turn_action_taken, the true-pass / all-pass streak, or Priority Deal / last-trader purposes. It can close an already-open Brown purchase (ruling 2) without becoming stock trading.
+- (b) RULED 2026-10-05 (the owner's consolidated-integration brief): phone-width gameplay layout and keyboard map access are NOT required for Phase 3; they belong to Phase 5. Phase 4 may observe and report real-device / mobile / keyboard behaviour, but Phase 3 does not implement the responsive map architecture or the keyboard map controller.
+
+*Status (W3-F, 2026-10-10):* (a) RULED and IMPLEMENTED: rules v13 (W3-K), certified. (b) RULED 2026-10-05: phone-width gameplay layout and keyboard map access are Phase 5; Phase 4 may observe (AUD-16.09, D). `OWNER DECISION`.
+
+**OD-11 — CITY BYPASS (W3-E).** Ruled 2026-10-03. Source: the owner's safe Wave-2 integration brief (2026-10-03).
+- W3-E: manual route only.
+- Preserve automatic route optimality unchanged.
+- Stop/Bypass is offered only when the exact crossing supports both arms.
+- Forced bypass remains forced.
+- Whole-set `routeSetRefusal` remains authoritative.
+
+*Status (W3-F, 2026-10-10):* RULED and IMPLEMENTED: W3-E (AUD-07.03; U-17). `OWNER DECISION`.
+
+**OD-12 — RED REGIONS.** Ruled 2026-10-03. Source: the owner's Wave-1 integration brief (2026-10-03).
+- Owner authorized narrowly controlled RED-region bug fixes.
+- This does NOT authorize an App.tsx refactor.
+- For the Wave-1 integration exactly ONE RED edit: W1-N — delete the obsolete `settleRoomPayout(...)` call site in RED R2, now that settleRoomPayout is intentionally a no-op and the placeholder payout has been removed. Its own commit; no neighboring cleanup; no structural refactor; focused regression; independent review of that commit before continuing.
+- The other OD-12-gated W3 defects are not implemented in that task.
+
+*Status (W3-F, 2026-10-10):* RULED; every Phase-3 RED edit landed as its own separately reviewed commit naming its region (W1-N R2 `87d63c4`; later W2-J, W3-A, W3-B, W3-C, W3-J). Not a refactor licence. `OWNER DECISION`.
+
+**OD-13 — DERIVED POST-GAME STATISTICS (W2-L).** Ruled 2026-10-04. Source: the owner's W3-G owner-review brief (2026-10-04; AUD-25.15), as applied by W2-L.
+- Derived-statistics corrections are approved as implemented by W2-L: train discard; Salvager; refused runs; RunManualRoute; Cowboy fixes.
+
+*Status (W3-F, 2026-10-10):* RULED; W2-L's corrections ratified as implemented (AUD-12.02, AUD-12.03; U-41, U-43). `OWNER DECISION`.
+
+**OD-14 — PRESENTATION CALLS — (a) THROUGH (i).** Ruled 2026-10-04. Source: (a) re-approved by the owner 2026-10-04 and corrected 2026-10-05; (b), (c), (e)-(h) the owner-decision reconciliation brief (transcribed 2026-10-04; original dates not recorded); (d), (i) the W3-G owner-review brief (2026-10-04); all restated 2026-10-05.
+- (a) Preserve the CURRENT step-panel placement: the step panels sit INSIDE the sticky action bar. Do not move them.
+- (a) Remove the temporary sticky-fit probe. No W1-I-b layout move.
+- (b) Use the cash/payout player-color wash.
+- (c) Give the seventh LPF/player a distinct color.
+- (d) For the first-Diesel trade-in presentation, keep the label: "traded". Earlier 4-trains rusted by the phase event remain rusted.
+- (e) Keep/tighten the established waiting-room persistence presentation rather than replacing the model.
+- (f) No phase-change sound effect in this phase.
+- (g) Do not replay stale flourish/celebration effects.
+- (h) Use static rust/discard icon treatment.
+- (i) Phase 3 gets a bounded money-panel consistency pass. The goal is to make the money panel visually belong to the rest of the game and stop there.
+- (i) W2-K / W2-M may extend the established styling while touching money UI, but this is NOT permission for a money-panel redesign or broader frontend refactor.
+- *Correction:* 2026-10-05 (the owner's Phase-3 consolidated-integration brief (2026-10-05)): the earlier transcription "(a) Keep the step panels OUTSIDE the action bar" was WRONG; the owner's ruling is to preserve the current placement, which is INSIDE the sticky action bar. W1-I's product change (probe removed, placement unchanged) is correct.
+
+*Status (W3-F, 2026-10-10):* RULED (a)-(i): (a) AUD-01.01 / AUD-01.02 (U-16); (b) AUD-12.05 (U-7) and (c) AUD-12.06 (U-8), already implemented and pinned by W3-H; (d) AUD-12.07; (e) AUD-18.07; (f) VF/G-1 and (g) VF/G-7 (no work); (h) VF/I-10, VF/J-6 (W3-H `ce99b0d`); (i) W2-K's bounded money-panel pass. `OWNER DECISION`.
+
+**OD-15 — CINEMATIC TAKEOVERS AND MODALS.** Ruled 2026-10-05 (the owner's later clarification, restated in the consolidated-integration brief; supersedes any older wording). Source: the owner's W3-D decision briefs (2026-10-04), superseded by the owner's later clarification restated in the consolidated-integration brief (2026-10-05; canonical).
+- Intro video: a full-viewport cinematic takeover -- not a modal, not a dialog -- filling the viewport independently of gameplay uiScale.
+- End-game video: a full-viewport cinematic takeover -- not a modal, not a dialog -- filling the viewport independently of gameplay uiScale.
+- Underlying gameplay is non-interactive while a cinematic takeover covers it.
+- No inverse `zoom: 1/uiScale` hacks; true viewport geometry.
+- Real modal UI continues through the native / top-layer modal architecture. Do not invent a second manual inert / modal system.
+- W3-D's AUD-13.05 and AUD-13.06 work is preserved. AUD-13.04 / TutorialModal belongs with the final tutorial pass and is not force-completed now; W3-D may truthfully remain PARTIAL with that row deferred. Real-browser checking of cinematic coverage / inert behaviour belongs in Phase 4.
+- *Earlier ruling (kept for history; superseded where the above differs) — MODAL INFRASTRUCTURE AND THE CINEMATIC TAKEOVERS (W3-D) (earlier):* OD-15(a): RULED — GameIntroOverlay is a full-viewport takeover independent of uiScale; remove inverse scaling and use true viewport geometry. It is NOT a NativeModal and does not use dialog semantics. OD-15(a) covers both full-screen cinematic takeovers, the intro and the end-game film: each fills the full visual viewport, stays independent of gameplay uiScale, uses true viewport-fixed geometry rather than inverse scaling, has no dialog box/frame/chrome or constrained modal-panel dimensions, does not use NativeModal or native <dialog> semantics merely because it blocks interaction, prevents interaction with the gameplay underneath while active, and preserves its full-screen composition; preferably rendered outside the scaled gameplay layer. OD-15(b): RULED — use native showModal()/NativeModal for modal surfaces and retire ModalPortal when its final legitimate modal consumer has migrated. No second custom modal architecture based on ModalPortal + manual inert management; no new global manual-inert system; the browser top layer supplies modal isolation. Semantic rule: a genuinely modal aria-modal surface migrates to NativeModal; one that is not genuinely modal has its false modal semantics removed instead. Both cinematics are excluded from the NativeModal migration and are not ModalPortal consumers. AUD-13.04 waits for W3-A's integration (per the owner, OD-5 is ruled in W3-A's lane and recorded there); W3-D does not touch TutorialModal or R-TUT while W3-A is active.
+
+*Status (W3-F, 2026-10-10):* RULED and IMPLEMENTED: W3-D (AUD-13.05, AUD-13.06); `ModalPortal` stays (NativeModal's scaled destination); real-browser checks of the takeovers are Phase 4. `OWNER DECISION`.
+
+**OD-16 — TERMS PAGE (S10-12).** Ruled 2026-10-04 (transcribed; original date not recorded). Source: the owner-decision reconciliation brief (transcribed 2026-10-04; original date not recorded), restated 2026-10-05.
+- Phase 3 builds the Terms route/page shell.
+- Phase 3 builds the relevant Terms/deposit link infrastructure.
+- Substantive Terms copy is OWNER-AUTHORED and must not be invented.
+- Final substantive Terms remain a Phase-7/mainnet gate.
+
+*Status (W3-F, 2026-10-10):* RULED; not an owner-decision blocker. The Terms shell and link infrastructure (AUD-20.08) are IMPLEMENTED and integrated (2026-10-07); the substantive owner-authored Terms copy stays a Phase-7 / mainnet gate. `OWNER DECISION`.
+
+**OD-17 — TILE-UPGRADE CROSS-REFERENCES.** Ruled 2026-10-03. Source: the owner's W3-K rules-v13 brief (2026-10-03).
+- D-18 and D-22 are excluded from the v13 batch: V13_SCOPE_VERIFICATION found D-18 INVALID (the printed rule) and D-22 ALREADY CORRECT (Stage 9.3 rule 5b, rules v7).
+- No engine change.
+
+*Status (W3-F, 2026-10-10):* RULED: no engine change (VF/D-18 invalid; VF/D-22 already correct). The visual-flourish ledger's two entries are reclassified by W3-F (2026-10-10). `OWNER DECISION`.
+
+**OD-18 — LIVE / ASYNC CLOCKS (U-10) — SUPERSEDED IN PART: BUILD THE CLOCK IN PHASE 3, NOT ITS CONSEQUENCES.** Ruled 2026-10-05 (the owner's consolidated-integration brief; supersedes the 2026-10-04 transcription in part). Source: the owner-decision reconciliation brief (transcribed 2026-10-04; original date not recorded), SUPERSEDED IN PART by the consolidated-integration brief (2026-10-05) and, for escrow-2.1 remedies, by the owner's final clocks brief (2026-10-06; last correction 2026-10-07).
+- The earlier blanket deferral is SUPERSEDED IN PART: the clock system is BUILT IN PHASE 3 so it can be tested during Phase 4.
+- Build now, before Phase 4: Live vs Async clock / timing infrastructure; visible clock state; the pause / resume semantics that clock model needs; durable / persistent timing state; reconnect / reload behaviour; server-authoritative timing where required; enough instrumentation / status to playtest it meaningfully in Phase 4.
+- Do NOT yet implement automatic forfeiture merely because a clock expires. Still deferred pending Phase-4 validation: the automatic forfeit consequence; automatic trade decline; host succession.
+- A clock reaching zero must not silently create a forfeiture settlement unless a separately approved later rule explicitly authorises that transition. No Forfeit / Clemency settlement payload may be produced before clock / forfeit semantics are validated and authorised.
+- Not built inside merge-conflict resolution; recorded as required remaining Phase-3 work and one of the first post-integration lanes before Phase 4.
+- *Earlier ruling (kept for history; superseded where the above differs) — LIVE / ASYNC LIMITS (U-10) AND RECORDED LIMITS (2026-10-04 (transcribed; original date not recorded)):* Do NOT add at this stage: move clock; automatic forfeit; automatic trade decline; host succession. Reconsider these only after Phase-4 human playtesting.
+
+*Status (W3-F, 2026-10-10):* RULED, SUPERSEDED IN PART: the clocks are IMPLEMENTED (AUD-11.04, pre-Phase-4 lane A; U-10), integrated 2026-10-07; host succession and any Forfeit / Clemency settlement payload stay DEFERRED pending Phase-4 validation (AUD-19.04, E). `OWNER DECISION`.
+
+**OD-19 — WATCH IS A READ-ONLY SPECTATOR VIEW (AUD-25.16).** Ruled 2026-10-04. Source: the owner's OD-19 decision on the W3-G Watch-defect triage (2026-10-04); confirmed 2026-10-05.
+- ACCEPT the Watch defect classification as HIGH.
+- "Watch" always opens a READ-ONLY spectator view.
+- This remains true even when the signed-in user already occupies a seat in that game.
+- Watch must NOT silently reinterpret the viewer as their seated player.
+- Re-entering an owned seat belongs to the existing participant path: "Your tables" / Open / Rejoin.
+- Preserve the existing user-facing meaning already stated by the Watch control: "Watch this game. You will not have a seat."
+- Separately (AUD-25.16, independent of spectator policy): a client whose locally APPLIED board state is behind the authoritative game state must never be allowed to submit a gameplay action as though its board were current. The W3-J remediation addresses both layers -- CLIENT: while replay / catch-up / divergence remains unresolved, gameplay controls are non-actionable, and stale local turn authority must not enable a move; SUBMISSION / SERVER: do not rely only on the browser hiding / disabling controls; the submission must carry / bind to the revision / log position actually APPLIED to the client's board, not merely the newest log position received; the server must reject a gameplay action whose client-applied position does not match the authoritative pre-action position. The exact protocol implementation belongs to W3-J investigation / review.
+
+*Status (W3-F, 2026-10-10):* RULED and IMPLEMENTED: W3-J (AUD-25.16; U-56), integrated 2026-10-05; W3-J's RED edits are not re-asked for owner confirmation; the fail-closed behaviour is intentional. `OWNER DECISION`.
 
 ---
 

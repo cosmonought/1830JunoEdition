@@ -2,9 +2,7 @@
 
 **Roadmap (owner, authoritative):** Phase 1 server / infrastructure migration → 2 JUNO testnet live proof → **3 player-facing UI / UX
 and pre-playtest closure** → 4 human playtesting and stabilization → 5 major frontend / App.tsx refactor → 6 final polish / release
-testing → 7 mainnet readiness / launch. **Current Phase-3 baseline:** `phase3/consolidated-final-preplaytest-integration` (2026-10-07, from `phase3/preplaytest-final-clocks-remedies` @
-`5fc690e7289a5feb67b128c9c78122f474d1dc38` exactly; provisional; not merged to main; no broad owner gate; Phase 3 NOT closed). Status: the
-table "Status after the consolidated FINAL pre-playtest integration (2026-10-07)" below.
+testing → 7 mainnet readiness / launch. **Phase 3 is CLOSED (W3-F, 2026-10-10).** **Phase-4 playtest baseline:** `ludum/integration` @ `e63221ae3f308dcbdb89bf67b28929a04099605b` (the consolidated final pre-playtest integration + the Ludum platform and the approved Play lobby / Host / waiting room; §11 closure contract judged in `w3f_closure`). Status: the table "Status at the W3-F closure (2026-10-10)" below; the Phase-4 procedures: [`PHASE4_PLAYTEST_CHECKLIST.md`](PHASE4_PLAYTEST_CHECKLIST.md).
 
 Start here. These documents plus the repository are all a Phase-3 session needs. It does not need any chat, Project memory
 or attachment.
@@ -17,6 +15,7 @@ or attachment.
 | [`phase3_accounting.json`](phase3_accounting.json) | The matrix in machine-checkable form (rows and the audit-bullet → row map) |
 | [`check_phase3_accounting.py`](check_phase3_accounting.py) | The accounting check, plus `--drift <sha>` for the kickoff drift check |
 | [`PHASE3_FINAL_CLOCKS_REMEDIES.md`](PHASE3_FINAL_CLOCKS_REMEDIES.md) | Lane A's design record (2026-10-06, last owner correction 2026-10-07; `phase3/preplaytest-final-clocks-remedies`; INTEGRATED 2026-10-07 as the consolidated final integration's base): the Live / Async / No-deadline clocks, offers (no allowance refresh) and round-instance declines, overdue / strikes / N-1 with approvals valid through the seal, voluntary and system pause, the evidence chain and strike ledger, the history without a length cap, FP4 signing and the UI; residuals and owner decisions |
+| [`PHASE4_PLAYTEST_CHECKLIST.md`](PHASE4_PLAYTEST_CHECKLIST.md) | W3-F: one reproducible procedure per Phase-4 row (70 D rows, the early Any-count escrow correction, real-wallet money tests, clocks, recovery) |
 | [`V13_SETTLEMENT_CERTIFICATION_VECTORS.md`](V13_SETTLEMENT_CERTIFICATION_VECTORS.md) | What the separate rules-v13 settlement certification pass must prove (bankruptcy vectors; the tests red by design until then) |
 | [`archive/PHASE3_EXECUTION_MAP_DRAFT_2026-10-03.md`](archive/PHASE3_EXECUTION_MAP_DRAFT_2026-10-03.md) | The superseded parallel draft, kept for provenance only |
 
@@ -47,7 +46,7 @@ or attachment.
 | Player reporting (branch; INTEGRATED 2026-10-07, ported) | `phase3/preplaytest-player-reporting` (2026-10-06, from `caad745` exactly; `c133128`, `3d63979`, `d434eff`, `e9db5c5` + tracking): seated players report conduct for operator review; server-derived evidence; durable cases and a minimal reviewer panel; no score, nothing public, no game / money / profile change (P3-N035; P3-N032 on its branch). |
 | W3-B latch residue (slice branch; INTEGRATED 2026-10-07) | `phase3/preplaytest-w3b-latch-residue` (2026-10-05, from `b8d5246` exactly): OD-12 RED R1 `0b2f360` (P3-N021), `2cea8c4` (AUD-14.06 + P3-N021 non-RED, dispatch-site coverage registry), review fixes `f855b8b`, tracking; W3-B COMPLETE; versions and keys unchanged. See the matrix's "W3-B latch residue slice status" / `w3b_latch_residue` in the JSON |
 | **Consolidated FINAL pre-playtest integration (provisional, current baseline)** | `phase3/consolidated-final-preplaytest-integration` (2026-10-07, from `phase3/preplaytest-final-clocks-remedies` @ `5fc690e7289a5feb67b128c9c78122f474d1dc38` exactly; main not used as the base): lanes A+B `0d42a0c` (merge `610e26b`), C `5bf555e` ported (merge `b607853`; IaC `b281a59`; cross-pool roster + clock evidence `ef64e26`), D `746ec12` (`76fcf02`), E `aa85a94` (`80447ca`), F `c36fece` (`a8a1253`), G `9c1ef90` (`3b2edcc`), H `6b28e73` (`006d9cd`, reconciled), the Rules Reference fix `8475971`, review fixes `bc2be5c`, then tracking. Not merged to main; nothing deployed; no broad owner gate. See the matrix's "Consolidated final pre-playtest integration status" / `consolidated_final_preplaytest_integration` in the JSON |
-| Phase-4 playtest baseline | TBD — recorded at Phase-3 closure (W3-F) |
+| **Phase-4 playtest baseline** | **`e63221ae3f308dcbdb89bf67b28929a04099605b`** (`ludum/integration`, W3-F 2026-10-10): the consolidated final integration (`7f8bff24` lineage) + Ludum platform v1 / v1.1 / v1.2 + Play lobby `0ccbda95` + Host / waiting room `03b755a2` + fixes `700f35a6`, `d6cb1b12`, `e63221ae`. Later docs-only commits do not move it. |
 
 ## Owner rulings recorded
 
@@ -67,7 +66,7 @@ blocker (lane D); OD-18 superseded in part (BUILD the clock in Phase 3, not its 
 re-confirmation of W3-J's RED edits); D-17 a Phase-4 observation; D-35 required Phase-3 implementation; AUD-25.02 copy-only
 correction; the third-seat emergency offer a required Phase-3 bugfix; W3-H `4c89333` approved.
 
-**The owner's AUD-00.02 brief (2026-10-05) is the latest word** (plan §7.3, after the consolidated rulings; `aud00_roadmap_reconciliation`
+**The owner's AUD-00.02 brief (2026-10-05) was the latest word until the W3-F closure** (plan §7.3, after the consolidated rulings; `aud00_roadmap_reconciliation`
 in the JSON): the Phase 1–7 roadmap order; AUD-04.04 + AUD-08.01 placed in a pre-Phase-4 derivation residue lane; the final gameplay
 tutorial pass LAST; the Account / Profile / Wallet lane (onboarding redesign, homepage overlap fix, trust indicators) with W1-K and
 AUD-20.08 folded in; the profile policy recorded as direction (below). **No owner decision is open.**
@@ -75,6 +74,21 @@ AUD-20.08 folded in; the profile policy recorded as direction (below). **No owne
 **Owner-decision rule.** Owner decisions require explicit owner approval. Assistant / Cowork recommendations, planning
 defaults, inferred choices and implementation decisions are NOT owner rulings. A ruling given in conversation is transcribed
 in the same pass; the list below is the single maintained status list.
+
+## Status at the W3-F closure (2026-10-10)
+
+| Status | Items |
+|---|---|
+| **PHASE 3 CLOSED** | Baseline `e63221ae3f308dcbdb89bf67b28929a04099605b`. Every slice COMPLETE (W2-K: the official Keplr assets; W3-F: this closure). Every C row RULED; every A / B row IMPLEMENTED; 46 F rows re-confirmed (`evidence/w3f/F_ROW_RECONFIRMATION.json`); Part C / Part D / the flourish ledger reconciled. Closure contract §11 items 1–12 PASS -- item 8 as delegated by the owner's 2026-10-10 release brief (focused suites + both browsers' end-to-end flows; not the full suite). JSON: `w3f_closure`, `phase3_final_integration` |
+| **INTEGRATED (2026-10-10)** | Ludum platform v1 / v1.1 / v1.2 (native sign-up / sign-in / sign-out / Confirm it's you over the one account service); the approved Play lobby (`0ccbda95`), Host a game / waiting room + ante editor + official Keplr assets (`03b755a2`); the host ante race closed at the source, shared-bar a11y, the Any-count notice (`700f35a6`); the read-only Watch copy (`d6cb1b12`). Record: `ludum_platform_play_integration` |
+| **ESCROW 2.1 STAGING DEPLOYMENT (uni-7, 2026-10-09)** | DEPLOYED + VERIFIED from `b9512f7` (main untouched): code_id **125** (checksum `c3bd0618…8219`), contract `juno19vd5hphghprl2m8agchctyav8pmeh6p4x3vud6cfhd2y6ulwtf0s0jrk7x` (fresh verifier PASS; resolver = treasury = Ludum DAO core), REMEDY KMS key remedy-r1 `0eac8a2c…`, single-host backend `sh1-b9512f7-arm64-r1` (escrow active; host-role KMS probe PASS incl. REMEDY; `awsDeploy verify` 118/0), frontend Vercel `dpl_2ikGEZ4QN956Ne3gQt2uM7L1hNnG` pinned to 2.1; relayer READY. **LIVE TWO-PLAYER MONEY PROOF DEFERRED TO PHASE 4** (owner 2026-10-09: no self-play / extra accounts; no existing tooling plays a genuine two-seat money game) — NOT a pass; Phase-2 E2 and B3 stay deferred to human playtesting. Record: `phase3_accounting.json` `escrow21_staging_deployment` |
+| **EARLY PHASE-4 TASK (mandatory)** | The Any-count escrow correction: Escrow 2.1 needs an exact seat count for a money table, so Play blocks Any with an ante (said under Players). A corrected escrow version is certified and deployed before Any is offered with an ante; **Escrow 2.1 stays unchanged.** |
+| **PHASE-4 PLAYTEST** | [`PHASE4_PLAYTEST_CHECKLIST.md`](PHASE4_PLAYTEST_CHECKLIST.md): every D row; real-wallet funded games, settlement, REMEDY and disputes on Escrow 2.1 (the live two-player money proof); the host ante race on a real Keplr window; B3 and Phase-2 E2 (never relabelled PASS). **Phase 3 verified no real Keplr wallet and no real Juno transaction.** |
+| **RECORDED RESIDUALS** | A non-Play client can open a second, unbound, cancellable escrow (A-4 duplicate design); U-39 `sellableHoldings` in percent, U-18, U-31, RR-2c (no matrix rows); S6-13's cleanup phase (5 vs 7) for the later phase's planning |
+| **PHASE-5 DEFERRED** | Phone-width gameplay layout and map accessibility (OD-10(b)); the major App.tsx refactor |
+| **PHASE-7 / MAINNET GATE** | The owner-authored Terms copy (OD-16); mainnet deployment |
+
+*The table below is the status at the 2026-10-07 consolidated FINAL integration (history; superseded by the table above).*
 
 ## Status after the consolidated FINAL pre-playtest integration (2026-10-07)
 

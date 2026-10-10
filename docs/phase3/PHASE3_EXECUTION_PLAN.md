@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | PLANNING RECORD. **Wave 1 is integrated provisionally on `phase3/wave1-integration` (2026-10-03)** — each slice carries its status line below; the matrix's "Wave-1 integration status" section and `phase3_accounting.json` (`slice_status`, row `status`) are the machine copy. Waves 2 and 3 are not started. **Current (2026-10-05, AUD-00.02):** the Wave 1–3 slices are integrated, except the PARTIAL / NOT STARTED slices listed in `docs/phase3/README.md`, on the current provisional Phase-3 baseline `phase3/consolidated-pre-playtest-integration` @ `b8d5246c579d32ad4f9a2fccd7c293d1655ff81a` (not merged to main; no broad owner gate); the remaining pre-Phase-4 work is the lane list in §6, "Pre-Phase-4 work after the AUD-00.02 brief"; `docs/phase3/README.md` is the status list. |
+| **Status** | **PHASE 3 CLOSED (W3-F, 2026-10-10); Phase-4 baseline `ludum/integration` @ `e63221ae3f308dcbdb89bf67b28929a04099605b`** (W3-F's status line below; `w3f_closure` in the JSON). *History:* PLANNING RECORD. **Wave 1 is integrated provisionally on `phase3/wave1-integration` (2026-10-03)** — each slice carries its status line below; the matrix's "Wave-1 integration status" section and `phase3_accounting.json` (`slice_status`, row `status`) are the machine copy. Waves 2 and 3 are not started. **Current (2026-10-05, AUD-00.02):** the Wave 1–3 slices are integrated, except the PARTIAL / NOT STARTED slices listed in `docs/phase3/README.md`, on the current provisional Phase-3 baseline `phase3/consolidated-pre-playtest-integration` @ `b8d5246c579d32ad4f9a2fccd7c293d1655ff81a` (not merged to main; no broad owner gate); the remaining pre-Phase-4 work is the lane list in §6, "Pre-Phase-4 work after the AUD-00.02 brief"; `docs/phase3/README.md` is the status list. |
 | **Authoritative inputs** | [`PHASE3_UIUX_AUDIT_2026-10-03.md`](PHASE3_UIUX_AUDIT_2026-10-03.md) (the backlog) → [`PHASE3_AUDIT_RECONCILIATION.md`](PHASE3_AUDIT_RECONCILIATION.md) (one disposition per item) → this plan (how to execute). |
 | **Planning snapshot** | `recon/phase1-remainder-hardening` @ `8e897f9c5196f825a69c492dfb7c29088123cf67`. Source facts and line numbers below were read there. **It is not the implementation base.** |
 | **Implementation base** | **RULED (OD-0, 2026-10-05): the current integration lineage — today `phase3/consolidated-pre-playtest-integration` @ `b8d5246c579d32ad4f9a2fccd7c293d1655ff81a`.** *Was:* **TBD — the final canonical integrated head after Phase 2 closes.** Pinned by the integrator at kickoff (OD-0, P0). Never `main`, `083d066`, `8e897f9` or a migration branch by default. **Wave 1 was built on `8f33f0fb72d462c381a572015de7860a93fbd198` by the owner's brief;** whether that is the OD-0 pin, or Wave 1 is carried onto the final post-Phase-2 head, is the owner's call, and OD-0's drift check against the final pin is still owed. |
@@ -767,6 +767,7 @@ gates.
   from this plan); the matrix and JSON updated to final status; the Phase-4 baseline head recorded;
   `PROJECT_CANONICAL_CONTEXT.md` updated; a closure report.
 - **Depends on:** every other slice, W3-G and W3-J. **Ends with:** the final owner broad gate.
+- **Status (2026-10-10):** COMPLETE on `ludum/integration` (Phase-4 baseline `e63221ae3f308dcbdb89bf67b28929a04099605b`): AUD-25.14 IMPLEMENTED (Part C's 56 U-items and Part D's OD-0 … OD-19 reconciled; the flourish ledger agrees); the 46 F rows re-confirmed at the head (44 RECONFIRMED, 2 RECONFIRMED-OBSOLETE; `evidence/w3f/F_ROW_RECONFIRMATION.json`); `PHASE4_PLAYTEST_CHECKLIST.md` written (70 of 70 D rows, plus the early Phase-4 Any-count escrow correction and real-wallet money testing); AUD-18.05 RESOLVED by the official Keplr assets (`03b755a2`); the baseline recorded here, in the README and in `PROJECT_CANONICAL_CONTEXT.md`. §11 items 1–12 PASS; item 8 as delegated by the owner's 2026-10-10 release brief (focused suites and both browsers' end-to-end flows, not the full suite). The final Play tutorial (F) and the escrow 2.1 release-readiness work were integrated on `phase3/consolidated-final-preplaytest-integration` before this closure.
 
 #### W3-G
 **U-28 retrospective UI-parity audit — the Phase-3 closure gate** · L6 · **5–8 h** · *new*
@@ -885,7 +886,7 @@ are unchanged.
 `5fc690e`; not merged to main; no broad owner gate):** ACCOUNT, A, B, C, E and DERIV are IMPLEMENTED and INTEGRATED there (ACCOUNT
 as the owner's FINAL account / Authorization Wallet model, which supersedes the profile policy below; A as the final clocks /
 remedies line with the Escrow 2.1 / FP4 wiring, no host succession, no Forfeit / Clemency settlement payload), together with
-player reporting (P3-N035). **F (LAST) and W3-F are NOT STARTED. Phase 3 is not closed.** Status table: `README.md` ("Status
+player reporting (P3-N035). *(Then:)* F (LAST) and W3-F were NOT STARTED. **2026-10-10: F integrated and W3-F COMPLETE -- Phase 3 CLOSED (W3-F's status line).** Status table: `README.md` ("Status
 after the consolidated FINAL pre-playtest integration").
 
 | Lane | What | Rows | Hard limits |
@@ -1285,8 +1286,8 @@ spotlighting of the real UI, and an always-available library. Automatic tutorial
 "restart for this game"; the old one-way switch removed. Progress per player per game; reload-safe; no backlog for replay, late join or a
 new device; watchers get no automatic tutorials. Tutorials are NOT a forced notice and yield to every mandatory surface; Fleet Loss must not
 depend on any tutorial preference. The coach is non-modal (NativeModal would make the board inert). Content is structured with stable ids,
-separate from triggers and presentation. Project 18XX is the brand. **Status:** IMPLEMENTED on `phase3/final-play-tutorial` (from `5caa4d6`;
-not integrated) -- AUD-13.04 and P3-N036; W3-D COMPLETE. W3-F (closure bookkeeping, the Phase-4 checklist and the broad owner gate) follows.
+separate from triggers and presentation. Project 18XX is the brand. **Status:** IMPLEMENTED on `phase3/final-play-tutorial` (from `5caa4d6`) -- AUD-13.04 and P3-N036; W3-D COMPLETE; since INTEGRATED on
+`phase3/consolidated-final-preplaytest-integration`. W3-F COMPLETE 2026-10-10 (W3-F's status line).
 
 **ACCOUNT / PROFILE / WALLET LANE.** The onboarding redesign, the homepage overlap fix and trust indicators are pre-Phase-4 work; W1-K
 (AUD-19.02) and AUD-20.08 (the Terms shell / link infrastructure) are folded into it. The official Keplr logo stays ASSET PENDING; the

@@ -1,0 +1,278 @@
+[
+ {
+  "key": "AUD-02.09",
+  "verdict": "RECONFIRMED",
+  "citation": "frontend/src/tutorial/lessons.ts:160-171 (lesson auction.allPass); frontend/src/utils/da7DelayedAuctionCertification.test.ts :: \"DA6-O1: the auction tutorial's all-pass page states §1.2.3's two EXCLUSIVE outcomes -- the SV alone is marked down\"",
+  "note": "TutorialModal.tsx is gone; the canonical lesson auction.allPass states the two exclusive outcomes (SV markdown while unsold, private revenue once sold), and the DA-7 test reads tutorial/lessons.ts and forbids the old 'three things happen' copy."
+ },
+ {
+  "key": "AUD-02.10",
+  "verdict": "RECONFIRMED",
+  "citation": "frontend/src/App.tsx:3183 (boParOwner = boParOwedTo(liveState)); frontend/src/gameEngine/auctionAuthority.ts (boParOwedTo); frontend/src/components/phase65bBoParPrompt.test.tsx",
+  "note": "The B&O par prompt is derived from the live board via boParOwedTo; no latch remains (App.tsx:7009, 9464 note the removed reset)."
+ },
+ {
+  "key": "AUD-02.11",
+  "verdict": "RECONFIRMED",
+  "citation": "frontend/src/gameEngine/sandboxSession.ts:2605-2631 (markdown branch allPassed:false; revenue all-pass markdown:null); frontend/src/App.tsx:7565-7582; frontend/src/utils/atomicReducer.test.ts :: \"the all-pass pays private income once the SV is sold, and marks nothing down (Batch 7.3, C5)\"",
+  "note": "The reducer returns exactly one of markdown or revenue all-pass, and the shell narrates 'Everyone passed -- SV drops ...' only for the markdown and the private payouts only for the revenue all-pass."
+ },
+ {
+  "key": "AUD-02.12",
+  "verdict": "RECONFIRMED",
+  "citation": "frontend/src/App.tsx:4419-4421, 7427-7447; frontend/src/utils/saleCopyDisclosure.ts; frontend/src/components/carcosaBloodPricePanel.test.tsx :: \"the ordinary badge of the same model sends gilded: false, with no Blood Price warning\"; RULES_HARDENING_BACKLOG.md:4739 (U-42 RESOLVED)",
+  "note": "The Blood Price copy choice and buyer warning surfaces are present and pinned by the carcosaBloodPricePanel tests; U-42 still reads RESOLVED (UR-4/UR-6)."
+ },
+ {
+  "key": "AUD-02.13",
+  "verdict": "RECONFIRMED",
+  "citation": "frontend/src/gameEngine/gameVariants.ts:288 (VARIANT_COPY.delayedAuction.blurb); frontend/src/utils/da6DelayedAuctionCopy.test.ts :: \"D-56: the lobby blurb says when the auction runs, and keeps its warning\"",
+  "note": "The blurb carries D-56's ruled wording ('after the Operating Round set in which the first 3-train is purchased, immediately before the next Stock Round') and the test forbids 'start of Phase 3'."
+ },
+ {
+  "key": "AUD-03.13",
+  "verdict": "RECONFIRMED",
+  "citation": "frontend/src/components/PrivateCompaniesSection.tsx:95, 485 (mounted at frontend/src/components/StockRoundPanel.tsx:3512); frontend/src/components/phase65bPrivateCompaniesSection.test.tsx :: \"Sell → choose recipient → asking price → Send Offer; the recipient's Accept settles it\"; frontend/src/utils/phase65bPrivateTradeRoom.test.ts",
+  "note": "Player-to-player private trade (sell and buy offers) is rendered and settled through the room, pinned by the 6.5-B tests."
+ },
+ {
+  "key": "AUD-03.14",
+  "verdict": "RECONFIRMED",
+  "citation": "frontend/src/App.tsx:10157-10175 (saleBlockFor = stockSaleRefusal); frontend/src/gameEngine/stockTransactionAuthority.ts:559-563 (unparred-corporation refusal, rulebook p.15); frontend/src/components/phase65bUnparredSale.test.tsx :: \"PRR (unstarted): Sell is disabled and the reason under it is the server's\" (run at this head: 5/5 PASS)",
+  "note": "The greyed Sell holds, but the cited 6.5-B helper utils/stockRoundSaleBlock.ts is no longer imported by any non-test file: Phase 3 W1-A replaced the shell verdict with stockSaleRefusal itself, which carries the par check. The helper is now dead code, used only by the test."
+ },
+ {
+  "key": "AUD-03.15",
+  "verdict": "RECONFIRMED",
+  "citation": "frontend/src/utils/privateProposalView.ts:24 (used at frontend/src/App.tsx:4273); frontend/src/components/phase65bConsentPrompts.test.tsx :: \"every seat sees ONE prompt; only the buying president has live controls; its Accept sends the funding answer, which settles\"",
+  "note": "ordinaryPrivateProposalView returns null for an emergency-funding offer, so only one prompt is raised."
+ },
+ {
+  "key": "AUD-04.08",
+  "verdict": "RECONFIRMED",
+  "citation": "frontend/src/utils/displayedOperatingStep.ts:42 (used at frontend/src/App.tsx:12240); frontend/src/utils/phase65bHostedStepDisplay.test.tsx :: \"after a reload, the hosted bar draws Buy Trains (the legacy freeze drew Lay Track); the discard prompt is up for NYC's president\"",
+  "note": "The hosted bar's step is derived from the live board by displayedOperatingSubPhase."
+ },
+ {
+  "key": "AUD-05.03",
+  "verdict": "RECONFIRMED",
+  "citation": "frontend/src/components/RadialTileSelector.tsx:365-369 (\"Escape always closes outright\"); frontend/src/App.tsx:255 (TileSelectionPopup no longer rendered or imported)",
+  "note": "The live picker closes on Escape; TileSelectionPopup.tsx still exists but has no JSX mount or import in any non-test file."
+ },
+ {
+  "key": "AUD-05.05",
+  "verdict": "RECONFIRMED",
+  "citation": "frontend/src/components/RulesReference.tsx:494; frontend/src/components/phase65bTerrainCopy.test.tsx :: \"none of the categorical statements survives anywhere on the reference\" and \"the hexes it names are exactly the standard board's preprinted-yellow terrain hexes (G19, D10, E5), each $80 water\"",
+  "note": "The 'upgrades are free' statements are gone and the first-upgrade terrain rule names G19, D10 and E5."
+ },
+ {
+  "key": "AUD-05.06",
+  "verdict": "RECONFIRMED",
+  "citation": "frontend/src/components/hexTileCatalog.ts:950 (canonicalTileName); frontend/src/utils/actionLog.ts:30, 560; frontend/src/components/RadialTileSelector.tsx:30, 639-656",
+  "note": "The action log's 'laid Tile' line and the picker's labels both go through canonicalTileName."
+ },
+ {
+  "key": "AUD-07.06",
+  "verdict": "RECONFIRMED",
+  "citation": "frontend/src/gameEngine/rulesVersion.ts:366-406 (v12 R12-2 entry; S6-16 at :379, S6-15 at :400); frontend/src/gameEngine/rulesVersion.ts:70 (RULES_ENGINE_VERSION = 13)",
+  "note": "The v12 entry carrying the S6-15/S6-16 fixes is still in the version history; the head engine is v13, which builds on v12 (pre-v12 behaviour survives only for legacy boards)."
+ },
+ {
+  "key": "AUD-13.01",
+  "verdict": "RECONFIRMED",
+  "citation": "frontend/src/components/NativeModal.tsx:18-31 (closedby Escape policy); 28 <NativeModal call sites across 23 non-test files (e.g. components/GameOverModal.tsx, tutorial/TutorialLibrary.tsx); frontend/src/components/nativeModalBoundary.test.tsx :: describes \"#1651 closedby is the Escape policy, and it is written down\", \"#1653 end containment: the cycle is continuous and visible\"",
+  "note": "Native dialog surfaces with focus containment and an Escape policy are in place. There are now 28 call sites, up from 14 at 8e897f9."
+ },
+ {
+  "key": "AUD-13.03",
+  "verdict": "RECONFIRMED-OBSOLETE",
+  "citation": "frontend/src/components/SandboxRoomBar.tsx:212 and frontend/src/App.tsx:14826 (LIVE-2D removal notes); frontend/src/components/settingsDialogDismissal.test.tsx :: \"LIVE-2D: no seat-PIN surface survives -- the modal, its call sites and its store are gone\"",
+  "note": "SeatPinModal no longer exists in the tree. Seat PINs were removed in LIVE-2D, and a seat now belongs to the principal in the server GameRecord."
+ },
+ {
+  "key": "AUD-14.02",
+  "verdict": "RECONFIRMED",
+  "citation": "frontend/src/utils/roomSession.ts:917-939 (an unchanged board answers refusedFrame with refusalReasonFor's sentence); frontend/src/utils/serverLink.ts:945-957 (refused -> options.onRefused); frontend/src/utils/serverLink.test.ts :: \"passes a refusal to the player and settles the caller with null\"; frontend/src/components/phase3W1dOfferRescind.test.tsx:163 (room submit returns kind 'refused' with the reducer's sentence)",
+  "note": "A reducer refusal is answered as kind 'refused' rather than 'applied', and the link routes it to onRefused. The end-to-end focused room test that W3-G was to add is not part of this row's evidence."
+ },
+ {
+  "key": "AUD-16.01",
+  "verdict": "RECONFIRMED",
+  "citation": "frontend/public/index.html:31 (viewport has no maximum-scale and no user-scalable=no); frontend/src/utils/uiScale.ts:70 (UI_SCALE_DEFAULT = 1); frontend/src/utils/viewportZoom.test.ts :: \"does not refuse user scaling\"; frontend/src/utils/uiScaleDefault.test.ts :: \"gives the same answer at every width -- the window is not an input\"; frontend/src/components/hostGameW1O.test.tsx :: describe \"AUD-16.05: breakpoints switch at the same effective width at every scale\"; frontend/src/components/rulesStockRound.test.tsx :: \"gives every wide table its own horizontal scroll region\"; frontend/src/utils/ledgerScrollCue.test.ts :: describe \"the tile catalog fits two columns on a phone\"",
+  "note": "Default 100% and pinch zoom are pinned by tests. The no-overflow claim is a rendered measurement: it is pinned only indirectly by containment and breakpoint tests (Rules Reference, Ledger, Lobby, waiting room, Host Game). Rail Map and the Auction tab rest on source styles (e.g. WaterfallAuctionDashboard.tsx:1056-1110 width 100%, flexWrap, minWidth 0), not on a test."
+ },
+ {
+  "key": "AUD-18.08",
+  "verdict": "RECONFIRMED",
+  "citation": "frontend/src/utils/lobbyPublicRooms.test.ts :: \"offers Watch on every public room, and Join on the one that can take a seat\"; frontend/src/components/hostDialogEscape.test.tsx :: describes \"Escape dismisses the Host Game dialog\", \"focus goes back to the control that opened the card\"; frontend/src/components/hostGameW1O.test.tsx :: describe \"AUD-16.05: breakpoints switch at the same effective width at every scale\"",
+  "note": "Public-room Join/Watch and Host Game Escape and focus restore are pinned by focused tests; the waiting-room layout is covered by the AUD-16.05 breakpoint test."
+ },
+ {
+  "key": "AUD-20.10",
+  "verdict": "RECONFIRMED",
+  "citation": "frontend/src/panels/ContextualActionBar.tsx:2058-2060 (\"Close the room. Any player may do this; it closes on its own if nobody does.\")",
+  "note": "The Close Room tooltip makes no payout claim. The line drifted from :2112-2114 to :2060."
+ },
+ {
+  "key": "AUD-20.12",
+  "verdict": "RECONFIRMED",
+  "citation": "frontend/src/components/GameOverModal.tsx:342-348 (removal note)",
+  "note": "The string 'settled on-chain' occurs in frontend/src only inside the GameOverModal removal comment; no rendered copy carries it."
+ },
+ {
+  "key": "AUD-20.11",
+  "verdict": "RECONFIRMED",
+  "citation": "frontend/src/App.tsx:14740, 14839 (both <SettlementBand ... board={liveState} />); frontend/src/components/money/settlementEvidenceBoard.test.tsx :: \"every SettlementBand mount -- the result's band and the table bar's strip -- takes liveState, never gameState\"",
+  "note": "Both SettlementBand mounts receive liveState, so a dispute's evidence is the live board even mid-scrub."
+ },
+ {
+  "key": "AUD-21.01",
+  "verdict": "RECONFIRMED",
+  "citation": "frontend/src/components/RulesReference.tsx:2617 (redesign note); frontend/src/components/rulesOverview.test.tsx :: describes \"the reference opens on Overview\", \"the narrow layout is one row of navigation, not three\"; frontend/src/components/rulesStockRound.test.tsx / rulesOperatingRound.test.tsx :: \"lookups are tables, and tables contain their own overflow\"",
+  "note": "The redesigned Rules Reference (Overview landing, page navigation, contained tables) is present and pinned by the rules* test files."
+ },
+ {
+  "key": "AUD-21.07",
+  "verdict": "RECONFIRMED",
+  "citation": "frontend/src/components/RulesReference.tsx:926 (\"...rounded toward the printed route total.\"); frontend/src/gameEngine/gameVariants.ts:1220 (roundRevenueTowardPrinted); frontend/src/components/unpredictableRevenueRulesReference.test.tsx:86 (\"UR-N6 / OD-UR-10 an exact tie toward printed (UR-7)\")",
+  "note": "The exact-$5 tie copy and the engine rule agree. The citation drifted from :854-861 to :926."
+ },
+ {
+  "key": "VF/C-2",
+  "verdict": "RECONFIRMED",
+  "citation": "VISUAL_FLOURISH_BACKLOG.md:987 (OWNER DECISION); frontend/src/components/StockRoundPanel.tsx:1482-1486 (row-only app-stock-row-dim)",
+  "note": "The decision still stands in the ledger, and the dim is applied per ownership row only."
+ },
+ {
+  "key": "VF/C-6",
+  "verdict": "RECONFIRMED",
+  "citation": "VISUAL_FLOURISH_BACKLOG.md:1009 (OWNER DECISION); frontend/src/App.tsx:5971 (playVariantCue(PRESIDENCY_SFX, sfxEnabledRef.current)); frontend/src/components/stockTransferFocus.ts:59",
+  "note": "The presidency cue rides the master switch alone and has no category of its own."
+ },
+ {
+  "key": "VF/C-8",
+  "verdict": "RECONFIRMED",
+  "citation": "VISUAL_FLOURISH_BACKLOG.md:1039 (OWNER DECISION); frontend/src/components/StockRoundPanel.tsx:1362 (card .map rebinding the committed/staged company)",
+  "note": "The decision still stands in the ledger. It moved from :1020 to :1039."
+ },
+ {
+  "key": "VF/C-11",
+  "verdict": "RECONFIRMED",
+  "citation": "VISUAL_FLOURISH_BACKLOG.md:1074 (OWNER DECISION)",
+  "note": "The decision still stands, unchanged, in the ledger, which moved from :1037 to :1074. It records accepted behaviour and claims no defect."
+ },
+ {
+  "key": "VF/D-8",
+  "verdict": "RECONFIRMED",
+  "citation": "VISUAL_FLOURISH_BACKLOG.md:1138 (OWNER DECISION); frontend/src/components/tileTransition.ts:165 (TILE_TRANSITION_REDUCED_MS = 240), :1145-1148; frontend/src/components/tileTransitionAudio.test.tsx :: \"under reduced motion sounds only the commit, on the first frame of its fade\"",
+  "note": "Reduced motion is a 240 ms fade, as decided."
+ },
+ {
+  "key": "VF/D-9",
+  "verdict": "RECONFIRMED",
+  "citation": "VISUAL_FLOURISH_BACKLOG.md:1148 (OWNER DECISION); frontend/src/components/tileTransition.ts:2733-2734; frontend/src/components/tileTransition.test.ts:1304 :: \"plays a lay and an upgrade, and snaps a removal, a downgrade and a re-facing\"; frontend/src/components/tileTransitionStaging.test.ts :: \"snaps every changed hex before deciding whether one may play, and plays only a single animatable change\"",
+  "note": "The play/snap rule is implemented as decided and pinned."
+ },
+ {
+  "key": "VF/D-10",
+  "verdict": "RECONFIRMED",
+  "citation": "VISUAL_FLOURISH_BACKLOG.md:1154 (OWNER DECISION); frontend/src/components/tileTransitionAudio.test.tsx :: \"drops a superseded transition's future cues, and lets the change that replaced it sound its own\"",
+  "note": "Supersession drops the running transition with no queue. The ledger entry moved from :1117 to :1154."
+ },
+ {
+  "key": "VF/D-29",
+  "verdict": "RECONFIRMED",
+  "citation": "VISUAL_FLOURISH_BACKLOG.md:1489 (OWNER DECISION); frontend/src/components/tileTransition.ts:188 (lead: 128); frontend/src/components/tileTransitionAudio.test.tsx :: \"sounds new rail and then the commit, each once on its own beat, and nothing more however many frames follow\" (another seat's lay)",
+  "note": "The decision still stands in the ledger. It moved from :1362 to :1489."
+ },
+ {
+  "key": "VF/D-31",
+  "verdict": "RECONFIRMED",
+  "citation": "VISUAL_FLOURISH_BACKLOG.md:1515 (OWNER DECISION); frontend/src/components/tileTransitionStaging.test.ts :: \"draws the proposal in the tile pass, with the flourish's painter, after a running transition and before any other tile drawing\"",
+  "note": "The proposal is drawn in the tile pass in place of #822's ghost pass."
+ },
+ {
+  "key": "VF/D-37",
+  "verdict": "RECONFIRMED",
+  "citation": "VISUAL_FLOURISH_BACKLOG.md:1590 (OWNER DECISION); frontend/src/components/tileTransition.ts:1189-1217 (mutation.mp3 only at stationEmergence)",
+  "note": "The decision still stands in the ledger. It moved from :1449 to :1590."
+ },
+ {
+  "key": "VF/D-38",
+  "verdict": "RECONFIRMED",
+  "citation": "VISUAL_FLOURISH_BACKLOG.md:1598 (OWNER DECISION); frontend/src/utils/audio.ts:198-204 (sfxEnabledMirror); frontend/src/components/tileTransitionAudio.test.tsx :: \"reads the switch the audio control shows: the control mirrors it on every change\"",
+  "note": "The board reads the mirror of the master switch, as decided."
+ },
+ {
+  "key": "VF/E-3",
+  "verdict": "RECONFIRMED",
+  "citation": "VISUAL_FLOURISH_BACKLOG.md:1647 (OWNER DECISION); frontend/src/components/StockRoundPanel.tsx:1250-1257, 1306 (floatGridRef on the roster grid)",
+  "note": "The centring target is the roster grid ref."
+ },
+ {
+  "key": "VF/E-4",
+  "verdict": "RECONFIRMED",
+  "citation": "VISUAL_FLOURISH_BACKLOG.md:1654 (OWNER DECISION)",
+  "note": "The decision still stands in the ledger. It moved from :1513 to :1654 and records accepted behaviour, not a defect."
+ },
+ {
+  "key": "VF/G-5",
+  "verdict": "RECONFIRMED",
+  "citation": "VISUAL_FLOURISH_BACKLOG.md:1849 (OWNER DECISION); frontend/src/panels/ContextualActionBar.tsx:3186, 4074 (two <PhaseBadge ... flip={phaseFlip}> renders)",
+  "note": "Two renders of the same badge play the same flip, as decided."
+ },
+ {
+  "key": "VF/H-1",
+  "verdict": "RECONFIRMED",
+  "citation": "VISUAL_FLOURISH_BACKLOG.md:1876 (OWNER DECISION); frontend/src/App.tsx:14790-14801, 14967 (the #901 Top Bar badge removed; the ticket carries 'N ORs remaining')",
+  "note": "The decision still stands in the ledger. It moved from :1663 to :1876."
+ },
+ {
+  "key": "VF/H-8",
+  "verdict": "RECONFIRMED",
+  "citation": "VISUAL_FLOURISH_BACKLOG.md:1962 (OWNER DECISION); frontend/src/utils/bankBreak.ts:89; frontend/src/utils/bankBreakEndgame.ts:14-39",
+  "note": "The countdown is in Operating Rounds, derived from the round machine."
+ },
+ {
+  "key": "VF/I-2",
+  "verdict": "RECONFIRMED-OBSOLETE",
+  "citation": "VISUAL_FLOURISH_BACKLOG.md:1998 (OWNER DECISION, marked superseded in substance); frontend/src/tutorial/TutorialLibrary.tsx:16, 32-49 (On/Off + per-game Restart); frontend/src/components/trainRustFlourish.test.ts:505 and frontend/src/components/trainDiscardFlourish.test.ts:458, 503 (expect no tutorialModeEnabled)",
+  "note": "The 'Tutorial mode' control and tutorialModeEnabled are gone from non-test source. The final Play tutorial replaced them with On/Off and Restart in TutorialLibrary, and the ledger entry is kept only as history."
+ },
+ {
+  "key": "VF/I-4",
+  "verdict": "RECONFIRMED",
+  "citation": "VISUAL_FLOURISH_BACKLOG.md:2034 (OWNER DECISION); frontend/src/App.tsx:2707-2708 (\"they all run off one clock (I-4)\"); frontend/src/components/flourishAudio.test.ts:179",
+  "note": "Every rust chip runs on one clock, with no stagger between corporations."
+ },
+ {
+  "key": "VF/J-4",
+  "verdict": "RECONFIRMED",
+  "citation": "VISUAL_FLOURISH_BACKLOG.md:2136 (OWNER DECISION); frontend/src/components/trainDiscardFlourish.ts:110-150 (local departure plus Bank Pool receiving reaction)",
+  "note": "Option B is implemented. The ledger entry moved from :1914 to :2136."
+ },
+ {
+  "key": "VF/J-7",
+  "verdict": "RECONFIRMED",
+  "citation": "VISUAL_FLOURISH_BACKLOG.md:2165 (OWNER DECISION); frontend/src/components/TrainBadges.tsx:459 (const staged = rustState.before ?? discardState.before ?? trains)",
+  "note": "Rust staging wins the tie over discard staging in the shared chip row."
+ },
+ {
+  "key": "VF/K-1",
+  "verdict": "RECONFIRMED",
+  "citation": "VISUAL_FLOURISH_BACKLOG.md:2186 (OWNER DECISION); frontend/src/panels/ContextualActionBar.tsx:3272 (<RustMark /> {reprieveWarning.label}, the 'Final Run: N-trains' badge)",
+  "note": "The Final Run badge carries the rust mark, as decided."
+ },
+ {
+  "key": "P3-N025",
+  "verdict": "RECONFIRMED",
+  "citation": "frontend/src/gameEngine/stationPlacementGate.ts:115-117 (refuses a city-less placement on a hex with more than one city when routeRulesV12InEffect); frontend/src/components/hexBoardData.ts:717-718; frontend/src/gameEngine/rulesVersion.ts:396-397; frontend/src/routeOracle/routeV12Revision.test.ts :: describe \"ING-1: a city-less paid placement on a two-city hex\" / \"is refused on v12 and still accepted pre-v12\"",
+  "note": "v12+ refuses creating the state, and routeRulesV12InEffect also holds on the v13 head because it is true unless the board is pre-v12."
+ },
+ {
+  "key": "P3-N026",
+  "verdict": "RECONFIRMED",
+  "citation": "frontend/src/gameEngine/terrainFee.ts:66 (terrainFeeDue, charged once per hex incl. preprinted G19/D10/E5) used at frontend/src/gameEngine/layTileAuthority.ts:116; frontend/src/components/RulesReference.tsx:494; RULES_HARDENING_BACKLOG.md:4847; frontend/src/components/phase65bTerrainCopy.test.tsx :: \"the hexes it names are exactly the standard board's preprinted-yellow terrain hexes (G19, D10, E5), each $80 water\"",
+  "note": "The engine charges the first-upgrade terrain fee and the copy names D10/E5 with G19. The backlog citation drifted from :4757 to :4847."
+ }
+]

@@ -20,7 +20,7 @@ const FRONTEND = path.join(__dirname, "..", "..");
 const config = JSON.parse(fs.readFileSync(path.join(FRONTEND, "vercel.json"), "utf8")) as { headers: { source: string; headers: { key: string; value: string }[] }[] };
 const all = config.headers.find((rule) => rule.source === "/(.*)");
 const header = (key: string) => all?.headers.find((h) => h.key.toLowerCase() === key.toLowerCase())?.value ?? null;
-const CSP = header("Content-Security-Policy") ?? header("Content-Security-Policy-Report-Only") ?? "";
+const CSP = header("Content-Security-Policy") ?? "";
 const directives = new Map(CSP.split(";").map((part) => part.trim()).filter(Boolean).map((part) => {
   const [name, ...sources] = part.split(/\s+/);
   return [name, sources] as const;
@@ -37,6 +37,8 @@ describe("Play's security headers (frontend/vercel.json)", () => {
   it("applies to every path, with nosniff", () => {
     expect(all).toBeDefined();
     expect(header("X-Content-Type-Options")).toBe("nosniff");
+    /* Enforced (stage 2), after the Report-Only stage ran clean on the live site in Chrome and Firefox. */
+    expect(header("Content-Security-Policy-Report-Only")).toBeNull();
     expect(CSP).not.toBe("");
   });
 

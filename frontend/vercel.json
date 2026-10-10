@@ -4,7 +4,7 @@
       "source": "/(.*)",
       "headers": [
         {
-          "key": "Content-Security-Policy-Report-Only",
+          "key": "Content-Security-Policy",
           "value": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; media-src 'self' https://s3.radio.co https://streams.fluxfm.de https://fluxfm.streamabc.net https://funkyradio.streamingmedia.it https://stream.rcs.revma.com https://*.rcs.revma.com https://listen.181fm.com; connect-src 'self' wss://play.netadao.org https://d3d68n2c5eingb.cloudfront.net https://juno.api.t.stavr.tech; manifest-src 'self'; worker-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self' https://netadao.org https://www.netadao.org https://academy.netadao.org https://fork.netadao.org https://ludum.netadao.org; upgrade-insecure-requests"
         },
         {

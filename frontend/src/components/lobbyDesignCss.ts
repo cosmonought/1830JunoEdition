@@ -173,10 +173,13 @@ export const LOBBY_DESIGN_CSS = `
 .lb-pop p.lb-disc { font-size: 11px; color: var(--lb-faint); }
 
 /* ---------------- the footer ---------------- */
-.lb-footer { margin-top: auto; padding: 8px 16px 28px; display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 10px 28px; font: 700 12px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; color: #c8c6c0; }
-.lb-footer a { color: #c8c6c0; text-decoration: none; display: inline-flex; align-items: baseline; gap: 10px; }
-.lb-footer a:hover span, .lb-footer a:focus-visible span { color: #f2f0eb; text-decoration: underline; text-underline-offset: 3px; }
-.lb-footer a:focus-visible { outline: 2px solid #f8e5a3; outline-offset: 2px; }
+.lb-footer { margin-top: auto; padding: 8px 16px 28px; display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 10px 28px; }
+.lb-footer > a { font: 700 12px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; color: #c8c6c0; text-decoration: none; display: inline-flex; align-items: baseline; gap: 10px; }
+.lb-footer > a:hover span, .lb-footer > a:focus-visible span { color: #f2f0eb; text-decoration: underline; text-underline-offset: 3px; }
+.lb-footer > a:focus-visible { outline: 2px solid #f8e5a3; outline-offset: 2px; }
+/* Play's credit (AppFooter) sits in this row as it is: only its full-width bar box is released, so it lines up after
+   the hairline. The credit itself -- mark, size, blend, words -- is untouched. */
+.lb-footer > footer { width: auto !important; padding: 0 !important; margin: 0 !important; }
 .lb-footer .lb-lw { font: 400 20px/1 "Anton", "Impact", "Arial Narrow", sans-serif; letter-spacing: .01em; color: #f2f0eb; text-decoration: none !important; }
 .lb-footer .lb-sep { width: 1px; height: 18px; background: #2a2a2a; }
 @media (max-width: 640px) { .lb-footer { flex-direction: column; } .lb-footer .lb-sep { display: none; } }

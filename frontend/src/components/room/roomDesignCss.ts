@@ -290,9 +290,11 @@ details.rm-more[open] summary::before { content: "− "; }
 .rm-pop .rm-pop-sub { margin: 0 0 6px; font: 500 10px/1.2 var(--rm-mono); letter-spacing: .12em; text-transform: uppercase; color: var(--rm-faint); }
 
 /* ---- the Ludum footer (the lobby's) */
-.rm-foot { margin-top: auto; padding: 8px 16px 28px; display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 10px 28px; font: 700 12px/1.5 var(--rm-sans); color: var(--rm-dim); }
-.rm-foot a { color: var(--rm-dim); text-decoration: none; display: inline-flex; align-items: baseline; gap: 10px; }
-.rm-foot a:hover span, .rm-foot a:focus-visible span { color: var(--rm-text); text-decoration: underline; text-underline-offset: 3px; }
+.rm-foot { margin-top: auto; padding: 8px 16px 28px; display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 10px 28px; }
+.rm-foot > a { font: 700 12px/1.5 var(--rm-sans); color: var(--rm-dim); text-decoration: none; display: inline-flex; align-items: baseline; gap: 10px; }
+.rm-foot > a:hover span, .rm-foot > a:focus-visible span { color: var(--rm-text); text-decoration: underline; text-underline-offset: 3px; }
+/* Play's credit (AppFooter) sits in this row as it is: only its full-width bar box is released. */
+.rm-foot > footer { width: auto !important; padding: 0 !important; margin: 0 !important; }
 .rm-foot .rm-lw { font: 400 20px/1 var(--rm-display); letter-spacing: .01em; color: var(--rm-text); }
 .rm-foot .rm-sep { width: 1px; height: 18px; background: var(--rm-rule); }
 

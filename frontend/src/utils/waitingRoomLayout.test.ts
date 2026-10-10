@@ -31,7 +31,8 @@ describe("§4: the page, top to bottom", () => {
     order(WAITING, "<TopBar onLeaveGame={onLeave}", 'data-testid="room-sign"', 'className="rm-you-row"', 'data-testid="boarding-board"', 'data-testid="game-settings"', "<RoomFooter />");
     expect(WAITING).not.toContain("<h2 id=\"rm-dep-h\">");
     expect(PARTS).toContain("Project 18XX on Ludum ↗");
-    expect(PARTS).toContain("Powered by Neta DAO");
+    /* Footer fix (owner, 2026-10-10): the credit is Play's own AppFooter (the animated mark and its words), not text. */
+    expect(PARTS).toContain('<AppFooter surface="meta" />');
   });
 
   it("paints its own ground, with no photograph", () => {

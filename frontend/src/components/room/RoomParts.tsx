@@ -10,6 +10,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useRef } from "react";
 import type { GameType } from "../../gameEngine/gameVariants";
 import { EDITION_COLOR, historyLines, type PublicGameHistory } from "../../utils/lobbyBoard";
 import { clockRules, cutsFor, paperOffset, passSeed, type PaceChoice } from "../../utils/roomDesign";
+import AppFooter from "../AppFooter";
 import { SeatTrustFacts, TRUST_FACTS_DISCLAIMER } from "../TrustFacts";
 
 /* ------------------------------------------------------------------ the lockup */
@@ -345,16 +346,16 @@ export function PlayerPanel(props: PlayerPanelProps): JSX.Element {
 /* ------------------------------------------------------------------ the footer (the lobby's) */
 
 export function RoomFooter(): JSX.Element {
+  /* The Ludum link and a hairline, then Play's own Neta DAO credit UNCHANGED (`AppFooter` "meta": the animated mark).
+     A <div>: the credit is the <footer> landmark. */
   return (
-    <footer className="rm-foot" data-testid="room-footer">
+    <div className="rm-foot" data-testid="room-footer">
       <a href="https://ludum.netadao.org/projects/project-18xx/" target="_blank" rel="noopener noreferrer">
         <b className="rm-lw">LUDUM</b>
         <span>Project 18XX on Ludum ↗</span>
       </a>
       <i className="rm-sep" aria-hidden="true" />
-      <a href="https://netadao.org" target="_blank" rel="noopener noreferrer" title="Neta DAO — opens netadao.org in a new tab">
-        <span>Powered by Neta DAO</span>
-      </a>
-    </footer>
+      <AppFooter surface="meta" />
+    </div>
   );
 }

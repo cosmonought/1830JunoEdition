@@ -102,9 +102,13 @@ describe("the footer mark can still see the room it keys against", () => {
     /* PLAY LOBBY (approved design): the lobby's footer is its own Ludum footer now, and there is no photograph
        behind the page for it to sit under -- but the order is still asserted, not assumed: the credit is the lobby
        root's LAST child, after the tables region. The waiting room and the board keep AppFooter. */
+    /* Footer fix (owner, 2026-10-10): the handoffs had wrongly drawn the credit as plain text; the lobby's row now ends
+       with Play's own credit, `AppFooter` "meta" (the animated, `screen`-keyed mark), unchanged. */
     const lobby = SOURCES.Lobby;
     expect(lobby).not.toContain("<div style={styles.sceneClip}");
-    expect(lobby.lastIndexOf('<footer className="lb-footer" data-testid="lobby-footer">')).toBeGreaterThan(lobby.indexOf('data-testid="lobby-tables"'));
+    expect(lobby.lastIndexOf('<div className="lb-footer" data-testid="lobby-footer">')).toBeGreaterThan(lobby.indexOf('data-testid="lobby-tables"'));
+    expect(lobby.split('<AppFooter surface="meta" />').length - 1).toBe(1);
+    expect(lobby.indexOf('<AppFooter surface="meta" />')).toBeGreaterThan(lobby.indexOf('className="lb-sep"'));
   });
 
   it("gives the waiting room's copy the same ground", () => {
@@ -119,6 +123,11 @@ describe("the footer mark can still see the room it keys against", () => {
     expect(SOURCES.SandboxWaitingRoom).not.toContain("waiting-room.jpg");
     expect(SOURCES.SandboxWaitingRoom).not.toContain("<AppFooter");
     expect(SOURCES.SandboxWaitingRoom.split("<RoomFooter />").length - 1).toBe(2); // the room and its hold
+    /* Footer fix (owner, 2026-10-10): RoomFooter ends with Play's own credit, `AppFooter` "meta", unchanged -- keyed
+       with `screen` against this root's #080808 inside its own isolated group. */
+    const parts = readStripped("components/room/RoomParts.tsx");
+    expect(parts.split('<AppFooter surface="meta" />').length - 1).toBe(1);
+    expect(parts).not.toContain("<span>Powered by Neta DAO</span>");
   });
 
   it("paints no picture on the root, so nothing can re-fit as the seats fill (design note #1266, kept)", () => {

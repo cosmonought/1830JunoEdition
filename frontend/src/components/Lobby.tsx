@@ -46,6 +46,7 @@ import { createHostedGame, gameIdOf, joinHostedGame, type RoomSetup } from "../u
 /* LIVE-2E: the profile chip (link a device, rotate the key, sign out), and the profile's name as the host's seat name.
    P3-ACCT (public first): signed out, the same corner offers Log in and Create account. */
 import { ProfileMenu } from "./ProfileMenu";
+import AppFooter from "./AppFooter";
 import { profileNickname } from "../utils/profileApi";
 /* P3-ACCT: Host, Join and a listed table's Join ask for an account first, then carry on by themselves. */
 import { requireAccount } from "../utils/accountPrompt";
@@ -658,16 +659,17 @@ export function Lobby({ onEnterSandbox, onWatchSandbox }: LobbyProps) {
 
       {/* PLAY LOBBY (approved design §2.5): the Ludum footer -- the wordmark and "Project 18XX on Ludum", a hairline, and
           the Neta DAO credit (still the link to netadao.org it always was). */}
-      <footer className="lb-footer" data-testid="lobby-footer">
+      {/* The Ludum link and a hairline, then Play's own Neta DAO credit UNCHANGED (`AppFooter` "meta": the animated
+          mark at 28px, keyed with `screen`, and "Powered by Neta DAO" as one link). A <div>, because the credit is the
+          <footer> landmark and a footer may not hold another. */}
+      <div className="lb-footer" data-testid="lobby-footer">
         <a href="https://ludum.netadao.org/projects/project-18xx/" target="_blank" rel="noopener noreferrer">
           <b className="lb-lw">LUDUM</b>
           <span>Project 18XX on Ludum ↗</span>
         </a>
         <i className="lb-sep" aria-hidden="true" />
-        <a href="https://netadao.org" target="_blank" rel="noopener noreferrer" title="Neta DAO — opens netadao.org in a new tab">
-          <span>Powered by Neta DAO</span>
-        </a>
-      </footer>
+        <AppFooter surface="meta" />
+      </div>
     </div>
   );
 }

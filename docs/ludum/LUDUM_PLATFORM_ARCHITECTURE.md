@@ -859,3 +859,39 @@ configuration, and a test enforces this. The governance pages grant nothing to s
 
 **Not done here:** none of these steps has been performed. There was no image build, no plan against AWS, no apply and no
 restart.
+
+---
+
+## 14. Release and rollback after display-name changes (v1.1; owner request 2026-10-10)
+
+**The hazard.** The ONE display-name change writes two things no earlier build can read:
+- the profile's optional `name_changed_at` (memory/journal store and the DynamoDB `PROF#…` item alike), and
+- a `display-name-changed` event in the security journal (`SEC#…`).
+
+Every build before `sh1-669192e-arm64-r1` (ludum/integration `669192e0`, digest
+`sha256:868f8f2bfbe0435a0594d9b5712591c45eb1aed996e50cab35cbd8160c3ea15e`) decodes profiles strictly: an item with an
+attribute it does not know is "not a well-formed profile record" (`identityItems.ts` `decodeRecord`, `store.ts`
+`isProfile` `exactKeys`), so the identity load fails and the server REFUSES TO START. Its restore tooling also refuses
+an unknown event kind (fail closed). Nothing is corrupted, but the older image cannot serve.
+
+**The rule: a rollback floor.** `F` = `sh1-669192e-arm64-r1` is the first image that reads both. Once ANY profile has
+used its change, no image older than `F` may be deployed, and no identity restore may use tooling older than `F`.
+- Before any rollback, run the read-only check (it reads nothing but counts):
+  `aws dynamodb scan --table-name gs-<env>-identity --select COUNT --consistent-read --filter-expression "begins_with(pk, :p) AND attribute_exists(name_changed_at)" --expression-attribute-values '{":p":{"S":"PROF#"}}'`
+  Count 0: every earlier rollback target that the other rules allow (`ludum_origins`, §13) is still valid.
+  Count > 0: the target must be `F` or later. (Staging, 2026-10-10T03:38Z: 7 profiles, 0 renamed.)
+- The only writer is Ludum's `display-name` route (Play's own UI has no rename), so the floor can move only once
+  Ludum's `/me/account/` is published. Publishing it is therefore also the owner's acceptance that rollbacks below `F`
+  end at the first rename.
+
+**Never "fix" it by migrating data.** Stripping `name_changed_at` or the journal events would hand a player back a
+change they already used, break the "a used change is never undone" write guard, and make a restore's replay disagree
+with the table. Identity data is preserved as written.
+
+**If v1.1 must be withdrawn after renames:** roll FORWARD to a build on `F`'s line that turns the feature off (for
+example the `display-name` route answering 503), never back below `F`.
+
+**Future identity schema changes: expand, then contract.** Ship the READER first (a release that accepts the new field
+or event but never writes it), let it become the rollback target, then ship the WRITER. The previous image is then
+always a valid rollback target. v1.1 shipped reader and writer together; the floor above is the price, and it is bounded
+by the publication gate.

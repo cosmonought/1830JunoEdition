@@ -6756,6 +6756,21 @@
    "auth_e2e": "Chrome 36/36, Firefox 36/36: the real server + the integrated Ludum site (platform/integration) under their production hostnames: registration, sign-in / sign-out and recovery on both sites, Confirm it's you, one shared session, DAO membership per account, reviewer vs non-reviewer, open-redirect refusal, CSP clean, phone width.",
    "ludum_site": "check-scripts (20 pages), 108 platform tests, build-site 73 files (sign-in / sign-up / recover present; no dev files)",
    "not_verified": "No real Keplr wallet and no real Juno transaction was used or verified in Phase 3: funded games, settlement, REMEDY, disputes and the ante race on real Keplr are Phase-4 playtesting."
+  },
+  "release": {
+   "status": "PUBLISHED 2026-10-10 (gates passed; backend -> Play -> Ludum)",
+   "source": "ludum/integration f9ab4c2d420c3415fb758e66f805efc0147e5780 (code = baseline e63221ae + W3-F docs)",
+   "backend": "sh1-f9ab4c2-arm64-r1 sha256:45d401cfa01c0aed2cc40b543264fbc38040a7a76359106e42509f2b8d634519 on i-01fe56536bf591382; arm64 smoke 7/7; READY; KMS role probe (relayer, settlement, admission, REMEDY) exit 0",
+   "play": "Vercel dpl_GHYQKNBofVnbhcmSs7qevVubhJ1L (main.bb56ecdd.js; escrow 2.1 pin unchanged; bundle scans clean)",
+   "ludum": "cosmonought/ludum main 11dce9e -> f88afd7 (fast-forward); Pages run 38047230484 success",
+   "verification": "CORS 49/49; v1.1 live API 38/38; production browsers Chrome 32/32, Firefox 31/33 (the two misses: the harness hit the guest-session IP rate limit, 429 -- protection working) + API recovery check 8/9 (old password 403, new 200; the replay refused 401 rather than 409: the session was retired)",
+   "rollback": "backend sh1-669192e-arm64-r1 (the floor) -- roll Ludum back with it; Play promote dpl_HCTXa1afVQS3rVdMvyZiqYUVJmvT; Ludum revert 34271ce on main (no force-push)",
+   "known_defects": [
+    "Play sends no CSP / frame-ancestors / X-Frame-Options (pre-existing; never configured) -- a separate reviewed change",
+    "Any with an ante blocked (early Phase-4 escrow correction)",
+    "a non-Play client can open a second unbound, cancellable escrow (A-4)"
+   ],
+   "record": "docs/phase3/PHASE3_FINAL_RELEASE_2026-10-10.md"
   }
  },
  "w3f_closure": {

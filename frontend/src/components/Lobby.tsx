@@ -21,7 +21,6 @@
 import React, { useCallback, useEffect, useState } from "react";
 
 import { UiScalePicker } from "./UiScalePicker";
-import { chainConfigError } from "../config";
 import { FREE_TABLES_OFFERED } from "../utils/tablePolicy"; // PHASE 3 FINAL (§13)
 import { isBackendConfigured, backendConfigError } from "../config/backend";
 import { preloadWaitingRoomScene } from "./SandboxWaitingRoom";
@@ -335,7 +334,6 @@ export function Lobby({ onEnterSandbox, onWatchSandbox }: LobbyProps) {
     [handleJoinListedRoom],
   );
 
-  const chainError = chainConfigError();
   const backendError = backendConfigError();
 
 
@@ -384,15 +382,10 @@ export function Lobby({ onEnterSandbox, onWatchSandbox }: LobbyProps) {
             does not go looking for it: the title was pushed down by the flow header it used to live in, and
             #1131 anchored it to the scene instead, where nothing above it can move it. The pill moves because
             the left is where it belongs, not because the title still needs the room. */}
-        {chainError && (
-          <div
-            style={styles.chainPill}
-            title={`${chainError}\n\nOn-chain tables return with the escrow contract; every table on this server is a no-money table.`}
-          >
-            <span style={styles.chainDot} aria-hidden="true" />
-            Offline · sandbox active
-          </div>
-        )}
+        {/* PHASE 4 (owner): the "Offline · sandbox active" pill is gone. It reported the parked on-chain mode's
+            REACT_APP_CONTRACT_ADDRESS configuration and said every table was a no-money table -- untrue on a build
+            pinned to the Escrow 2.1 deployment, where tables are anted. Real failures are still said where they
+            happen: the game server's connection (the session and room notices) and the escrow pin (the money panel). */}
         <div style={styles.utilityAccount}>
         {/* P3-ACCT: the rules are public -- a visitor reads them here, no account needed. */}
         <button type="button" style={styles.rulesButton} onClick={() => openInfoPage("rules")} data-testid="lobby-rules">
@@ -1187,24 +1180,6 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "0 20px",
     boxSizing: "border-box",
   },
-  chainPill: {
-    alignSelf: "flex-start",
-    display: "inline-flex",
-    alignItems: "center",
-    gap: "7px",
-    fontSize: FONT_SIZE.micro,
-    fontWeight: 700,
-    letterSpacing: "0.03em",
-    padding: "3px 10px",
-    borderRadius: RADIUS.pill,
-    border: "1px solid #2a2a2a",
-    backgroundColor: "#141414",
-    color: "#a8a6a0",
-    cursor: "help",
-  },
-  /* The dot is the one coloured thing, and it is the app's own "connecting/undecided" amber rather than a
-     red -- an unconfigured chain is a state, not a failure. */
-  chainDot: { width: "7px", height: "7px", borderRadius: RADIUS.circle, backgroundColor: "#c9a94c", flex: "none" },
   panelTitle: { margin: 0, fontSize: FONT_SIZE.heading, fontWeight: 700, color: "#f2f0eb" },
   /* Design note #902: the variant rows. Same rhythm as `AutoPassModal`'s condition list -- a label, then what
      it costs you -- because both are asking a player to agree to something before it happens. */

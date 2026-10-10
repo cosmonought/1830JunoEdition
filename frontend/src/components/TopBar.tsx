@@ -9,7 +9,6 @@
 
 import React from "react";
 
-import { chainConfigError } from "../config";
 import { styles } from "../styles/appStyles";
 // Design note #1075: the volume, the off switch, and which effects play -- one panel, two buttons.
 import AudioControls from "./AudioControls";
@@ -39,13 +38,6 @@ import { type AudioCategoryToggle } from "./AudioControlPopover";
 //
 // See docs/ai_architecture/ui_shell_layout.md, TopBar.tsx #28 / #41.
 
-/** Pulls the `REACT_APP_*` name out of a `chainConfigError()` message, for
- *  the compact badge. `null` if the message names none, in which case the
- *  caller falls back to a generic label rather than printing a truncated
- *  sentence. */
-function firstMissingEnvVar(message: string): string | null {
-  return message.match(/REACT_APP_[A-Z_]+/)?.[0] ?? null;
-}
 
 /* ------------------------------------------------------------------ */
 /* Dashboard Control Bar                                              */
@@ -122,7 +114,6 @@ export default function TopBar({
   // otherwise look like it should work and fail on click. Names the exact
   // environment variable. Computed at render -- these are build-time constants
   // that cannot change during a session, so there is nothing to cache.
-  const configError = chainConfigError();
 
   return (
     <header style={styles.topBar}>
@@ -219,15 +210,10 @@ export default function TopBar({
           NOT DELETED, because "the chain is not configured" is the reason every on-chain action will fail and
           a board that silently does nothing is worse than a quiet dot. It is diagnosis, so it is sized like
           the other diagnoses instead of like an alarm. */}
-      {configError && (
-        <span
-          style={{ ...styles.topBarDot, ...styles.topBarDotOffline }}
-          title={`Offline — ${configError}`}
-          /* PHASE 3 CLOSURE (a11y): a labelled dot is an image -- `aria-label` is prohibited on a role-less span. */
-          role="img"
-          aria-label={`Offline — ${firstMissingEnvVar(configError) ?? "chain not configured"}`}
-        />
-      )}
+      {/* PHASE 4 (owner): the amber "Offline" dot is gone. It reported the parked on-chain mode's REACT_APP_* chain
+          configuration (REACT_APP_CONTRACT_ADDRESS), which a build pinned to the Escrow 2.1 deployment does not use; it
+          was permanently "offline" in production and said nothing true. The escrow pin's own problems are said by the
+          money panel, and the game server's connection by the session notices. */}
 
       {/* ==================================================================
            PHASE 3 FINAL (§12): NO WALLET CLUSTER IN THE BAR -- A KEPLR ADDRESS IS NOT "WHO YOU ARE"

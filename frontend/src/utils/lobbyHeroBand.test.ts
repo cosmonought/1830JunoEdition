@@ -383,11 +383,12 @@ describe("the room is the page, and the text carries its own ground", () => {
     expect(LOBBY).toContain("styles.utilityRow");
     expect(LOBBY).toContain("styles.utilityAccount");
     expect(LOBBY).toContain('justifyContent: "space-between"');
-    expect(LOBBY.indexOf("Offline · sandbox active")).toBeLessThan(LOBBY.indexOf("styles.utilityAccount"));
-    // The paused card's sentence survives where a developer will look and a player will not. LIVE-2D: it no
-    // longer names a flag to flip -- the staging lobby is deleted, and money tables return with the escrow contract.
+    /* PHASE 4 (owner): the "Offline · sandbox active" pill is gone -- it read the parked on-chain mode's configuration
+       and claimed every table was a no-money table, untrue on the Escrow 2.1 deployment. */
+    expect(LOBBY).not.toContain("Offline · sandbox active");
+    expect(LOBBY).not.toContain("chainConfigError");
     expect(LOBBY).not.toContain("On-chain rooms — paused");
-    expect(LOBBY).toContain("On-chain tables return with the escrow contract; every table on this server is a no-money table.");
+    expect(LOBBY).not.toContain("every table on this server is a no-money table");
   });
 
   it("drops the three lines of copy that captioned labelled controls", () => {

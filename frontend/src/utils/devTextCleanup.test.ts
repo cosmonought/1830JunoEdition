@@ -45,16 +45,17 @@ describe("the shell stops narrating its own scaffolding", () => {
     /* THE VARIABLE NAME IS THE PART THAT HAD TO GO, not the offline state. `firstMissingEnvVar` still exists
        and still runs -- it feeds the label and the tooltip, where the person who can act on it will look. */
     expect(TOPBAR).not.toContain("styles.offlineBadge");
-    expect(TOPBAR).toContain("styles.topBarDotOffline");
-    // Still diagnosable: the whole message, including the variable, one hover away.
-    expect(TOPBAR).toContain("title={`Offline — ${configError}`}");
+    /* PHASE 4 (owner): the amber "Offline" dot is gone too -- it reported the parked on-chain mode's REACT_APP_*
+       configuration, which a build pinned to the Escrow 2.1 deployment never uses (permanently "offline" in production). */
+    expect(TOPBAR).not.toContain("topBarDotOffline");
+    expect(TOPBAR).not.toContain("chainConfigError");
+    expect(TOPBAR).not.toContain("REACT_APP_");
   });
 
-  it("keeps the offline state announced rather than only coloured", () => {
-    /* #1078's LESSON, APPLIED BEFORE IT COULD BE RELEARNED: the badge carried its state as text and the dot
-       carries it as a colour, which is nothing at all to a screen reader. The `aria-label` is what stops this
-       being an accessibility regression dressed as a visual cleanup. */
-    expect(TOPBAR).toContain("aria-label={`Offline —");
+  it("PHASE 4: announces no 'Offline' state at all -- the legacy chain-config dot is retired, not re-coloured", () => {
+    /* #1078's lesson (a state carried by colour alone is nothing to a screen reader) no longer applies: the state it
+       announced was the parked on-chain mode's configuration, never true of the Escrow 2.1 build. */
+    expect(TOPBAR).not.toContain("aria-label={`Offline —");
   });
 });
 

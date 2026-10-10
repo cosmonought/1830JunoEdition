@@ -522,7 +522,6 @@ export const styles: Record<string, React.CSSProperties> = {
   /* Design note #1119: the offline state as a dot, so it sits in the same row and the same vocabulary as the
      session-key and wallet dots rather than as a warning badge shouting a build variable at a player. Amber
      is the colour the old badge's border carried, kept so the state is recognisable to anyone who knew it. */
-  topBarDotOffline: { backgroundColor: "#d9b95c" },
   topBarDot: {
     width: "9px",
     height: "9px",

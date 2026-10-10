@@ -230,7 +230,10 @@ describe("the room bar's in-room strip is gone, piece by piece", () => {
        exactly that. Two live instances remain, both on surfaces where there is genuinely no room yet. */
     expect(APP.split("<SandboxRoomBar").length - 1).toBe(1);
     above(APP, "<SandboxRoomBar", "<TopBar");
-    expect(readStripped("components/Lobby.tsx")).toContain("<SandboxRoomBar");
+    /* Phase 3 lobby redesign (0ccbda95): the lobby's own doors (Host a Game / Join with a code) replaced its bare
+       SandboxRoomBar, so the shell's instance above the TopBar is the one live one left. */
+    expect(readStripped("components/Lobby.tsx")).not.toContain("<SandboxRoomBar");
+    expect(readStripped("components/Lobby.tsx")).toContain('data-testid="lobby-actions"');
   });
 
   it("keeps the room's error reachable", () => {

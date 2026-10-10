@@ -28,7 +28,7 @@ import { TermsLink } from "../InfoPages";
 import type { MoneyServices } from "../../money/moneySession";
 import { moneyServices } from "../../money/moneySession";
 import { formatMoneyTime } from "../../money/moneyTime";
-import { useMoneyTable, type MoneyActionKind } from "../../money/useMoneyTable";
+import { useMoneyTable, type MoneyActionKind, type MoneyTable } from "../../money/useMoneyTable";
 import { KeplrMark } from "./KeplrMark";
 import { SAME_WALLET_SENTENCE, SAME_WALLET_SWITCH_HINT, SAME_WALLET_TITLE } from "../../money/sameWalletAck";
 import { buttonStyle, moneyStyles as styles } from "./moneyStyles";
@@ -173,7 +173,7 @@ function ReviewCard({ money, isHost, wallet, now, clock }: { money: RoomMoneyVie
   );
 }
 
-type AskedKind = "withdraw" | "cancel-escrow" | "refund-after-deadline" | "liveness-settle" | "annul";
+export type AskedKind = "withdraw" | "cancel-escrow" | "refund-after-deadline" | "liveness-settle" | "annul";
 
 /** What a withdrawal, a cancel, a refund -- or, once started on Juno, an exit -- does, asked before anything is signed. */
 function exitSentence(money: RoomMoneyView, kind: AskedKind): string {
@@ -229,10 +229,41 @@ const MONEY_PANEL_CSS = `
 `;
 
 export function MoneyPanel({ room, onStart, busy = false, port, services }: MoneyPanelProps): JSX.Element | null {
-  const money = room.money ?? null;
   const svc = services ?? moneyServices();
-  const table = useMoneyTable({ gameId: room.gameId, view: money, variants: room.variants, isHost: room.you.role === "host", port, services: svc, onStart, clock: room.clock ?? null });
+  const table = useMoneyTable({ gameId: room.gameId, view: room.money ?? null, variants: room.variants, isHost: room.you.role === "host", port, services: svc, onStart, clock: room.clock ?? null });
   const [asking, setAsking] = useState<AskedKind | null>(null);
+  return <MoneyPanelView room={room} table={table} services={svc} port={port} busy={busy} asking={asking} setAsking={setAsking} />;
+}
+
+/* ==================================================================
+    PLAY WAITING ROOM (handoff §6, §7): THE SAME STEPS, ON YOUR BOARDING PASS
+   ==================================================================
+   The waiting room owns ONE `useMoneyTable` and shares it: your pass's right half carries the status sentence, the one
+   action (Ante -- or Start game, Withdraw, Send again, Relink in its place) and its Keplr status line, and under them,
+   from here, everything else the seat's money needs, unchanged: "Confirm it's you", the wallet
+   replacement question, the Authorization Wallet warning, the No-deadline acknowledgement, the deposit's terms (the
+   compact line, "Full deposit terms" and the Terms page), the exit confirmations, the wallet blocker, the outcome
+   sentences, the pending transaction and the escrow details. `layout: "departure"` leaves out what the design moved or
+   removed: the stake strip (the sign shows the ante and funding), the five-step progress line (§7: the tear and the
+   stamps replace it), the headline and detail (the status sentence), the primary button (the pass), Withdraw (the pass)
+   and Cancel on Juno (Game settings' Cancel table). Every button here is still `table.run` -- the server and Keplr decide each. */
+export interface MoneyPanelViewProps {
+  room: RoomView;
+  table: MoneyTable;
+  services: MoneyServices;
+  port?: SessionPort;
+  busy?: boolean;
+  asking: AskedKind | null;
+  setAsking: (kind: AskedKind | null) => void;
+  layout?: "panel" | "departure";
+}
+
+/** The other actions the waiting room's design places elsewhere (the pass: Withdraw; Your table: Cancel on Juno). */
+const PLACED_ELSEWHERE: ReadonlySet<string> = new Set(["withdraw", "cancel-escrow"]);
+
+export function MoneyPanelView({ room, table, services: svc, port, busy = false, asking, setAsking, layout = "panel" }: MoneyPanelViewProps): JSX.Element | null {
+  const money = room.money ?? null;
+  const departure = layout === "departure";
   if (money === null || table.flow === null) return null;
   const flow = table.flow;
   const pinned = svc.pin();
@@ -250,8 +281,10 @@ export function MoneyPanel({ room, onStart, busy = false, port, services }: Mone
   const tableLine = flow.stage === "funding" && flow.step !== "funded" ? startBlockerSentence(money, money.start.blocker, table.now) : null;
 
   return (
-    <section className="money-seat-panel" style={styles.panel} aria-label="Your deposit" data-testid="money-panel" data-tutorial-anchor="money-panel">
+    <section className="money-seat-panel" style={departure ? styles.departure : styles.panel} aria-label="Your deposit" data-testid="money-panel" data-tutorial-anchor="money-panel">
       <style>{MONEY_PANEL_CSS}</style>
+      {departure ? null : (
+        <>
       <p style={styles.sectionLabel} aria-hidden="true">
         Your deposit
       </p>
@@ -279,6 +312,8 @@ export function MoneyPanel({ room, onStart, busy = false, port, services }: Mone
         </p>
       ) : null}
       {tableLine !== null && tableLine !== flow.detail ? <p style={styles.faint}>{tableLine}</p> : null}
+        </>
+      )}
 
       {table.needs !== null && table.needs.kind === "confirm" ? (
         <div data-testid="money-confirm">
@@ -374,7 +409,31 @@ export function MoneyPanel({ room, onStart, busy = false, port, services }: Mone
         </div>
       ) : null}
 
-      {(flow.primary !== null || flow.others.length > 0) && asking === null ? (
+      {departure ? (
+        (() => {
+          const rest = flow.others.filter((action) => !PLACED_ELSEWHERE.has(action.kind));
+          const closeReview = table.reviewing && flow.step === "review";
+          return (rest.length > 0 || closeReview) && asking === null ? (
+            <div style={styles.row}>
+              {closeReview && flow.primary !== null && flow.primary.kind === "approve" ? (
+                <button type="button" className="wr-touch" style={buttonStyle("primary", inFlight || flow.blocker !== null)} disabled={inFlight || flow.blocker !== null} onClick={() => press(flow.primary as FlowAction)} data-testid="money-action-approve">
+                  {table.busy === "approve" ? `${flow.primary.label}…` : flow.primary.label}
+                </button>
+              ) : null}
+              {closeReview ? (
+                <button type="button" className="wr-touch" style={buttonStyle("secondary", inFlight)} disabled={inFlight} onClick={table.closeReview} data-testid="money-review-close">
+                  Not now
+                </button>
+              ) : null}
+              {rest.map((action) => (
+                <button key={action.kind} type="button" className="wr-touch" style={buttonStyle(action.tone, inFlight)} disabled={inFlight} title={action.title} onClick={() => press(action)} data-testid={`money-action-${action.kind}`}>
+                  {table.busy === action.kind ? `${action.label}…` : action.label}
+                </button>
+              ))}
+            </div>
+          ) : null;
+        })()
+      ) : (flow.primary !== null || flow.others.length > 0) && asking === null ? (
         <div style={styles.row}>
           {flow.primary !== null ? (
             <button

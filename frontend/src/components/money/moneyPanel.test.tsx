@@ -110,7 +110,7 @@ describe("ESCROW-4: the money panel", () => {
     const view = moneyView({ escrow: { chainGameId: "7", state: "FUNDING", fundingDeadline: T0 + 3_600_000 } });
     await render(<MoneyPanel room={room(view)} onStart={() => undefined} services={services} port={port} />);
     expect(byTestId("money-headline")?.textContent).toMatch(/A real-money table: 1 JUNOX per seat/);
-    /* W2-K (OD-9(b)): the official Keplr logo is pending -- the button is its words alone, no stand-in mark. */
+    /* W2-K (OD-9(b)): the Ante button is its words alone -- the official Keplr icon marks only "Connect Keplr". */
     expect(byTestId("money-action-ante")?.textContent).toBe("Ante 1 JUNOX");
     expect(container.querySelector('[data-testid="keplr-mark"]')).toBeNull();
     /* The terms are on the panel before the press, with the Terms page linked (AUD-20.08). */
@@ -184,11 +184,15 @@ describe("ESCROW-4: the money panel", () => {
 describe("ESCROW-4: the waiting room, the result, the profile menu", () => {
   it("the waiting room routes a money seat to the panel: no Ready, funding in the roster, the real stake, no 'refunds ante'", () => {
     const waiting = readStripped("components/SandboxWaitingRoom.tsx");
-    expect(waiting).toContain("money !== null && room !== null ? (");
-    expect(waiting).toContain("<MoneyPanel room={room} onStart={onStart} busy={busy} />");
-    expect(waiting).toContain("fundingTag(money.seats.find((seat) => seat.playerId === player.id)?.funding ?? \"none\")");
-    expect(waiting).toContain('label="Stake"');
+    /* PLAY WAITING ROOM (handoff §6, §7): ONE `useMoneyTable` for the screen -- the pass's Ante and the money steps
+       under it share it; each seat's pass says its funding as the server read it; the stake is on the sign and the
+       passes (no Stake row); Ready exists only for a development build's no-ante table. */
+    expect(waiting).toContain("const table = useMoneyTable({ gameId: room?.gameId ?? \"\", view: money, variants, isHost, services, onStart, clock: room?.clock ?? null });");
+    expect(waiting).toContain('<MoneyPanelView room={room} table={table} services={services} busy={busy} asking={asking} setAsking={setAsking} layout="departure" />');
+    expect(waiting).toContain("const fundingOf = (playerId: string): MoneySeatFunding => money?.seats.find((seat) => seat.playerId === playerId)?.funding ?? \"none\";");
+    expect(waiting).not.toContain('label="Stake"');
     expect(waiting).not.toContain("refunds ante");
+    expect(waiting.slice(waiting.indexOf("const passAction"), waiting.indexOf("if (flow === null) return null;"))).toContain("if (money === null) {");
     /* The hosted Start is shell behaviour (the room handlers), so it is read through the shell source set:
        it keeps being checked when the handler moves out of `App.tsx` (APP-TEST-0A). */
     const shell = readShell();

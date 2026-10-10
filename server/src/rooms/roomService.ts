@@ -410,6 +410,22 @@ export function transferHost(env: OpEnv, toPlayerId: string): OpOutcome {
   return { ok: true, record: next(env.record, env.now, (draft) => void (draft.host_player_id = toPlayerId)) };
 }
 
+/** PLAY WAITING ROOM: the host's new ante per seat (base units, already validated against the escrow's minimum). Only the
+ *  table's own record of its terms changes: before the host's opening deposit no escrow exists, and the host's CreateGame
+ *  is built from these terms. Whether the ante may still change is the money layer's decision, taken in the same task
+ *  (`moneyTables.seatOpRefusal`, op "set-ante"): never once a deposit can exist. */
+export function setAnte(env: OpEnv, stake: string): OpOutcome {
+  const denied = gate("set-ante", env);
+  if (denied) return denied;
+  const terms = env.record.money;
+  if (terms === null) return { ok: false, code: "no-ante", reason: "This table has no ante to change." };
+  if (terms.ante_gross === stake) return { ok: true, record: null };
+  const record = next(env.record, env.now, (draft) => {
+    draft.money = { ...(draft.money as GameMoneyTerms), ante_gross: stake };
+  });
+  return { ok: true, record };
+}
+
 /** #28: cancelled, the code released, everybody told the room is gone. */
 export function cancelRoom(env: OpEnv): OpOutcome {
   const denied = gate("cancel-room", env);

@@ -45,6 +45,7 @@ export type RoomOp =
   | "kick"
   | "transfer-host"
   | "cancel-room"
+  | "set-ante"
   | "report";
 
 export interface AuthzContext {
@@ -89,6 +90,8 @@ export const AUTHZ_TABLE: Readonly<Record<RoomOp, { stages: Partial<Record<Stage
   "set-visibility": { stages: { W: R("H") }, denial: "forbidden" },
   "rotate-code": { stages: { W: R("H") }, denial: "forbidden" },
   "cancel-room": { stages: { W: R("H") }, denial: "forbidden" },
+  /* PLAY WAITING ROOM: the host changes the ante, waiting only (the money layer then decides: before the first deposit). */
+  "set-ante": { stages: { W: R("H") }, denial: "forbidden" },
   /* #18 start: the host, waiting, not held. */
   "start-game": { stages: { W: R("H") }, denial: "forbidden" },
   /* #19 / #25-27 gameplay (RevertTo, OpenStockRound, CloseRoom included): seated only, once dealt. Hd is answered

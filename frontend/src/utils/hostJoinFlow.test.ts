@@ -296,9 +296,13 @@ describe("the client reads them back (design note #1415)", () => {
 
   it("the waiting room shows the terms, asks before the ante, and offers the host a kick", () => {
     const waiting = readStripped("components/SandboxWaitingRoom.tsx");
-    expect(waiting).toContain("Ready to play — ante into this game?");
-    expect(waiting).toContain("onToggleReady(readyConfirm === \"deposit\")");
-    expect(waiting).toContain("canKick && player.id !== room?.hostId");
+    /* PLAY WAITING ROOM: a production table's Ready IS its ante -- the deposit's terms and every confirmation are
+       Play's money steps (`MoneyPanelView`), and Keplr shows the transaction before anything moves. A development
+       build's no-ante table keeps a plain Ready. The host's Remove is never offered on the host's own seat. */
+    expect(waiting).toContain('<MoneyPanelView room={room} table={table} services={services} busy={busy} asking={asking} setAsking={setAsking} layout="departure" />');
+    expect(waiting).toContain("onToggleReady(!me.isReady)");
+    expect(waiting).toContain("player.id !== room?.hostId");
+    expect(waiting).toContain("onKick?.(player.id);");
     expect(waiting).toContain("const needed = seatsNeeded(room, MIN_PLAYERS);");
     expect(waiting).toContain("The host removed you from this table.");
   });

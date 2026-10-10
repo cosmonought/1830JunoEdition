@@ -42,7 +42,9 @@ describe("the two boardrooms stay on their own screens", () => {
        same file; asserting that neither names the OTHER's is what actually holds them apart. */
     expect(LOBBY).toContain("/images/lobby-boardroom.jpg");
     expect(LOBBY).not.toContain("/images/waiting-room.jpg");
-    expect(WAITING).toContain("/images/waiting-room.jpg");
+    /* PLAY WAITING ROOM (approved design §4): the waiting room shows no photograph at all -- its only raster is the
+       boarding passes' rag paper. */
+    expect(WAITING).not.toContain("/images/waiting-room.jpg");
     expect(WAITING).not.toContain("/images/lobby-boardroom.jpg");
   });
 
@@ -402,7 +404,8 @@ describe("the anteroom and the table share their chrome", () => {
        the offline dot. Asserted as the import, because a lookalike header would satisfy any test written
        about what appears on the screen. */
     expect(WAITING).toContain('import TopBar from "./TopBar"');
-    expect(WAITING).toContain("<TopBar roomName={roomCode} onLeaveGame={onLeave} audio={audio} />");
+    /* PLAY WAITING ROOM (§4, §5): the bar carries no code -- the sign's foot line does ("ROOM", the code, Copy code). */
+    expect(WAITING).toContain("<TopBar onLeaveGame={onLeave} audio={audio} />");
     // The panel no longer carries its own copy of either control.
     expect(WAITING).not.toContain("<AudioControls audio={audio} />");
     expect(WAITING).not.toContain("styles.headerActions");
@@ -414,9 +417,12 @@ describe("the anteroom and the table share their chrome", () => {
     /* Design note #1443 RENAMED THE BOX, not the rule: the panel became a full-width surface with two
        columns on it, so the wrapper that carries the inset is `surfaceWrap`. The claim -- the root carries no
        inset, and the box below it does -- and the value are both unchanged. */
-    expect(WAITING).toContain("styles.surfaceWrap");
-    expect(WAITING).not.toContain("styles.panelWrap");
-    expect(WAITING).toContain('padding: "24px 20px 0"');
+    /* PLAY WAITING ROOM: the inset is the content column's (`.rm-wrap`, the design's 16px gutter); the root and the
+       bar above it carry none. */
+    expect(WAITING).toContain('<main className="rm-wrap">');
+    expect(readStripped("components/room/roomDesignCss.ts")).toContain(".rm-wrap { width: 100%; max-width: 1200px; margin-inline: auto; padding-inline: 16px; }");
+    const root = WAITING.slice(WAITING.indexOf("  root: {"));
+    expect(root.slice(0, root.indexOf("\n  },"))).not.toContain("padding");
   });
 });
 

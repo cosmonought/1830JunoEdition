@@ -99,6 +99,31 @@ export function TableTrustFacts({ gameId, players, port }: { gameId: string; pla
   );
 }
 
+/** PLAY WAITING ROOM (handoff §8): ONE seat's facts, for the player panel a seated viewer opens from a name -- the same
+ *  read as `TableTrustFacts` (the server answers seated, signed-in players only, and refuses anyone else), shown for the
+ *  one player tapped. Nothing while it can't be read. */
+export function SeatTrustFacts({ gameId, playerId, port }: { gameId: string; playerId: string; port?: SessionPort }): JSX.Element | null {
+  const [seats, setSeats] = useState<ReadonlyMap<string, TrustFacts> | null>(null);
+  const session = useSession(port ?? sessionPort());
+  const signedInAs = session.state === "ready" ? (session.account?.name ?? "") : null;
+  useEffect(() => {
+    if (signedInAs === null) {
+      setSeats(null);
+      return undefined;
+    }
+    let live = true;
+    void tableTrustFacts(gameId, port).then((answer) => {
+      if (live) setSeats(answer.ok ? answer.seats : null);
+    });
+    return () => {
+      live = false;
+    };
+  }, [gameId, playerId, port, signedInAs]);
+  const facts = seats?.get(playerId);
+  if (facts === undefined) return null;
+  return <TrustFactsList facts={facts} testId={`trust-facts-${playerId}`} />;
+}
+
 /** The account's own facts (the profile menu). */
 export function MyTrustFacts({ port }: { port?: SessionPort }): JSX.Element | null {
   const [facts, setFacts] = useState<TrustFacts | null>(null);

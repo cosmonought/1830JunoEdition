@@ -214,7 +214,10 @@ describe("a row offers what the server would allow (design note #1440)", () => {
     expect(LOBBY).toContain("onWatch={(gameId) => (onWatchSandbox ?? onEnterSandbox)(gameId)}");
     expect(LIST).toContain("onClick={() => onWatch(row.gameId)}");
     // And the room they land in says why none of its controls are theirs.
-    expect(WAITING).toContain("const isWatching = room !== null && me === null && !wasKicked;");
+    /* PLAY WAITING ROOM: no seat and not removed -> the Watching panel (a seat gets the pass; a removed player, Removed). */
+    expect(WAITING).toContain("{me !== null && room !== null ? (");
+    expect(WAITING).toContain(") : wasKicked ? (");
+    expect(WAITING).toContain('data-testid="waiting-room-watching"');
     expect(WAITING).toContain("You are watching this table.");
   });
 
@@ -370,8 +373,10 @@ describe("one bank, named once (design note #1440)", () => {
 
   it("gives the option, the helper and the waiting room's terms the same read", () => {
     expect(HOST).toContain("{bankSizeLabel(length)}");
-    expect(HOST).toContain("{GAME_LENGTH_BLURB[variants.length]}");
-    expect(WAITING).toContain("value={bankSizeLabel(variants.length)}");
+    /* PLAY HOST A GAME / WAITING ROOM: the Bank buttons and "$12,000 (Standard)" -- one read, `bankSizeLabel`. */
+    expect(HOST).toContain("{GAME_LENGTH_NOTE[variants.length]}");
+    expect(WAITING).toContain("bankText(variants.length)");
+    expect(readStripped("utils/roomDesign.ts")).toContain("export const bankText = (length: GameLength): string => `${bankSizeLabel(length)} (${LENGTH_WORD[length]})`;");
     /* `toLocaleString()` with no locale renders "12.000" on a German browser -- the same bank, a different
        number in the reader's own notation, on two screens that must agree. */
     expect(WAITING).not.toContain("toLocaleString()");

@@ -234,9 +234,16 @@ describe("every Host Game group is one radio group, not a row of buttons (design
     const all = Object.keys(GROUPS).flatMap((g) => tabStopsIn(g).map((r) => r.id));
     expect(all).toEqual(Object.keys(GROUPS).map((g) => DEFAULT_SELECTED[g]));
     expect(all.length).toBe(Object.keys(GROUPS).length);
-    const everyRadio = document.querySelectorAll('[role="radio"]');
-    expect(everyRadio.length).toBe(Object.values(GROUPS).flat().length);
-    expect(Array.from(everyRadio).filter((n) => (n as HTMLElement).tabIndex === 0).length).toBe(3);
+    /* PLAY HOST A GAME (handoff §3.1): the Async card carries its own group of deadline chips -- a FOURTH group, with
+       one Tab stop of its own. While Live is chosen no chip is checked (the table is Live) and the remembered pace
+       (24h) stays the group's stop, so the keyboard can still reach it. */
+    const everyRadio = Array.from(document.querySelectorAll('[role="radio"]')) as HTMLElement[];
+    const chips = everyRadio.filter((n) => (n.getAttribute("data-testid") ?? "").startsWith("host-deadline-"));
+    expect(chips.map((n) => n.getAttribute("data-testid"))).toEqual(["host-deadline-43200", "host-deadline-86400", "host-deadline-172800", "host-deadline-259200", "host-deadline-604800", "host-deadline-none"]);
+    expect(chips.filter((n) => n.tabIndex === 0).map((n) => n.getAttribute("data-testid"))).toEqual(["host-deadline-86400"]);
+    expect(chips.filter((n) => n.getAttribute("aria-checked") === "true")).toEqual([]);
+    expect(everyRadio.length).toBe(Object.values(GROUPS).flat().length + chips.length);
+    expect(everyRadio.filter((n) => n.tabIndex === 0).length).toBe(4);
   });
 
   it("keeps the groups independent", () => {
@@ -258,9 +265,12 @@ describe("every Host Game group is one radio group, not a row of buttons (design
   });
 
   it("labels each group and carries the radio roles", () => {
+    /* PLAY HOST A GAME (handoff §3.1): each group is named by its visible label ("Table", "Pace", "Visibility"), and
+       the Async chips by their own ("Async deadline per action"). */
     const groups = Array.from(document.querySelectorAll('[role="radiogroup"]'));
-    expect(groups.length).toBe(3);
-    expect(groups.map((g) => g.getAttribute("aria-label"))).toEqual(["Game", "pace", "visibility"]);
+    expect(groups.length).toBe(4);
+    const nameOf = (g: Element) => g.getAttribute("aria-label") ?? document.getElementById(g.getAttribute("aria-labelledby") ?? "")?.textContent ?? null;
+    expect(groups.map(nameOf)).toEqual(["Table", "Pace", "Async deadline per action", "Visibility"]);
     for (const [name, ids] of Object.entries(GROUPS)) {
       for (const id of ids) expect([name, id, at(id).getAttribute("role")]).toEqual([name, id, "radio"]);
     }
@@ -268,34 +278,29 @@ describe("every Host Game group is one radio group, not a row of buttons (design
 });
 
 describe("a deselected option looks like its never-selected peers (design note #1448a)", () => {
-  /* THE PLAYTEST BUG, as a rendered assertion. The selected variants used to override the `borderColor`
-     LONGHAND on a base that sets the `border` SHORTHAND; React clears the longhand on deselect and leaves the
-     shorthand alone, so the element kept `border-width: 1px; border-style: solid;` with no colour -- which
-     Chromium computes as black. The deselected card wore a dark edge none of its peers had.
-     ASSERTED ON THE INLINE STYLE, which is where the damage was and what jsdom can see. */
+  /* THE PLAYTEST BUG was an inline `borderColor` longhand over a `border` shorthand: React cleared the longhand on
+     deselect and left a black edge. PLAY HOST A GAME draws selection from the radio's own `aria-checked` in the
+     stylesheet (`.rh-tcard[aria-checked="true"]`, `.rh-opt[aria-checked="true"]`), so no option carries an inline
+     border at all -- a deselected option has nothing left over, by construction. Asserted on the rendered nodes. */
   for (const [group, ids] of Object.entries(GROUPS)) {
-    it(`${group}: the inline border survives a select-then-deselect round trip`, () => {
+    it(`${group}: no inline border before or after a select-then-deselect round trip`, () => {
       const a = DEFAULT_SELECTED[group];
       const b = ids.find((id) => id !== a) as string;
-      const untouched = at(ids[ids.length - 1]).style.border;
-      expect(untouched).toContain("solid");
-      expect(untouched).not.toBe("");
-
-      clickNestedChild(b); // a is now deselected, having been selected
-      const deselected = at(a).style;
-      expect(deselected.borderColor).not.toBe("");
-      expect(deselected.border).toBe(untouched);
-      expect(deselected.boxShadow).toBe("");
+      for (const id of ids) expect([id, at(id).style.border, at(id).style.borderColor]).toEqual([id, "", ""]);
+      clickNestedChild(b);
+      expect(at(a).getAttribute("aria-checked")).toBe("false");
+      expect([at(a).style.border, at(a).style.borderColor, at(a).style.boxShadow]).toEqual(["", "", ""]);
     });
   }
 
-  it("never pairs a border shorthand with a borderColor longhand in this file's styles", () => {
-    /* The general form, so the next variant added here cannot reintroduce it. */
+  it("draws selection from aria-checked in the stylesheet, and never pairs a border shorthand with a borderColor longhand", () => {
     const { readStripped, sliceBetween } =
       require("../utils/sourceScan") as typeof import("../utils/sourceScan");
     const styles = sliceBetween(readStripped("components/HostSetupCard.tsx"),
       "const styles: Record<string, React.CSSProperties> = {", "\n};");
-    expect(styles).toContain('border: "1px solid');
     expect(styles).not.toContain("borderColor:");
+    const css = readStripped("components/room/roomDesignCss.ts");
+    expect(css).toContain('.rh-tcard[aria-checked="true"] { border-color: var(--rm-gold);');
+    expect(css).toContain('.rh-opt[aria-checked="true"] { border-color: var(--rm-gold);');
   });
 });

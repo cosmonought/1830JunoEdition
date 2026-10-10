@@ -930,6 +930,9 @@ const ROOM_OPS: Readonly<Record<string, FrameFields>> = nullTable<FrameFields>({
   "transfer-host": nullTable({ type: req(str(16)), toPlayerId: req(str(40, PLAYER_ID_PATTERN)) }),
   "start-game": nullTable({ type: req(str(16)) }),
   "cancel-room": nullTable({ type: req(str(16)) }),
+  /* PLAY WAITING ROOM: the host changes a real-money table's ante per seat (base units, an opaque integer string), only
+     until the first deposit -- the server decides (`roomHost.ts` / `moneyTables.seatOpRefusal`). */
+  "set-ante": nullTable({ type: req(str(16)), stake: req(str(MAX_AMOUNT_LENGTH)) }),
   /* LIVE-2F/3D (C9-01): a READ, on the lobby channel -- the caller's own tables ("Your tables"). Names no game. */
   "my-tables": nullTable({ type: req(str(16)) }),
   /* Phase 3 final clocks (`utils/clockProtocol.ts`): the table clock's ops -- the host's deadline before play, the

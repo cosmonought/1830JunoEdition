@@ -424,6 +424,7 @@ const ORACLE: Record<RoomOp, Partial<Record<Stage, string>>> = {
   "set-visibility": { W: "H" },
   "rotate-code": { W: "H" },
   "cancel-room": { W: "H" },
+  "set-ante": { W: "H" },
   "start-game": { W: "H" },
   submit: { A: "SH", C: "SH", Hd: "SH" },
   chat: { W: "SH", A: "SH", C: "SH", Hd: "SH" },

@@ -81,27 +81,26 @@ const byTestId = <T extends HTMLElement = HTMLElement>(id: string): T | null => 
 const click = (node: HTMLElement | null) => act(() => node?.click());
 
 describe("Phase 3 final clocks: the host's action deadline", () => {
-  it("an Async table's pace (or No deadline) is chosen in the house rules and sent with the create", async () => {
+  /* PLAY HOST A GAME (handoff §3.1): the deadline is chosen on step 1, inside the Async pace card (12h-7d, or None);
+     picking a chip also chooses Async. A money table needs an exact count until the corrected escrow (§11). */
+  it("an Async table's pace (or No deadline) is chosen on the pace card and sent with the create", async () => {
     offerMoneyTables();
     const created: Array<{ variants: GameVariants; setup: RoomSetup }> = [];
     act(() => root.render(<HostSetupCard busy={false} error={null} onClose={() => {}} onCreate={(variants, setup) => created.push({ variants, setup })} />));
     await settle();
-    const pace = Array.from(document.querySelectorAll<HTMLButtonElement>('[role="radio"]')).find((node) => /async/i.test(node.textContent ?? ""));
-    click(pace ?? null);
+    const chips = byTestId("host-deadline");
+    expect(chips).not.toBeNull();
+    expect(Array.from(chips!.querySelectorAll('[role="radio"]')).map((node) => node.textContent)).toEqual(["12hper action", "24hper action", "2dper action", "3dper action", "7dper action", "Noneno deadline"]);
+    click(byTestId("host-deadline-259200"));
+    expect(byTestId("host-pace-async")?.getAttribute("aria-checked")).toBe("true");
     click(byTestId("host-continue"));
     await settle();
+    click(byTestId("host-players-4"));
     typeInto(byTestId<HTMLInputElement>("host-stake-amount"), "2.5");
     await settle();
-    const select = byTestId<HTMLSelectElement>("host-deadline");
-    expect(select).not.toBeNull();
-    expect(Array.from(select!.options).map((option) => option.textContent)).toEqual(["12 hours per action", "24 hours per action", "2 days per action", "3 days per action", "7 days per action", "No deadline"]);
-    act(() => {
-      select!.value = "259200";
-      select!.dispatchEvent(new Event("change", { bubbles: true }));
-    });
     click(byTestId("host-create-room"));
     expect(created[0].variants.mode).toBe("async");
-    expect(created[0].setup).toMatchObject({ deadline: "async-pace", paceSecs: 259_200, anteUjuno: "2500000" });
+    expect(created[0].setup).toMatchObject({ deadline: "async-pace", paceSecs: 259_200, anteUjuno: "2500000", playerCount: 4 });
   });
 
   it("an Async No-deadline table with its required stake waits for the host's acknowledgement of the disclosure, and sends it with the create", async () => {
@@ -109,25 +108,19 @@ describe("Phase 3 final clocks: the host's action deadline", () => {
     const created: Array<{ variants: GameVariants; setup: RoomSetup }> = [];
     act(() => root.render(<HostSetupCard busy={false} error={null} onClose={() => {}} onCreate={(variants, setup) => created.push({ variants, setup })} />));
     await settle();
-    const pace = Array.from(document.querySelectorAll<HTMLButtonElement>('[role="radio"]')).find((node) => /async/i.test(node.textContent ?? ""));
-    click(pace ?? null);
-    click(byTestId("host-continue"));
-    await settle();
-    typeInto(byTestId<HTMLInputElement>("host-stake-amount"), "2.5");
-    await settle();
-    const select = byTestId<HTMLSelectElement>("host-deadline");
-    act(() => {
-      select!.value = "none";
-      select!.dispatchEvent(new Event("change", { bubbles: true }));
-    });
-    const create = byTestId<HTMLButtonElement>("host-create-room");
-    expect(create?.disabled).toBe(true);
-    click(create);
-    expect(created).toHaveLength(0);
+    click(byTestId("host-deadline-none"));
+    /* The acknowledgement moved to step 1: Continue waits for it, and the footer says why. */
+    expect(byTestId<HTMLButtonElement>("host-continue")?.disabled).toBe(true);
+    expect(byTestId("host-summary")?.textContent).toBe("Tick the no-deadline acknowledgement to continue.");
     const ack = byTestId<HTMLInputElement>("host-no-deadline-ack");
     expect(ack).not.toBeNull();
     click(ack);
-    expect(byTestId<HTMLButtonElement>("host-create-room")?.disabled).toBe(false);
+    expect(byTestId<HTMLButtonElement>("host-continue")?.disabled).toBe(false);
+    click(byTestId("host-continue"));
+    await settle();
+    click(byTestId("host-players-2"));
+    typeInto(byTestId<HTMLInputElement>("host-stake-amount"), "2.5");
+    await settle();
     click(byTestId("host-create-room"));
     expect(created).toHaveLength(1);
     expect(created[0].setup).toMatchObject({ deadline: "no-deadline", paceSecs: null, noDeadlineAck: true, anteUjuno: "2500000" });
@@ -135,9 +128,11 @@ describe("Phase 3 final clocks: the host's action deadline", () => {
 
   it("a Live table states its 20:00 action clock (nothing to choose)", () => {
     act(() => root.render(<HostSetupCard busy={false} error={null} onClose={() => {}} onCreate={() => {}} />));
-    click(byTestId("host-continue"));
-    expect(byTestId("host-deadline")).toBeNull();
-    expect(byTestId("host-deadline-live")?.textContent).toMatch(/20:00 for each required action/);
+    expect(byTestId("host-pace-live")?.getAttribute("aria-checked")).toBe("true");
+    expect(byTestId("host-deadline-live")?.textContent).toBe("20mper action");
+    /* No chip is checked while the table is Live. */
+    expect(Array.from(byTestId("host-deadline")!.querySelectorAll('[aria-checked="true"]'))).toHaveLength(0);
+    expect(byTestId("host-clock")?.textContent).toMatch(/Live: 20:00 for each required action\./);
   });
 });
 

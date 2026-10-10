@@ -170,7 +170,8 @@ import {
 import SandboxRoomBar from "./components/SandboxRoomBar";
 /* Design note #1141: the mini-camera and the dialog that frames it. */
 import MarketPeekModal from "./components/MarketPeekModal";
-import SandboxWaitingRoom, { SandboxWaitingRoomHold } from "./components/SandboxWaitingRoom";
+import SandboxWaitingRoom, { DEPART_HOLD_MS, DEPART_HOLD_REDUCED_MS, SandboxWaitingRoomHold } from "./components/SandboxWaitingRoom";
+import { prefersReducedMotion } from "./components/SplitFlap";
 import { skipIntroPreferred } from "./utils/introPreference";
 import {
   appendSandboxAction,
@@ -216,7 +217,6 @@ import {
   type RoomOpBody,
   type RoomOpResult,
   type RoomView,
-  type RoomVisibility,
 } from "./utils/roomProtocol";
 /* Design note #1169: the in-flight seat, and the rules for when it stops being in flight. */
 import {
@@ -3277,6 +3277,23 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
      not an edge. */
   const previousRoomStatus = useRef<RoomView["status"] | null>(null);
   const [introPlaying, setIntroPlaying] = useState(false);
+  /* PLAY WAITING ROOM (handoff §9.4): when the host starts, the sign's status flips to DEPARTING and holds 2.1 s before
+     the opening titles (or, skipped on this browser, the board) take over. The edge is the server's own: this tab saw
+     the table waiting, and now sees it dealt. A table opened mid-game never holds. */
+  const [departingHold, setDepartingHold] = useState(false);
+  const previousLifecycle = useRef<RoomView["lifecycle"] | null>(null);
+  useEffect(() => {
+    const lifecycle = sandboxRoom?.lifecycle ?? null;
+    const previous = previousLifecycle.current;
+    previousLifecycle.current = lifecycle;
+    if (!(previous === "waiting" && lifecycle === "active")) return undefined;
+    setDepartingHold(true);
+    const timer = setTimeout(() => setDepartingHold(false), prefersReducedMotion() ? DEPART_HOLD_REDUCED_MS : DEPART_HOLD_MS);
+    return () => {
+      clearTimeout(timer);
+      setDepartingHold(false);
+    };
+  }, [sandboxRoom?.lifecycle]);
   /* Design note #1143: the same fact as `introPlaying`, in the one form that is true early enough. The
      status effect below and the whistle's effect run in the SAME commit, and state queued by the first is
      not visible to the second -- a ref written there is. Kept beside the state rather than replacing it,
@@ -13698,8 +13715,6 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
      that the table is still waiting. */
   const handleKickSandboxPlayer = useCallback((playerId: string) => void runRoomOp({ type: "kick", playerId }), [runRoomOp]);
   const handleTransferHost = useCallback((toPlayerId: string) => void runRoomOp({ type: "transfer-host", toPlayerId }), [runRoomOp]);
-  const handleSetVisibility = useCallback((visibility: RoomVisibility) => void runRoomOp({ type: "set-visibility", visibility }), [runRoomOp]);
-  const handleRotateCode = useCallback(() => void runRoomOp({ type: "rotate-code" }), [runRoomOp]);
   const handleCancelRoom = useCallback(() => void runRoomOp({ type: "cancel-room" }), [runRoomOp]);
   /** A watcher of a waiting table takes a seat; a seated player gives theirs up and keeps watching. */
   const handleTakeSeat = useCallback(() => void requireAccount(() => void runRoomOp({ type: "take-seat" }), "Log in or create an account to take a seat."), [runRoomOp]);
@@ -14339,8 +14354,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
            not disabled, since it is not a term they are agreeing to. LIVE-2D: the role is the server's. */
         onKick={isSandboxHost ? handleKickSandboxPlayer : undefined}
         onTransferHost={isSandboxHost ? handleTransferHost : undefined}
-        onSetVisibility={isSandboxHost ? handleSetVisibility : undefined}
-        onRotateCode={isSandboxHost ? handleRotateCode : undefined}
+        /* PLAY WAITING ROOM (handoff §5, §16): visibility and the code are not changed from the waiting room -- the
+           `set-visibility` and `rotate-code` ops stand on the server, unoffered here. */
         onCancelRoom={isSandboxHost ? handleCancelRoom : undefined}
         /* Phase 3 (P3-N035): a seated player may report another seat (a Watch tab never). */
         onReport={!watchOnly && seated ? handleReportPlayer : undefined}
@@ -14354,6 +14369,28 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
         }}
       />
       </>
+    );
+  }
+
+  /* PLAY WAITING ROOM (§9.4): the DEPARTING hold -- the waiting room, read-only, for the 2.1 s after the deal. */
+  if (sandbox && sandboxRoomCode && sandboxRoom?.lifecycle === "active" && departingHold) {
+    return (
+      <SandboxWaitingRoom
+        roomCode={sandboxRoom.code ?? "Private game"}
+        room={sandboxRoom}
+        localPlayerId={localId}
+        error={null}
+        busy
+        departing
+        onSetColor={() => undefined}
+        onToggleReady={() => undefined}
+        onStart={() => undefined}
+        audio={audioControls}
+        onLeave={() => {
+          handleLeaveSandboxRoom();
+          onLeaveGame();
+        }}
+      />
     );
   }
 

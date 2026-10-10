@@ -120,7 +120,8 @@ describe("AUD-17.01: each option is named by its label and described by its sent
     mountHost();
     act(() => byTestId<HTMLButtonElement>("host-continue").click());
     const players = byTestId("host-player-count");
-    expect(textOfIds(players.getAttribute("aria-describedby"))).toMatch(/seats are ready/);
+    /* PLAY HOST A GAME (handoff §3.2): Players is a radio group, described by its note (Any by default). */
+    expect(textOfIds(players.getAttribute("aria-describedby"))).toMatch(/everyone seated has anted/);
     const bank = byTestId("host-bank-size");
     expect(textOfIds(bank.getAttribute("aria-describedby")).length).toBeGreaterThan(0);
     for (const key of ["gentleRust", "dynamicStockMarket", "delayedAuction", "unpredictableRevenue"]) {
@@ -170,13 +171,13 @@ describe("AUD-17.02: Home and End move focus and selection together, in all thre
 
 describe("AUD-17.03: the selected option keeps its accent inside the ring", () => {
   it("keeps the house ring for an unselected option and stands the ring off, in the accent's green, on the selected one", () => {
-    const raw = readSource("components/HostSetupCard.tsx");
-    expect(raw).toContain(".host-segment:focus-visible { outline: 2px solid #8a8a86; outline-offset: 2px; }");
-    expect(raw).toMatch(
-      /\.host-type-card\[aria-checked="true"\]:focus-visible,\s*\.host-segment\[aria-checked="true"\]:focus-visible \{ outline-color: #9fe0b8; outline-offset: 3px; \}/,
-    );
-    // The accent itself is untouched: border shorthand plus the inset line (#1448a).
-    expect(raw).toContain('segmentSelected: { border: "1px solid #6fae86"');
+    /* PLAY HOST A GAME (handoff §2, §3): one gilt ring for every control, standing 2px off; the selected option's
+       accent is a gold border with a 1px gold glow OUTSIDE it -- so the ring clears the glow by a pixel and the
+       accent stays whole inside the ring ("chosen" and "you are here" read as two marks of one control). */
+    const css = readSource("components/room/roomDesignCss.ts");
+    expect(css).toContain(".rh button:focus-visible, .rh input:focus-visible, .rh a:focus-visible, .rh summary:focus-visible { outline: 2px solid var(--rm-gilt); outline-offset: 2px; }");
+    expect(css).toContain('.rh-tcard[aria-checked="true"] { border-color: var(--rm-gold); box-shadow: 0 0 0 1px var(--rm-gold);');
+    expect(css).toContain('.rh-opt[aria-checked="true"] { border-color: var(--rm-gold); box-shadow: 0 0 0 1px var(--rm-gold);');
   });
 });
 
@@ -321,7 +322,7 @@ describe("AUD-16.05: breakpoints switch at the same effective width at every sca
       ["components/Lobby.tsx", "LOBBY_CSS"],
       ["components/LobbyRoomList.tsx", "LOBBY_ROOMS_CSS"],
       ["components/SandboxRoomBar.tsx", "BARE_BUTTON_CSS"],
-      ["components/SandboxWaitingRoom.tsx", "WAITING_ROOM_CSS"],
+      ["components/SandboxWaitingRoom.tsx", "ROOM_DESIGN_CSS"],
       ["components/RulesReference.tsx", "RULES_REFERENCE_CSS"],
     ] as const) {
       const src = readStripped(file);

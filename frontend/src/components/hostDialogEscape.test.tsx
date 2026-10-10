@@ -725,7 +725,7 @@ describe("opening the card moves focus into it", () => {
   it("leaves exactly one Tab stop in the Game group, and it is the focused one", () => {
     openWithPointer();
     const stops = Array.from(card().querySelectorAll<HTMLElement>('[role="radio"][data-radio-key]'))
-      .filter((node) => node.tabIndex === 0 && node.closest('[aria-label="Game"]'));
+      .filter((node) => node.tabIndex === 0 && node.closest(".rh-cards"));
     expect(stops.map((node) => node.getAttribute("data-radio-key"))).toEqual(["standard"]);
     expect(document.activeElement).toBe(stops[0]);
   });
@@ -849,7 +849,13 @@ describe("changing step takes focus with it", () => {
     at("host-continue").focus();
     toRules();
     expect(onStep()).toBe("rules");
-    expect(focusName()).toBe("heading:House rules");
+    /* PLAY HOST A GAME (handoff §3): the heading stays "Host a game"; the step is its description -- the marker,
+       "1 · Table  2 · Terms", with the current step marked -- so focus arriving there announces the new step. */
+    const heading = document.activeElement as HTMLElement;
+    expect(heading.tagName).toBe("H2");
+    expect(heading.textContent?.trim()).toBe("Host a game");
+    const steps = document.getElementById(heading.getAttribute("aria-describedby") ?? "");
+    expect(steps?.querySelector('[aria-current="step"]')?.textContent).toBe("2 · Terms");
     expect(card().contains(document.activeElement)).toBe(true);
   });
 
@@ -902,7 +908,8 @@ describe("changing step takes focus with it", () => {
     toRules();
     backToType();
     expect(snapshot().checked).toEqual(chosen);
-    expect(chosen).toEqual(["plus", "async", "private"]);
+    /* Async's remembered pace (24h) is checked with it (handoff §3.1: the pace card carries its own clock). */
+    expect(chosen).toEqual(["plus", "async", "86400", "private"]);
   });
 
   it("survives repeated forward/back cycles with focus still inside and the listener ledger at zero", () => {
@@ -983,13 +990,15 @@ describe("the dialog says what it is", () => {
     openWithPointer();
     toRules();
     expect(dialogEl().getAttribute("aria-label")).toBe("Host a game");
-    expect(maybe('[role="heading"]')?.textContent?.trim()).toBe("House rules");
+    /* PLAY HOST A GAME (handoff §3, §16): the step-two heading "House rules" became the "2 · Terms" marker. */
+    expect(maybe("h2")?.textContent?.trim()).toBe("Host a game");
+    expect(maybe('[aria-current="step"]')?.textContent).toBe("2 · Terms");
   });
 
   it("carries one heading per step, at one level, and no description it does not have", () => {
     openWithPointer();
-    expect(Array.from(card().querySelectorAll('[role="heading"]')).length).toBe(1);
-    expect(maybe('[role="heading"]')?.getAttribute("aria-level")).toBe("2");
+    expect(Array.from(card().querySelectorAll('h1, h2, h3, h4, [role="heading"]')).length).toBe(1);
+    expect(maybe("h2")?.tagName).toBe("H2");
     expect(card().hasAttribute("aria-describedby")).toBe(false);
     expect(card().hasAttribute("aria-live")).toBe(false);
   });

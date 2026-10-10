@@ -64,7 +64,8 @@ export interface LobbyBoardsProps {
   readPlayers?: (gameId: string) => Promise<PublicSeatHistory[] | null>;
 }
 
-async function defaultReadPlayers(gameId: string): Promise<PublicSeatHistory[] | null> {
+/** The lobby's players reader -- also the waiting room's player panel (handoff §8: the same public endpoint). */
+export async function readPublicPlayers(gameId: string): Promise<PublicSeatHistory[] | null> {
   const answer = await sessionPort().api("lobby/players", { gameId });
   if (answer.kind !== "answered" || answer.status !== 200) return null;
   return publicPlayersOf(answer.body);
@@ -171,7 +172,7 @@ function Pips({ row }: { row: BoardRow }) {
   );
 }
 
-export function LobbyBoards({ rooms, loading, error, available, busy, refusal, onJoin, onWatch, noAnteSeats = true, readPlayers = defaultReadPlayers }: LobbyBoardsProps) {
+export function LobbyBoards({ rooms, loading, error, available, busy, refusal, onJoin, onWatch, noAnteSeats = true, readPlayers = readPublicPlayers }: LobbyBoardsProps) {
   const [edition, setEdition] = useState<EditionFilter>("all");
   const [mode, setMode] = useState<ModeFilter>("all");
   const [underOpen, setUnderOpen] = useState(true);
@@ -598,7 +599,7 @@ export function LobbyBoards({ rooms, loading, error, available, busy, refusal, o
 
       {/* ---------------- the seated list ---------------- */}
       {pop !== null && popRow !== undefined && (
-        <div ref={popEl} className="lb-pop" role="dialog" aria-modal="false" aria-labelledby="lb-pop-h" data-testid="lobby-seated">
+        <div ref={popEl} className="lb-pop" role="dialog" aria-labelledby="lb-pop-h" data-testid="lobby-seated">
           <SeatedList
             row={popRow}
             departing={departing.has(popRow.gameId)}

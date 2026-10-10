@@ -194,16 +194,13 @@ describe("the shell draws one room, not a room and three opinions", () => {
   });
 });
 
-describe("the nickname field fills in from a snapshot it cannot have on mount", () => {
-  it("seeds from the seat rather than only from the initialiser", () => {
-    /* `useState(x)` reads `x` once, and on the mount there is no seat yet (#764). The box opened empty for a
-       player who already had a name. */
-    expect(WAITING).toContain("if (nicknameTouched || knownNickname === \"\") return;");
-    expect(WAITING).toContain("setNicknameText(knownNickname);");
-  });
-
-  it("never seeds over typing", () => {
-    /* Including a deliberate clear, which is why this is a `touched` flag and not an emptiness test. */
-    expect(WAITING).toContain("setNicknameTouched(true);");
+describe("the nickname field is gone (PLAY WAITING ROOM, handoff §6, §16)", () => {
+  it("names the seat by the account's profile name, with no field to seed or type over", () => {
+    /* The design has no name field: a seat's name is the profile name (`create` and `take-seat` seed it on the
+       server), so #764's seeding problem has no field left to happen in. */
+    for (const gone of ["nicknameText", "setNicknameTouched", "knownNickname", "onSetNickname("]) {
+      expect([gone, WAITING.includes(gone)]).toEqual([gone, false]);
+    }
+    expect(WAITING).toContain("const nameOf = (player: { nickname: string }) => player.nickname || \"A player\";");
   });
 });

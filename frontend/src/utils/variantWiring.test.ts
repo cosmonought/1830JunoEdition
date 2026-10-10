@@ -124,7 +124,7 @@ describe("the host's setup card offers every variant the schema defines (design 
 
   it("is really the card", () => {
     expect(source).toContain("HostSetupCard");
-    expect(source).toContain("Create Room");
+    expect(source).toContain("Create table");
   });
 
   it("binds a control to each boolean flag", () => {
@@ -133,7 +133,8 @@ describe("the host's setup card offers every variant the schema defines (design 
        are chosen by the type boxes through `recommendedVariantsFor` -> `withGameType`. */
     const rows = sliceBetween(source, "export const HOUSE_RULE_ROWS", "];");
     const typeFlags = sliceBetween(room, "const GAME_TYPE_FLAGS", "as const");
-    expect(source).toContain("recommendedVariantsFor(type, mode)");
+    /* PLAY HOST A GAME (handoff §3.2): choosing the table resets step two to ITS recommended defaults. */
+    expect(source).toContain("const fresh = recommendedVariantsFor(next, mode);");
     expect(source).toContain('testId="host-plus-tiles"');
     expect(BOOLEAN_FLAGS.length).toBeGreaterThan(0);
     for (const flag of BOOLEAN_FLAGS) {
@@ -150,7 +151,8 @@ describe("the host's setup card offers every variant the schema defines (design 
        digits. The claim this case makes ("the control is wired to the table") is unchanged; the name of the
        read is not. */
     expect(source).toContain("bankSizeLabel(length)");
-    expect(source).toContain("GAME_LENGTH_BLURB");
+    /* PLAY HOST A GAME (handoff §3.2): the Bank buttons carry the amount; the sentence under them is GAME_LENGTH_NOTE. */
+    expect(source).toContain("GAME_LENGTH_NOTE[variants.length]");
     expect(source).toContain('data-testid="host-bank-size"');
   });
 
@@ -161,7 +163,8 @@ describe("the host's setup card offers every variant the schema defines (design 
   it("the waiting room shows every seat the terms in force, and only those (design note #924)", () => {
     /* THE FILTER IS THE ASSERTION: a rule variant is a row only when it is on. Nobody edits here any more --
        there is no `canEditVariants`, no `onSetVariants` -- and the sentence says whose choice it was. */
-    expect(room).toContain("VARIANT_TOGGLES.filter((toggle) => variants[toggle.key])");
+    /* PLAY WAITING ROOM (handoff §9.2): the Variants section, from the same ordered rows and copy as the host's card. */
+    expect(room).toContain("const variantRows = VARIANT_ROWS.filter((row) => variants[row.key]");
     expect(room).not.toContain("canEditVariants");
     expect(room).not.toContain("onSetVariants");
     /* Design note #1446 REPLACED THE SENTENCE, and the claim it was standing in for survives: the terms are
@@ -169,9 +172,10 @@ describe("the host's setup card offers every variant the schema defines (design 
        settled. "You are agreeing to them when you press Ready" was false for a watcher, who has no Ready
        control by design, and odd for the host, who chose them -- so it says the one thing true of every
        reader, once, with no role-specific variant to keep in step. */
-    expect(room).toContain("Fixed when the room opened.");
+    expect(room).toContain("Fixed when the table opened");
     expect(room).not.toContain("when you press Ready");
-    expect(room).toContain("House rules");
+    expect(room).toContain('<h2 id="rm-variants-h">Variants</h2>');
+    expect(room).not.toContain("House rules");
   });
 
   it("says so when a guest's filtered list would be empty", () => {
@@ -192,8 +196,11 @@ describe("the host's setup card offers every variant the schema defines (design 
     /* Design note #1445 moved the line, not the claim: with no optional rules there is no right region at
        all, so the fact is stated quietly at the foot of the left column's settings rather than as a heading
        over an empty rail. */
-    expect(room).toContain("House rules \u00b7 <span style={styles.noneTag}>None</span>");
-    expect(room).toContain('data-testid="waiting-room-no-house-rules"');
+    /* PLAY WAITING ROOM (handoff \u00a79.2) SUPERSEDES the "None" line: the Variants section appears only when the table
+       has variants, and Game settings then takes the full width -- so there is no heading over an empty list to
+       read as a loading state, which was #924's point. */
+    expect(room).toContain("{variantRows.length > 0 ? (");
+    expect(room).toContain('<div className={variantRows.length > 0 ? "rm-lower rm-two" : "rm-lower"}>');
     expect(room).not.toContain("1830");
     const { GAME_LENGTH_NOTE } = require("../gameEngine/gameVariants") as typeof import("../gameEngine/gameVariants");
     expect(GAME_LENGTH_NOTE.standard).toBe("The standard game, as printed.");
@@ -203,13 +210,17 @@ describe("the host's setup card offers every variant the schema defines (design 
     /* REPORTED: "too small and too gray against the dark background." These descriptions are the CONTENT of
        the decision, not a caption on a control whose label already carries it, so they take this app's body
        treatment rather than `AutoPassModal`'s micro/grey captions. */
-    const note = sliceBetween(room, "variantNote: {", "},");
-    expect(note).toContain("FONT_SIZE.small");
-    expect(note).not.toContain("FONT_SIZE.micro");
+    /* PLAY WAITING ROOM (handoff §2, §9.2): the descriptions are body text (system sans 12.5px, never the micro size),
+       in the design's muted step -- #8a8a86 on the #080808 page is 5.6:1, clear of AA. */
+    const css = readStripped("components/room/roomDesignCss.ts");
+    const note = sliceBetween(css, ".rm-rules span {", "}");
+    expect(note).toContain("font: 400 12.5px/1.5 var(--rm-sans)");
+    expect(note).toContain("color: var(--rm-muted)");
+    expect(css).toContain("--rm-muted: #8a8a86;");
     /* Design note #1092 retoned this to `#c8c6c0`, the neutral ladder's secondary-text step. #924's claim is
        about LEGIBILITY -- "too small and too gray" -- not about a particular grey, and the new value is
        11.22:1 on the panel behind it, so the complaint this line guards against stays fixed. */
-    expect(note).toContain("#c8c6c0");
+
   });
 
   it("tells a table what the rounding rule does to their dividends (design notes #922 -> #961)", () => {

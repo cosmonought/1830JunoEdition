@@ -1283,7 +1283,7 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
     if (record.money === null) return null;
     if (dealtRecord(record)) return null;
     if (op === "transfer-host") return { code: "money-host-fixed", reason: "At a real-money table the host is the escrow's creator on Juno, so hosting can't be handed over before the game starts." };
-    if (op !== "kick" && op !== "release-seat" && op !== "cancel-room") return null;
+    if (op !== "kick" && op !== "release-seat" && op !== "cancel-room" && op !== "set-ante") return null;
     let fin: FinancialGameRecord | null;
     let snapshot: Snapshot;
     try {
@@ -1294,6 +1294,24 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
     }
     if (fin?.phase === "held") return { code: "held", reason: "This table's money is on hold for review; its seats can't change." };
     const bound = fin?.binding?.escrow ?? null;
+    /* PLAY WAITING ROOM: the ante changes only while no deposit can exist. Refused once the escrow is bound, while any
+       seat's deposit may be on its way (a reported create or join), while the host's CreateGame may be in flight (W-2:
+       ten minutes after the host's proven link, as cancel-room), and unless the chain says CONCLUSIVELY that the host's
+       ante is not on it under any proven ticket of the seat. Decided in the table's own task, so no link, admission or
+       deposit report interleaves with it. */
+    if (op === "set-ante") {
+      const FIXED = { code: "ante-fixed", reason: "A seat has already anted, so the ante is fixed." };
+      if (bound !== null) return FIXED;
+      const seatHints = hints.get(record.game_id);
+      if (seatHints !== undefined && [...seatHints.values()].some((hint) => hint.kind === "create" || hint.kind === "join")) return FIXED;
+      if (hostCreateInFlight(record, snapshot.grants)) return { code: "deposit-in-flight", reason: "Your ante may be on its way to Juno right now, so the ante can't change. If it doesn't land, you can change it about ten minutes after you verified your wallet." };
+      const entry = entryOf(record.game_id);
+      entry.ledger = snapshot;
+      const onChain = await hostAnteOnChain(entry, record, snapshot.grants);
+      if (onChain.kind === "unknown") return { code: "chain-unknown", reason: "Juno couldn't be checked just now, so the ante wasn't changed. Try again in a moment." };
+      if (onChain.kind === "found") return FIXED;
+      return null;
+    }
     if (op === "cancel-room") {
       if (bound !== null) {
         const game = await freshChain(record.game_id, bound.chain_game_id);
@@ -2076,6 +2094,18 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
       },
     },
     /** A create's money terms, checked against this deployment (never a caller's claim about the deployment). */
+    /** PLAY WAITING ROOM: a new ante, checked as a create's stake is (whole base units above zero, the escrow's minimum,
+     *  money tables open and the escrow not paused). Whether the table may still change it is `seatOpRefusal`'s. */
+    async checkAnte(stake: unknown): Promise<{ readonly ok: true; readonly stake: string } | { readonly ok: false; readonly code: string; readonly reason: string }> {
+      const status = creationStatus();
+      if (!status.ok) return { ok: false, code: status.code, reason: status.reason };
+      if (typeof stake !== "string" || !/^[1-9][0-9]{0,29}$/.test(stake)) return { ok: false, code: "bad-stake", reason: "The ante must be a whole number of the token's base units, above zero." };
+      const current = await chainConfig();
+      if (current === null) return { ok: false, code: "money-unavailable", reason: "Juno's escrow can't be read right now. Try again in a minute." };
+      if (current.minAnte !== null && BigInt(stake) < BigInt(current.minAnte)) return { ok: false, code: "bad-stake", reason: `The smallest ante Juno's escrow accepts is ${current.minAnte} base units.` };
+      if (current.paused) return { ok: false, code: "money-unavailable", reason: "Juno's escrow is paused right now, so the ante can't change." };
+      return { ok: true, stake };
+    },
     async prepareCreate(input: { readonly stake: unknown; readonly exactPlayers: unknown; readonly variants: GameVariants }): Promise<{ readonly ok: true; readonly terms: GameMoneyTerms } | { readonly ok: false; readonly code: string; readonly reason: string }> {
       const status = creationStatus();
       if (!status.ok) return { ok: false, code: status.code, reason: status.reason };

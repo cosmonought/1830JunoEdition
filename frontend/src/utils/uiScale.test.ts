@@ -166,13 +166,15 @@ describe("all three screens draw at the same scale", () => {
        exactly `cover`. A leftover bare `100vh` here is the bug, so that is what is asserted. */
     /* Design note #1294: the arithmetic moved into `sceneSizeFor(scale)`, applied per render with the live
        scale; the claim is the same and is asked of that function. */
-    const scene = sliceBetween(LOBBY, "function sceneSizeFor(scale: number)", "\n}");
-    expect(scene).toContain("${100 / scale}vh");
-    expect(scene).toContain("${100 / scale}vw");
-    expect(scene).not.toContain("(100vh");
-    expect(scene).not.toContain("(100vw");
-    expect(scene).not.toContain("max(100vh");
-    expect(LOBBY).toContain("...styles.scene, ...sceneSizeFor(uiScale)");
+    /* PLAY LOBBY (approved design): the full-window cover photograph is GONE -- the boardroom is the hero's own
+       artwork, sized from its container (`cqh`), never from the viewport -- so there is no viewport arithmetic left
+       inside the zoom to get wrong. Asserted as that absence, and as the container sizing that replaced it. */
+    expect(LOBBY).not.toContain("...styles.scene");
+    const css = readStripped("components/lobbyDesignCss.ts");
+    const art = sliceBetween(css, ".lb-hero-art img {", "}");
+    expect(art).toContain("100cqh");
+    expect(art).not.toContain("vh");
+    expect(art).not.toContain("vw");
   });
 });
 

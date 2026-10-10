@@ -133,7 +133,8 @@ describe("the sandbox purple is a signal with a ladder under it", () => {
   it("paints all four surfaces from the same constants", () => {
     for (const path of [
       "components/Lobby.tsx",
-      "components/SandboxWaitingRoom.tsx",
+      /* PLAY WAITING ROOM: the waiting room left this list -- it is drawn in the approved design's own tokens
+         (`room/roomDesignCss.ts`), with no sandbox signal on it. */
       "tutorial/TutorialCoach.tsx", // PHASE 3 FINAL PLAY TUTORIAL: the coach replaced `TutorialModal.tsx`
       "styles/appStyles.ts",
     ]) {

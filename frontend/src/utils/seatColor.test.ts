@@ -206,7 +206,7 @@ describe("#1337: the roster resolves to distinct colours", () => {
   it("is what the waiting room draws and greys, what SetupGame records, and what the server enforces", () => {
     const ROOM = readStripped("components/SandboxWaitingRoom.tsx");
     expect(ROOM).toContain("const resolvedColors = resolveSeatColors(players);");
-    expect(ROOM).toContain("(player) => resolvedColors[player.id] === color && player.id !== localPlayerId,");
+    expect(ROOM).toContain("players.find((player) => resolvedColors[player.id] === color && player.id !== localPlayerId)");
     expect(ROOM).not.toContain("player.color ?? SEAT_COLORS[");
     expect(readShell()).toContain("setRoomColors(resolveSeatColors(msg.SetupGame.players));");
     const fs = require("fs") as typeof import("fs");

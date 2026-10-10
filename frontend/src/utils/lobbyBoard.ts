@@ -257,7 +257,8 @@ export function historyLines(h: PublicGameHistory): { none: true } | { none: fal
 
 /* ------------------------------------------------------------------ the split-flap drum */
 
-export const FLAP_DRUM = " ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/·+-";
+/* PLAY WAITING ROOM (handoff §2): the drum adds "$ , ." so amounts can flip (the sign's ante, "At this count"). */
+export const FLAP_DRUM = " ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/·+-$,.";
 export const FLAP_STEP_MS = 55;
 export const FLAP_STAGGER_MS = 40;
 export const FLAP_MAX_STEPS = 14;

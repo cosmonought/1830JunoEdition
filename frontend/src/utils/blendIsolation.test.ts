@@ -108,23 +108,25 @@ describe("the footer mark can still see the room it keys against", () => {
   });
 
   it("gives the waiting room's copy the same ground", () => {
-    /* No `sceneClip` here -- the photograph is a background on the ROOT, so the footer has only to avoid
-       isolating itself from it. Asserted because a flat `#0f0f0f` would key just as well and somebody
-       simplifying this away would not see the mark break until they looked at it. */
+    /* PLAY WAITING ROOM (approved design §4) SUPERSEDES this case's photograph: the waiting room paints the design's
+       ink and closes with the LOBBY's footer (the Ludum link and the Neta DAO credit, in type) -- there is no keyed
+       mark on it left to blend, and no photograph behind it. What stays true is the root's own ground and its
+       stacking context. */
     const root = styleBlock("SandboxWaitingRoom", "root");
-    expect(root).toContain('backgroundColor: "#0f0f0f"');
-    /* Design note #1266: the photograph moved to `sceneLayer`, a fixed child at `z-index: -1`, so a growing
-       roster cannot re-fit it (that re-fit was reported as the screen "zooming" on Ready). The root is now
-       the stacking context that holds both the layer and the footer -- the PAINTER's group, #1170a -- so
-       the mark still keys against the picture. Pinned: the layer paints the room, the root isolates, and
-       the layer renders in both the room and its hold. */
-    const scene = styleBlock("SandboxWaitingRoom", "sceneLayer");
-    expect(scene).toContain("waiting-room.jpg");
-    expect(scene).toContain('position: "fixed"');
-    expect(scene).toContain("zIndex: -1");
+    expect(root).toContain('backgroundColor: "#080808"');
     expect(root).toContain('isolation: "isolate"');
-    expect(SOURCES.SandboxWaitingRoom.split("styles.sceneLayer").length - 1).toBe(2);
-    expect(SOURCES.SandboxWaitingRoom).toContain('<AppFooter surface="meta" />');
+    expect(SOURCES.SandboxWaitingRoom).not.toContain("sceneLayer");
+    expect(SOURCES.SandboxWaitingRoom).not.toContain("waiting-room.jpg");
+    expect(SOURCES.SandboxWaitingRoom).not.toContain("<AppFooter");
+    expect(SOURCES.SandboxWaitingRoom.split("<RoomFooter />").length - 1).toBe(2); // the room and its hold
+  });
+
+  it("paints no picture on the root, so nothing can re-fit as the seats fill (design note #1266, kept)", () => {
+    /* #1266's report -- the screen "zooming" on Ready -- came from a background that re-fit as the roster grew. The
+       design has no photograph, and the root carries no background image to re-fit. */
+    const root = styleBlock("SandboxWaitingRoom", "root");
+    expect(root).not.toContain("backgroundImage");
+    expect(root).toContain('position: "relative"');
   });
 
   it("still needs the blend at all, which is why all of this matters", () => {

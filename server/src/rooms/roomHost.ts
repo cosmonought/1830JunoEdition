@@ -102,6 +102,7 @@ import {
   assertDeal,
   buildSetupGame,
   cancelRoom,
+  setAnte,
   createRecord,
   joinByCode,
   kick,
@@ -143,7 +144,7 @@ export interface EscrowGameplaySeam {
 const FROZEN_ROSTER_OPS: ReadonlySet<string> = new Set(["join", "take-seat", "release-seat", "leave", "set-profile", "kick", "cancel-room"]);
 export const FROZEN_ROSTER_SENTENCE = "This table's players are locked in with the escrow: seats can no longer change.";
 /** ESCROW-4 (R-J1, W-2, W-3): the ops a real-money table decides again in the task, against the ledger and the chain. */
-const MONEY_SEAT_OPS: ReadonlySet<string> = new Set(["kick", "release-seat", "transfer-host", "cancel-room"]);
+const MONEY_SEAT_OPS: ReadonlySet<string> = new Set(["kick", "release-seat", "transfer-host", "cancel-room", "set-ante"]);
 export const MONEY_UNAVAILABLE_SENTENCE = "This table's money can't be checked on this server right now, so its seats can't change.";
 
 export interface RoomHostDeps {
@@ -1255,7 +1256,7 @@ export function createRoomHost(deps: RoomHostDeps) {
   const ack = (socket: WebSocket, requestId: string, result: { ok: true; data?: Record<string, unknown> } | { ok: false; code: string; reason: string }) =>
     deps.send(socket, result.ok ? { kind: "room-ack", requestId, ok: true, ...(result.data ? { data: result.data } : {}) } : { kind: "room-ack", requestId, ok: false, code: result.code, reason: result.reason });
 
-  const MEMBERSHIP_OPS = new Set(["join", "take-seat", "release-seat", "leave", "set-ready", "set-profile"]);
+  const MEMBERSHIP_OPS = new Set(["join", "take-seat", "release-seat", "leave", "set-ready", "set-profile", "set-ante"]);
   /** Each game op's row in the authorization table (runOp answers an outsider `not-found` before anything else). */
   const OP_NAMES: Readonly<Record<string, RoomOp>> = Object.freeze({
     "take-seat": "take-seat",
@@ -1268,6 +1269,7 @@ export function createRoomHost(deps: RoomHostDeps) {
     kick: "kick",
     "transfer-host": "transfer-host",
     "cancel-room": "cancel-room",
+    "set-ante": "set-ante",
   });
 
   async function activated(principalId: string): Promise<boolean> {
@@ -1545,6 +1547,18 @@ export function createRoomHost(deps: RoomHostDeps) {
         }
       }
       const needsCode = (record: GameRecord) => type === "rotate-code" || (type === "set-visibility" && op.visibility === "private" && record.visibility !== "private");
+      /* PLAY WAITING ROOM: a new ante is checked as a create's stake is before the table's task runs; whether it may
+         still change is decided inside the task (MONEY_SEAT_OPS -> `seatOpRefusal`). */
+      let anteStake: string | null = null;
+      if (type === "set-ante") {
+        const verdict = authorizeNow(game, ctx.principalId, "set-ante");
+        if (!verdict.ok) return ack(socket, requestId, verdict);
+        const money = deps.money?.() ?? null;
+        if (money === null) return ack(socket, requestId, { ok: false, code: "money-unavailable", reason: MONEY_UNAVAILABLE_SENTENCE });
+        const checked = await money.checkAnte(op.stake);
+        if (!checked.ok) return ack(socket, requestId, { ok: false, code: checked.code, reason: checked.reason });
+        anteStake = checked.stake;
+      }
       const result = await runOp(game, ctx.principalId, opName, (env, fresh) => {
         switch (type) {
           case "take-seat":
@@ -1567,6 +1581,8 @@ export function createRoomHost(deps: RoomHostDeps) {
             return transferHost(env, String(op.toPlayerId));
           case "cancel-room":
             return cancelRoom(env);
+          case "set-ante":
+            return setAnte(env, anteStake as string);
           default:
             return { ok: false, code: "bad-frame", reason: "That is not a room operation." };
         }

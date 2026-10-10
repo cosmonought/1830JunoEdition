@@ -38,7 +38,7 @@ import TopBar from "./TopBar";
 import { httpSessionPort, installSessionPort, type SessionPort } from "../utils/sessionBootstrap";
 import { resetAccountPromptForTests, type AccountMode } from "../utils/accountPrompt";
 import { profileAuthorizationText, type ProfileAuthorizationFields, type ProfileAuthorizationPurpose } from "../utils/profileAuthorizationV1";
-import { ANTE_UNAVAILABLE_SENTENCE, FREE_TABLES_OFFERED, NO_ANTE_WATCH_ONLY } from "../utils/tablePolicy";
+import { ANTE_UNAVAILABLE_SENTENCE, ANY_COUNT_BLOCKED_SENTENCE, FREE_TABLES_OFFERED, NO_ANTE_WATCH_ONLY } from "../utils/tablePolicy";
 import { readStripped } from "../utils/sourceScan";
 import type { RoomSummary } from "../utils/roomProtocol";
 import type { GameVariants } from "../gameEngine/gameVariants";
@@ -633,7 +633,9 @@ describe("§13: the host card requires a stake", () => {
     expect(created).not.toHaveBeenCalled();
   });
 
-  it("with an offer: the stake is required -- no toggle, no 'played for fun' -- two seats by default, and Create Room waits for a valid stake", async () => {
+  /* PLAY HOST A GAME (handoff §3.2, §11): Any is the default and is NOT turned into an exact count -- on a money table
+     Create table says why it is blocked until the host chooses one (Escrow 2.1 needs every seat it was created for). */
+  it("with an offer: the stake is required -- no toggle, no 'played for fun' -- Any stays the default but is gated, and Create table waits for a valid stake and an exact count", async () => {
     process.env.REACT_APP_ESCROW_DEPLOYMENT = JSON.stringify(TEST_PIN);
     resetPinnedDeploymentForTests();
     const port = scriptedPort();
@@ -652,15 +654,22 @@ describe("§13: the host card requires a stake", () => {
     expect(byTestId("host-stake")).toBeTruthy();
     expect(byTestId("host-ante-unavailable")).toBeNull();
     expect(byTestId("host-stake-on")).toBeNull();
-    expect(byTestId("host-stake-required")?.textContent).toBe("Every game here is played for a real ante: each seat deposits the stake in JUNOX on Juno testnet (uni-7).");
     expect(all().textContent).not.toContain("played for fun");
-    expect(byTestId<HTMLSelectElement>("host-player-count")?.value).toBe("2");
+    expect(byTestId("host-players-any")?.getAttribute("aria-checked")).toBe("true");
     expect(byTestId<HTMLButtonElement>("host-create-room")?.disabled).toBe(true);
-    expect(byTestId("host-stake-problem")?.textContent).toMatch(/^Enter the stake in JUNOX/);
+    expect(byTestId("host-stake-problem")?.textContent).toBe("Enter the ante in JUNOX, like 10 or 2.5 (above zero).");
     type(byTestId<HTMLInputElement>("host-stake-amount"), "2.5");
     await settle();
     expect(byTestId("host-stake-problem")).toBeNull();
-    expect(byTestId("host-stake-summary")?.textContent).toMatch(/Each seat deposits 2\.5 JUNOX/);
+    /* The fee is the deployment's own (100 bps here), never a constant. */
+    expect(byTestId("host-stake-summary")?.textContent).toBe("Each seat deposits 2.5 JUNOX; the 1% developer fee (0.025 JUNOX) isn't refunded. You can change the ante in the waiting room until the first deposit.");
+    /* Any, with an ante: blocked, said, and pressing creates nothing. */
+    expect(byTestId("host-players-any")?.getAttribute("aria-checked")).toBe("true");
+    expect(byTestId("host-create-why")?.textContent).toBe(ANY_COUNT_BLOCKED_SENTENCE);
+    expect(byTestId<HTMLButtonElement>("host-create-room")?.disabled).toBe(true);
+    await click(byTestId("host-create-room"));
+    expect(created).not.toHaveBeenCalled();
+    await click(byTestId("host-players-2"));
     const create = byTestId<HTMLButtonElement>("host-create-room");
     expect(create?.disabled).toBe(false);
     await click(create);

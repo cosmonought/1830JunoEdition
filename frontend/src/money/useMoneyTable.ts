@@ -104,6 +104,9 @@ export interface MoneyTable {
   readonly busy: MoneyActionKind | null;
   /** P3-ACCT: where a running Ante is ("Connecting wallet…", "Verifying wallet…", "Waiting for deposit…"), or null. */
   readonly progress: string | null;
+  /** W2-M (AUD-20.02): whether this seat's wallet proof can be counted on for a deposit (the Ante re-proves first when
+   *  "refused") -- read by the waiting room to plan the Keplr approval count (handoff §7). */
+  readonly proof: "aged" | "refused" | null;
   readonly notice: string | null;
   readonly error: string | null;
   /** A step the player must take before the action can run: "Confirm it's you", or the wallet replacement question
@@ -565,6 +568,7 @@ export function useMoneyTable(input: MoneyTableInput): MoneyTable {
     verification: checked,
     busy,
     progress,
+    proof,
     notice,
     error,
     needs,

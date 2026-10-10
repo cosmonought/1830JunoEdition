@@ -120,7 +120,8 @@ describe("the game-selection step ships one canvas for three logos (design note 
 });
 
 describe("the presentation is a well and a fit, not a table of nudges (design note #1447)", () => {
-  const gallery = sliceBetween(HOST, '<Section title="Game">', "</Section>");
+  /* PLAY HOST A GAME: the table cards (handoff §3.1), up to the Pace field that follows them. */
+  const gallery = sliceBetween(HOST, 'className="rh-cards"', 'id={`${ids}-mode`}');
 
   it("gives every card the same well and fits the art inside it", () => {
     expect(HOST).toContain('aspectRatio: "4 / 3"');
@@ -181,39 +182,30 @@ describe("the artwork does not become the title (design note #1447)", () => {
   });
 });
 
-describe("the choice is still one choice (design note #1447)", () => {
-  const gallery = sliceBetween(HOST, '<Section title="Game">', "</Section>");
+describe("the choice is still one choice (design note #1447, PLAY HOST A GAME §3.1)", () => {
+  const gallery = sliceBetween(HOST, '<span className="rh-fl" id={`${ids}-type`}>', 'id={`${ids}-mode`}');
 
   it("groups the radios it always should have", () => {
-    /* NOT A REDESIGN OF THE SEMANTICS -- a repair. The three boxes carried `role="radio"` with no
-       `role="radiogroup"` around them, so assistive technology was told each was a radio and never told what
-       set it belonged to or how many there were.
-       Design note #1448: `role`, `aria-checked`, `tabIndex` and the click handler now arrive together from
-       `useRadioGroup`, the one definition all three groups share -- so this case no longer looks for the
-       four attributes spelled out here, which would be the old bug in a new form (three hand-written copies
-       that can disagree). It asserts the group's own markup and that the options come from the hook;
-       `hostRadioGroups.test.tsx` renders the result and checks what the attributes actually ARE. */
+    /* #1448: role, aria-checked, tabIndex and the click arrive together from `useRadioGroup`, the one definition every
+       group shares; `hostRadioGroups.test.tsx` renders the result. The group is named by its visible label, "Table". */
     expect(gallery).toContain('role="radiogroup"');
-    expect(gallery).toContain('aria-label="Game"');
+    expect(gallery).toContain("aria-labelledby={`${ids}-type`}");
     expect(gallery).toContain("ref={gameRadio.ref}");
     expect(gallery).toContain("onKeyDown={gameRadio.onKeyDown}");
     expect(gallery).toContain("{...gameRadio.optionProps(candidate)}");
     expect(gallery).toContain("const selected = candidate === type;");
     const hook = sliceBetween(HOST, "function useRadioGroup<T extends string>", "\n}\n");
     expect(hook).toContain('role: "radio" as const');
-    expect(hook).toContain('"aria-checked": key === value');
+    expect(hook).toContain('"aria-checked": active && key === value');
     expect(hook).toContain("tabIndex: key === value ? 0 : -1");
   });
 
   it("selects the same values it selected before", () => {
-    /* The card changed; what pressing it means did not. One handler, the same ordered table, and the same
-       hand-off to the house-rules step. */
-    /* #1448: the handler moved into the hook, so the claim moves with it -- ONE place that sets the type,
-       reading the same ordered table. */
-    expect(HOST).toContain("useRadioGroup(GAME_TYPE_ORDER, type, setType)");
-    expect((HOST.match(/setType/g) ?? []).length).toBe(2); // the state hook, and the one handed to the group
+    /* One place sets the type, reading the same ordered table; choosing it resets step two to its defaults. */
+    expect(HOST).toContain("useRadioGroup(GAME_TYPE_ORDER, type, chooseType)");
+    expect((HOST.match(/setType/g) ?? []).length).toBe(2); // the state hook, and the one call in chooseType
     expect(gallery).toContain("GAME_TYPE_ORDER.map((candidate)");
-    expect(HOST).toContain("recommendedVariantsFor(type, mode)");
+    expect(HOST).toContain("const fresh = recommendedVariantsFor(next, mode);");
     expect(HOST).toContain('data-testid={`host-type-${candidate}`}');
     expect(HOST).toContain('data-testid="host-continue"');
     for (const type of GAME_TYPE_ORDER) {
@@ -222,67 +214,36 @@ describe("the choice is still one choice (design note #1447)", () => {
     expect(HOST_TYPE_BLURB.standard).toBe("The classic game.");
   });
 
-  it("says Game, not Game type", () => {
-    /* Display language only -- `GameType`, `GAME_TYPE_ORDER`, `GAME_TYPE_COPY`, `GAME_TYPE_ART` and the
-       `host-type-*` test ids are untouched, and the three choices are the same three. */
-    expect(HOST).toContain('<Section title="Game">');
+  it("says Table (the design's label), never Game type, and names each card by its full title", () => {
+    expect(HOST).toMatch(/id=\{`\$\{ids\}-type`\}>\s*Table\s*</);
     expect(HOST).not.toContain("Game type");
-    expect(GAME_TYPE_ORDER.map((t) => GAME_TYPE_COPY[t].label))
-      .toEqual(["18XX", "18XX+", "18XX+: A Level Playing Field"]);
-    expect(HOST).toContain('data-testid={`host-type-${candidate}`}');
+    expect(GAME_TYPE_ORDER.map((t) => GAME_TYPE_COPY[t].label)).toEqual(["18XX", "18XX+", "18XX+: A Level Playing Field"]);
+    expect(gallery).toContain("id={gameRadio.labelId(candidate)}");
   });
 
-  it("gives Pace and Visibility the ring the cards get", () => {
-    /* #1447a: the step shipped with no focus style on ANY of its three groups. The cards got one; a keyboard
-       user reaching Pace still had nothing to see. One rule, three groups -- so the next control added here
-       is a class away from being reachable rather than a second copy of the declaration. */
-    expect(HOST_RAW).toContain(".host-segment:focus-visible");
-    const rule = sliceBetween(HOST_RAW, ".host-type-card:focus-visible", "}");
-    expect(rule).toContain(".host-segment:focus-visible");
-    expect(rule).toContain("outline: 2px solid #8a8a86");
-    expect(rule).toContain("outline-offset: 2px");
-    // :focus-visible, not :focus -- a pointer click must not leave a ring behind.
-    expect(HOST_RAW).not.toContain(".host-segment:focus {");
-    expect(HOST_RAW).not.toContain(".host-type-card:focus {");
-    const seg = sliceBetween(HOST, "function Segmented<T extends string>", "const TAG_TEXT");
-    expect(seg).toContain('className="host-segment"');
-    expect(seg).toContain('role="radiogroup"');
-    expect(seg).toContain("styles.segmentSelected");
-    /* #1448: the radio attributes come from the shared hook here too -- one definition, two consumers. */
-    expect(seg).toContain("useRadioGroup(options.map((option) => option.key), value, onChange)");
-    expect(seg).toContain("{...radio.optionProps(option.key)}");
-    expect(seg).toContain("onKeyDown={radio.onKeyDown}");
+  it("gives every control on the dialog the same gilt ring, on :focus-visible only", () => {
+    const css = readStripped("components/room/roomDesignCss.ts");
+    expect(css).toContain(".rh button:focus-visible, .rh input:focus-visible, .rh a:focus-visible, .rh summary:focus-visible { outline: 2px solid var(--rm-gilt); outline-offset: 2px; }");
+    expect(css).not.toContain(".rh button:focus {");
+    expect(HOST).toContain('className="rh-opt host-segment"');
   });
 
-  it("makes the whole card the target, and shows a keyboard where it is", () => {
-    /* The well and the text are both inside the button, so there is no dead strip; and the ring is the app's
-       own -- 2px #8a8a86 at 2px offset, as the Lobby's rows and the waiting room's controls use. */
+  it("makes the whole card the target", () => {
     expect(gallery).toContain("<button");
     expect(gallery.indexOf("styles.typeWell")).toBeGreaterThan(gallery.indexOf("<button"));
-    expect(gallery.indexOf("styles.typeText")).toBeLessThan(gallery.indexOf("</button>"));
-    expect(HOST_RAW).toContain(".host-type-card:focus-visible");
-    expect(HOST_RAW).toContain("outline: 2px solid #8a8a86");
-    expect(HOST_RAW).toContain("outline-offset: 2px");
-    expect(gallery).toContain('className="host-type-card"');
+    expect(gallery.indexOf("HOST_TYPE_BLURB[candidate]")).toBeLessThan(gallery.indexOf("</button>"));
+    expect(gallery).toContain('className="rh-tcard host-type-card"');
   });
 
-  it("says which one is chosen three ways, and never dims the others out", () => {
-    /* #1448a: the SHORTHAND, not the `borderColor` longhand -- see `hostRadioGroups.test.tsx` for why the
-       longhand left a black edge on every card that had ever been selected. */
-    expect(HOST).toContain('typeBoxSelected: { border: "1px solid #6fae86"');
-    expect(HOST).toContain("styles.typeMarkOn");
-    // #1447: readable, not hidden. A logo at a third of its brightness is not a choice, it is a disabled one.
-    const idle = sliceBetween(HOST, "typeArtIdle: {", "}");
-    const opacity = Number((idle.match(/opacity: ([\d.]+)/) ?? [])[1]);
-    expect(opacity).toBeGreaterThanOrEqual(0.8);
-    expect(opacity).toBeLessThan(1);
+  it("says which one is chosen three ways -- border, glow and check mark -- and never dims the others out", () => {
+    const css = readStripped("components/room/roomDesignCss.ts");
+    expect(css).toContain('.rh-tcard[aria-checked="true"] { border-color: var(--rm-gold); box-shadow: 0 0 0 1px var(--rm-gold); background: #17120c; }');
+    expect(gallery).toContain('{selected ? "✓" : ""}');
+    /* #1447: readable, not hidden -- an unselected logo at .9 is still plainly gold. */
+    expect(HOST_RAW).toContain(".host-type-card img { opacity: .9; }");
   });
 
-  it("widens the gallery step only", () => {
-    /* The house-rules step is a form and keeps its 600px measure; three logo wells need the room. The switch
-       is the step, so neither can quietly take the other's width. */
-    expect(HOST).toContain('cardGallery: { width: "min(820px, 100%)" }');
-    expect(HOST).toContain('...(step === "type" ? styles.cardGallery : null)');
-    expect(HOST).toContain('card: {\n    width: "min(600px, 100%)"');
+  it("is one board at most 980px wide (handoff §3)", () => {
+    expect(readStripped("components/room/roomDesignCss.ts")).toContain(".rh { width: min(980px, 100%);");
   });
 });

@@ -1,182 +1,145 @@
-// The anteroom: who is here, what they are called, and who may start.
+// The waiting room: the table's own departure sign, your boarding pass, what to do before departure, every seat's
+// pass, and the table's settings.
 //
-// Design note #529: this REPLACES the board rather than sitting over it. Before
-// setup lands there is no game -- the player count is undecided, so starting
-// cash and the certificate limit are too, and showing the board underneath would
-// show a plausible, correctly-rendered game nobody is playing.
-//
-// Design note #529a: everyone gets Ready; only the host gets Start. Start is the
-// one write that DEALS the game, and two clients sending it would put two setups
-// with different shuffles in the log, each replayed by every client.
-//
-// See docs/ai_architecture/firebase_middleware.md, SandboxWaitingRoom.tsx #529.
+// Design note #529: this REPLACES the board rather than sitting over it -- before the deal there is no game, so the
+// player count, the starting cash and the certificate limit are undecided. Design note #529a: only the host starts
+// (Start is the one write that deals).
 //
 // ==================================================================
-//  LIVE-2D: DRAWN FROM THE SERVER'S RoomView, AND EVERY CONTROL IS A NAMED OP
+//  PLAY WAITING ROOM (approved design, "play-host-waiting-handoff" §4-§9): A DEPARTURE BOARD FOR ONE TABLE
 // ==================================================================
 //
-// `room` is the server's per-recipient projection; `room.you` is who this tab is at the table -- its role and its
-// seat's `player_id` -- and is the only place this screen learns either. Every button here sends one `room-op` the
-// server authorizes against its own record: take a seat, give it up, ready, name and colour, and for the host the
-// table itself -- public or private, a new code, remove a player, hand the host role on, cancel, start. A control is
-// shown to the role that may use it (the same table the server enforces, LIVE-2 §6.4) and greyed while a request is
-// in flight; the server's refusal, when there is one, is shown as the sentence it is.
+// Top to bottom: Play's top bar; THE SIGN (§5) -- the edition's lockup, Status / Seats / Ante / Pace / Bank / Host /
+// Variants, the code and the edition's sentence; YOUR BOARDING PASS (§6), the sign's full width on rag paper, in two
+// halves -- who you are and your colour (left), and everything you do before departure (right: the status sentence, the
+// action row with THE ONE ACTION, the Terms link, the error line); THE BOARDING BOARD (§8) -- every seat's pass in seat
+// order, the tear and the stamps, "At this count"; GAME SETTINGS (with Skip the titles, Report a player and the host's
+// Cancel table) and VARIANTS (§9); the Ludum footer. Visibility and the code are not changed from here (§5, §16).
 //
-// ESCROW-4: AT A REAL-MONEY TABLE, THE DEPOSIT IS THE READY. `room.money` (the server's money projection) replaces
-// Ready with the seat's funding panel (`money/MoneyPanel.tsx`: Connect -> Confirm -> Link -> Review -> Approve in
-// Keplr -> Sent -> Funded -> Seats locked), the roster's Ready column with each seat's funding, and the Ante row with
-// the table's real stake. Start is the panel's (the chain's funding decides it). Leave stays an unsubscribe; "Give up
-// seat" stays, and the server refuses it while the seat has money on Juno (withdraw first).
-import React, { useState } from "react";
-import {
-  bankSizeLabel,
-  GAME_LENGTH_NOTE,
-  GAME_MODE_COPY,
-  GAME_TYPE_COPY,
-  STANDARD_VARIANTS,
-  VARIANT_COPY,
-  type VariantCopyKey,
-  gameTypeOf,
-} from "../gameEngine/gameVariants";
+// LIVE-2D STILL HOLDS: drawn from the server's per-recipient `RoomView`; every control is one named `room-op` the
+// server authorizes against its own record, shown only to the role that may use it, greyed while a request is in flight;
+// a refusal is shown as the sentence it is. The ROLE is the server's (`you.role`).
+//
+// THE MONEY (§6, §7): this screen owns ONE `useMoneyTable` and shares it. The pass carries the Ante -- one press runs
+// what the seat still needs (`moneyActions.anteNow`: connect, the free proof, the deposit), each approved in Keplr's
+// own window -- with a status line naming the approval Keplr is showing ("Check Keplr: … (2 of 3)"). The pass's right half
+// also carries, inset in their own dark look, everything else the seat's money needs, unchanged (`MoneyPanelView`, layout "departure"): "Confirm it's you",
+// the wallet questions, the No-deadline acknowledgement, the deposit's terms, the exit confirmations, the pending
+// transaction, the escrow details. The host's ante editor sends the new `set-ante` op, which the SERVER allows only
+// until the first deposit. Funding is only ever what the server read from Juno: a pass tears and "Boarded" lands when
+// the server says the seat funded, never on a click.
 
-import { FONT_FAMILY, FONT_SIZE, LINE_HEIGHT, RADIUS } from "../styles/typography";
-import {
-  roomSeatCap,
-  roomVisibility,
-  seatsNeeded,
-  waitingRoomBlock,
-  waitingRoomNotice,
-} from "../utils/sandboxRoom";
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import { GAME_TYPE_COPY, STANDARD_VARIANTS, VARIANT_COPY, type VariantCopyKey, gameTypeOf } from "../gameEngine/gameVariants";
+
+import { roomVisibility, seatsNeeded, waitingRoomBlock } from "../utils/sandboxRoom";
 import type { RoomOpResult, RoomView, RoomVisibility } from "../utils/roomProtocol";
 import { MIN_PLAYERS, certLimitForPlayers, startingCashForPlayers } from "../gameEngine/gameSetup";
-// #1415: the ante's figures and the subsidy line, the same ones the host's setup card showed.
-import { ANTE_SUBSIDY_NOTE, VISIBILITY_COPY } from "./HostSetupCard";
-import { anteBreakdown, formatJuno } from "../utils/anteMath";
+import { VISIBILITY_COPY, PLUS_TILES_TITLE, HOUSE_RULE_ROWS } from "./HostSetupCard";
 import { SEAT_COLORS, SEAT_COLOR_NAMES, resolveSeatColors } from "../utils/playerLabels";
-import { MoneyPanel, StakeStrip, bpsText } from "./money/MoneyPanel";
-/* Phase 3 final clocks: the table's action deadline, said with the terms (and the host's choice on a free Async table). */
+import { MoneyPanelView, type AskedKind } from "./money/MoneyPanel";
+import { KeplrMark } from "./money/KeplrMark";
 import { CLOCK_ASYNC_PACES_SECS, CLOCK_OPS, type RoomClockView } from "../utils/clockProtocol";
-import { ASYNC_DEADLINE_NOTE, LIVE_DEADLINE_NOTE, NO_DEADLINE_NOTE, deadlineLabel, paceLabel } from "../utils/gameClockView";
+import { paceLabel } from "../utils/gameClockView";
 import { roomOp } from "../utils/roomLink";
-import { TableTrustFacts } from "./TrustFacts";
 import { ReportPlayerControl } from "./ReportPlayerControl";
 import type { ReportPlayerBody } from "../utils/conductApi";
 import { TermsLink } from "./InfoPages";
-import { amountText, fundingTag } from "../money/moneyFlow";
+import { amountText } from "../money/moneyFlow";
+import { moneyServices } from "../money/moneySession";
+import { useMoneyTable } from "../money/useMoneyTable";
+import { formatAmount, parseAmountToBase, type MoneySeatFunding } from "../utils/moneyProtocol";
 import { type AudioControlsProps } from "./AudioControls";
-/* Design note #1138: the shell's own bar, mounted here so the audio controls stop moving between the
-   anteroom and the table. */
+/* Design note #1138: the shell's own bar, mounted here so the audio controls stay put between anteroom and table. */
 import TopBar from "./TopBar";
-import AppFooter from "./AppFooter";
 import { setSkipIntroPreferred, skipIntroPreferred } from "../utils/introPreference";
 import { chromeZoomFor } from "../styles/appStyles";
-/* Design note #1294: the chrome scale, live. */
 import { useUiScale } from "../utils/useUiScale";
 /* W1-O (AUD-16.05): breakpoints asked in the zoomed root's own pixels. */
 import { zoomAwareMediaCss } from "../utils/uiScale";
-/* Design note #1122: the sandbox signal ladder. */
+import { EDITION_NAME, clockText, type PublicSeatHistory } from "../utils/lobbyBoard";
+import { readPublicPlayers } from "./LobbyBoards";
 import {
-  SANDBOX_TITLE,
-} from "../styles/palette";
+  PASS_STATE_TEXT,
+  ROOM_STATUS_CLASS,
+  ROOM_STATUS_WORD,
+  anteFeeSentence,
+  approvalOf,
+  approvalStatus,
+  bankText,
+  departureBlocker,
+  leadSentence,
+  paceText,
+  plannedApprovals,
+  roomStatus,
+  type ApprovalStep,
+  type PaceChoice,
+  type PassState,
+} from "../utils/roomDesign";
+import { RAG_PAPER_URL, ROOM_DESIGN_CSS } from "./room/roomDesignCss";
+import { BoardingPass, ClockRules, EDITION_TOKEN, Lockup, OpenSeat, PlayerPanel, RoomFooter, type PanelHistory } from "./room/RoomParts";
+import SplitFlap from "./SplitFlap";
 
-/** Design note #910: the four boolean variants as DATA, so adding a fifth is one row rather than a fifth
- *  hand-written block that could be forgotten -- which is exactly the failure this note is fixing, at the
- *  scale of a whole panel. `key` is typed against `GameVariants`, so a renamed flag is a compile error here
- *  rather than a toggle that silently stops binding. */
-/* ==================================================================
-    DESIGN NOTE 961a: NEITHER THE LABELS NOR THE BLURBS ARE WRITTEN HERE
-   ==================================================================
-   This table used to carry both, and BOTH had drifted from the Lobby's: the blurb by a whole sentence about
-   dividend rounding, and the label by a word -- "Delayed private auction" here against "Delayed auction"
-   there. One variant with two names, on the two screens a table reads before agreeing to it.
-   THE ORDER IS STILL THIS FILE'S OWN, which is why the keys are listed rather than taken from
-   `Object.keys`: the sequence a host reads the toggles in is a presentation decision, and the record is a
-   dictionary rather than a running order. Typed as `VariantCopyKey`, so a renamed flag is a compile error
-   here rather than a toggle that silently stops binding. */
-/* Design note #1271: `expandedMap` and `levelPlayingField` are NOT toggles -- they are the Game Type, one
-   choice with its illegal combinations removed (see `gameVariants` #1271). #1415: the CONTROLS for all of
-   these live on `HostSetupCard` now; this table is the ORDER the terms in force are listed in here, and
-   `GAME_TYPE_FLAGS` names the two the type owns, so `variantWiring.test.ts` can still ask that every boolean
-   flag reaches a control somewhere. */
+/** Design note #1271: `expandedMap` and `levelPlayingField` are the Game Type (one choice), not toggles -- named here so
+ *  `variantWiring.test.ts` can still ask that every boolean flag reaches a control somewhere. */
 export const GAME_TYPE_FLAGS = ["expandedMap", "levelPlayingField"] as const;
-const VARIANT_TOGGLES: ReadonlyArray<{
-  key: VariantCopyKey;
-  label: string;
-  blurb: string;
-}> = (
-  [
-    "unpredictableRevenue",
-    "dynamicStockMarket",
-    "gentleRust",
-    "delayedAuction",
-    "plusTiles",
-  ] as const
-).map((key) => ({ key, ...VARIANT_COPY[key] }));
+
+/** The table's variants in force, in the order the Variants section reads them: the tile tray, then the four rules
+ *  (#961a: the shared copy, so a rule reads the same here as on the host's card). */
+const VARIANT_ROWS: ReadonlyArray<{ key: VariantCopyKey; title: string; blurb: string }> = [
+  { key: "plusTiles", title: PLUS_TILES_TITLE, blurb: VARIANT_COPY.plusTiles.blurb },
+  ...HOUSE_RULE_ROWS.map((row) => ({ key: row.key as VariantCopyKey, title: row.title, blurb: VARIANT_COPY[row.key].blurb })),
+];
+
+/** How long the sign holds DEPARTING before the opening titles take over (handoff §9.4); reduced motion: briefly. */
+export const DEPART_HOLD_MS = 2_100;
+export const DEPART_HOLD_REDUCED_MS = 300;
 
 export interface SandboxWaitingRoomProps {
-  /** LIVE-2D: what the bar and the title show -- the table's code, or "Private game" to an outsider. */
+  /** LIVE-2D: the table's code, or "Private game" to an outsider. */
   roomCode: string;
   room: RoomView | null;
   /** LIVE-2D: this tab's seat, from `room.you.playerId` ("" when it holds none). Presentation only. */
   localPlayerId: string;
   error: string | null;
   busy: boolean;
-  onSetNickname: (nickname: string) => void;
+  /** Kept for the shell's wiring. PLAY WAITING ROOM: the design has no name field -- a seat's name is the account's
+   *  profile name (`create` and `take-seat` seed it); `set-profile {nickname}` is no longer offered here. */
+  onSetNickname?: (nickname: string) => void;
   /** Design note #569: `null` returns this seat to the assigned default. */
   onSetColor: (color: string | null) => void;
+  /** Development builds' no-ante tables only: Ready (a production table's Ready is its ante). */
   onToggleReady: (isReady: boolean) => void;
   onStart: () => void;
   onLeave: () => void;
-  /* ==================================================================
-      DESIGN NOTE 1415: THE TERMS ARE READ HERE, NOT WRITTEN
-     ==================================================================
-     `onSetVariants` IS GONE. #910 put the house-rules controls on this screen so every seat could see them
-     before agreeing; the host now chooses them on the setup card BEFORE the room exists (`HostSetupCard`),
-     and "rules frozen after Create Room" is the ruling. What this screen keeps is #910's real point -- the
-     terms are on the room document and every seat reads the same ones -- drawn as a summary rather than a
-     form. A host who wants different terms hosts a different room.
-     `onKick` IS NEW: the host removes a joiner, before the start only. `undefined` for a guest. */
+  /** #1415: the host removes a joiner, before the start only. `undefined` for a guest. */
   onKick?: (playerId: string) => void;
   /** LIVE-2D: a watcher of a waiting table takes a seat (`take-seat`). Absent when the table cannot seat them. */
   onTakeSeat?: () => void;
-  /** LIVE-2D: a seated player gives the seat up and keeps watching (`release-seat`); a host's passes the host role on. */
+  /** LIVE-2D: a seated player gives the seat up and keeps watching (`release-seat`). */
   onReleaseSeat?: () => void;
-  /** LIVE-2D, host only: public or private (`set-visibility`; going private rotates the code). */
+  /** NOT OFFERED HERE (handoff §5, §10, §16): visibility is chosen in Host a game and only shown afterwards, and the
+   *  code doesn't change from the waiting room. Kept in the props for the shell's wiring; the server ops stand. */
   onSetVisibility?: (visibility: RoomVisibility) => void;
-  /** LIVE-2D, host only: a new code; the old one stops working at once (`rotate-code`). */
   onRotateCode?: () => void;
-  /** LIVE-2D, host only: hand the host role to another seated player (`transfer-host`). */
+  /** LIVE-2D, host only: hand the host role on (`transfer-host`) -- never at a money table (its host is the escrow's
+   *  creator on Juno), so only a development build's no-ante table offers it. */
   onTransferHost?: (playerId: string) => void;
   /** LIVE-2D, host only: close the table for everybody (`cancel-room`). */
   onCancelRoom?: () => void;
-  /** Phase 3 (P3-N035): a seated player reports another seat's conduct (`room-op report-player`). Absent: no control
-   *  (a Watch tab, a sandbox). The control itself shows only to a seated viewer with someone to report. */
+  /** Phase 3 (P3-N035): a seated player reports another seat's conduct (`room-op report-player`). */
   onReport?: (body: ReportPlayerBody) => Promise<RoomOpResult>;
-  /** ==================================================================
-   *   DESIGN NOTE 1101: THE RADIO WAS ALREADY PLAYING HERE, WITH NOTHING TO PRESS
-   *  ==================================================================
-   *
-   * ASKED: "can we have the radio playable in the Waiting Room and continue smoothly into the game start?"
-   *
-   * THE CONTINUITY HALF NEEDED NO WORK, and that is worth stating because it looks like it should have.
-   * `useRadioStream`'s element is owned by `AppShell`, built once under a `[]`-dep effect and released only
-   * when that component unmounts. This screen and the game shell are two BRANCHES OF THE SAME RENDER -- an
-   * early return and the fall-through -- so the element is already alive here, and pressing Start does not
-   * touch it. No reconnect, no re-buffer, no gap.
-   *
-   * WHAT WAS MISSING WAS REACH. The toggle lives in `TopBar`, which the early return skips, so the stream
-   * sat there with no control attached. This prop is that control and nothing more.
-   *
-   * SUPERSEDED IN PART BY #1102. This first shipped as a plain on/off toggle, on the reasoning that volume
-   * and per-category switches do not belong on a screen whose job is to be left. REPORTED back: "I'm not
-   * sure the audio button should behave one way in the Waiting Room and another in the Game." The reasoning
-   * was sound and the premise was not -- a player should not learn two audio controls for one app -- so this
-   * now renders the very same `AudioControls` the bar does.
-   *
-   * AND IT BUYS THE AUTOPLAY GESTURE. Browsers require a click before audio may start (#1009), which is why
-   * the stream defaults to paused; a click here satisfies it, so the game never has to ask for one. */
+  /** Design note #1101/#1102: the same audio controls the bar carries in the game. */
   audio?: AudioControlsProps["audio"];
+  /** The host started: the sign flips to DEPARTING and holds before the opening titles (§9.4). */
+  departing?: boolean;
+  /** Tests: the room-op sender for the ante editor and the deadline chooser. */
+  sendOp?: typeof roomOp;
 }
+
+const utcHm = (ms: number): string => new Date(ms).toISOString().slice(11, 16);
+/** An amount's number alone ("2.5"), as the ante editor's field shows it (`formatAmount` never groups digits). */
+const plainAmount = (base: string, exponent: number, symbol: string): string => formatAmount(base, exponent, symbol).replace(` ${symbol}`, "");
 
 export function SandboxWaitingRoom({
   roomCode,
@@ -184,7 +147,6 @@ export function SandboxWaitingRoom({
   localPlayerId,
   error,
   busy,
-  onSetNickname,
   onSetColor,
   onToggleReady,
   onStart,
@@ -192,78 +154,115 @@ export function SandboxWaitingRoom({
   onKick,
   onTakeSeat,
   onReleaseSeat,
-  onSetVisibility,
-  onRotateCode,
   onTransferHost,
   onCancelRoom,
   onReport,
   audio,
+  departing: departingHold = false,
+  sendOp = roomOp,
 }: SandboxWaitingRoomProps) {
-  /* Design note #1294: the chrome scale, live. */
   const uiScale = useUiScale();
   const players = room?.players ?? [];
   const me = players.find((player) => player.id === localPlayerId) ?? null;
   /* Design note #1337: one colour per seat, chosen or assigned, the same on every client. */
   const resolvedColors = resolveSeatColors(players);
-  /* LIVE-2D: the ROLE is the server's (`you.role`), never inferred from a stored id or a nickname. */
   const isHost = room?.you.role === "host";
-  /* Design note #910: read off the ROOM, so a guest and the host are looking at one answer. */
   const variants = room?.variants ?? STANDARD_VARIANTS;
-  /* #1415: the table's terms beyond the variants -- who may join, how many, and what a seat puts in. */
+  const type = gameTypeOf(variants);
   const visibility = roomVisibility(room);
-  const seatCap = roomSeatCap(room);
-  const exactCount = typeof room?.playerCount === "number" ? room.playerCount : null;
-  /* LIVE-2: a no-money table's ante is always off. ESCROW-4: a real-money table carries `money` (its stake and funding),
-     and its money panel takes the place of Ready. */
-  const ante = anteBreakdown("0");
+  const exact = typeof room?.playerCount === "number";
+  const cap = room?.playerCount ?? room?.seatCap ?? 0;
   const money = room?.money ?? null;
-  const canKick = isHost && room?.status === "waiting" && !busy && onKick !== undefined;
-  /* ESCROW-4: a real-money table's host is its escrow's creator on Juno -- hosting isn't handed over before the deal. */
-  const canTransfer = isHost && !busy && onTransferHost !== undefined && money === null;
-  /* #1415: this seat was removed -- the server says so in `you.kicked`. */
   const wasKicked = room !== null && room.you.kicked;
-  /* ==================================================================
-      DESIGN NOTE 1441: WATCHING AN OPEN TABLE, SAID OUT LOUD
-     ==================================================================
-     #1441 lets the Lobby offer Watch on a table that is still waiting, so this screen now has a viewer it
-     never had: somebody with no seat who was not kicked out of one. Every control here is already gated on
-     `me` and correctly does nothing for them -- Ready, the colours, the name -- and a screen full of
-     controls that silently refuse is the failure #1415 wrote the full table's reason for.
-     ONE LINE, NOT A MODE. They are looking at the room; what they need is the sentence that explains why
-     none of it is theirs, and the way back to a seat. */
-  const isWatching = room !== null && me === null && !wasKicked;
-  /* #1415: Ready is the deposit, so it asks first; un-Ready is the withdrawal and asks too. */
-  const [readyConfirm, setReadyConfirm] = useState<"deposit" | "withdraw" | null>(null);
+  const hostPlayer = players.find((player) => player.id === room?.hostId) ?? null;
+  const hostName = hostPlayer?.nickname || "The host";
+  const nameOf = (player: { nickname: string }) => player.nickname || "A player";
+
+  /* ---- the money: ONE hook, shared by the pass's action, its status line and the money steps under them */
+  const services = moneyServices();
+  const table = useMoneyTable({ gameId: room?.gameId ?? "", view: money, variants, isHost, services, onStart, clock: room?.clock ?? null });
+  const flow = money !== null ? table.flow : null;
+  const [asking, setAsking] = useState<AskedKind | null>(null);
+  const inFlight = table.busy !== null || busy;
+  const approving = table.busy === "ante" || table.busy === "verify";
+  const fundingOf = (playerId: string): MoneySeatFunding => money?.seats.find((seat) => seat.playerId === playerId)?.funding ?? "none";
+  const myFunding: MoneySeatFunding = money?.you?.funding ?? (me !== null ? fundingOf(me.id) : "none");
+  const escrowOpen = money?.escrow.chainGameId != null;
+  const anyMoney = money !== null && (escrowOpen || players.some((player) => fundingOf(player.id) !== "none" && fundingOf(player.id) !== "linked") || table.pending !== null);
+
+  /* ---- §7: the Keplr approval count, planned at the press and followed as the Ante runs */
+  const [approvals, setApprovals] = useState<{ plan: ApprovalStep[]; seen: ApprovalStep[] } | null>(null);
+  useEffect(() => {
+    const step = approvalOf(table.progress);
+    if (step === null) return;
+    setApprovals((current) => (current === null || current.seen[current.seen.length - 1] === step ? current : { ...current, seen: [...current.seen, step] }));
+  }, [table.progress]);
+  useEffect(() => {
+    if (table.busy === null) setApprovals(null);
+  }, [table.busy]);
+  const pressAnte = () => {
+    setApprovals({
+      plan: plannedApprovals({ connected: table.wallet.kind === "connected", linked: money?.you?.link != null, proofRefused: table.proof === "refused", isHost }),
+      seen: [],
+    });
+    void table.run("ante");
+  };
+
+  /* ---- §6: the tear -- only the moment of funding animates; a seat already funded when the page loads is torn */
+  const fundedIds = players.filter((player) => fundingOf(player.id) === "funded").map((player) => player.id);
+  const fundedKey = fundedIds.join(",");
+  const seenFunded = useRef<Set<string> | null>(null);
+  const [tearing, setTearing] = useState<ReadonlySet<string>>(() => new Set());
+  const tearTimers = useRef<number[]>([]);
+  useEffect(() => {
+    if (money === null) return;
+    const previous = seenFunded.current;
+    seenFunded.current = new Set(fundedIds);
+    if (previous === null) return;
+    const fresh = fundedIds.filter((id) => !previous.has(id));
+    if (fresh.length === 0) return;
+    setTearing((current) => new Set([...Array.from(current), ...fresh]));
+    tearTimers.current.push(
+      window.setTimeout(() => {
+        setTearing((current) => new Set(Array.from(current).filter((id) => !fresh.includes(id))));
+      }, 1_100),
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fundedKey, money === null]);
+  useEffect(() => () => tearTimers.current.forEach((timer) => window.clearTimeout(timer)), []);
+
+  /* ---- local UI state */
   const [kicking, setKicking] = useState<string | null>(null);
-  /* LIVE-2D: the host's two-step confirmations -- hand the host role over, and cancel the table. */
   const [handingOver, setHandingOver] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState(false);
   const [copied, setCopied] = useState(false);
-  /* ==================================================================
-     DESIGN NOTE 1169a: AN INITIALISER IS NOT A SUBSCRIPTION
-     ==================================================================
-     `useState(me?.nickname ?? "")` reads its argument ONCE, on the mount -- and on the mount there is no `me`,
-     because the seat arrives with the first snapshot one round trip later (#764's third state, again). So the
-     field opened empty for a player who already had a name: rejoin a room, or reload into one, and the box
-     said nothing while the roster below it said "B". Found next to #1169 rather than reported, and it is the
-     same shape -- a control drawn from data that had not arrived yet.
-     SEEDED ONCE, AND NEVER OVER TYPING. `touched` is what separates "has not been filled in yet" from "is
-     deliberately empty because I am clearing it", which a `!nicknameText` test would run together. */
   const [skipIntro, setSkipIntro] = useState(() => skipIntroPreferred());
-  const [nicknameText, setNicknameText] = useState(me?.nickname ?? "");
-  const [nicknameTouched, setNicknameTouched] = useState(false);
-  const knownNickname = me?.nickname ?? "";
-  React.useEffect(() => {
-    if (nicknameTouched || knownNickname === "") return;
-    setNicknameText(knownNickname);
-  }, [knownNickname, nicknameTouched]);
+  const [clockOpen, setClockOpen] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
-  /* #1415: "exactly N" means N -- the server refuses the (N+1)th seat, so "at least N" here IS exactly N. */
-  const needed = seatsNeeded(room, MIN_PLAYERS);
-  const enough = players.length >= needed;
-  const allReady = players.length > 0 && players.every((player) => player.isReady);
-  /* LIVE-2D: the server's own start gate (`you.canStart`), with the local readers agreeing for the tooltip. */
-  const canStart = isHost && (room?.you.canStart ?? false) && enough && allReady;
+  /* ---- the sign */
+  const departing = departingHold || room?.status === "playing" || money?.start.state === "starting" || money?.start.state === "started";
+  const status = roomStatus({ departing, seated: players.length, cap, exact });
+  const pace: PaceChoice = {
+    mode: variants.mode,
+    deadline: room?.clock?.deadline ?? (variants.mode === "live" ? "live" : null),
+    paceSecs: room?.clock?.paceSecs ?? null,
+  };
+  const ante = money !== null ? amountText(money, money.terms.anteGross) : null;
+  const exponent = money?.deployment.exponent ?? 6;
+  const symbol = money?.deployment.symbol ?? "JUNOX";
+  const fundedSeats = money?.escrow.fundedSeats ?? 0;
+  const fundOf = exact ? cap : players.length;
+  const totalOf = (n: number): string => (money === null ? "" : formatAmount((BigInt(/^[0-9]{1,40}$/.test(money.terms.anteGross) ? money.terms.anteGross : "0") * BigInt(n)).toString(), exponent, symbol));
+  const fundedLine =
+    money === null
+      ? "No ante at this table (development build)."
+      : `${fundedSeats} of ${fundOf} ${exact ? "seats" : "seated"} funded${fundedSeats > 0 ? ` · ${totalOf(fundedSeats).replace(` ${symbol}`, "")} of ${totalOf(fundOf)}` : ""}`;
+  const variantRows = VARIANT_ROWS.filter((row) => variants[row.key] && !(row.key === "plusTiles" && variants.levelPlayingField));
   const code = room?.code ?? null;
   const copyCode = () => {
     if (code === null) return;
@@ -277,797 +276,783 @@ export function SandboxWaitingRoom({
       /* no clipboard on an insecure origin: the code is `user-select: all` and can be copied by hand */
     }
   };
-  /* Design note #857: what the ROOM is short of, from the same reader `canStartSandboxGame` uses -- so the
-     host's tooltip and the guest's line cannot describe the same room differently. */
-  const block = waitingRoomBlock(room, MIN_PLAYERS);
-  const notice = waitingRoomNotice(room, MIN_PLAYERS, {
-    isHost,
-    isReady: me?.isReady ?? false,
-  });
 
-  /* Design note #529: the numbers this room WOULD be dealt, shown live as people
-     arrive. They are the whole consequence of the player count, and a lobby that
-     hides them makes the count feel cosmetic. `null` off the printed table. */
-  /* #1320: the Level Playing Field has its own tables and a seventh seat, so the figures read the room's
-     variants -- the same object the toggles below edit, so they move the moment the host ticks the box. */
-  /* #1445: the optional rules in force, derived once -- the right region's existence, the left column's
-     "None" line and the rows themselves are three readings of one answer, so there is one filter. */
-  const houseRules = VARIANT_TOGGLES.filter((toggle) => variants[toggle.key]);
-  /* ==================================================================
-      DESIGN NOTE 1446: A RAIL IS FOR A COLUMN'S WORTH OF RULES
-     ==================================================================
-     REPORTED of the single-rule capture: "a full-height divided column is reserved for one short item" --
-     which is #1445's own no-rules argument arriving one case later. An empty rail and a rail holding two
-     lines are the same fault at different sizes.
-     THE COUNT DECIDES, and nothing else. Not the rendered height, not the viewport: a layout chosen by
-     measuring text is a layout that changes when a word is edited, and it cannot be asserted without a
-     browser. `houseRules.length` is the same number on every client and in a unit test.
-     THREE IS THE FLOOR because two of these entries are about a paragraph each -- at two the rail is shorter
-     than the settings beside it, and at three it is the taller column the divider was drawn for.
-     PRESENTATION ONLY. The same array, the same order, the same copy; all that moves is which parent the
-     section is rendered into. */
-  const RULES_FOR_RAIL = 3;
-  const railed = houseRules.length >= RULES_FOR_RAIL;
-  /* One element, rendered into one of two parents -- so the flow and the rail cannot drift into two designs
-     with two sets of copy, which is what a second JSX block here would become. */
-  const houseRulesSection = (
-    <>
-      <h2 style={styles.sectionHeading}>House rules</h2>
-      <div style={styles.variantList}>
-        {houseRules.map((toggle) => (
-          <div key={toggle.key} style={styles.variantToggle}>
-            <span style={styles.termTick} aria-hidden="true">✓</span>
-            <span style={styles.termText}>
-              <span style={styles.termLabel}>{toggle.label}</span>
-              <span style={styles.variantNote}>{toggle.blurb}</span>
-            </span>
-          </div>
-        ))}
-      </div>
-    </>
-  );
+  /* ---- the pass's right half: the status sentence and what it reads */
+  const needed = seatsNeeded(room, MIN_PLAYERS);
+  const allReady = players.length > 0 && players.every((player) => player.isReady);
+  const canStartFree = isHost && (room?.you.canStart ?? false) && players.length >= needed && allReady;
+  const canStart = !departing && (money !== null ? flow?.primary?.kind === "start" : canStartFree);
+  const allIn = money !== null && (exact ? players.length === cap : players.length >= MIN_PLAYERS) && players.every((player) => fundingOf(player.id) === "funded");
+  const blocker = money !== null ? departureBlocker(money, money.start.blocker, table.now, { exact, seated: players.length, cap }) : null;
+  const special =
+    flow === null
+      ? null
+      : flow.stage === "held" || flow.stage === "cancelled" || flow.stage === "started" || flow.stage === "starting"
+        ? flow.headline
+        : myFunding === "unlinked"
+          ? flow.headline
+          : flow.step === "sent" && flow.primary?.kind === "resend"
+            ? flow.headline
+            : /* linked, but the escrow won't take this seat's deposit right now (Juno unreadable, the host's ante gone, …) */
+              myFunding === "linked" && flow.primary === null && (isHost || escrowOpen) && flow.detail !== null
+              ? flow.detail
+              : null;
+  const lead =
+    money === null
+      ? freeTableLead({ departing, isHost, canStart: canStartFree, exact, cap, block: waitingRoomBlock(room, MIN_PLAYERS), ready: me?.isReady ?? false })
+      : leadSentence({
+          departing,
+          isHost,
+          hostName,
+          ante: ante ?? "",
+          exact,
+          seated: players.length,
+          approving,
+          funding: myFunding === "unlinked" ? "unlinked" : myFunding,
+          sending: table.pending !== null && (table.pending.kind === "create" || table.pending.kind === "join"),
+          escrowOpen,
+          allIn,
+          canStart: flow?.primary?.kind === "start",
+          blocker,
+          special,
+        });
+  /* The flow's own detail, under the lead, where it says something the lead doesn't (held, a signed-only deposit, …). */
+  const leadDetail = flow !== null && special === flow.headline && flow.detail !== null ? flow.detail : null;
+
+  /* ---- §6: the host's ante editor (until the first deposit -- the server decides; this hides it once money moved) */
+  const [anteDraft, setAnteDraft] = useState<string | null>(null);
+  const [anteEditing, setAnteEditing] = useState(false);
+  const anteInput = useRef<HTMLInputElement | null>(null);
+  const [anteSending, setAnteSending] = useState(false);
+  const [anteError, setAnteError] = useState<string | null>(null);
+  const anteEditable = isHost && money !== null && !departing && room?.status === "waiting" && !anyMoney && !approving;
+  const anteCurrent = money === null ? "" : plainAmount(money.terms.anteGross, exponent, symbol);
+  const anteTyped = anteDraft ?? anteCurrent;
+  const anteBase = parseAmountToBase(anteTyped, exponent);
+  const anteBelowMin = anteBase !== null && money?.terms.minAnte != null && BigInt(anteBase) < BigInt(money.terms.minAnte);
+  const openAnteEditor = () => {
+    setAnteEditing(true);
+    setAnteDraft(anteCurrent);
+    setAnteError(null);
+    window.setTimeout(() => anteInput.current?.select(), 0);
+  };
+  const closeAnteEditor = () => {
+    setAnteEditing(false);
+    setAnteDraft(null);
+    setAnteError(null);
+  };
+  const submitAnte = () => {
+    if (room === null || money === null) return;
+    if (anteBase === null) {
+      setAnteError(`Enter the ante in ${symbol}, like 10 or 2.5 (above zero).`);
+      return;
+    }
+    if (anteBelowMin) {
+      setAnteError(`The smallest ante Juno's escrow accepts is ${formatAmount(money.terms.minAnte, exponent, symbol)}.`);
+      return;
+    }
+    setAnteSending(true);
+    setAnteError(null);
+    void sendOp({ type: "set-ante", stake: anteBase }, room.gameId).then((answer) => {
+      setAnteSending(false);
+      if (answer.ok) closeAnteEditor();
+      else setAnteError(answer.reason);
+    });
+  };
+
+  /* ---- §8: the player panel (the lobby's public history; the tablemate facts for seated viewers) */
+  const [panel, setPanel] = useState<{ playerId: string; anchor: HTMLElement } | null>(null);
+  /* The table's public answer, read once per roster: null while it is read; "private" / "error" when it can't be. */
+  const [history, setHistory] = useState<{ key: string; seats: PublicSeatHistory[] | "private" | "error" | null } | null>(null);
+  const roster = players.map((player) => player.id).join(",");
+  const historyKey = `${room?.gameId ?? ""}|${roster}|${visibility}`;
+  const closePanel = useCallback(() => setPanel(null), []);
+  useEffect(() => {
+    if (panel === null || room === null) return undefined;
+    if (history !== null && history.key === historyKey) return undefined;
+    /* The endpoint answers only for a table in the public list (`publicHistory.ts`): a private table's names are not
+       tied to anyone's public record here. */
+    if (visibility !== "public") {
+      setHistory({ key: historyKey, seats: "private" });
+      return undefined;
+    }
+    setHistory({ key: historyKey, seats: null });
+    let live = true;
+    void readPublicPlayers(room.gameId).then(
+      (seats) => live && setHistory({ key: historyKey, seats: seats ?? "error" }),
+      () => live && setHistory({ key: historyKey, seats: "error" }),
+    );
+    return () => {
+      live = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [panel, historyKey]);
+  const panelPlayer = panel === null ? null : (players.find((player) => player.id === panel.playerId) ?? null);
+  useEffect(() => {
+    if (panel !== null && panelPlayer === null) setPanel(null);
+  }, [panel, panelPlayer]);
+  const panelHistory = (seat: number): PanelHistory => {
+    const seats = history?.key === historyKey ? history.seats : null;
+    if (seats === null) return { state: "loading" };
+    if (seats === "private") return { state: "private" };
+    if (seats === "error") return { state: "error" };
+    return { state: "ok", history: seats.find((entry) => entry.seat === seat)?.history ?? null };
+  };
+  const openPanel = (playerId: string, anchor: HTMLElement) => setPanel((current) => (current?.playerId === playerId ? null : { playerId, anchor }));
+
+  /* ---- what each seat's pass says */
+  const passState = (playerId: string): PassState => {
+    if (money === null) return players.find((player) => player.id === playerId)?.isReady ? "ready" : "not-ready";
+    const funding = fundingOf(playerId);
+    if (funding === "funded") return "paid";
+    if (funding === "sent") return "sent";
+    if (funding === "unlinked") return "unlinked";
+    if (playerId === room?.hostId && !escrowOpen) return "opens";
+    return "none";
+  };
+  const stampOf = (state: PassState): "sent" | "boarded" | null => (state === "paid" ? "boarded" : state === "sent" ? "sent" : null);
+
+  /* ---- the action printed on your pass */
+  const passAction = (): JSX.Element | null => {
+    if (departing || me === null) return null;
+    const startButton = (enabled: boolean, testId: string) => (
+      <button type="button" className="rm-btn rm-primary rm-big" onClick={onStart} disabled={!enabled || busy || inFlight} title="Locks the seats with the escrow and starts the game on Juno." data-testid={testId}>
+        Start game
+      </button>
+    );
+    if (money === null) {
+      return (
+        <>
+          <button type="button" className={isHost ? "rm-qbtn" : "rm-btn rm-primary rm-big"} onClick={() => onToggleReady(!me.isReady)} disabled={busy} data-testid="ready-toggle">
+            {me.isReady ? "Not ready" : "Ready to play"}
+          </button>
+          {isHost ? startButton(canStartFree, "start-game") : null}
+        </>
+      );
+    }
+    if (flow === null) return null;
+    if (approving) {
+      return (
+        <button type="button" className="rm-btn rm-primary rm-big" disabled data-testid="money-action-ante">
+          Approve in Keplr…
+        </button>
+      );
+    }
+    if (flow.step === "sent" && flow.primary?.kind !== "resend") {
+      return (
+        <button type="button" className="rm-btn rm-primary rm-big" disabled data-testid="money-sent">
+          Sent · waiting for Juno
+        </button>
+      );
+    }
+    if (myFunding === "funded") {
+      /* §6: once the host has anted, Start game takes the Ante's place (disabled until the table can start; the status
+         sentence says why). A funded guest gets Withdraw deposit there -- and, past the server's grace for a host who
+         hasn't started, Start game too (`money.start.canStart`, Play's existing rule). */
+      const withdraw = isHost ? undefined : flow.others.find((action) => action.kind === "withdraw");
+      const guestStart = !isHost && flow.primary?.kind === "start";
+      return (
+        <>
+          {isHost || guestStart ? startButton(canStart, "money-action-start") : null}
+          {withdraw !== undefined ? (
+            <button type="button" className="rm-qbtn" onClick={() => setAsking("withdraw")} disabled={inFlight} title={withdraw.title} data-testid="money-action-withdraw">
+              {withdraw.label}
+            </button>
+          ) : null}
+        </>
+      );
+    }
+    const primary = flow.primary;
+    if (primary === null || primary.kind === "start") return null;
+    const isAnte = primary.kind === "ante" || primary.kind === "verify";
+    /* Guests before the host has anted: the Ante is shown, disabled (the lead sentence says why -- §6, open question 1). */
+    const disabled = inFlight || flow.blocker !== null || primary.kind === "verify";
+    return (
+      <button
+        type="button"
+        className="rm-btn rm-primary rm-big"
+        disabled={disabled}
+        title={primary.kind === "verify" ? "Opens once the host's ante has opened the table on Juno." : primary.title}
+        onClick={() => (primary.kind === "ante" ? pressAnte() : void table.run(primary.kind))}
+        data-testid={`money-action-${primary.kind === "verify" ? "ante" : primary.kind}`}
+      >
+        {primary.kind === "connect" ? <KeplrMark /> : null}
+        {isAnte ? `Ante ${ante}` : table.busy === primary.kind ? `${primary.label}…` : primary.label}
+      </button>
+    );
+  };
+  const keplrLine = approving ? (approvalStatus(approvals?.plan ?? [], approvals?.seen ?? []) ?? "Keplr shows each step before anything moves.") : "";
+
+  const cancelEscrow = flow?.others.find((action) => action.kind === "cancel-escrow") ?? null;
+  const hostMoneyOut = money !== null && (fundedSeats > 0 || escrowOpen);
+  const termsLine = `${GAME_TYPE_COPY[type].label} · ${paceText(pace)} · ${bankText(variants.length)}`;
   const cash = startingCashForPlayers(players.length, variants);
   const certs = certLimitForPlayers(players.length, variants);
-  const maxPlayers = seatCap;
 
-  /* Design note #1144: the same 70% the shell and the lobby draw at. This screen is the one the report named
-     first -- "did the Waiting Room panel become huge at some point?" -- and #1137 answered the half of that
-     question that was about the ROOT. This is the other half: the panel really is drawn larger than the
-     player has been reading it at, because they have been reading everything at 70%. */
   return (
-    <div style={{ ...styles.root, ...chromeZoomFor(uiScale) }}>
-      <style>{zoomAwareMediaCss(WAITING_ROOM_CSS, uiScale)}</style>
-      {/* Design note #1266: the photograph, on its own fixed layer. */}
-      <div style={styles.sceneLayer} aria-hidden="true" />
-      {/* Design note #1138: the anteroom gets the shell's own title bar -- one control, one position, both
-          screens. `roomName` carries the code, so the bar shows it the way the game does. */}
-      <TopBar roomName={roomCode} onLeaveGame={onLeave} audio={audio} />
-      <div style={styles.surfaceWrap}>
-        <div
-          style={{ ...styles.surface, ...(railed ? null : styles.surfaceSolo) }}
-          data-testid="waiting-room-main"
-        >
-          <div className={railed ? "wr-columns" : "wr-columns wr-columns-solo"}>
-            {/* ==================================================================
-                 PRIMARY: WHERE AM I, WHO IS HERE, WHAT DO I DO NOW
-                ==================================================================
-                #1443's order, and the visual weight follows it: the room's identity, then the people, then
-                the one action. The terms are the second column because a seat reads them once and acts on
-                the roster continuously. */}
-            <div style={styles.primary}>
-              {/* ==================================================================
-                   DESIGN NOTE 1444: THE GAME IS THE SUBJECT; THE CODE IS THE ADDRESS
-                  ==================================================================
-                  REPORTED: "the current oversized green room code still receives the emphasis that should
-                  belong to the Game." #1443 unboxed the code and, having unboxed it, left it at the size the
-                  box had been sized for -- so the largest thing on a screen about a game was a string you
-                  only need in order to reach it.
-                  THREE STEPS, ONE ORDER, BOTH VISIBILITIES: the page says what it is, the game says what is
-                  being played, the room says where. A private table needs its code no more prominently than a
-                  public one -- the code is equally load-bearing there and equally not the subject -- so the
-                  hierarchy does not fork, which is one fewer thing that can disagree between two rooms.
-                  THE CODE KEEPS ITS MONOSPACE, ITS LETTER-SPACING, ITS GREEN AND ITS `user-select: all`. Those
-                  are what make it readable aloud and copyable in one gesture; only the size was the claim. */}
-              <h1 style={styles.title}>Waiting room</h1>
-              <p style={styles.gameName}>{GAME_TYPE_COPY[gameTypeOf(variants)].label}</p>
-              <p style={styles.roomLine}>
-                <span style={styles.roomLabel}>Room</span>
-                <code style={styles.code} data-testid="waiting-room-code">{code ?? roomCode}</code>
-                {code !== null && (
-                  <button type="button" className="wr-touch" style={styles.quietButton} onClick={copyCode} data-testid="copy-code">
-                    {copied ? "Copied" : "Copy code"}
-                  </button>
-                )}
-                {isHost && onRotateCode && (
-                  <button
-                    type="button"
-                    className="wr-touch"
-                    style={styles.quietButton}
-                    onClick={onRotateCode}
-                    disabled={busy}
-                    title="A new code for this table. The old one stops working at once; anyone already here stays."
-                    data-testid="rotate-code"
-                  >
-                    New code
-                  </button>
-                )}
-              </p>
-              {/* #1445: the game's own sentence, kept when its row left the settings list. The TITLE is not
-                  duplicated by it (that is why the row went), but the description is the only statement on
-                  this screen of what the table is actually playing -- and under the Level Playing Field it is
-                  the only place the map's differences are listed at all. Below the code, so the title and the
-                  address stay the pair the eye reads first. */}
-              <p style={styles.gameNote}>{GAME_TYPE_COPY[gameTypeOf(variants)].blurb}</p>
-
-              {/* #1443: name and colour are ONE operation -- who you are at this table -- so they share a
-                  heading and a row rather than sitting as two unlabelled controls. A watcher has no seat to
-                  name or colour, so the block is absent rather than disabled (#1441's rule, applied here). */}
-              {!isWatching && (
-                <section style={styles.block} aria-labelledby="wr-you">
-                  <h2 id="wr-you" style={styles.sectionHeading}>
-                    Your seat
-                  </h2>
-                  <form
-                    style={styles.nickRow}
-                    onSubmit={(event) => {
-                      event.preventDefault();
-                      onSetNickname(nicknameText);
-                    }}
-                  >
-                    <input
-                      className="wr-touch"
-                      style={styles.input}
-                      value={nicknameText}
-                      onChange={(event) => {
-                        setNicknameTouched(true);
-                        setNicknameText(event.target.value);
-                      }}
-                      placeholder="Your name"
-                      aria-label="Your nickname"
-                      maxLength={20}
-                    />
-                    <button type="submit" className="wr-touch" style={styles.button} disabled={busy}>
-                      Set name
-                    </button>
-                  </form>
-                  {/* Design note #569a: optional by construction -- a seat that never touches this gets the
-                      palette by index and is never colourless. Taken colours are DISABLED rather than hidden:
-                      a greyed swatch with the holder's name says why it cannot be chosen, where removing it
-                      would make the palette a different size for every player and look like a bug. */}
-                  <div style={styles.colorRow} role="group" aria-label="Your colour">
-                    {SEAT_COLORS.map((color) => {
-                      /* #1337: a seat's DEFAULT colour is held too -- the table sees colours, not intents. */
-                      const holder = players.find(
-                        (player) => resolvedColors[player.id] === color && player.id !== localPlayerId,
-                      );
-                      const mine = me?.color === color;
-                      return (
-                        <button
-                          key={color}
-                          type="button"
-                          aria-pressed={mine}
-                          aria-label={SEAT_COLOR_NAMES[color] ?? color}
-                          disabled={busy || !me || holder !== undefined}
-                          onClick={() => onSetColor(mine ? null : color)}
-                          title={
-                            holder
-                              ? `${holder.nickname || "Another player"} has taken ${SEAT_COLOR_NAMES[color] ?? "this"}.`
-                              : mine
-                                ? `${SEAT_COLOR_NAMES[color] ?? "This colour"} — click again to let the game assign one.`
-                                : (SEAT_COLOR_NAMES[color] ?? color)
-                          }
-                          style={{
-                            ...styles.swatch,
-                            backgroundColor: color,
-                            ...(mine ? styles.swatchMine : {}),
-                            ...(holder ? styles.swatchTaken : {}),
-                          }}
-                        />
-                      );
-                    })}
-                  </div>
-                </section>
-              )}
-
-              <section style={styles.block} aria-labelledby="wr-players">
-                <h2 id="wr-players" style={styles.sectionHeading}>
-                  Players
-                  {/* #1443: the seat count belongs to the heading it counts. It used to trail the deal line,
-                      where "certificate limit 18." and "4 of 4 seats" ran together as "18.4". */}
-                  <span style={styles.seatCount}>
-                    {players.length} of {maxPlayers} seats{exactCount !== null ? " (exactly)" : ""}
+    <div className="rm" style={{ ...styles.root, ...chromeZoomFor(uiScale) }} data-testid="waiting-room-main">
+      <style>{zoomAwareMediaCss(ROOM_DESIGN_CSS, uiScale)}</style>
+      {/* Design note #1138: the shell's own title bar -- one control, one position, both screens. */}
+      <TopBar onLeaveGame={onLeave} audio={audio} />
+      <main className="rm-wrap">
+        {/* ================================================================ the sign (§5) */}
+        <section className="rm-gate" style={{ ["--rm-ed" as string]: EDITION_TOKEN[type] } as React.CSSProperties} aria-labelledby="rm-g-title" data-testid="room-sign">
+          <div className="rm-g-top">
+            <span className="rm-kick">Waiting room</span>
+            <span className="rm-g-top-r">
+              <span className="rm-g-four">
+                <span className="rm-lab">Table</span>
+                <SplitFlap text={code === null ? "----" : code.slice(-4)} width={4} className="rm-flap-sm" label={code === null ? "Private table" : `Table ${code.slice(-4)}`} />
+              </span>
+              <span className="rm-clock" aria-label="Time now, UTC">
+                {clockText(now)}
+              </span>
+            </span>
+          </div>
+          <div className="rm-g-main">
+            <Lockup type={type} as="h1" id="rm-g-title" />
+            <dl className="rm-g-fields">
+              <div className="rm-g-st">
+                <dt>Status</dt>
+                <dd>
+                  <SplitFlap text={ROOM_STATUS_WORD[status]} width={10} className={`rm-flap-lg ${ROOM_STATUS_CLASS[status]}`} label={ROOM_STATUS_WORD[status]} testId="room-status" />
+                </dd>
+              </div>
+              <div>
+                <dt>Seats</dt>
+                <dd>
+                  <SplitFlap text={`${players.length}/${cap}`} width={3} className="rm-flap-sm" label={`${players.length} of ${cap} seats`} testId="room-seats" />
+                  <span className="rm-pips" aria-hidden="true">
+                    {Array.from({ length: cap }, (_, i) => (
+                      <i key={i} className={i < players.length ? "rm-on" : undefined} />
+                    ))}
                   </span>
-                </h2>
-                <ul style={styles.roster} aria-label="Players in this room">
-                  {players.length === 0 ? (
-                    <li style={styles.emptySeat}>Nobody here yet.</li>
-                  ) : (
-                    players.map((player) => (
-                      <li key={player.id} className="wr-seat" style={styles.seat}>
-                        <span style={styles.seatName}>
-                          {/* Design note #569: the seat's colour, where the seat is named -- so a player can
-                              see the assignment before the game starts rather than on the board. */}
-                          <span
-                            style={{ ...styles.rosterDot, backgroundColor: resolvedColors[player.id] }}
-                            aria-hidden="true"
-                          />
-                          <span style={styles.seatNameText}>{player.nickname || "unnamed"}</span>
-                          {player.id === room?.hostId && <span style={styles.hostTag}>Host</span>}
-                          {player.id === localPlayerId && <span style={styles.youTag}>You</span>}
-                        </span>
-                        {money !== null ? (
-                          <span
-                            style={money.seats.find((seat) => seat.playerId === player.id)?.funding === "funded" ? styles.ready : styles.notReady}
-                            data-testid={`money-seat-${player.id}`}
-                          >
-                            {fundingTag(money.seats.find((seat) => seat.playerId === player.id)?.funding ?? "none")}
-                          </span>
-                        ) : (
-                          <span style={player.isReady ? styles.ready : styles.notReady}>
-                            {player.isReady ? "Ready" : "Not ready"}
-                          </span>
-                        )}
-                        <span style={styles.seatControls}>
-                          {/* LIVE-2D: the seat PINs are gone -- a seat is its principal's, bound by the server. */}
-                          {!player.online && player.id !== localPlayerId && (
-                            <span style={styles.faintNote} title="This player has no table open right now.">away</span>
-                          )}
-                          {/* LIVE-2D: the host hands the host role on -- asked twice, inline, like a removal. */}
-                          {canTransfer && player.id !== room?.hostId && (
-                            handingOver === player.id ? (
-                              <span style={styles.kickConfirm}>
-                                <button
-                                  type="button"
-                                  className="wr-touch"
-                                  style={styles.quietButton}
-                                  onClick={() => {
-                                    setHandingOver(null);
-                                    onTransferHost?.(player.id);
-                                  }}
-                                  data-testid={`transfer-confirm-${player.id}`}
-                                >
-                                  Make host
-                                </button>
-                                <button type="button" className="wr-touch" style={styles.quietButton} onClick={() => setHandingOver(null)}>
-                                  Keep
-                                </button>
-                              </span>
-                            ) : (
-                              <button
-                                type="button"
-                                className="wr-touch"
-                                style={styles.quietButton}
-                                onClick={() => setHandingOver(player.id)}
-                                title={`Make ${player.nickname || "this player"} the host. You keep your seat.`}
-                                data-testid={`transfer-${player.id}`}
-                              >
-                                Host ⇄
-                              </button>
-                            )
-                          )}
-                          {/* #1415: the host removes a joiner -- never themselves, never after the start.
-                              Asked twice, inline: a seat is a person, and a mis-click here is a person gone. */}
-                          {canKick && player.id !== room?.hostId && (
-                            kicking === player.id ? (
-                              <span style={styles.kickConfirm}>
-                                <button
-                                  type="button"
-                                  className="wr-touch"
-                                  style={styles.kickButtonConfirm}
-                                  onClick={() => {
-                                    setKicking(null);
-                                    onKick?.(player.id);
-                                  }}
-                                  data-testid={`kick-confirm-${player.id}`}
-                                >
-                                  Remove
-                                </button>
-                                <button type="button" className="wr-touch" style={styles.quietButton} onClick={() => setKicking(null)}>
-                                  Keep
-                                </button>
-                              </span>
-                            ) : (
-                              <button
-                                type="button"
-                                className="wr-touch"
-                                style={styles.kickButton}
-                                onClick={() => setKicking(player.id)}
-                                aria-label={`Remove ${player.nickname || "this player"} from the table`}
-                                title="Remove this player. They cannot rejoin this room."
-                                data-testid={`kick-${player.id}`}
-                              >
-                                ✕
-                              </button>
-                            )
-                          )}
-                        </span>
-                      </li>
-                    ))
-                  )}
-                </ul>
-
-                {/* Design note #529: what this many players are dealt. Its own sentence now -- see the
-                    seat-count note above for the run-together it used to make. */}
-                <p style={styles.note}>
-                  {cash !== null && certs !== null ? (
-                    <>
-                      {players.length} players — <strong style={styles.figure}>${cash}</strong> each,
-                      certificate limit <strong style={styles.figure}>{certs}</strong>.
-                    </>
-                  ) : exactCount !== null ? (
-                    `The host set this table for exactly ${exactCount} players. Waiting for more.`
-                  ) : (
-                    `Project 18XX is dealt for ${MIN_PLAYERS}–${maxPlayers} players. Waiting for more.`
-                  )}
-                </p>
-                {/* LIVE-2D: the seat is this browser's -- reload or reconnect and it is still yours. */}
-                <p style={styles.faintNote}>
-                  Your seat is kept for your profile: reload, reconnect or sign in on another device and you are still seated.
-                </p>
-              </section>
-
-              {/* ==================================================================
-                   DESIGN NOTE 1415: READY IS THE DEPOSIT
-                  ==================================================================
-                  RULED: "Players get a seat, then when they click 'Ready' they ante into the game. Then the
-                  Host starts the game." So the button asks first, with the figures: the ante, the treasury's
-                  share, and what reaches the pool -- the same three numbers the receipt will carry. Un-Ready
-                  is the withdrawal and asks the same way.
-                  #1443: THE CONFIRMATION IS THE ONE PANEL LEFT ON THIS SCREEN, and it earns its box: it is a
-                  transient state that interrupts the page, which is exactly the object a bounded surface is
-                  for. Everything that merely GROUPED content lost its border in this pass. */}
-              {readyConfirm && (
-                <div style={styles.readyConfirm} role="dialog" aria-label={readyConfirm === "deposit" ? "Confirm your ante" : "Withdraw your ante"}>
-                  <span style={styles.confirmTitle}>
-                    {readyConfirm === "deposit" ? "Ready to play — ante into this game?" : "Not ready — withdraw your ante?"}
-                  </span>
-                  <span style={styles.note}>
-                    {readyConfirm === "deposit" ? (
-                      <>
-                        Ante <strong style={styles.figure}>{formatJuno(ante.anteUjuno)}</strong> · developer
-                        treasury <strong style={styles.figure}>{formatJuno(ante.subsidyUjuno)}</strong> · to the
-                        pool <strong style={styles.figure}>{formatJuno(ante.netUjuno)}</strong>.
-                        {ante.anteUjuno === "0" ? " Nothing moves on this table — the ante is off." : ""}
-                      </>
-                    ) : (
-                      <>
-                        Your ante of <strong style={styles.figure}>{formatJuno(ante.anteUjuno)}</strong> is refunded
-                        and your seat stays. Press Ready again to ante back in.
-                      </>
-                    )}
-                  </span>
-                  <span style={styles.kickConfirm}>
-                    <button
-                      type="button"
-                      className="wr-touch"
-                      style={styles.buttonPrimary}
-                      onClick={() => {
-                        setReadyConfirm(null);
-                        onToggleReady(readyConfirm === "deposit");
-                      }}
-                      disabled={busy}
-                      data-testid="ready-confirm"
-                    >
-                      {readyConfirm === "deposit" ? "Confirm and ante" : "Withdraw"}
-                    </button>
-                    <button type="button" className="wr-touch" style={styles.button} onClick={() => setReadyConfirm(null)}>
-                      Cancel
-                    </button>
-                  </span>
+                  <small>{exact ? "Exactly" : `Any count, up to ${cap}`}</small>
+                </dd>
+              </div>
+              <div>
+                <dt>Ante</dt>
+                <dd>
+                  {ante !== null ? <SplitFlap text={ante} width={Math.max(9, ante.length)} className="rm-flap-sm rm-flap-pink" label={ante} testId="room-ante" /> : <span>None</span>}
+                  <small data-testid="room-funded">{fundedLine}</small>
+                </dd>
+              </div>
+              <div>
+                <dt>Pace</dt>
+                <dd>{paceText(pace)}</dd>
+              </div>
+              <div>
+                <dt>Bank</dt>
+                <dd>{bankText(variants.length)}</dd>
+              </div>
+              <div>
+                <dt>Host</dt>
+                <dd>
+                  {hostName}
+                  {room !== null ? <small>Opened {utcHm(room.createdAtMs)} UTC</small> : null}
+                </dd>
+              </div>
+              {variantRows.length > 0 ? (
+                <div>
+                  <dt>Variants</dt>
+                  <dd>{variantRows.map((row) => row.title).join(", ")}</dd>
                 </div>
-              )}
+              ) : null}
+            </dl>
+          </div>
+          <div className="rm-g-foot">
+            <span className="rm-roomline">
+              <span className="rm-lab">Room</span>
+              <code className="rm-code" data-testid="waiting-room-code">
+                {code ?? roomCode}
+              </code>
+              {code !== null ? (
+                <button type="button" className="rm-qbtn" onClick={copyCode} data-testid="copy-code">
+                  {copied ? "Copied" : "Copy code"}
+                </button>
+              ) : null}
+            </span>
+            <p>{GAME_TYPE_COPY[type].blurb}</p>
+          </div>
+        </section>
 
-              {/* ==================================================================
-                   DESIGN NOTE 1443: A WATCHER IS GIVEN A STATUS, NOT A DISABLED PROMISE
-                  ==================================================================
-                  REPORTED: "Do not present a prominent green Ready to play control that merely happens to be
-                  disabled. That visually promises an action the visitor cannot take."
-                  AND IT IS THE SAME FAULT #1441 REMOVED FROM THE LOBBY one screen earlier: a full table's
-                  disabled Join took the one place a control can be, said no, and hid what the room could
-                  still do. The answer there and here is that a fact about the viewer is written as a fact.
-                  LIVE-2D: a watcher's way to a seat is "Take a seat" -- a server op, refused when the table is
-                  full or the watcher was removed. There is no PIN rejoin and no watch intent any more. */}
-              <div style={styles.actionArea}>
-                {/* #1443: the ready control belongs to a SEAT. A watcher has none and a removed player has
-                    had one taken away -- and a green button that merely happens to be disabled promises
-                    both of them something. The condition is `me`, so neither can be forgotten separately. */}
-                {me ? (
-                  money !== null && room !== null ? (
-                  <>
-                    <MoneyPanel room={room} onStart={onStart} busy={busy} />
-                    {onReleaseSeat && (
-                      <div style={styles.actionRow}>
+        {/* ================================================================ your boarding pass (§6): the sign's full width,
+             two halves -- who you are (left), everything you do before departure (right) */}
+        <div className="rm-you-row">
+          {me !== null && room !== null ? (
+            <BoardingPass
+              big
+              name={nameOf(me)}
+              seat={players.indexOf(me) + 1}
+              seedText={`${me.id}|${players.indexOf(me)}`}
+              color={resolvedColors[me.id] ?? SEAT_COLORS[0]}
+              host={me.id === room.hostId}
+              you
+              away={false}
+              meta={termsLine}
+              ante={ante}
+              torn={myFunding === "funded"}
+              tearing={tearing.has(me.id)}
+              stamp={stampOf(passState(me.id))}
+              onName={(anchor) => openPanel(me.id, anchor)}
+              panelOpen={panel?.playerId === me.id}
+              testId="room-your-pass"
+              actions={
+                <div className="rm-p-act" data-testid="before-departure">
+                  <p className="rm-p-say" role="status" data-testid="room-lead">
+                    {lead}
+                  </p>
+                  {leadDetail !== null ? <p className="rm-why">{leadDetail}</p> : null}
+                  {!isHost && money !== null && !anyMoney && !departing ? <p className="rm-why">The host can still change the ante until the first deposit.</p> : null}
+                  {anteEditable && anteEditing ? (
+                    <form
+                      className="rm-ante-edit"
+                      data-testid="ante-editor"
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        submitAnte();
+                      }}
+                    >
+                      <label htmlFor="rm-ante-in">Ante per seat</label>
+                      <span className="rm-amount">
+                        <input
+                          id="rm-ante-in"
+                          ref={anteInput}
+                          inputMode="decimal"
+                          autoComplete="off"
+                          value={anteTyped}
+                          onChange={(event) => {
+                            setAnteDraft(event.target.value);
+                            setAnteError(null);
+                          }}
+                          aria-describedby="rm-ante-note"
+                          disabled={anteSending}
+                          data-testid="ante-editor-input"
+                        />
+                        <span>{symbol}</span>
+                        <button type="submit" className="rm-qbtn" disabled={anteSending || busy} data-testid="ante-editor-set">
+                          {anteSending ? "Setting…" : "Set ante"}
+                        </button>
+                        <button type="button" className="rm-qbtn" disabled={anteSending} onClick={closeAnteEditor} data-testid="ante-editor-keep">
+                          Keep {ante}
+                        </button>
+                      </span>
+                      <p className="rm-why" id="rm-ante-note">
+                        {anteBase === null
+                          ? `Enter the ante in ${symbol}, like 10 or 2.5 (above zero).`
+                          : `${anteFeeSentence(anteBelowMin ? (money?.terms.anteGross ?? anteBase) : anteBase, money?.terms.feeBps, exponent, symbol)} You can change the ante until the first deposit.`}
+                      </p>
+                    </form>
+                  ) : null}
+                  {!departing ? (
+                    <div className="rm-p-foot">
+                      {anteEditable && anteEditing ? null : passAction()}
+                      {anteEditable && !anteEditing ? (
+                        <button type="button" className="rm-qbtn" onClick={openAnteEditor} disabled={busy} data-testid="ante-editor-open">
+                          Change ante
+                        </button>
+                      ) : null}
+                      {onReleaseSeat ? (
                         <button
                           type="button"
-                          className="wr-touch"
-                          style={styles.quietButton}
+                          className="rm-qbtn"
                           onClick={onReleaseSeat}
                           disabled={busy}
-                          title="Give up your seat and keep watching. With a deposit on Juno, withdraw it first (the host of a real-money table leaves by cancelling it on Juno)."
+                          title={isHost ? "Give up your seat. The host role passes to the next player who joined; with nobody left, the table closes." : "Give up your seat and keep watching this table."}
                           data-testid="release-seat"
                         >
                           Give up seat
                         </button>
-                      </div>
-                    )}
-                  </>
-                  ) : (
-                  <div style={styles.actionRow}>
-                    <button
-                      type="button"
-                      className="wr-touch"
-                      style={me?.isReady ? styles.button : styles.buttonPrimary}
-                      onClick={() => setReadyConfirm(me?.isReady ? "withdraw" : "deposit")}
-                      disabled={busy || !me || readyConfirm !== null}
-                      title={
-                        me?.isReady
-                          ? "Withdraw your ante and mark yourself not ready."
-                          : `Ante ${formatJuno(ante.anteUjuno)} and mark yourself ready.`
-                      }
-                    >
-                      {me?.isReady ? "Not ready" : "Ready to play"}
-                    </button>
-                    {isHost && (
-                      <button
-                        type="button"
-                        className="wr-touch"
-                        style={{ ...styles.buttonStart, ...(canStart ? {} : styles.buttonDisabled) }}
-                        onClick={onStart}
-                        disabled={!canStart || busy}
-                        /* Design note #857: the SAME reader the guest's line uses. This tooltip was the only
-                           statement of what was blocking, and it was hovered by the one person who could act
-                           on it. */
-                        title={
-                          block === "need-players"
-                            ? exactCount !== null
-                              ? `You set this table for exactly ${exactCount} players; ${players.length} ${players.length === 1 ? "is" : "are"} seated.`
-                              : `Project 18XX needs at least ${MIN_PLAYERS} players.`
-                            : block === "need-ready"
-                              ? "Waiting for everyone to mark themselves ready."
-                              : "Deal the game and begin."
-                        }
-                      >
-                        Start game
-                      </button>
-                    )}
-                    {/* LIVE-2D: give the seat up and keep watching (`release-seat`). The host's seat passes the host
-                        role to the next player who joined; a table left with nobody seated closes. */}
-                    {onReleaseSeat && (
-                      <button
-                        type="button"
-                        className="wr-touch"
-                        style={styles.quietButton}
-                        onClick={onReleaseSeat}
-                        disabled={busy}
-                        title={
-                          isHost
-                            ? "Give up your seat. The host role passes to the next player who joined; with nobody left, the table closes."
-                            : "Give up your seat and keep watching this table."
-                        }
-                        data-testid="release-seat"
-                      >
-                        Give up seat
-                      </button>
-                    )}
-                  </div>
-                  )
-                ) : isWatching ? (
-                  <div style={styles.actionRow}>
-                    {money !== null && <StakeStrip money={money} />}
-                    <p style={styles.watchStatus} data-testid="waiting-room-watching">
-                      <span style={styles.watchTag}>Watching</span>
-                      {onTakeSeat
-                        ? "You are watching this table. Take a seat to play; the host may start without you."
-                        : "You are watching this table. There is no seat free; the host may start without you."}
+                      ) : null}
+                      <p className="rm-keplr" role="status" aria-live="polite" data-testid="money-progress">
+                        {keplrLine}
+                      </p>
+                    </div>
+                  ) : null}
+                  {money !== null ? <TermsLink className="rm-link" label="Terms of real-money play" testId="waiting-room-terms-link" /> : null}
+                  {money !== null ? (
+                    <div className="rm-money" data-testid="room-money-steps">
+                      <MoneyPanelView room={room} table={table} services={services} busy={busy} asking={asking} setAsking={setAsking} layout="departure" />
+                    </div>
+                  ) : null}
+                  {anteError !== null || error ? (
+                    <p className="rm-err" role="alert" data-testid="waiting-room-error">
+                      {anteError ?? error}
                     </p>
-                    {onTakeSeat && (
-                      <button
-                        type="button"
-                        className="wr-touch"
-                        style={styles.buttonPrimary}
-                        onClick={onTakeSeat}
-                        disabled={busy}
-                        data-testid="take-seat"
-                      >
-                        Take a seat
-                      </button>
-                    )}
-                  </div>
-                ) : null}
-
-                {/* Design note #857: the guest is told what the host was only hovering. Below the row, because
-                    it is the ANSWER to the button just pressed. Not an error, and drawn so. */}
-                {wasKicked ? (
-                  <span style={styles.error}>
-                    The host removed you from this table. You cannot rejoin it; leave and join or host another.
+                  ) : null}
+                </div>
+              }
+            >
+              {!departing ? (
+                <div className="rm-colour" role="group" aria-labelledby="rm-colour-l">
+                  <span id="rm-colour-l">Set player colour:</span>
+                  <span className="rm-swatches">
+                    {SEAT_COLORS.map((color) => {
+                      /* #1337: a seat's DEFAULT colour is held too -- the table sees colours, not intents. */
+                      const holder = players.find((player) => resolvedColors[player.id] === color && player.id !== localPlayerId);
+                      /* The swatch the seat is drawn in is the pressed one, chosen or assigned (#1337); pressing a
+                         CHOSEN colour again hands the choice back to the game (#569). */
+                      const mine = me.color === color;
+                      const inUse = resolvedColors[me.id] === color;
+                      const label = SEAT_COLOR_NAMES[color] ?? color;
+                      return (
+                        <button
+                          key={color}
+                          type="button"
+                          className="rm-sw"
+                          style={{ ["--c" as string]: color } as React.CSSProperties}
+                          aria-pressed={inUse}
+                          aria-label={label}
+                          disabled={busy || holder !== undefined}
+                          onClick={() => onSetColor(mine ? null : color)}
+                          title={holder ? `${nameOf(holder)} has taken ${label}.` : mine ? `${label} — click again to let the game assign one.` : label}
+                        />
+                      );
+                    })}
                   </span>
-                ) : (
-                  notice && <span style={styles.notice}>{notice}</span>
-                )}
+                </div>
+              ) : null}
+            </BoardingPass>
+          ) : wasKicked ? (
+            <div className="rm-nopass" data-testid="waiting-room-removed">
+              <span className="rm-wtag">Removed</span>
+              <p>You no longer hold a seat at this table.</p>
+              <p className="rm-why">The host removed you from this table. You cannot rejoin it; leave and join or host another.</p>
+              {error ? (
+                <p className="rm-err" role="alert">
+                  {error}
+                </p>
+              ) : null}
+            </div>
+          ) : (
+            <div className="rm-nopass" data-testid="waiting-room-watching">
+              <span className="rm-wtag">Watching</span>
+              <p>{onTakeSeat ? "You are watching this table. Take a seat to play." : "You are watching this table. Every seat is taken."}</p>
+              {onTakeSeat ? (
+                <div className="rm-actions">
+                  <button type="button" className="rm-btn rm-primary rm-big" onClick={onTakeSeat} disabled={busy} data-testid="take-seat">
+                    Take a seat
+                  </button>
+                </div>
+              ) : null}
+              <p className="rm-why">{onTakeSeat ? (ante !== null ? `Taking a seat holds it for you. You board by anteing ${ante}.` : "Taking a seat holds it for you.") : "You can keep watching; the game is shown here when it starts."}</p>
+              {error ? (
+                <p className="rm-err" role="alert">
+                  {error}
+                </p>
+              ) : null}
+            </div>
+          )}
+        </div>
 
-                {error && <span style={styles.error}>{error}</span>}
-
-                {/* Design note #1239 (`introPreference.ts`): THIS browser's choice, not a term of the game --
-                    so it sits with the actions rather than among the rules, is never disabled for guests, and
-                    is not written to the room. */}
-                <label style={styles.skipIntro}>
-                  <input
-                    type="checkbox"
-                    checked={skipIntro}
-                    onChange={(event) => {
-                      setSkipIntroPreferred(event.target.checked);
-                      setSkipIntro(event.target.checked);
-                    }}
-                  />
-                  <span style={styles.termText}>
-                    <span style={styles.termLabel}>Skip the opening titles</span>
-                    <span style={styles.variantNote}>
-                      On this browser only. Other players still see them unless they tick this too.
-                    </span>
-                  </span>
-                </label>
-              </div>
-
-              {/* ==================================================================
-                   DESIGN NOTE 1445: THE ORDINARY SETTINGS BELONG WITH THE ROOM, NOT IN A RAIL
-                  ==================================================================
-                  REPORTED from the captures: "Game Settings should not occupy the right column." #1444 was
-                  right that a setting is not a house rule and wrong about where the distinction goes -- it
-                  gave a rail to the group that is true of EVERY table and left the lower-left empty under a
-                  roster that had finished.
-                  SO THE SETTINGS FALL INTO THE LEFT COLUMN'S FLOW, after the action they qualify, and the
-                  right region becomes what it is named for: the rules this table is playing DIFFERENTLY. The
-                  reading order is the same on both layouts because there is only one source order.
-                  DESIGN NOTE 910 survives every re-layout: a seat reads the TERMS IN FORCE, not the menu, and
-                  they live on the room document so the host and a guest are looking at one answer. */}
-              {/* LIVE-2D: THE HOST'S TABLE CONTROLS -- who may find it, and closing it. Shown to the host only (the
-                  server refuses anybody else); each is one named op. */}
-              {isHost && (onSetVisibility || onCancelRoom) && (
-                <section style={styles.flowSection} aria-labelledby="wr-host" data-testid="waiting-room-host-controls">
-                  <h2 id="wr-host" style={styles.sectionHeading}>Your table</h2>
-                  <div style={styles.actionRow}>
-                    {onSetVisibility && (
-                      <button
-                        type="button"
-                        className="wr-touch"
-                        style={styles.button}
-                        onClick={() => onSetVisibility(visibility === "public" ? "private" : "public")}
-                        disabled={busy}
-                        title={
-                          visibility === "public"
-                            ? "Take this table off the Lobby. The code changes; players already seated stay, watchers are sent back."
-                            : "List this table on the Lobby, so anyone can find it and join."
-                        }
-                        data-testid="toggle-visibility"
-                      >
-                        {visibility === "public" ? "Make private" : "Make public"}
-                      </button>
-                    )}
-                    {onCancelRoom &&
-                      (cancelling ? (
-                        <span style={styles.kickConfirm}>
+        {/* ================================================================ the Boarding board (§8) */}
+        <section className="rm-board" aria-labelledby="rm-boarding-h" data-testid="boarding-board">
+          <div className="rm-b-head">
+            <h2 id="rm-boarding-h">
+              Boarding
+              <span className="rm-count" data-testid="boarding-count">
+                {exact ? `${players.length} of ${cap} seats · exactly` : `${players.length} seated · up to ${cap}`}
+              </span>
+            </h2>
+            <span className="rm-b-hint">Tap a name for their game history</span>
+          </div>
+          <ol className="rm-passes" aria-label="Every seat at this table">
+            {Array.from({ length: Math.max(cap, players.length) }, (_, i) => {
+              const player = players[i];
+              if (player === undefined) return <OpenSeat key={`open-${i}`} seat={i + 1} exact={exact} ante={ante} />;
+              const state = passState(player.id);
+              const isMe = player.id === localPlayerId;
+              const canKick = isHost && !isMe && room?.status === "waiting" && !departing && !busy && onKick !== undefined && player.id !== room?.hostId;
+              const canTransfer = isHost && !isMe && money === null && !departing && onTransferHost !== undefined;
+              return (
+                <BoardingPass
+                  key={player.id}
+                  name={nameOf(player)}
+                  seat={i + 1}
+                  seedText={`${player.id}|${i}`}
+                  color={resolvedColors[player.id] ?? SEAT_COLORS[i % SEAT_COLORS.length]}
+                  host={player.id === room?.hostId}
+                  you={isMe}
+                  away={!player.online}
+                  meta={PASS_STATE_TEXT[state]}
+                  ante={ante}
+                  torn={state === "paid"}
+                  tearing={tearing.has(player.id)}
+                  stamp={stampOf(state)}
+                  hideStamp={kicking === player.id || handingOver === player.id}
+                  onName={(anchor) => openPanel(player.id, anchor)}
+                  panelOpen={panel?.playerId === player.id}
+                  testId={money !== null ? `money-seat-${player.id}` : `room-pass-${player.id}`}
+                >
+                  {canKick || canTransfer ? (
+                    <span className="rm-p-foot">
+                      {kicking === player.id ? (
+                        <>
+                          <span className="rm-why">Remove {nameOf(player)}?</span>
                           <button
                             type="button"
-                            className="wr-touch"
-                            style={styles.kickButtonConfirm}
+                            className="rm-qbtn rm-solid-danger"
                             onClick={() => {
-                              setCancelling(false);
-                              onCancelRoom();
+                              setKicking(null);
+                              onKick?.(player.id);
                             }}
-                            data-testid="cancel-room-confirm"
+                            data-testid={`kick-confirm-${player.id}`}
                           >
-                            Close the table for everyone
+                            Remove
                           </button>
-                          <button type="button" className="wr-touch" style={styles.quietButton} onClick={() => setCancelling(false)}>
-                            Keep it
+                          <button type="button" className="rm-qbtn" onClick={() => setKicking(null)}>
+                            Keep
                           </button>
-                        </span>
+                        </>
+                      ) : handingOver === player.id ? (
+                        <>
+                          <span className="rm-why">Make {nameOf(player)} the host?</span>
+                          <button
+                            type="button"
+                            className="rm-qbtn"
+                            onClick={() => {
+                              setHandingOver(null);
+                              onTransferHost?.(player.id);
+                            }}
+                            data-testid={`transfer-confirm-${player.id}`}
+                          >
+                            Make host
+                          </button>
+                          <button type="button" className="rm-qbtn" onClick={() => setHandingOver(null)}>
+                            Keep
+                          </button>
+                        </>
                       ) : (
-                        <button
-                          type="button"
-                          className="wr-touch"
-                          style={styles.quietButton}
-                          onClick={() => setCancelling(true)}
-                          disabled={busy}
-                          data-testid="cancel-room"
-                        >
-                          Cancel table
-                        </button>
-                      ))}
-                  </div>
-                </section>
-              )}
-
-              <section style={styles.flowSection} aria-labelledby="wr-settings">
-                <h2 id="wr-settings" style={styles.sectionHeading}>Game settings</h2>
-                {/* #1446: "you are agreeing to them when you press Ready" was false for a watcher, who has
-                    no Ready control by design, and odd for the host, who chose them. What is true of every
-                    reader is that they are settled -- so that is what it says, once, for everyone. */}
-                <p style={styles.faintNote}>Fixed when the room opened.</p>
-
-                <dl style={styles.terms}>
-                  {/* #1445: Game and Players are GONE from this list. The game is the page's title and the
-                      roster's heading already carries "3 of 6 seats" / "4 of 4 seats (exactly)" -- a second
-                      copy of either is the duplication #1444 was removing, one level up. */}
-                  <TermRow label="Pace" value={GAME_MODE_COPY[variants.mode].label} note={GAME_MODE_COPY[variants.mode].blurb} />
-                  {/* Phase 3 final clocks: the action deadline (Live: 20:00 per required action; Async: the host's
-                      pace or No deadline, fixed once play begins -- a table with stakes fixed it with its escrow). */}
-                  <TermRow
-                    label="Deadline"
-                    value={room?.clock ? deadlineLabel(room.clock) : variants.mode === "live" ? "Live · 20:00 per action" : money !== null ? "—" : "No deadline"}
-                    note={
-                      room?.clock == null && variants.mode === "async" && money !== null
-                        ? "The table's deadline (fixed with its escrow) is being read from the server."
-                        : room?.clock?.deadline === "no-deadline" || (room?.clock == null && variants.mode === "async")
-                          ? NO_DEADLINE_NOTE
-                          : variants.mode === "live"
-                            ? LIVE_DEADLINE_NOTE
-                            : ASYNC_DEADLINE_NOTE
-                    }
-                  />
-                  {isHost && money === null && variants.mode === "async" && room?.status === "waiting" ? <DeadlineChooser gameId={room.gameId} clock={room.clock ?? null} /> : null}
-                  {/* #1444: the visibility's explanation lives HERE and nowhere else. It used to sit beside
-                      the room code as well, which is where a reader met "Public room — listed on the Lobby"
-                      and then met "Visibility · Public" a column later. */}
-                  <TermRow
-                    label="Visibility"
-                    value={VISIBILITY_COPY[visibility].label}
-                    note={VISIBILITY_COPY[visibility].blurb}
-                  />
-                  {/* #1444: a bank that is not the printed one is a table playing differently, so the row says
-                      so where the value is -- rather than printing the amount a second time under House rules
-                      in order to classify it. */}
-                  <TermRow
-                    label="Bank"
-                    value={bankSizeLabel(variants.length)}
-                    tag={variants.length === "standard" ? undefined : "Non-standard"}
-                    note={GAME_LENGTH_NOTE[variants.length]}
-                  />
-                  {money !== null ? (
-                    <TermRow
-                      label="Stake"
-                      value={`${amountText(money, money.terms.anteGross)} per seat`}
-                      tag="Real money"
-                      note={`Deposited to an escrow on ${money.deployment.chainId}${money.terms.feeBps === null ? "" : `; the escrow keeps ${bpsText(money.terms.feeBps)} of each deposit (not refunded)`}. Winnings are paid to the wallet that deposited.`}
-                    />
-                  ) : (
-                    <TermRow
-                      label="Ante"
-                      value={formatJuno(ante.anteUjuno)}
-                      note={
-                        ante.anteUjuno === "0"
-                          ? ANTE_SUBSIDY_NOTE
-                          : /* PHASE 3 FINAL PLAY TUTORIAL (copy correction): no fee grants exist; the cut is the escrow's fee. */
-                            `${formatJuno(ante.subsidyUjuno)} of each ante is kept as the escrow's fee (not refunded); ${formatJuno(ante.netUjuno)} reaches the pool.`
-                      }
-                    />
-                  )}
-                </dl>
-                {/* P3-ACCT: at a real-money table, the Terms (AUD-20.08) right under the stake they govern, and the
-                    seats' factual history (never a score). Outside the terms list: neither is a term/value pair. */}
-                {money !== null ? (
-                  <p style={{ margin: "4px 0 0", fontSize: "12px" }}>
-                    <TermsLink label="Terms of real-money play" testId="waiting-room-terms-link" />
-                  </p>
-                ) : null}
-                {money !== null && room !== null ? <TableTrustFacts gameId={room.gameId} players={players} /> : null}
-                {/* Phase 3 (P3-N035): report a player's conduct to the operator's review (seated viewers only). */}
-                {onReport !== undefined ? (
-                  <p style={{ margin: "4px 0 0", fontSize: "12px" }}>
-                    <ReportPlayerControl room={room} onReport={onReport} />
-                  </p>
-                ) : null}
-
-                {/* #1445: with no optional rules there is no right region at all -- an empty rail and a
-                    divider around the word "None" is half a surface reserved for an absence. The fact is
-                    still stated, quietly, at the foot of the settings it belongs beside. */}
-                {!houseRules.length && (
-                  <p style={styles.noRulesLine} data-testid="waiting-room-no-house-rules">
-                    House rules · <span style={styles.noneTag}>None</span>
-                  </p>
-                )}
-              </section>
-
-              {/* #1446: one or two rules follow the settings in the same flow, separated by the same rule and
-                  the same space -- a section, not a rail. */}
-              {houseRules.length > 0 && !railed && (
-                <section style={styles.flowSection} data-testid="waiting-room-rules-inline">
-                  {houseRulesSection}
-                </section>
-              )}
-            </div>
-
-            {/* ==================================================================
-                 SECONDARY: WHAT THIS TABLE IS PLAYING DIFFERENTLY
-                ==================================================================
-                #1445: the right region exists for the optional rules in force and for nothing else. Its
-                height is whatever the active rules come to -- one rule is a short column and five is a long
-                one -- and with none active it is not rendered, so the surface becomes a single region rather
-                than a column of settings beside a column of nothing.
-                THE CLASSIFICATION IS THE MODEL'S. `VARIANT_TOGGLES` is the list of optional rules the
-                configuration already keeps, and the filter over it is unchanged: nothing has moved between ON
-                and off, only between headings. The copy is #961a's shared record, so a rule reads here
-                exactly as it did on the setup card. */}
-            {railed && (
-              <div className="wr-secondary" style={styles.secondary} data-testid="waiting-room-rules-rail">
-                {houseRulesSection}
+                        <>
+                          {canKick ? (
+                            <button
+                              type="button"
+                              className="rm-qbtn rm-danger"
+                              onClick={() => setKicking(player.id)}
+                              aria-label={`Remove ${nameOf(player)} from the table`}
+                              title="Remove this player. They cannot rejoin this room."
+                              data-testid={`kick-${player.id}`}
+                            >
+                              ✕ Remove
+                            </button>
+                          ) : null}
+                          {canTransfer ? (
+                            <button type="button" className="rm-qbtn" onClick={() => setHandingOver(player.id)} title={`Make ${nameOf(player)} the host. You keep your seat.`} data-testid={`transfer-${player.id}`}>
+                              Make host
+                            </button>
+                          ) : null}
+                        </>
+                      )}
+                    </span>
+                  ) : null}
+                </BoardingPass>
+              );
+            })}
+          </ol>
+          <div className="rm-deal">
+            <span className="rm-kick">At this count</span>
+            <dl>
+              <div>
+                <dt>Players</dt>
+                <dd>
+                  <SplitFlap text={String(players.length)} width={1} className="rm-flap-gold" label={String(players.length)} />
+                </dd>
               </div>
-            )}
+              <div>
+                <dt>Each starts with</dt>
+                <dd>
+                  <SplitFlap text={cash !== null ? `$${cash.toLocaleString("en-US")}` : "--"} width={6} className="rm-flap-gold" label={cash !== null ? `$${cash.toLocaleString("en-US")}` : "not dealt below two players"} testId="room-cash" />
+                </dd>
+              </div>
+              <div>
+                <dt>Certificate limit</dt>
+                <dd>
+                  <SplitFlap text={certs !== null ? String(certs) : "--"} width={2} className="rm-flap-gold" label={certs !== null ? String(certs) : "not dealt below two players"} testId="room-certs" />
+                </dd>
+              </div>
+            </dl>
           </div>
+          <div className="rm-b-foot">Your seat is kept for your profile: reload, reconnect or sign in on another device and you are still seated.</div>
+        </section>
+
+        {/* ================================================================ Game settings and Variants (§9) */}
+        <div className={variantRows.length > 0 ? "rm-lower rm-two" : "rm-lower"}>
+          <section className="rm-sec rm-quiet" aria-labelledby="rm-settings-h" data-testid="game-settings">
+            <h2 id="rm-settings-h">
+              Game settings <small>Fixed when the table opened</small>
+            </h2>
+            <dl className="rm-terms">
+              <div>
+                <dt>Pace</dt>
+                <dd>
+                  <b data-testid="settings-pace">{paceText(pace)}</b>
+                  <ClockRules pace={pace} feeBps={money?.terms.feeBps ?? null} open={clockOpen} onToggle={setClockOpen} testId="room-clock" />
+                  {isHost && money === null && variants.mode === "async" && room?.status === "waiting" && !departing ? <DeadlineChooser gameId={room.gameId} clock={room.clock ?? null} sendOp={sendOp} /> : null}
+                </dd>
+              </div>
+              <div>
+                <dt>Visibility</dt>
+                <dd>
+                  <b>{VISIBILITY_COPY[visibility].label}</b>
+                  <span>{VISIBILITY_COPY[visibility].blurb}</span>
+                </dd>
+              </div>
+              <div>
+                <dt>Bank</dt>
+                <dd>
+                  <b>{bankText(variants.length)}</b>
+                </dd>
+              </div>
+            </dl>
+            {/* §9.1: under the rows -- Skip the opening titles (seated players), Report a player, and the host's Cancel
+                table under a hairline. Design note #1239: the titles are THIS browser's choice, not a term of the game. */}
+            {me !== null ? (
+              <label className="rm-skip">
+                <input
+                  type="checkbox"
+                  checked={skipIntro}
+                  onChange={(event) => {
+                    setSkipIntroPreferred(event.target.checked);
+                    setSkipIntro(event.target.checked);
+                  }}
+                />
+                <span>
+                  <b>Skip the opening titles</b>
+                  <span>On this browser only. Other players still see them unless they tick this too.</span>
+                </span>
+              </label>
+            ) : null}
+            {onReport !== undefined ? (
+              <p className="rm-why">
+                <ReportPlayerControl room={room} onReport={onReport} />
+              </p>
+            ) : null}
+            {isHost && !departing && room?.status === "waiting" && onCancelRoom ? (
+              <div className="rm-host-end" data-testid="waiting-room-host-controls">
+                {cancelling ? (
+                  <div className="rm-confirm" role="group" aria-label="Cancel the table">
+                    <p>Close this table for everyone? {hostMoneyOut ? "Every deposit comes back to its wallet, minus the fee." : "Nobody has anted, so nothing moves."}</p>
+                    <div className="rm-actions">
+                      <button
+                        type="button"
+                        className="rm-qbtn rm-solid-danger"
+                        disabled={inFlight}
+                        onClick={() => {
+                          setCancelling(false);
+                          /* Once the escrow is open the table closes on Juno (Play's CANCEL_FLOW: Keplr shows the
+                             transaction, every deposit comes back minus the fee); before, it is the room's own cancel. */
+                          if (cancelEscrow !== null) void table.run("cancel-escrow");
+                          else onCancelRoom();
+                        }}
+                        data-testid="cancel-room-confirm"
+                      >
+                        Close the table for everyone
+                      </button>
+                      <button type="button" className="rm-qbtn" onClick={() => setCancelling(false)}>
+                        Keep it
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button type="button" className="rm-qbtn rm-danger" onClick={() => setCancelling(true)} disabled={busy} title="Closes the table for everyone. Every deposit comes back to its wallet, minus the fee." data-testid="cancel-room">
+                    Cancel table
+                  </button>
+                )}
+              </div>
+            ) : null}
+          </section>
+          {variantRows.length > 0 ? (
+            <section className="rm-sec rm-quiet" aria-labelledby="rm-variants-h" data-testid="waiting-room-variants">
+              <h2 id="rm-variants-h">Variants</h2>
+              <ul className="rm-rules">
+                {variantRows.map((row) => (
+                  <li key={row.key}>
+                    <b>{row.title}</b>
+                    <span>{row.blurb}</span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ) : null}
         </div>
-      </div>
-      {/* Design note #1113: the meta-UI credit, the same component and the same moving mark the lobby
-          carries. The waiting room is the one screen between them and had no footer at all. */}
-      <AppFooter surface="meta" />
+      </main>
+      <RoomFooter />
+
+      {panel !== null && panelPlayer !== null && room !== null ? (
+        <PlayerPanel
+          name={nameOf(panelPlayer)}
+          seat={players.indexOf(panelPlayer) + 1}
+          host={panelPlayer.id === room.hostId}
+          playerId={panelPlayer.id}
+          gameId={room.gameId}
+          history={panelHistory(players.indexOf(panelPlayer))}
+          seatedViewer={me !== null}
+          anchor={panel.anchor}
+          onClose={closePanel}
+        />
+      ) : null}
     </div>
   );
 }
 
 export default SandboxWaitingRoom;
 
+/** A development build's no-ante table: its lead sentence (production tables are always anted). */
+function freeTableLead(input: { departing: boolean; isHost: boolean; canStart: boolean; exact: boolean; cap: number; block: ReturnType<typeof waitingRoomBlock>; ready: boolean }): string {
+  if (input.departing) return "Departing.";
+  const waiting = input.block === "need-players" ? (input.exact ? `Waiting for every seat to be taken (${input.cap} players).` : "Waiting for at least 2 players.") : "Waiting for everyone to mark themselves ready.";
+  if (input.isHost) return input.canStart ? "Everyone seated is ready. Start deals the game." : input.ready ? waiting : "No ante at this table (development build). Mark yourself ready, then start once everyone is.";
+  return input.ready ? `You're ready. ${input.block === "host-to-start" ? "Waiting for the host to start the game…" : waiting}` : "No ante at this table (development build). Mark yourself ready when you're set.";
+}
+
 /* ==================================================================
     DESIGN NOTE 1258: THE HOLD IS DRAWN IN THE ROOM IT IS HOLDING FOR
    ==================================================================
-   REPORTED: "screen flash on Host Game."
-   THE FLASH WAS A THIRD SCREEN. Pressing Host unmounts the lobby -- the boardroom photograph -- and the
-   shell's first render is #764's hold: a small card on the bare app ground, no photograph, no title bar,
-   for exactly the one round trip it takes the room document to arrive. Then THIS screen mounts, with its
-   own photograph and its own bar. Two full-bleed scenes with a dark card between them is a flash however
-   short the middle frame is, and the host sees it on every single game.
-   #764 WAS RIGHT THAT THERE MUST BE A HOLD -- the board is not a safe default -- and wrong only about what
-   it looks like. The hold now renders in this component's own root, bar and panel, so the frame between
-   the lobby and the waiting room IS the waiting room, with a sentence where the roster will be. One
-   transition rather than two, and the photograph is already decoded when the roster lands.
-   `roomCode` IS SHOWN IMMEDIATELY. It is known before the document is -- `hostSandboxRoom` returns it --
-   and it is the one thing a host wants to start reading aloud. */
+   The frame between the lobby and the waiting room IS the waiting room -- its ground, its bar and its sign -- with a
+   sentence where the table will be, for the one round trip the room's first view takes. */
 export function SandboxWaitingRoomHold({
   roomCode,
   onLeave,
   audio,
   error = null,
 }: Pick<SandboxWaitingRoomProps, "roomCode" | "onLeave" | "audio"> & {
-  /** LIVE-2F/3D (C9-03): what the server said instead of a view (it could not open the table just now, or it is held)
-   *  -- said here, where the player is looking, rather than a "Fetching" that never ends. */
+  /** LIVE-2F/3D (C9-03): what the server said instead of a view -- said here, where the player is looking. */
   error?: string | null;
 }) {
   const uiScale = useUiScale();
   return (
-    <div style={{ ...styles.root, ...chromeZoomFor(uiScale) }}>
-      <style>{zoomAwareMediaCss(WAITING_ROOM_CSS, uiScale)}</style>
-      <div style={styles.sceneLayer} aria-hidden="true" />
-      <TopBar roomName={roomCode} onLeaveGame={onLeave} audio={audio} />
-      <div style={styles.surfaceWrap}>
-        <div style={styles.surface}>
-          {/* #1443: the hold wears the room's own type, so the frame before the roster lands is the same
-              screen rather than a card that becomes one. */}
-          <div style={styles.primary}>
-            <h1 style={styles.title}>Waiting room</h1>
-            <code style={styles.code}>{roomCode}</code>
-            <p style={styles.visibilityNote} role={error ? "status" : undefined}>{error ?? "Fetching the room…"}</p>
-            <div style={styles.actionRow}>
-              <button type="button" className="wr-touch" style={styles.button} onClick={onLeave}>
-                Cancel
-              </button>
-            </div>
+    <div className="rm" style={{ ...styles.root, ...chromeZoomFor(uiScale) }} data-testid="waiting-room-hold">
+      <style>{zoomAwareMediaCss(ROOM_DESIGN_CSS, uiScale)}</style>
+      <TopBar onLeaveGame={onLeave} audio={audio} />
+      <main className="rm-wrap">
+        <section className="rm-gate" aria-labelledby="rm-hold-h">
+          <div className="rm-g-top">
+            <span className="rm-kick" id="rm-hold-h">
+              Waiting room
+            </span>
+            {roomCode ? <code className="rm-code">{roomCode}</code> : null}
           </div>
-        </div>
-      </div>
-      <AppFooter surface="meta" />
+          <div className="rm-g-foot">
+            <p role={error ? "status" : undefined}>{error ?? "Fetching the room…"}</p>
+            <button type="button" className="rm-qbtn" onClick={onLeave}>
+              Cancel
+            </button>
+          </div>
+        </section>
+      </main>
+      <RoomFooter />
     </div>
   );
 }
 
-/** #1415: one term of the table, read-only -- a label, its value, and the sentence that explains it.
- *  #1443: a real definition pair inside a `<dl>`, separated from its neighbours by a hairline rather than
- *  gathered into a card. The label and the value are the scannable line; the prose sits under both. */
-/** Phase 3 final clocks: the host of a free Async table may change its action deadline until play begins. */
+/** Phase 3 final clocks: the host of a no-ante Async table may change its action deadline until play begins. */
 function DeadlineChooser({ gameId, clock, sendOp = roomOp }: { gameId: string; clock: RoomClockView | null; sendOp?: typeof roomOp }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const value = clock === null || clock.deadline === "no-deadline" ? "none" : String(clock.paceSecs ?? "none");
   return (
-    <div style={styles.term}>
-      <label style={styles.variantNote}>
+    <div>
+      <label className="rm-why">
         Change the deadline:{" "}
         <select
           value={value}
@@ -1093,511 +1078,33 @@ function DeadlineChooser({ gameId, clock, sendOp = roomOp }: { gameId: string; c
           <option value="none">No deadline</option>
         </select>
       </label>
-      {error !== null ? <p style={styles.variantNote} role="alert">{error}</p> : null}
+      {error !== null ? (
+        <p className="rm-err" role="alert">
+          {error}
+        </p>
+      ) : null}
     </div>
   );
 }
 
-function TermRow({ label, value, tag, note }: { label: string; value: string; tag?: string; note?: string }) {
-  return (
-    <div style={styles.term}>
-      <div style={styles.termLine}>
-        <dt style={styles.termLabel}>{label}</dt>
-        <dd style={styles.termValue}>
-          {/* #1444: a classification, beside the value it classifies -- not a second copy of the value under
-              another heading. */}
-          {tag && <span style={styles.termTag}>{tag}</span>}
-          {value}
-        </dd>
-      </div>
-      {note && <p style={styles.variantNote}>{note}</p>}
-    </div>
-  );
-}
-
-/* Design note #1258: the same photograph the root paints, fetched while the player is still in the lobby
-   so it is in the cache before the hold needs it. A `link rel=preload` would want the document head; an
-   `Image` is the same request from here. Idempotent -- the browser dedupes a URL it already holds. */
+/* Design note #1258: what the waiting room paints first, fetched while the player is still in the lobby -- now the
+   boarding passes' rag paper (the design's only raster image). Idempotent: the browser dedupes a URL it holds. */
 export function preloadWaitingRoomScene(): void {
   if (typeof Image === "undefined") return;
   const img = new Image();
-  img.src = `${process.env.PUBLIC_URL ?? ""}/images/waiting-room.jpg`;
+  img.src = RAG_PAPER_URL;
 }
-
-/* ==================================================================
-    DESIGN NOTE 1443: TWO COLUMNS, ONE HAIRLINE, AND NOTHING ELSE DRAWN
-   ==================================================================
-   REPORTED: "almost every level is expressed as another rectangle ... a long, narrow form floating in a
-   large room." SIX NESTED SURFACES for four questions -- the panel, the code box, the roster rows, the house
-   rules card, the confirm, the variant rows -- each one a correct grouping and, together, a page with no
-   hierarchy at all. The same fault this project removed from the Rules Reference, one screen later.
-   THE STRUCTURE DOES THE GROUPING NOW. Two unequal columns on a single surface, divided by one hairline: the
-   room and the people on the left, the terms they are agreeing to on the right. Nothing inside either column
-   is boxed except the ante confirmation, which is a transient state rather than a grouping.
-   ONE MARKUP AT BOTH WIDTHS. The columns collapse to one and the hairline turns from a left border into a
-   top rule; the roster's three cells become a name, a state under it and the controls beside both -- the
-   same `display: contents`-free grid re-placement the Lobby's list uses, which is to say the rows are
-   re-hung rather than re-rendered.
-   `!important` ON THE TOUCH HEIGHT for the reason #1441 recorded: these controls carry inline padding, and
-   an inline declaration outranks any ordinary rule. Only `min-height` is asserted here, which no inline
-   style sets -- the shorthand is left alone so the horizontal padding stays as authored. */
-const WAITING_ROOM_CSS = `
-.wr-columns {
-  display: grid;
-  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
-  /* #1445: "stretch" is about the RULE, not the region. The rules themselves still end where they end --
-     nothing in the right column grows to fill it -- but the hairline that divides the two regions runs the
-     height of the surface, because a divider that stops two thirds of the way down reads as unfinished
-     rather than as a boundary. */
-  align-items: stretch;
-}
-/* #1445: no optional rules, no second region -- and therefore no divider and no half-surface reserved for
-   the word "None". The surface narrows with it (see "surfaceSolo") so one column is a column and not a
-   thousand pixels of prose. */
-.wr-columns-solo { grid-template-columns: minmax(0, 1fr); }
-.wr-secondary {
-  border-left: 1px solid #2a2a2a;
-  margin-left: 30px;
-  padding-left: 30px;
-}
-.wr-seat {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 84px max-content;
-  column-gap: 12px;
-  align-items: center;
-}
-.wr-columns button:focus-visible,
-.wr-columns input:focus-visible { outline: 2px solid #8a8a86; outline-offset: 2px; }
-@media (max-width: 899px) {
-  .wr-columns { grid-template-columns: minmax(0, 1fr); }
-  .wr-secondary {
-    border-left: none;
-    border-top: 1px solid #2a2a2a;
-    margin-left: 0;
-    padding-left: 0;
-    margin-top: 24px;
-    padding-top: 20px;
-  }
-  .wr-seat {
-    grid-template-columns: minmax(0, 1fr) max-content;
-    row-gap: 1px;
-  }
-  .wr-seat > :nth-child(1) { grid-column: 1; grid-row: 1; }
-  .wr-seat > :nth-child(2) { grid-column: 1; grid-row: 2; }
-  .wr-seat > :nth-child(3) { grid-column: 2; grid-row: 1 / span 2; }
-  .wr-touch { min-height: 44px; min-width: 44px; }
-}
-`;
 
 const styles: Record<string, React.CSSProperties> = {
-  /* ==================================================================
-      DESIGN NOTE 1100: THE ONE SCREEN THAT NEVER PAINTED ITS OWN GROUND
-     ==================================================================
-     REPORTED: "the Lobby and Game screens are both full-page in the color scheme, but the Waiting Room has a
-     bright white background that is jarring between the two darks." This root declared layout and padding
-     only, so the page behind the panel was whatever `body` happened to be -- the user-agent default. Both
-     halves are fixed: this root paints itself like its two neighbours, AND `index.html` paints `body`. */
+  /* Design note #1100: the waiting room paints its own ground (the design's ink), like its two neighbours. */
   root: {
-    display: "flex",
-    flexDirection: "column",
-    /* ==================================================================
-        DESIGN NOTE 1443: `align-items: center` WAS CENTRING BY SHRINKING
-       ==================================================================
-       FOUND BY MEASURING, not by looking: this root centred its children by making every one of them
-       shrink-to-fit, which is a different thing from centring a full-width child's contents. `AppFooter`
-       therefore became as wide as the credit inside it -- so a footer that could not fit the window did not
-       merely overflow, it also denied `max-width: 100%` anything to resolve against.
-       THE CENTRING MOVES TO `surfaceWrap`, which is where it belongs: that box is full-width and centres the
-       surface inside itself, exactly as the Lobby's root does for its content column. */
-    minHeight: "100vh",
-    width: "100%",
-    /* ==================================================================
-        DESIGN NOTE 1266: THE STACKING CONTEXT THE PHOTOGRAPH LIVES INSIDE
-       ==================================================================
-       REPORTED: "clicking Ready in the waiting room causes the screen to zoom in a bit?" -- the scene was a
-       background on this root, so it re-fit every time the roster grew. It is a FIXED child at `z-index: -1`
-       now, and these two lines are what make that legal: `position: relative` plus `isolation: isolate` make
-       this root the stacking context the layer sits in, so it paints above this root's own opaque fill
-       instead of behind it. Drop either one and the photograph disappears entirely -- which is exactly what
-       #1443 did for one build while rewriting these styles, and what this note is here to prevent next time. */
     position: "relative",
     isolation: "isolate",
-    backgroundColor: "#0f0f0f",
-    color: "#f2f0eb",
-    fontFamily: FONT_FAMILY,
-    padding: 0,
-    boxSizing: "border-box",
-  },
-  /* Design note #1266: the photograph on its own FIXED layer at `z-index: -1`, so a growing roster cannot
-     re-fit it -- that re-fit was reported as the screen "zooming" on Ready. */
-  sceneLayer: {
-    position: "fixed",
-    inset: 0,
-    zIndex: -1,
-    pointerEvents: "none",
-    backgroundImage:
-      "linear-gradient(rgba(8, 8, 8, 0.24), rgba(8, 8, 8, 0.38)), " +
-      `url("${process.env.PUBLIC_URL ?? ""}/images/waiting-room.jpg")`,
-    backgroundSize: "cover",
-    backgroundPosition: "center",
-    backgroundRepeat: "no-repeat",
-  },
-  surfaceWrap: {
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "center",
     width: "100%",
-    padding: "24px 20px 0",
+    minHeight: "100vh",
+    backgroundColor: "#080808",
     boxSizing: "border-box",
   },
-  /* ==================================================================
-      DESIGN NOTE 1112: NEARLY OPAQUE, AND NO BACKDROP BLUR -- RE-MEASURED FOR #1443's WIDTH
-     ==================================================================
-     0.90 IS A MEASURED FLOOR, NOT A FEEL. A lamp sits directly behind this surface, and it is the brightest
-     thing in the photograph; under the 0.24-0.38 wash the ladder's FAINTEST text step has to clear AA there
-     or the number is wrong.
-     WIDENING TO 1040 COSTS NOTHING, which is the fact this pass had to check rather than assume. The lamp
-     (rgb 246, 255, 213) is already inside the old 520px footprint, so the worst case is the SAME pixel at
-     both widths: measured 4.66:1 for `#8a8a86`, 9.46:1 for `#c8c6c0` and 14.19:1 for `#f2f0eb` over the
-     resulting `rgb(32, 33, 30)`. Past AA on the faintest step, which is what sets the number -- at 0.88 it
-     falls under it.
-     THE CAP IS THE LOBBY'S. 1040px is what `Lobby.tsx` caps its content column at; a third width for the
-     screen between them would be a number with no argument behind it. */
-  surface: {
-    width: "100%",
-    maxWidth: "1040px",
-    padding: "26px 30px 30px",
-    boxSizing: "border-box",
-    borderRadius: RADIUS.layer,
-    border: "1px solid #2a2a2a",
-    backgroundColor: "rgba(15, 15, 15, 0.90)",
-    boxShadow: "0 18px 48px rgba(0, 0, 0, 0.55)",
-  },
-  /* #1445: with one region the cap comes in, because 980px of definition rows is a label at one edge and a
-     value at the other. 720 is about the measure the two-column left region already reads at. */
-  surfaceSolo: { maxWidth: "720px" },
-  primary: { display: "flex", flexDirection: "column", minWidth: 0 },
-  secondary: { display: "flex", flexDirection: "column", minWidth: 0 },
-
-  /* --- where am I --- */
-  /* #1444: the page's own name, sized as a label rather than as the subject -- the game below it is what the
-     screen is about. Same treatment as the section headings, so the three levels read as one ladder. */
-  title: {
-    margin: 0,
-    fontSize: FONT_SIZE.small,
-    fontWeight: 800,
-    letterSpacing: "0.08em",
-    textTransform: "uppercase",
-    color: "#8a8a86",
-  },
-  gameName: {
-    margin: "3px 0 0",
-    fontSize: "26px",
-    fontWeight: 800,
-    letterSpacing: "0.01em",
-    lineHeight: LINE_HEIGHT.tight,
-    color: "#f2f0eb",
-    overflowWrap: "anywhere",
-  },
-  roomLine: { margin: "6px 0 0", display: "flex", alignItems: "baseline", gap: "8px", flexWrap: "wrap" },
-  gameNote: {
-    margin: "8px 0 0",
-    fontSize: FONT_SIZE.small,
-    color: "#8a8a86",
-    lineHeight: LINE_HEIGHT.normal,
-    maxWidth: "52ch",
-  },
-  roomLabel: {
-    fontSize: FONT_SIZE.micro,
-    fontWeight: 700,
-    letterSpacing: "0.08em",
-    textTransform: "uppercase",
-    color: "#8a8a86",
-  },
-  /* #1444: the ADDRESS, not the subject. #1443 unboxed it and left it at 28px -- the size the box had been
-     sized for -- which kept the emphasis the game should carry. What survives is everything that makes it
-     usable: the monospace, the letter-spacing that stops O and 0 running together when it is read aloud, the
-     green it has carried since #1100, and `user-select: all` so one gesture copies the whole code. */
-  code: {
-    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-    fontSize: FONT_SIZE.strong,
-    fontWeight: 800,
-    letterSpacing: "0.12em",
-    color: "#7ee0a1",
-    userSelect: "all",
-  },
-  visibilityNote: {
-    margin: "5px 0 0",
-    fontSize: FONT_SIZE.small,
-    color: "#8a8a86",
-    lineHeight: LINE_HEIGHT.normal,
-    maxWidth: "46ch",
-  },
-
-  /* --- sections --- */
-  block: { display: "flex", flexDirection: "column", marginTop: "22px", minWidth: 0 },
-  sectionHeading: {
-    margin: 0,
-    display: "flex",
-    alignItems: "baseline",
-    flexWrap: "wrap",
-    gap: "10px",
-    fontSize: FONT_SIZE.small,
-    fontWeight: 800,
-    letterSpacing: "0.08em",
-    textTransform: "uppercase",
-    color: "#c8c6c0",
-  },
-  /* #1445: the settings are the last thing in the left column, separated from the action above them by space
-     and a rule -- #1443's constraint, and the same separation #1444 used between the two groups before the
-     settings moved out of the rail. */
-  /* #1446: named for the PLACE rather than for one of its occupants -- the settings and, at one or two
-     rules, the house rules are the same kind of block in the same flow. */
-  flowSection: { display: "flex", flexDirection: "column", marginTop: "26px", paddingTop: "20px", borderTop: "1px solid #2a2a2a", minWidth: 0 },
-  noRulesLine: {
-    margin: "14px 0 0",
-    paddingTop: "10px",
-    borderTop: "1px solid #23231f",
-    fontSize: FONT_SIZE.small,
-    fontWeight: 700,
-    color: "#8a8a86",
-  },
-  termTag: {
-    fontSize: FONT_SIZE.micro,
-    fontWeight: 700,
-    letterSpacing: "0.06em",
-    textTransform: "uppercase",
-    color: "#8a8a86",
-    marginRight: "8px",
-    whiteSpace: "nowrap",
-  },
-  noneTag: {
-    fontSize: FONT_SIZE.micro,
-    fontWeight: 800,
-    letterSpacing: "0.08em",
-    textTransform: "uppercase",
-    color: "#8a8a86",
-  },
-  subHeading: {
-    margin: "14px 0 2px",
-    fontSize: FONT_SIZE.micro,
-    fontWeight: 800,
-    letterSpacing: "0.08em",
-    textTransform: "uppercase",
-    color: "#8a8a86",
-  },
-  seatCount: {
-    fontWeight: 600,
-    letterSpacing: "0.02em",
-    textTransform: "none",
-    color: "#8a8a86",
-    fontVariantNumeric: "tabular-nums",
-  },
-
-  /* --- your seat --- */
-  nickRow: { display: "flex", flexDirection: "row", alignItems: "center", gap: "8px", marginTop: "8px", flexWrap: "wrap" },
-  colorRow: { display: "flex", flexDirection: "row", alignItems: "center", gap: "7px", marginTop: "10px", flexWrap: "wrap" },
-  input: {
-    flex: 1,
-    minWidth: "140px",
-    fontSize: FONT_SIZE.control,
-    padding: "7px 10px",
-    /* An input is `content-box` by default, so the 44px touch floor would have been 44 PLUS its padding and
-       border -- a 60px field beside a 44px button. The border box is what the floor is about. */
-    boxSizing: "border-box",
-    borderRadius: RADIUS.control,
-    border: "1px solid #3a3a3a",
-    backgroundColor: "#141414",
-    color: "#f2f0eb",
-  },
-  swatch: {
-    width: "26px",
-    height: "26px",
-    borderRadius: RADIUS.circle,
-    border: "2px solid transparent",
-    cursor: "pointer",
-    padding: 0,
-  },
-  // #1449: the shorthand, not `borderColor` -- the base is `2px solid transparent`, so the longhand left a
-  // black ring on whichever swatch the player had just left.
-  swatchMine: { border: "2px solid #f2f0eb", boxShadow: "0 0 0 2px rgba(226,230,238,0.25)" },
-  swatchTaken: { opacity: 0.28, cursor: "not-allowed" },
-
-  /* --- the roster: an open list, hairline separated --- */
-  roster: { listStyle: "none", margin: "8px 0 0", padding: 0, minWidth: 0 },
-  seat: {
-    padding: "8px 0",
-    borderBottom: "1px solid #23231f",
-    fontSize: FONT_SIZE.body,
-    color: "#c8c6c0",
-    minWidth: 0,
-  },
-  emptySeat: { listStyle: "none", padding: "8px 0", fontSize: FONT_SIZE.small, color: "#8a8a86" },
-  seatName: { display: "flex", alignItems: "center", gap: "8px", minWidth: 0, flexWrap: "wrap" },
-  seatNameText: { fontWeight: 700, color: "#f2f0eb", overflowWrap: "anywhere", minWidth: 0 },
-  rosterDot: { width: "10px", height: "10px", borderRadius: RADIUS.circle, flex: "none" },
-  hostTag: {
-    fontSize: FONT_SIZE.micro,
-    fontWeight: 700,
-    letterSpacing: "0.06em",
-    textTransform: "uppercase",
-    // Design note #1122: the sandbox heading tone, shared rather than re-picked.
-    color: SANDBOX_TITLE,
-  },
-  youTag: {
-    fontSize: FONT_SIZE.micro,
-    fontWeight: 700,
-    letterSpacing: "0.06em",
-    textTransform: "uppercase",
-    color: "#8a8a86",
-  },
-  seatControls: { display: "inline-flex", alignItems: "center", justifyContent: "flex-end", gap: "6px" },
-  ready: { fontSize: FONT_SIZE.small, color: "#7ee0a1", fontWeight: 700 },
-  notReady: { fontSize: FONT_SIZE.small, color: "#8a8a86" },
-
-  /* --- prose --- */
-  note: { margin: "10px 0 0", fontSize: FONT_SIZE.small, color: "#c8c6c0", lineHeight: LINE_HEIGHT.normal },
-  faintNote: { margin: "6px 0 0", fontSize: FONT_SIZE.small, color: "#8a8a86", lineHeight: LINE_HEIGHT.normal },
-  figure: { color: "#f2f0eb", fontVariantNumeric: "tabular-nums" },
-
-  /* --- what can I do now --- */
-  actionArea: { display: "flex", flexDirection: "column", gap: "10px", marginTop: "24px" },
-  actionRow: { display: "flex", flexDirection: "row", gap: "8px", flexWrap: "wrap", alignItems: "center" },
-  button: {
-    fontSize: FONT_SIZE.control,
-    fontWeight: 700,
-    padding: "8px 16px",
-    borderRadius: RADIUS.card,
-    border: "1px solid #3a3a3a",
-    backgroundColor: "#1c1c1c",
-    color: "#c8c6c0",
-    cursor: "pointer",
-  },
-  quietButton: {
-    fontSize: FONT_SIZE.micro,
-    fontWeight: 700,
-    padding: "4px 9px",
-    borderRadius: RADIUS.control,
-    border: "1px solid #2e2e2e",
-    backgroundColor: "transparent",
-    color: "#a8a6a0",
-    cursor: "pointer",
-    whiteSpace: "nowrap",
-  },
-  buttonPrimary: {
-    fontSize: FONT_SIZE.control,
-    fontWeight: 800,
-    padding: "8px 18px",
-    borderRadius: RADIUS.card,
-    border: "1px solid #2f6f6a",
-    backgroundColor: "#14312f",
-    color: "#7fe0d0",
-    cursor: "pointer",
-  },
-  buttonStart: {
-    fontSize: FONT_SIZE.control,
-    fontWeight: 800,
-    padding: "8px 18px",
-    borderRadius: RADIUS.card,
-    border: "1px solid #38bdf8",
-    backgroundColor: "#1d3a55",
-    color: "#9ec5ff",
-    cursor: "pointer",
-  },
-  buttonDisabled: { opacity: 0.4, cursor: "not-allowed" },
-  /* #1443: the watcher's status. A fact about the viewer, written as one -- the tag carries the same blue
-     the guest's waiting line uses, because both say "nothing is wrong, and nothing is yours to press". */
-  watchStatus: {
-    margin: 0,
-    display: "flex",
-    alignItems: "baseline",
-    flexWrap: "wrap",
-    gap: "4px 10px",
-    fontSize: FONT_SIZE.small,
-    color: "#c8c6c0",
-    lineHeight: LINE_HEIGHT.normal,
-    maxWidth: "58ch",
-  },
-  watchTag: {
-    fontSize: FONT_SIZE.micro,
-    fontWeight: 800,
-    letterSpacing: "0.08em",
-    textTransform: "uppercase",
-    color: "#9ec5ff",
-    border: "1px solid #2f4a68",
-    borderRadius: RADIUS.control,
-    padding: "2px 8px",
-    whiteSpace: "nowrap",
-  },
-  skipIntro: { display: "flex", flexDirection: "row", gap: "9px", alignItems: "flex-start", marginTop: "4px", cursor: "pointer" },
-
-  /* --- the ante confirmation: the one bounded object left, because it is a state and not a grouping --- */
-  readyConfirm: {
-    display: "flex",
-    flexDirection: "column",
-    gap: "8px",
-    marginTop: "22px",
-    padding: "14px 16px",
-    borderRadius: RADIUS.card,
-    border: "1px solid #2f6f6a",
-    backgroundColor: "#12201f",
-  },
-  confirmTitle: { fontSize: FONT_SIZE.strong, fontWeight: 800, color: "#f2f0eb" },
-  kickConfirm: { display: "inline-flex", alignItems: "center", gap: "6px", flexWrap: "wrap" },
-  kickButton: {
-    fontSize: FONT_SIZE.micro,
-    fontWeight: 700,
-    lineHeight: 1,
-    padding: "4px 8px",
-    borderRadius: RADIUS.control,
-    border: "1px solid #5a2f2f",
-    backgroundColor: "transparent",
-    color: "#c07a7a",
-    cursor: "pointer",
-  },
-  kickButtonConfirm: {
-    fontSize: FONT_SIZE.micro,
-    fontWeight: 800,
-    padding: "4px 10px",
-    borderRadius: RADIUS.control,
-    border: "1px solid #7a3a3a",
-    backgroundColor: "#2a1616",
-    color: "#e0a0a0",
-    cursor: "pointer",
-    whiteSpace: "nowrap",
-  },
-
-  /* --- the terms --- */
-  terms: { margin: "10px 0 0", padding: 0, minWidth: 0 },
-  term: { padding: "8px 0", borderTop: "1px solid #23231f", minWidth: 0 },
-  termLine: { display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "10px", flexWrap: "wrap" },
-  termLabel: { margin: 0, fontSize: FONT_SIZE.small, fontWeight: 700, color: "#f2f0eb" },
-  termValue: {
-    margin: 0,
-    fontSize: FONT_SIZE.small,
-    fontWeight: 700,
-    color: "#c8c6c0",
-    fontVariantNumeric: "tabular-nums",
-    textAlign: "right",
-    overflowWrap: "anywhere",
-  },
-  termTick: { color: "#7ee0a1", fontWeight: 800, fontSize: FONT_SIZE.small, lineHeight: LINE_HEIGHT.normal },
-  termText: { display: "flex", flexDirection: "column", gap: "1px", minWidth: 0 },
-  variantList: { display: "flex", flexDirection: "column", gap: "10px", marginTop: "12px" },
-  variantToggle: { display: "flex", flexDirection: "row", gap: "9px", alignItems: "flex-start" },
-  /* Design note #924: these descriptions are the CONTENT of the decision, not a caption on a control whose
-     label already carries it, so they take this app's body treatment rather than micro/grey captions.
-     #1092 retoned this to `#c8c6c0`, the neutral ladder's secondary-text step. */
-  variantNote: {
-    margin: "2px 0 0",
-    fontSize: FONT_SIZE.small,
-    color: "#c8c6c0",
-    lineHeight: LINE_HEIGHT.normal,
-  },
-  notice: {
-    fontSize: FONT_SIZE.small,
-    lineHeight: LINE_HEIGHT.normal,
-    color: "#9ec5ff",
-  },
-  error: { fontSize: FONT_SIZE.small, color: "#e07a7a", lineHeight: LINE_HEIGHT.normal },
 };
+
+export { EDITION_NAME };

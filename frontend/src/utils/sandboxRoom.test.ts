@@ -294,9 +294,11 @@ describe("the waiting room actually renders it", () => {
       path.join(__dirname, "..", "components", "SandboxWaitingRoom.tsx"),
       "utf8",
     );
-    // #1415: the line yields to the "you were removed" notice, so the braces around it moved out.
-    expect(room).toContain("notice && <span style={styles.notice}>{notice}</span>");
-    expect(room).toContain('block === "need-players"');
-    expect(room).toContain('block === "need-ready"');
+    /* PLAY WAITING ROOM: every table a production server makes is anted, and its status sentence is the money flow's
+       (`roomDesign.leadSentence`). A development build's no-ante table still reads THE SHARED BLOCK for its sentence
+       -- the same reader `canStartSandboxGame` uses -- rather than re-deriving it. */
+    expect(room).toContain("block: waitingRoomBlock(room, MIN_PLAYERS)");
+    expect(room).toContain('input.block === "need-players"');
+    expect(room).toContain('input.block === "host-to-start"');
   });
 });

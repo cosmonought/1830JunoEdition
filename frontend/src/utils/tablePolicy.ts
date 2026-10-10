@@ -25,3 +25,19 @@ export const ANTE_UNAVAILABLE_SENTENCE =
 
 /** Said on a no-ante table in the public list (Watch only). */
 export const NO_ANTE_WATCH_ONLY = "No ante — watch only";
+
+/* ==================================================================
+    PLAY HOST A GAME (handoff §11): ANY-COUNT MONEY TABLES ARE GATED, NOT REDESIGNED
+   ==================================================================
+   The approved design offers "Any (up to N)" first, and by default. Deployed Escrow 2.1 requires every seat chosen when
+   its game is created to fund before it can start, so an Any-count money table cannot exist on it: the server refuses a
+   real-money create without an exact count (`moneyTables.prepareCreate`), and so does this page (`stakeChoice`). Owner
+   decision: the escrow is corrected early in Phase 4. Until that correction is certified and this flag turns on WITH
+   it, Any stays visible, first and selected by default -- never hidden, never quietly turned into an exact count, its
+   copy unchanged -- and Create table says why it is blocked and asks for an exact count. No-ante development tables
+   (`FREE_TABLES_OFFERED`) take Any as they always have. */
+export const ANY_COUNT_MONEY_TABLES: boolean = false;
+
+/** Said beside a blocked Create table while Any is chosen on a money table. */
+export const ANY_COUNT_BLOCKED_SENTENCE =
+  "Any-count tables with an ante open once Juno's corrected escrow is certified. For now, choose an exact number of players to create this table.";

@@ -16,6 +16,8 @@ export const moneyStyles = sheet({
      -- and a blue card here was the one grouping that still nested a surface. The review card and the confirmations
      below stay bounded: they are states, the same exception the room makes for its ante confirmation. */
   panel: { display: "flex", flexDirection: "column", gap: "10px", minWidth: 0 },
+  /* PLAY WAITING ROOM: the same steps on your boarding pass (inset there in their own dark look). */
+  departure: { display: "flex", flexDirection: "column", gap: "10px", minWidth: 0 },
   /* The waiting room's section label (its `subHeading`): micro, heavy, tracked, the faint step. */
   sectionLabel: { margin: 0, fontSize: FONT_SIZE.micro, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8a8a86" },
   /* "Escrow details": a quiet disclosure, read as a control rather than as a sentence. */

@@ -183,7 +183,8 @@ describe("the difficulty qualifiers ride on the titles (design note #961a)", () 
       expect(source).not.toContain("<strong>Gentle rust</strong>");
     }
     expect(host).toContain("blurb={VARIANT_COPY[row.key].blurb}");
-    expect(waiting).toContain("VARIANT_COPY[key]");
+    /* PLAY WAITING ROOM: the Variants section reads the same rows (and record) as the host's card. */
+    expect(waiting).toContain("VARIANT_COPY[row.key].blurb");
   });
 
   it("closes the delayed auction with the warning it was given", () => {

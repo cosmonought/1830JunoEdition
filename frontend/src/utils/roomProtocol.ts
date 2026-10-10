@@ -225,6 +225,9 @@ export type RoomOpBody =
   | { type: "transfer-host"; toPlayerId: string }
   | { type: "start-game" }
   | { type: "cancel-room" }
+  /** PLAY WAITING ROOM: the host changes a money table's ante per seat (base units) -- the server allows it only until
+   *  the first deposit (`server/src/escrow/moneyTables.ts` seatOpRefusal "set-ante"). */
+  | { type: "set-ante"; stake: string }
   /** Phase 3 final clocks (`clockProtocol.ts` CLOCK_OPS): the table clock's ops. */
   | { type: "clock-policy"; deadline: ClockDeadlineClass; paceSecs?: number | null }
   | { type: "clock-pause"; action: "request" | "yes" | "no"; kind: "pause" | "resume"; id?: number }

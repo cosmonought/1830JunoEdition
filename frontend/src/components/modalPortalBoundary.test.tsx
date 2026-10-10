@@ -348,7 +348,8 @@ describe("nothing Host Game does changed by moving its DOM", () => {
     open();
     click(labelled("Continue"));
     expect(openCard().contains(document.activeElement)).toBe(true);
-    expect((document.activeElement as HTMLElement).getAttribute("role")).toBe("heading");
+    /* PLAY HOST A GAME: the heading is a real <h2> ("Host a game", described by the step marker). */
+    expect((document.activeElement as HTMLElement).tagName).toBe("H2");
     click(labelled("Back"));
     expect(document.activeElement).toBe(at("host-type-standard"));
   });
@@ -364,7 +365,7 @@ describe("nothing Host Game does changed by moving its DOM", () => {
   it("still resets by unmounting, so a reopen starts from the defaults", () => {
     open();
     click(labelled("Continue"));
-    expect(labelled("Create Room")).toBeDefined();
+    expect(labelled("Create table")).toBeDefined();
     escape();
     open();
     expect(labelled("Continue")).toBeDefined();

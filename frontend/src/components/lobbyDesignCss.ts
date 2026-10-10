@@ -196,8 +196,16 @@ export const LOBBY_DESIGN_CSS = `
 }
 /* ---------------- phone: cards, a stacked header, the seated list as a bottom sheet ---------------- */
 @media (max-width: 640px) {
-  .lb-hero { grid-template-columns: 1fr; padding-block: 4px 24px; }
-  .lb-hero-art { --d: 64px; order: -1; height: 170px; min-height: 0; margin: 0 -16px -36px; }
+  /* the drawing is a full-width backdrop (230px, bleeding over the 16px gutters, the man at the head of the table 40px
+     from the right edge) with the title set into its lower left, in front of it; the line, the buttons and any
+     refusal run full width below, 22px apart (design handoff §2, §9) */
+  .lb-hero { grid-template-columns: minmax(0, 1fr); grid-template-areas: "top" "dek" "doors"; row-gap: 22px; padding-block: 4px 24px; }
+  .lb-hero-l { display: contents; }
+  .lb-lockup { grid-area: top; align-self: end; position: relative; z-index: 1; padding-bottom: 4px; }
+  .lb-dek { grid-area: dek; } .lb-doors { grid-area: doors; } .lb-door-error { grid-row: 4; }
+  .lb-hero-art { grid-area: top; --d: 40px; align-self: stretch; height: 230px; min-height: 0; margin: 0 -16px;
+    -webkit-mask-image: linear-gradient(90deg, transparent 0%, #000 30%, #000 92%, transparent 100%), linear-gradient(180deg, transparent 0%, #000 12%, #000 70%, transparent 100%);
+    mask-image: linear-gradient(90deg, transparent 0%, #000 30%, #000 92%, transparent 100%), linear-gradient(180deg, transparent 0%, #000 12%, #000 70%, transparent 100%); }
   .lb-lockup .lb-name { font-size: 30px; margin-bottom: 10px; }
   .lb-lockup .lb-num { font-size: 80px; }
   .lb-head h2 { font-size: 34px; }

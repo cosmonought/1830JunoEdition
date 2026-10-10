@@ -66,7 +66,8 @@ describe("the room is the page, and the text carries its own ground", () => {
        The full-page photograph (`sceneClip` > `scene`, cover arithmetic in zoom space) is no longer mounted. The
        header is two columns (5fr text, 7fr picture); the picture is Ludum's boardroom drawing, as tall as the text,
        cropped to its top 10-70%, the man at the head of the table held 96px from the box's right edge, and masked
-       so no rectangle shows (design handoff §2). On phones it is a 170px banner above the title. */
+       so no rectangle shows (design handoff §2). On phones it is a full-width 230px backdrop (bleeding over the 16px gutters, the man 40px from the right
+       edge) with the title set into its lower left, in front of it; the line and the doors run full width below. */
     expect(LOBBY).toContain('<section className="lb-hero" aria-labelledby="lobby-title">');
     expect(LOBBY).toContain("/images/p18-board-meeting.webp");
     expect(LOBBY).not.toContain("<div style={styles.sceneClip}");
@@ -75,7 +76,15 @@ describe("the room is the page, and the text carries its own ground", () => {
     expect(DESIGN_CSS).toContain("linear-gradient(180deg, transparent 0%, #000 14%, #000 78%, transparent 100%)");
     expect(DESIGN_CSS).toContain("height: calc(100cqh / .6); top: calc(100cqh / .6 * -.1)");
     expect(DESIGN_CSS).toContain("filter: brightness(.94) contrast(1.22)");
-    expect(DESIGN_CSS).toContain("--d: 64px; order: -1; height: 170px;");
+    expect(DESIGN_CSS).not.toContain("order: -1; height: 170px;");
+    const phone = DESIGN_CSS.slice(DESIGN_CSS.lastIndexOf("@media (max-width: 640px)"));
+    expect(phone).toContain('grid-template-areas: "top" "dek" "doors"; row-gap: 22px;');
+    expect(phone).toContain(".lb-hero-l { display: contents; }");
+    expect(phone).toContain(".lb-lockup { grid-area: top; align-self: end; position: relative; z-index: 1;");
+    expect(phone).toContain(".lb-hero-art { grid-area: top; --d: 40px; align-self: stretch; height: 230px; min-height: 0; margin: 0 -16px;");
+    expect(phone).toContain("linear-gradient(90deg, transparent 0%, #000 30%, #000 92%, transparent 100%), linear-gradient(180deg, transparent 0%, #000 12%, #000 70%, transparent 100%)");
+    expect(phone).toContain(".lb-lockup .lb-name { font-size: 30px;");
+    expect(phone).toContain(".lb-lockup .lb-num { font-size: 80px; }");
     expect(fs.existsSync(path.join(PUBLIC_DIR, "images", "p18-board-meeting.webp"))).toBe(true);
   });
 

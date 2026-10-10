@@ -428,7 +428,7 @@ export function Lobby({ onEnterSandbox, onWatchSandbox }: LobbyProps) {
           ==================================================================
           Ludum's lockup for Project 18XX -- PROJECT in Anton, 18XX in Anton under the gilt gradient -- the line, and
           the two doors (Host game, Join by code: the same handlers as before, account first), beside Ludum's boardroom
-          drawing, masked into the page. On phones the drawing is a banner above the title. The doors' refusal shows
+          drawing, masked into the page. On phones the drawing is a full-width backdrop with the title set into its lower left. The doors' refusal shows
           under them, as the bar did. */}
       <div className="lb" style={styles.heroWrap}>
         <section className="lb-hero" aria-labelledby="lobby-title">

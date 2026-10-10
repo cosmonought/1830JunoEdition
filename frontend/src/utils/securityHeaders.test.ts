@@ -44,7 +44,7 @@ describe("Play's security headers (frontend/vercel.json)", () => {
     expect(sources("default-src")).toEqual(["'self'"]);
     expect(sources("script-src")).toEqual(["'self'"]);
     expect(CSP).not.toMatch(/'unsafe-eval'|'wasm-unsafe-eval'|'strict-dynamic'/);
-    for (const [name, list] of directives) expect([name, list.filter((s) => ["*", "https:", "http:", "wss:", "ws:", "blob:"].includes(s))]).toEqual([name, []]);
+    for (const [name, list] of Array.from(directives.entries())) expect([name, list.filter((s) => ["*", "https:", "http:", "wss:", "ws:", "blob:"].includes(s))]).toEqual([name, []]);
     expect(sources("object-src")).toEqual(["'none'"]);
     expect(sources("base-uri")).toEqual(["'self'"]);
     expect(sources("form-action")).toEqual(["'self'"]);

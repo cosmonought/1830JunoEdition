@@ -223,6 +223,8 @@ export default function TopBar({
         <span
           style={{ ...styles.topBarDot, ...styles.topBarDotOffline }}
           title={`Offline — ${configError}`}
+          /* PHASE 3 CLOSURE (a11y): a labelled dot is an image -- `aria-label` is prohibited on a role-less span. */
+          role="img"
           aria-label={`Offline — ${firstMissingEnvVar(configError) ?? "chain not configured"}`}
         />
       )}

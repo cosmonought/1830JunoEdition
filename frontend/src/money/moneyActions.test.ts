@@ -185,6 +185,31 @@ describe("ESCROW-4: the host's CreateGame, and the exits", () => {
     expect(services.wallet.signed.map((message) => [message.kind, message.chainGameId])).toEqual([["createGame", null]]);
   });
 
+  it("PHASE 3 CLOSURE (the ante race): a CreateGame signed at an ante that changed while Keplr was open is dropped UNSENT", async () => {
+    const services = testServices();
+    const port = scriptedPort();
+    const key = await services.keys.create({ chainId: "uni-7", contract: TEST_CONTRACT, gameId: "g_table", playerId: "p-me", wallet: TEST_WALLET });
+    if (!key.ok) throw new Error(key.reason);
+    const view = moneyView({ you: linked([key.pubkey], { actions: ["open-escrow"] }) });
+    services.wallet.config = { paused: false, minAnte: "1000", admissionPubkey: null };
+    /* The host's other device changed the ante while this one's Keplr window was open. */
+    const changed = moneyView({ terms: { anteGross: "2500000" }, you: linked([key.pubkey], { actions: ["open-escrow"] }) });
+    const outcome = await approveDeposit(ctx({ view, port, services, isHost: true, latest: () => changed }));
+    expect(outcome).toEqual({ ok: false, reason: "The table's ante changed to 2.5 JUNOX while Keplr was open, so the transaction you signed (1 JUNOX) wasn't sent -- nothing moved. Press Ante again to open the table at the new ante." });
+    expect(services.wallet.signed.map((message) => message.kind)).toEqual(["createGame"]); // Keplr signed it...
+    expect(services.wallet.broadcasts).toEqual([]); // ...and it never left this page
+    expect(services.pending.all()).toEqual([]); // nor was it kept to be sent later
+    /* The same ante (nothing changed): sent as before. */
+    port.answer("money/deposit-sent", 202, { ok: true, accepted: true });
+    expect((await approveDeposit(ctx({ view, port, services, isHost: true, latest: () => view }))).ok).toBe(true);
+    expect(services.wallet.broadcasts).toHaveLength(1);
+    /* Opened on Juno meanwhile (another device's CreateGame bound): never a second escrow. */
+    const opened = moneyView({ escrow: { chainGameId: "9", state: "FUNDING" }, you: linked([key.pubkey], { actions: [] }) });
+    services.pending.all().forEach((record) => services.pending.remove(record.txHash));
+    expect(await approveDeposit(ctx({ view, port, services, isHost: true, latest: () => opened }))).toEqual({ ok: false, reason: "This table was opened on Juno while Keplr was open, so the transaction you signed wasn't sent (nothing moved)." });
+    expect(services.wallet.broadcasts).toHaveLength(1);
+  });
+
   it("withdraw is sent from the depositing wallet, cancel from the creator's; both to the table's escrow game", async () => {
     const services = testServices();
     const port = scriptedPort();

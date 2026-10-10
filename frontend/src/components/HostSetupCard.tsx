@@ -470,6 +470,12 @@ export function HostSetupCard({ busy, error, onClose, onCreate }: HostSetupCardP
                     ? `Up to ${seatMax} players. You can start once at least two seats are taken and everyone seated has anted; open seats close when you start.`
                     : `Nobody may join past ${playerCount}, and the game starts only when all ${playerCount} seats have anted.`}
                 </p>
+                {/* §11, gated: said right where the count is chosen (and again by Create table), never silently changed. */}
+                {anyBlocked ? (
+                  <p className="rh-fnote rh-gate" role="status" data-testid="host-any-gated">
+                    {ANY_COUNT_BLOCKED_SENTENCE}
+                  </p>
+                ) : null}
               </div>
 
               <div className="rh-two">

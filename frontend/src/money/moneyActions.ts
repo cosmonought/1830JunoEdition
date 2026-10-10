@@ -27,7 +27,7 @@ import { terminalStateHashV1 } from "../gameEngine/settlementDigest";
 import { payoutPreview } from "../gameEngine/settlementPreview";
 import type { GameStateResponse } from "../gameEngine/gameState";
 import { sha256Hex } from "../gameEngine/sha256";
-import type { MoneyDepositEntry, RoomMoneyView } from "../utils/moneyProtocol";
+import { formatAmount, type MoneyDepositEntry, type RoomMoneyView } from "../utils/moneyProtocol";
 import { reauthenticateWithPassword } from "../utils/profileApi";
 import { sessionPort, type SessionPort } from "../utils/sessionBootstrap";
 import type { PinnedEscrowDeployment } from "./escrowDeployment";
@@ -120,6 +120,8 @@ export interface TableContext {
   readonly services?: MoneyServices;
   /** This page's origin (the challenge's `Site:`); `window.location.origin` when absent. */
   readonly site?: string;
+  /** PHASE 3 CLOSURE (the host ante race): the NEWEST view of this table as the server pushes it (null: not known). */
+  readonly latest?: () => RoomMoneyView | null;
 }
 
 function pinOf(services: MoneyServices): { ok: true; pin: PinnedEscrowDeployment } | { ok: false; outcome: ActionOutcome } {
@@ -316,7 +318,16 @@ export interface SendTarget {
 }
 
 /** Keplr signs `message`; the signed bytes are KEPT before they are broadcast; the server is hinted. */
-export async function signKeepSend(services: MoneyServices, pin: PinnedEscrowDeployment, target: SendTarget, message: WalletMessage, port?: SessionPort): Promise<ActionOutcome> {
+export async function signKeepSend(
+  services: MoneyServices,
+  pin: PinnedEscrowDeployment,
+  target: SendTarget,
+  message: WalletMessage,
+  port?: SessionPort,
+  /** Asked AFTER Keplr signs and BEFORE anything is kept or sent: a sentence when the signed transaction no longer fits
+   *  the table (it is then dropped unsent -- it cannot land), or null. */
+  stillValid?: () => string | null,
+): Promise<ActionOutcome> {
   const account = await currentAccount(services, pin);
   if (!account.ok) return account.outcome;
   if (account.address !== target.wallet) return refuse(`Switch Keplr to ${target.wallet} to sign this action. (Keplr is on ${account.address}.)`);
@@ -329,6 +340,8 @@ export async function signKeepSend(services: MoneyServices, pin: PinnedEscrowDep
   if (inFlight !== undefined) return refuse("A transaction for this is already on its way to Juno. Wait for Juno's answer (the panel says when), and don't send it again.");
   const signed = await services.wallet.signTx(pin, target.wallet, message, `${APP_NAME}: ${message.hint}`);
   if (!signed.ok) return refuse(signed.reason, signed.code === "wrong-account" ? "connect" : undefined);
+  const stale = stillValid?.() ?? null;
+  if (stale !== null) return refuse(stale);
   const record: PendingWalletTx = {
     v: 1,
     gameId: target.gameId,
@@ -471,7 +484,20 @@ export async function approveDeposit(ctx: TableContext): Promise<ActionOutcome> 
     if (config.value.minAnte !== null && BigInt(view.terms.anteGross) < BigInt(config.value.minAnte)) return refuse("This table's stake is below what Juno's escrow accepts, so nothing was sent.");
     const message = createGameMessage(pin, view, ctx.variants, key.pubkey, ctx.deadline ?? null);
     if (!message.ok) return refuse(message.reason);
-    return signKeepSend(services, pin, target, message.value, ctx.port);
+    /* PHASE 3 CLOSURE (the host ante race, set-ante): Keplr may stay open for minutes. If the table's ante changed
+       meanwhile (the host's other device), or the table was opened on Juno, the CreateGame just signed would open an
+       escrow this table can't use -- so it is dropped UNSENT (never kept, never broadcast: it cannot land). */
+    const signedAnte = view.terms.anteGross;
+    const stillValid = (): string | null => {
+      const now = ctx.latest?.() ?? null;
+      if (now === null) return null;
+      if (now.escrow.chainGameId !== null) return "This table was opened on Juno while Keplr was open, so the transaction you signed wasn't sent (nothing moved).";
+      if (now.terms.anteGross !== signedAnte) {
+        return `The table's ante changed to ${formatAmount(now.terms.anteGross, now.deployment.exponent, now.deployment.symbol)} while Keplr was open, so the transaction you signed (${formatAmount(signedAnte, view.deployment.exponent, view.deployment.symbol)}) wasn't sent -- nothing moved. Press Ante again to open the table at the new ante.`;
+      }
+      return null;
+    };
+    return signKeepSend(services, pin, target, message.value, ctx.port, stillValid);
   }
   /* The escrow's own configuration first (its admission key, paused), then the server's approval checked against it. */
   const config = await services.wallet.chainConfig(pin);

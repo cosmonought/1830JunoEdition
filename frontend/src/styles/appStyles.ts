@@ -593,7 +593,9 @@ export const styles: Record<string, React.CSSProperties> = {
     border: "1px solid #2a2a2a",
     borderRight: "none",
     backgroundColor: "#141414",
-    color: "#6e6c68",
+    /* PHASE 3 CLOSURE (a11y): the stopped tone stays DIMMER than the playing white (#1127's point), but at the muted
+       step (#8a8a86, 5.4:1 on #141414) -- #6e6c68 (3.5:1) took the station name under WCAG AA, and axe flags it. */
+    color: "#8a8a86",
     flexShrink: 1,
     minWidth: 0,
   },

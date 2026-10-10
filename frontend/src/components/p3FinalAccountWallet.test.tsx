@@ -666,10 +666,12 @@ describe("§13: the host card requires a stake", () => {
     /* Any, with an ante: blocked, said, and pressing creates nothing. */
     expect(byTestId("host-players-any")?.getAttribute("aria-checked")).toBe("true");
     expect(byTestId("host-create-why")?.textContent).toBe(ANY_COUNT_BLOCKED_SENTENCE);
+    expect(byTestId("host-any-gated")?.textContent).toBe(ANY_COUNT_BLOCKED_SENTENCE); // said where the count is chosen
     expect(byTestId<HTMLButtonElement>("host-create-room")?.disabled).toBe(true);
     await click(byTestId("host-create-room"));
     expect(created).not.toHaveBeenCalled();
     await click(byTestId("host-players-2"));
+    expect(byTestId("host-any-gated")).toBeNull();
     const create = byTestId<HTMLButtonElement>("host-create-room");
     expect(create?.disabled).toBe(false);
     await click(create);

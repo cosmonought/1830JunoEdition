@@ -147,7 +147,9 @@ describe("P3-ACCT: a visitor gets the homepage, and an account only where one is
   it("the app has no gate: index renders the app for everyone, with the account dialog and the reading pages beside it", () => {
     const index = readStripped("index.tsx");
     expect(index).not.toContain("ProfileGate");
-    expect(index).toMatch(/<App \/>\s*<AccountPromptHost \/>\s*<InfoPagesHost \/>\s*<SessionEndedNotice \/>/);
+    /* Ludum v1.1 (557f63b9) added `LudumConfirmHost` ("Confirm it's you" for Ludum, `?ludum=confirm`) beside the account
+       dialog; this pin had kept the older adjacency and failed from that commit on (a stale pin, not a regression). */
+    expect(index).toMatch(/<App \/>\s*<AccountPromptHost \/>\s*<LudumConfirmHost \/>\s*<InfoPagesHost \/>\s*<SessionEndedNotice \/>/);
   });
 
   it("an anonymous visitor: the homepage at once -- Host, Join, Rules, Log in, Create account; no 'Your tables'; nothing asked", async () => {

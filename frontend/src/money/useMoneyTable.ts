@@ -357,7 +357,8 @@ export function useMoneyTable(input: MoneyTableInput): MoneyTable {
     const clock = current.clock ?? null;
     const me = current.view.you?.playerId ?? null;
     const deadline = clock === null ? null : { deadline: clock.deadline, paceSecs: clock.paceSecs, acknowledged: me !== null && clock.noDeadlineAcks.includes(me) };
-    return { gameId: current.gameId, view: current.view, variants: current.variants, isHost: current.isHost, port: current.port, services, deadline };
+    const gameId = current.gameId;
+    return { gameId, view: current.view, variants: current.variants, isHost: current.isHost, port: current.port, services, deadline, latest: () => (latest.current.gameId === gameId ? latest.current.view : null) };
   };
 
   const perform = useCallback(

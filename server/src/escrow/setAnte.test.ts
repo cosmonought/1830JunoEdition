@@ -128,6 +128,41 @@ describe("PLAY WAITING ROOM: set-ante -- the host changes the ante until the fir
       const cancel = await host.client.op({ type: "cancel-room" }, table.gameId);
       assert.equal(cancel.ok, false, "never dropped over an escrow holding the host's money");
       assert.equal(cancel.code, "cancel-on-juno");
+      /* PHASE 3 CLOSURE (the ante race): nothing shows that escrow as the table's -- the host's seat is not funded, the
+         sign's count is 0 -- and "Your deposits" lists it at what the chain holds (the OLD ante), cancellable by its
+         creator: the recovery path the refusal names. */
+      const view = moneyOf(await viewOf(host.client, table.gameId));
+      assert.equal(view.escrow.fundedSeats, 0);
+      assert.notEqual(view.you?.funding, "funded");
+      assert.equal(view.terms.anteGross, NEW_ANTE, "the table's terms stay the new ante");
+      /* RESIDUAL, recorded (A-4): the server still offers open-escrow here -- a second CreateGame at the NEW ante would
+         bind, and the old one stays a cancellable duplicate in "Your deposits". Play's own page never reaches this state:
+         it drops a CreateGame unsent when the ante changed while Keplr was open (`moneyActions.approveDeposit`,
+         `moneyActions.test.ts` "the ante race"); only a client that skips that check can. */
+      assert.equal(view.you?.actions.includes("open-escrow"), true);
+      const deposits = await host.api("deposits", {});
+      assert.equal(deposits.status, 200, deposits.text);
+      const entries = (deposits.body?.deposits ?? []) as Array<{ gameId: string; chainGameId: string; relation: string; creator: boolean; grossDeposit: string; actions: string[] }>;
+      const orphan = entries.find((entry) => entry.gameId === table.gameId);
+      assert.ok(orphan !== undefined, `the old-ante escrow is listed: ${deposits.text}`);
+      assert.equal(orphan.relation, "duplicate");
+      assert.equal(orphan.creator, true);
+      assert.equal(orphan.grossDeposit, STAKE, "listed at what the chain holds, never the table's new ante");
+      assert.ok(orphan.actions.includes("cancel-escrow"));
+      /* The host cancels it on Juno (Keplr, from Your deposits): the money comes back, and the table is free again. */
+      const cancelled = world.chain.cancel(orphan.chainGameId, wallet.address);
+      assert.equal(cancelled.ok, true, JSON.stringify(cancelled));
+      await world.observe();
+      world.advance(HOST_CREATE_WINDOW_MS + 1_000);
+      const afterward = await host.client.op({ type: "set-ante", stake: "3000000" }, table.gameId);
+      assert.equal(afterward.ok, true, `${afterward.code}: ${afterward.reason}`);
+      await world.money.idle();
+      /* The cancel is accepted. (This client is VIEWING the table, and a cancelled table closes its viewers' channel at
+         once -- the browser's "This table has closed" -- so its ack is not read here; the record says it.) */
+      host.client.send({ kind: "room-op", requestId: "rq-close", gameId: table.gameId, op: { type: "cancel-room" } });
+      const deadline = Date.now() + 5_000;
+      while (world.server.rooms.moneyPort.recordOf(table.gameId)?.status !== "cancelled" && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
+      assert.equal(world.server.rooms.moneyPort.recordOf(table.gameId)?.status, "cancelled");
     }));
 
   test("two devices of the host change it at once: both are applied in turn, and the record says the last", () =>

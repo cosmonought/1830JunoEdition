@@ -453,14 +453,40 @@ describe("account policy D: forgot password (the Authorization Wallet, no email,
     }
   });
 
-  test("a signed-in browser is not a recovery's place (409, nothing minted or checked)", async () => {
+  test("PHASE 4: 'Forgot current password?' while signed in -- its OWN account only, by its Authorization Wallet only; this browser stays signed in, every other device is signed out", async () => {
     const { server, port } = await prodServer();
     try {
       const ann = await account(port, "Ann");
-      assert.deepEqual((await recover(port, ann.cookie, { username: "ann", wallet: ann.wallet })).body, { error: "already-profiled" });
-      const direct = await post(port, "/gs/api/account/recover", ann.cookie, { operation: "0".repeat(32), ...ann.wallet.sign("x"), newPassword: NEW_PASSWORD });
-      assert.deepEqual([direct.status, direct.body], [409, { error: "already-profiled" }]);
-      assert.equal((await login(port, await bootstrapCookie(port), "ann", PASSWORD)).status, 200, "nothing changed");
+      const bea = await account(port, "Bea");
+      // Never another account's: the RECOVER text is not even minted for it.
+      assert.deepEqual((await recover(port, ann.cookie, { username: "bea", wallet: bea.wallet })).body, { error: "already-profiled" });
+      // Never the session alone: no operation, a forged one, or another wallet's signature -- one answer.
+      const forged = await post(port, "/gs/api/account/recover", ann.cookie, { operation: "0".repeat(32), ...ann.wallet.sign("x"), newPassword: NEW_PASSWORD });
+      assert.deepEqual([forged.status, forged.body], [403, { error: "invalid-credential" }]);
+      const mallory = keplrAccount("policy/mallory-signed-in");
+      assert.equal((await recover(port, ann.cookie, { username: "ann", wallet: mallory })).status, 403, "a wallet that is not Ann's Authorization Wallet");
+      assert.equal((await recover(port, ann.cookie, { username: "ann", wallet: ann.wallet, signer: mallory })).status, 403, "Ann's wallet named, another one signing");
+      assert.equal((await login(port, await bootstrapCookie(port), "ann", PASSWORD)).status, 200, "nothing changed so far");
+      // Another device signed in to Ann.
+      const other = await login(port, await bootstrapCookie(port), "ann", PASSWORD);
+      const otherCookie = cookieFromAnswer(other) as string;
+      // The right wallet: no old password, no sign-out first.
+      const reset = await recover(port, ann.cookie, { username: "ann", wallet: ann.wallet });
+      assert.equal(reset.status, 200, reset.text);
+      assert.equal((reset.body as { signedOut: number }).signedOut >= 1, true);
+      const fresh = cookieFromAnswer(reset);
+      assert.ok(fresh !== null, "this browser gets a fresh cookie and stays signed in");
+      assert.equal((await post(port, "/gs/api/account/me", fresh as string, {})).status, 200);
+      assert.equal((await post(port, "/gs/api/account/me", otherCookie, {})).status, 401, "the other device is signed out");
+      assert.equal((await login(port, await bootstrapCookie(port), "ann", PASSWORD)).status, 403, "the forgotten password is dead");
+      assert.equal((await login(port, await bootstrapCookie(port), "ann", NEW_PASSWORD)).status, 200, "the new one signs in");
+      // Single use: the same operation is never answered twice.
+      const minted = await post(port, "/gs/api/account/authorization", fresh as string, { purpose: "recover", username: "ann", wallet: ann.wallet.address });
+      const text = (minted.body?.texts as Array<{ text: string }>)[0].text;
+      const signed = ann.wallet.sign(text);
+      assert.equal((await post(port, "/gs/api/account/recover", fresh as string, { operation: minted.body?.operation, ...signed, newPassword: "a third passphrase here" })).status, 200);
+      const replay = await post(port, "/gs/api/account/recover", fresh as string, { operation: minted.body?.operation, ...signed, newPassword: "a fourth passphrase here" });
+      assert.notEqual(replay.status, 200, "replay refused");
     } finally {
       await stopServer(server);
     }

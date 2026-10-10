@@ -1420,6 +1420,24 @@ export class IdentityService {
    *  RECOVER: the one claimed to be the account's). */
   mintAuthorization(read: SessionCookieRead, input: { purpose: "create" | "recover"; username: unknown; wallet: unknown; site: string }, now: number, options: { client?: AuthorizationClient } = {}): MintOutcome {
     const current = this.signedOutSession(read, now);
+    /* PHASE 4: "Forgot current password?" while signed in -- a RECOVER of THIS session's own account (never another's:
+       a signed-in browser asking for another username is answered as before, "already-profiled"). The text is the same
+       RECOVER text the account's Authorization Wallet signs signed out; `profileId` marks it as this account's. */
+    if (current === "already-profiled" && input.purpose === "recover") {
+      const who = this.profiledCurrent(read, now);
+      if (typeof who === "string") return { kind: who };
+      const own = loginOf(who.profile);
+      const asked = cleanLoginName(input.username);
+      if (own === null || asked === null || loginKeyOf(asked) !== own.key) return { kind: "already-profiled" };
+      const wallet = typeof input.wallet === "string" && JUNO_WALLET_PATTERN.test(input.wallet) ? input.wallet : null;
+      if (wallet === null) return { kind: "bad-wallet" };
+      const op = this.authorizations.mint(
+        { kind: "recover", binding: { sessionId: who.session.session_id, familyId: who.session.family_id, loginKey: own.key, profileId: who.profile.profile_id, epoch: null }, site: input.site, account: own.name, wallet, replaces: null, ...(options.client !== undefined ? { client: options.client } : {}) },
+        now,
+      );
+      if (op === null) return { kind: "busy" };
+      return { kind: "ok", operation: op.operation, texts: op.texts.map(({ purpose, signer, text }) => ({ purpose, signer, text })), expiresAt: op.expiresAt };
+    }
     /* A durable unprofiled browser may still CREATE (its tables come with it, as ever); it may not sign in to another
        profile (LIVE-2E review M2). */
     if (current === "has-tables" && input.purpose === "recover") return { kind: "has-tables" };
@@ -1716,12 +1734,30 @@ export class IdentityService {
       this.stats.kdfBusy += 1;
       return { kind: "busy" };
     }
+    return this.replacePasswordKeepingFamily(read, now, { sessionId: before.session.session_id, heldHash: held.hash, newHash: hashed.value, via: "password" });
+  }
+
+  /** Replace the password of THIS session's account, KEEPING this browser's family (it stays signed in on a fresh
+   *  session) and signing every other device out -- "Change password" (`via: "password"`: the current password was
+   *  checked) and, PHASE 4, "Forgot current password?" while signed in (`via: "authorization-wallet"`: the account's
+   *  Authorization Wallet signed this session's RECOVER text; `wallet`: exactly the wallet that signed, which must still
+   *  be the account's). Refused (`invalid`) if the session, the password generation or the wallet moved meanwhile. The
+   *  account's principal, seats, tables and game wallets are untouched. */
+  private replacePasswordKeepingFamily(
+    read: SessionCookieRead,
+    now: number,
+    input: { readonly sessionId: string; readonly heldHash: string; readonly newHash: string; readonly via: "password" | "authorization-wallet"; readonly wallet?: { readonly address: string; readonly since: number } },
+  ): Promise<ChangePasswordOutcome> {
+    const walletStill = (profile: Profile): boolean => {
+      const standing = authorizationWalletOf(profile);
+      return standing !== null && input.wallet !== undefined && standing.address === input.wallet.address && standing.since === input.wallet.since;
+    };
     return this.serial(async () => {
       const who = this.profiledCurrent(read, now);
       if (typeof who === "string") return { kind: who };
       /* The very session and password generation the credential was checked against (a change or recovery that landed
          meanwhile wins: the password this request proved is no longer the account's). */
-      if (who.session.session_id !== before.session.session_id || loginOf(who.profile)?.hash !== held.hash) {
+      if (who.session.session_id !== input.sessionId || loginOf(who.profile)?.hash !== input.heldHash || (input.wallet !== undefined && !walletStill(who.profile))) {
         this.stats.credentialFailures += 1;
         return { kind: "invalid" as const };
       }
@@ -1741,12 +1777,13 @@ export class IdentityService {
         now,
       );
       const dropLinks = this.linkHashesOf(who.profile.profile_id);
-      const updated: Profile = { ...who.profile, password_hash: hashed.value, password_set_at: now };
+      const updated: Profile = { ...who.profile, password_hash: input.newHash, password_set_at: now };
       try {
         await this.commit(
           {
             expect: [
-              { kind: "profile-password", profile_id: updated.profile_id, password_hash: held.hash },
+              { kind: "profile-password", profile_id: updated.profile_id, password_hash: input.heldHash },
+              ...(input.wallet !== undefined ? [{ kind: "profile-authorization-wallet" as const, profile_id: updated.profile_id, wallet_address: input.wallet.address, wallet_since: input.wallet.since }] : []),
               { kind: "profile-selector", profile_id: updated.profile_id, recovery_selector: who.profile.recovery_selector },
               { kind: "family-open", family_id: kept },
               { kind: "session-absent", session_id: fresh.session_id },
@@ -1764,10 +1801,10 @@ export class IdentityService {
             at: now,
             principal_id: principalId,
             profile_id: updated.profile_id,
-            from_hash: held.hash,
-            to_hash: hashed.value,
+            from_hash: input.heldHash,
+            to_hash: input.newHash,
             set_at: now,
-            via: "password",
+            via: input.via,
             kept_family_id: kept,
             family_ids: familyList(families.map((family) => family.family_id)),
           },
@@ -1784,7 +1821,8 @@ export class IdentityService {
         this.grants.delete(session.session_id);
       }
       this.applyFamilies(families);
-      this.stats.passwordChanges += 1;
+      if (input.via === "password") this.stats.passwordChanges += 1;
+      else this.stats.accountRecoveries += 1;
       this.stats.revocations += mine.length + ended.length;
       /* Every session that ended -- this browser's old one too: its sockets close 4401 and reopen on the fresh cookie. */
       this.hooks.onSessionsEnded?.(
@@ -1805,6 +1843,7 @@ export class IdentityService {
   async recoverAccount(read: SessionCookieRead, input: { operation: unknown; newPassword: unknown } & AuthorizationSignature, now: number, options: { client?: string } = {}): Promise<RecoverAccountOutcome> {
     /* About THIS browser only (never about the account): answered before any proof work. */
     const early = this.signedOutSession(read, now);
+    if (early === "already-profiled") return this.resetSignedIn(read, input, now, options);
     if (typeof early === "string") return { kind: early };
     const next = cleanPassword(input.newPassword);
     if (!next.ok) return { kind: "bad-password", problem: next.problem };
@@ -1930,6 +1969,46 @@ export class IdentityService {
        elsewhere can no longer be answered after the password it would replace is gone. */
     if (outcome.kind === "ok") this.authorizations.purgeAccount(op.binding.loginKey, found.profile_id, op.operation);
     return outcome;
+  }
+
+  /** PHASE 4: "Forgot current password?" while SIGNED IN. The same proof as signed out -- this session's own RECOVER
+   *  operation (minted for this account only), signed by the account's Authorization Wallet over its exact text, single
+   *  use, the same budgets -- never the old password, and never the session alone. Applied like "Change password": this
+   *  browser keeps its family (a fresh cookie), every other device is signed out, the password generation and the
+   *  Authorization Wallet must be exactly as checked. ONE answer (`invalid`) for every refusal. */
+  private async resetSignedIn(read: SessionCookieRead, input: { operation: unknown; newPassword: unknown } & AuthorizationSignature, now: number, options: { client?: string }): Promise<RecoverAccountOutcome> {
+    const who = this.profiledCurrent(read, now);
+    if (typeof who === "string") return { kind: who === "profile-required" ? "already-profiled" : who };
+    const next = cleanPassword(input.newPassword);
+    if (!next.ok) return { kind: "bad-password", problem: next.problem };
+    const taken = this.authorizations.take(input.operation, "recover", { sessionId: who.session.session_id, familyId: who.session.family_id }, now);
+    if (taken.kind !== "open") {
+      this.stats.authorizationFailures += 1;
+      return taken.kind === "used" ? { kind: "authorization-used" } : { kind: "invalid" };
+    }
+    const op = taken.op;
+    const authority = authorizationWalletOf(who.profile);
+    const held = loginOf(who.profile);
+    const signed = this.verified(op, [input], now);
+    if (!signed || op.binding.profileId !== who.profile.profile_id || held === null || op.binding.loginKey !== held.key || authority === null || authority.address !== op.wallet || this.activeProfileOf(who.session.principal_id) === null) {
+      this.authorizations.spend(op.operation);
+      if (signed) this.stats.authorizationFailures += 1;
+      this.stats.credentialFailures += 1;
+      return { kind: "invalid" };
+    }
+    const hashed = await this.kdf.run(() => hashPassword(next.password, this.policy.passwordKdf, this.random), { client: options.client, authenticated: true });
+    if (hashed.kind === "busy") {
+      this.authorizations.release(op.operation);
+      this.stats.kdfBusy += 1;
+      return { kind: "busy" };
+    }
+    const changed = await this.replacePasswordKeepingFamily(read, now, { sessionId: who.session.session_id, heldHash: held.hash, newHash: hashed.value, via: "authorization-wallet", wallet: { address: authority.address, since: authority.since } });
+    if (changed.kind === "unavailable") this.authorizations.release(op.operation);
+    else this.authorizations.spend(op.operation);
+    if (changed.kind !== "ok") return changed.kind === "profile-required" ? { kind: "already-profiled" } : changed.kind === "bad-password" ? changed : { kind: changed.kind };
+    /* Every other open RECOVER of the account ends with the password it would have replaced. */
+    this.authorizations.purgeAccount(op.binding.loginKey, who.profile.profile_id, op.operation);
+    return { kind: "ok", name: who.profile.display_name, setCookie: changed.setCookie, principalId: changed.principalId, sessionId: changed.sessionId, signedOut: changed.signedOut };
   }
 
   /** "Change Authorization Wallet" (signed in): this session's REPLACE operation, with the CURRENT Authorization

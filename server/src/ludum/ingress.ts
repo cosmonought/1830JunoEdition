@@ -39,14 +39,15 @@
 // JSON. Never `*`, never an unlisted origin reflected, never `Access-Control-Expose-Headers`.
 //
 // v1.2 (docs/ludum/LUDUM_PLATFORM_ARCHITECTURE.md §15, owner request 2026-10-10): Ludum's OWN sign-up, sign-in, sign-out,
-// "Confirm it's you" and "Forgot password?". Seven exact paths, `auth/<action>` (`LUDUM_AUTH_ROUTES`), each mapped to ONE
+// "Confirm it's you" and "Forgot password?" (PHASE 4: also "Change password", and "Forgot current password?" while signed
+// in -- the same RECOVER route). Eight exact paths, `auth/<action>` (`LUDUM_AUTH_ROUTES`), each mapped to ONE
 // existing Play account route and served by Play's own handler (`identity/httpApi.ts` `serveLudumAccount`): the same
 // identity service, budgets, KDF gate, Authorization Wallet proofs and the same host-only `__Host-gs_session` cookie
-// (Secure, HttpOnly, SameSite=Strict, Path=/, no Domain) -- so one session signs both sites in and out. These seven, and
+// (Secure, HttpOnly, SameSite=Strict, Path=/, no Domain) -- so one session signs both sites in and out. These eight, and
 // only these, may answer with `Set-Cookie`; their answers use the account routes' own vocabulary. Steps 1-5's origin,
 // preflight, method, content-type and per-address checks run first, exactly as for every other route; a body is then
-// Play's (4 KiB, its closed schema). Password change, Authorization Wallet replacement, "sign out other devices" and
-// every money / conduct / trust route stay Play-origin only.
+// Play's (4 KiB, its closed schema). Authorization Wallet replacement, "sign out other devices", `account/me` and every
+// money / conduct / trust route stay Play-origin only.
 //
 // Errors use §5's vocabulary only: `{error: "bad-request" | "signed-out" | "not-found" | "rate-limited" | "unavailable",
 // detail?}`. Nothing here logs a header, a cookie, a body or an id.
@@ -57,6 +58,7 @@ import { readSessionCookie } from "../identity/cookies";
 import { clientIpOf } from "../identity/clientIp";
 import {
   ACCOUNT_AUTHORIZATION_PATH,
+  ACCOUNT_PASSWORD_PATH,
   ACCOUNT_CREATE_PATH,
   ACCOUNT_LOGIN_PATH,
   ACCOUNT_RECOVER_PATH,
@@ -89,6 +91,9 @@ export const LUDUM_AUTH_ROUTES: Readonly<Record<string, string>> = Object.freeze
   "auth/sign-in": ACCOUNT_LOGIN_PATH,
   "auth/recover": ACCOUNT_RECOVER_PATH,
   "auth/confirm": REAUTH_PATH,
+  /* PHASE 4 (owner): "Change password" on Ludum's own Profile page -- the same Play handler (the current password, the
+     password policy, the KDF gate, its budgets; this browser keeps a fresh cookie, every other device signed out). */
+  "auth/password": ACCOUNT_PASSWORD_PATH,
 });
 
 /** The Play account route a `/gs/api/ludum/v1/auth/<action>` path is served by, or null. */

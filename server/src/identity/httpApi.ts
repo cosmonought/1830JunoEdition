@@ -18,7 +18,8 @@
 // password and ONE designated AUTHORIZATION WALLET (`sessions.ts`, `authorizationWallet.ts`). Ordinary sign-in is the
 // username and password -- never a wallet. The Authorization Wallet signs only account actions: creating the account,
 // "Forgot password?" and approving its own replacement. There is NO recovery key and NO email anywhere.
-//   POST /gs/api/account/authorization {purpose: "create" | "recover", username, wallet}   (signed out) the text the
+//   POST /gs/api/account/authorization {purpose: "create" | "recover", username, wallet}   (signed out; PHASE 4: RECOVER
+//                                                          also signed in, for THAT account only) the text the
 //                                                          wallet signs for this browser: 200 {operation, texts:[{purpose,
 //                                                          signer, text}], expiresAt}. CREATE: 409 username-taken (before
 //                                                          Keplr signs). RECOVER looks NOTHING up (no enumeration).
@@ -41,7 +42,10 @@
 //                                                          is signed out. 403 invalid-credential; 400 bad-password.
 //   POST /gs/api/account/recover       {operation, pubKey, signature, newPassword}  (signed out) "Forgot password?" by the
 //                                                          Authorization Wallet: 200 {profile, signedOut} + a fresh cookie;
-//                                                          every earlier session of the account ends. ONE answer (403
+//                                                          every earlier session of the account ends. PHASE 4, signed in:
+//                                                          "Forgot current password?" -- the same proof, applied like
+//                                                          "Change password" (this browser keeps a fresh cookie, every
+//                                                          other device is signed out). ONE answer (403
 //                                                          invalid-credential) for every refusal: a bad signature, a
 //                                                          wallet that is not that account's Authorization Wallet, an
 //                                                          unknown, disabled or legacy account, an unknown or expired
@@ -283,9 +287,10 @@ async function serve(request: IncomingMessage, response: ServerResponse, api: Ht
 
 /** LUDUM v1.2: the account actions Ludum's own pages perform (docs/ludum/LUDUM_PLATFORM_ARCHITECTURE.md §15). The SAME
  *  handlers, budgets, KDF gate and host-only cookie as Play's -- reached through `/gs/api/ludum/v1/auth/*`, whose ingress
- *  has already checked the exact Ludum Origin and the method, and set the credentialed CORS headers. Nothing else of
- *  `/gs/api/*` is reachable this way: password change, Authorization Wallet replacement, "sign out other devices" and
- *  `account/me` stay Play's own. */
+ *  has already checked the exact Ludum Origin and the method, and set the credentialed CORS headers. PHASE 4 adds
+ *  "Change password" (and RECOVER, already here, now serves "Forgot current password?" while signed in). Nothing else of
+ *  `/gs/api/*` is reachable this way: Authorization Wallet replacement, "sign out other devices" and `account/me` stay
+ *  Play's own. */
 export const LUDUM_ACCOUNT_PATHS: ReadonlySet<string> = new Set([
   SESSION_PATH,
   REVOKE_PATH,
@@ -294,6 +299,8 @@ export const LUDUM_ACCOUNT_PATHS: ReadonlySet<string> = new Set([
   ACCOUNT_LOGIN_PATH,
   ACCOUNT_RECOVER_PATH,
   REAUTH_PATH,
+  /* PHASE 4 (owner): "Change password" on Ludum's own Profile page. */
+  ACCOUNT_PASSWORD_PATH,
 ]);
 
 /** Serve one of `LUDUM_ACCOUNT_PATHS` for a request whose (exact, allow-listed) Ludum origin is `origin`. The origin is

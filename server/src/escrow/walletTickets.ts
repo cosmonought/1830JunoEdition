@@ -366,11 +366,14 @@ export function createWalletTicketLedger(deps: WalletTicketDeps) {
 
     /** ESCROW-4: register a consent key for this seat (after "Confirm it's you"), on its newest grant issued to this
      *  principal -- standing, or frozen with the roster (the key may move while the game runs). Idempotent. */
-    async registerConsentKey(input: { readonly gameId: string; readonly playerId: string; readonly principalId: string; readonly pubkey: string }): Promise<TicketPutOutcome | "refused"> {
+    async registerConsentKey(input: { readonly gameId: string; readonly playerId: string; readonly principalId: string; readonly pubkey: string; readonly expectWallet?: string }): Promise<TicketPutOutcome | "refused"> {
       if (!/^0[23][0-9a-f]{64}$/.test(input.pubkey)) return "refused";
       const { version, document } = await deps.store.load(input.gameId);
       const newest = newestOf(document.grants, input.playerId);
       if (newest === undefined || newest.issued_under.principal_id !== input.principalId || !stands(newest, true)) return "refused";
+      /* PHASE 4: a key proven by the seat's wallet goes on that wallet's grant only (a relink to another wallet meanwhile
+         refuses: the proof was for the seat as it was). */
+      if (input.expectWallet !== undefined && newest.wallet !== input.expectWallet) return "refused";
       if (newest.consent_keys.includes(input.pubkey)) return "committed";
       const keys = [...newest.consent_keys, input.pubkey].slice(-MAX_CONSENT_KEYS);
       const grants = document.grants.map((grant) => (grant === newest ? { ...grant, consent_keys: keys } : grant));

@@ -434,12 +434,51 @@ describe("account policy: the profile menu of an account", () => {
      wallet'" is removed -- the profile remembers no wallet (`account/forget-wallet` is retired, 410), so a password
      change has no wallet to show. "Change password with the recovery key instead" is removed with the recovery key;
      a forgotten current password is "Forgot password?" by the Authorization Wallet, which the form says: */
-  it("a forgotten current password: the form points to 'Forgot password?' with the Authorization Wallet -- no key option", async () => {
+  it("PHASE 4: Change password and 'Forgot current password?' are two distinct choices; the change form links to the reset -- no key option, no sign-out", async () => {
     await signedInMenu();
+    expect(byTestId("profile-menu-password")?.textContent).toBe("Change password");
+    expect(byTestId("profile-menu-forgot")?.textContent).toBe("Forgot current password?");
+    expect(byTestId("profile-menu-password-note")?.textContent).toMatch(/If you don't, your Authorization Wallet approves a new one in Keplr -- you stay signed in\./);
     await click(byTestId("profile-menu-password"));
     expect(byTestId("profile-password-use-key")).toBeNull();
-    expect(byTestId("profile-password-forgot-note")?.textContent).toBe("Forgot your current password? Sign out, then use “Forgot password?” with your Authorization Wallet.");
     expect(byTestId("profile-password-form")?.querySelectorAll("input")).toHaveLength(2);
+    await click(byTestId("profile-password-to-forgot"));
+    expect(byTestId("profile-forgot-form")?.querySelectorAll("input")).toHaveLength(1);
+    expect(byTestId("profile-forgot-explain")?.textContent).toMatch(/You don't need your current password\. Your Authorization Wallet \(juno12gdms…dl783a\) approves the new one in Keplr/);
+    expect(byTestId("profile-current-secret")).toBeNull();
+  });
+
+  it("PHASE 4: 'Forgot current password?' while signed in -- Keplr on the Authorization Wallet signs this account's RECOVER text, the new password is set, this browser stays signed in", async () => {
+    const server = await signedInMenu();
+    await click(byTestId("profile-menu-forgot"));
+    type(byTestId<HTMLInputElement>("profile-forgot-new"), "short");
+    await submit(byTestId("profile-forgot-form"));
+    expect(all().querySelector('[role="alert"]')?.textContent).toBe("A password is at least 12 characters.");
+    expect(signedTexts).toEqual([]);
+    type(byTestId<HTMLInputElement>("profile-forgot-new"), "a brand new passphrase");
+    server.queue("/gs/api/account/authorization", minted("RECOVER"));
+    server.queue("/gs/api/account/recover", { status: 200, body: { ok: true, profile: { name: "Ann" }, signedOut: 2 } });
+    server.queue("/gs/api/account/me", { status: 200, body: ACCOUNT_ME });
+    await submit(byTestId("profile-forgot-form"));
+    expect(signedTexts).toEqual([authorizationText("RECOVER")]);
+    const sent = server.calls.filter((call) => call.path === "/gs/api/account/authorization" || call.path === "/gs/api/account/recover").map((call) => [call.path, JSON.parse(call.body)]);
+    expect(sent[0]).toEqual(["/gs/api/account/authorization", { purpose: "recover", username: "Ann", wallet: TEST_WALLET }]);
+    expect(sent[1][0]).toBe("/gs/api/account/recover");
+    expect(sent[1][1]).toMatchObject({ operation: OPERATION, newPassword: "a brand new passphrase" });
+    expect(server.calls.some((call) => call.path === "/gs/api/profile/reauth" || call.path === "/gs/api/session/revoke")).toBe(false);
+    expect(byTestId("profile-forgot-done")?.textContent).toBe("New password set. Signed out 2 other devices. This device stays signed in.");
+    expect(all().innerHTML).not.toContain("a brand new passphrase");
+  });
+
+  it("PHASE 4: 'Forgot current password?' with Keplr on another wallet: refused before anything is signed or sent", async () => {
+    const server = await signedInMenu();
+    wallet.address = "juno1keplrselectedwallet0000000000000000000x";
+    await click(byTestId("profile-menu-forgot"));
+    type(byTestId<HTMLInputElement>("profile-forgot-new"), "a brand new passphrase");
+    await submit(byTestId("profile-forgot-form"));
+    expect(all().querySelector('[role="alert"]')?.textContent).toMatch(/Switch Keplr to your Authorization Wallet \(juno12gdms…dl783a\)\. *|Switch Keplr to your Authorization Wallet/);
+    expect(signedTexts).toEqual([]);
+    expect(server.calls.some((call) => call.path === "/gs/api/account/authorization" || call.path === "/gs/api/account/recover")).toBe(false);
   });
 
   it("a wrong current password is one sentence, both fields cleared, nothing changed; a short new one is refused before anything is sent", async () => {

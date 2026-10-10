@@ -16,7 +16,9 @@ import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 
 import { parseWalletLinkChallenge } from "../../../frontend/src/gameEngine/escrow/walletLinkChallengeV1";
+import { parseSigningKeyChallenge } from "../../../frontend/src/gameEngine/escrow/signingKeyChallengeV1";
 import { BUILD, quietConsole, storedLog } from "../rooms/testSupport";
+import { apiRequest } from "../rooms/testSupport";
 import { hostCreates, joinerFunds, linkWallet, moneyServer, openMoneyTable, player, testConsentKey, testWallet, viewOf, PROD_ORIGIN, STAKE, type MoneyServer, type Player } from "./escrow4Support";
 import { currentMoneyContinuation, THIS_DEPLOYMENT } from "./moneyContinuation";
 import { HOST_CREATE_WINDOW_MS, MAX_ADMISSIONS_PER_SEAT, START_GRACE_MS } from "./moneyTables";
@@ -173,19 +175,17 @@ describe("ESCROW-4 / LIVE-4 amendment §4: money creation checks the settlement 
 });
 
 describe("ESCROW-4: the wallet proof (ADR-036), its bindings and its replays", () => {
-  test("no Confirm it's you: no challenge and no link; the challenge names this site, network, contract, table, seat and wallet", async () => {
+  test("PHASE 4: no password in normal play -- the challenge needs only the signed-in session; it names this site, network, contract, table, seat and wallet", async () => {
     const world = await moneyServer();
     try {
       const host = await player(world, "Hana");
       const table = await openMoneyTable(host);
       const wallet = testWallet("host");
-      /* PHASE 3 FINAL: creating the account signs it in, and a sign-in IS a recent authentication (a 5-minute grant):
-         past it, only a live session is left. */
+      /* PHASE 4 (owner): past the sign-in's 5-minute grant, with no "Confirm it's you", the challenge is still minted --
+         what links a wallet is the wallet's own signature over it (the cases below), never the session alone. */
       world.advance(6 * 60_000);
-      const stolen = await host.api("wallet-challenge", { gameId: table.gameId, wallet: wallet.address });
-      assert.equal(stolen.status, 403);
-      assert.equal(stolen.body?.error, "reauth-required", "a live session alone (a stolen cookie) cannot bind a wallet");
-      await host.confirm();
+      const unconfirmed = await host.api("wallet-challenge", { gameId: table.gameId, wallet: wallet.address });
+      assert.equal(unconfirmed.status, 200, unconfirmed.text);
       const bad = await host.api("wallet-challenge", { gameId: table.gameId, wallet: "juno1notanaddress" });
       assert.equal(bad.body?.error, "bad-wallet");
       const extra = await host.api("wallet-challenge", { gameId: table.gameId, wallet: wallet.address, playerId: "p-0000000000000000" });
@@ -263,22 +263,36 @@ describe("ESCROW-4: the wallet proof (ADR-036), its bindings and its replays", (
     }
   });
 
-  test("the wallet link needs the grant at LINK time too, and a signed-out family's challenge is dead", async () => {
+  test("PHASE 4: a link long after any grant needs only the wallet's own signature (repeated Ante past five minutes); a signed-out session's challenge is dead", async () => {
     const world = await moneyServer();
     try {
       const host = await player(world, "Hana");
       const table = await openMoneyTable(host);
       const wallet = testWallet("host");
-      await host.confirm();
-      /* PHASE 3 FINAL: the account holds an Authorization Wallet, so the cheap pre-check at LINK time no longer refuses
-         first; the challenge is asked late in the grant, so it is still live (5 minutes) when the grant lapses. */
       world.advance(4 * 60_000);
       const challenge = await host.api("wallet-challenge", { gameId: table.gameId, wallet: wallet.address });
       assert.equal(challenge.status, 200, challenge.text);
-      world.advance(2 * 60_000); // the 5-minute grant lapses; the challenge (5 minutes from its own issue) does not
-      const signed = wallet.signArbitrary(challenge.body?.text as string);
-      const late = await host.api("wallet-link", { gameId: table.gameId, nonce: challenge.body?.nonce, pubKey: signed.pubKey, signature: signed.signature, consentKey: testConsentKey("h").pubkey });
-      assert.equal(late.body?.error, "reauth-required");
+      world.advance(2 * 60_000); // past the sign-in's 5-minute grant; the challenge (5 minutes from its own issue) is live
+      const stranger = testWallet("stranger").signArbitrary(challenge.body?.text as string);
+      const spoofed = await host.api("wallet-link", { gameId: table.gameId, nonce: challenge.body?.nonce, pubKey: stranger.pubKey, signature: stranger.signature, consentKey: testConsentKey("h").pubkey });
+      assert.equal(spoofed.body?.error, "invalid-proof", "the session alone never links: only the named wallet's signature");
+      const again = await host.api("wallet-challenge", { gameId: table.gameId, wallet: wallet.address });
+      const signed = wallet.signArbitrary(again.body?.text as string);
+      const late = await host.api("wallet-link", { gameId: table.gameId, nonce: again.body?.nonce, pubKey: signed.pubKey, signature: signed.signature, consentKey: testConsentKey("h").pubkey });
+      assert.equal(late.status, 200, late.text);
+      assert.equal(late.body?.mode, "issued");
+      /* Much later (an hour), the same wallet is proven again with no password: the free re-proof. */
+      world.advance(60 * 60_000);
+      const third = await host.api("wallet-challenge", { gameId: table.gameId, wallet: wallet.address });
+      const reproof = wallet.signArbitrary(third.body?.text as string);
+      const renewed = await host.api("wallet-link", { gameId: table.gameId, nonce: third.body?.nonce, pubKey: reproof.pubKey, signature: reproof.signature, consentKey: testConsentKey("h").pubkey });
+      assert.equal(renewed.body?.mode, "unchanged", renewed.text);
+      /* Signed out: the session is gone, so its challenges are dead with it. */
+      const fresh = await host.api("wallet-challenge", { gameId: table.gameId, wallet: wallet.address });
+      assert.equal((await apiRequest(world.port, "/gs/api/session/revoke", { cookie: host.browser.cookie, body: {} })).status, 204);
+      const dead = wallet.signArbitrary(fresh.body?.text as string);
+      const afterOut = await host.api("wallet-link", { gameId: table.gameId, nonce: fresh.body?.nonce, pubKey: dead.pubKey, signature: dead.signature, consentKey: testConsentKey("h").pubkey });
+      assert.notEqual(afterOut.status, 200);
     } finally {
       await world.close();
     }
@@ -586,7 +600,7 @@ describe("ESCROW-4: security events push, and a deposit is relinked (never reass
       assert.equal(moneyOf(await viewOf(joiner.who.client, table.gameId)).you?.funding, "funded");
       /* The same account on a phone signs out every other device (including the one that linked). PHASE 3 FINAL: the
          phone signs in with the username and password (the recovery-key route is retired: 410). */
-      const { apiRequest, loginOnFreshBrowser } = await import("../rooms/testSupport");
+      const { loginOnFreshBrowser } = await import("../rooms/testSupport");
       const retired = await apiRequest(world.port, "/gs/api/profile/recover", { cookie: (await apiRequest(world.port, "/gs/api/session", {})).headers["set-cookie"]![0].split(";")[0], body: {} });
       assert.deepEqual([retired.status, retired.body?.error], [410, "retired"]);
       const signedIn = await loginOnFreshBrowser(world.port, joiner.who.browser.username, joiner.who.browser.password);
@@ -695,17 +709,31 @@ describe("ESCROW-4: consent keys and the CONSENT / ANNUL relay (the signature is
     }
   });
 
-  test("moving the signing key: registering needs Confirm it's you; after SetConsentKey the old key's consent is refused and the new one relays", async () => {
+  test("PHASE 4: moving the signing key needs the SEAT'S WALLET's signature (no password); after SetConsentKey the old key's consent is refused and the new one relays", async () => {
     const world = await moneyServer();
     try {
       const { joiner, jWallet, table, domain, seq, digest, chainGameId } = await settleable(world);
       const moved = testConsentKey("jo-phone");
-      world.advance(6 * 60_000); // the link's "Confirm it's you" has lapsed
-      const unconfirmed = await joiner.who.api("consent-key", { gameId: table.gameId, pubkey: moved.pubkey });
-      assert.equal(unconfirmed.status, 403);
-      assert.equal(unconfirmed.body?.error, "reauth-required", "creating or moving the key is sensitive");
-      await joiner.who.confirm();
-      assert.equal((await joiner.who.api("consent-key", { gameId: table.gameId, pubkey: moved.pubkey })).status, 200);
+      world.advance(6 * 60_000); // no grant: the session alone
+      const unsigned = await joiner.who.api("consent-key", { gameId: table.gameId, pubkey: moved.pubkey });
+      assert.equal(unsigned.status, 403);
+      assert.equal(unsigned.body?.error, "signature-required", "the session alone never registers a key");
+      const challenge = await joiner.who.api("signing-key-challenge", { gameId: table.gameId, pubkey: moved.pubkey });
+      assert.equal(challenge.status, 200, challenge.text);
+      const fields = parseSigningKeyChallenge(challenge.body?.text as string);
+      assert.deepEqual([fields?.wallet, fields?.signingKey, fields?.gameId, fields?.site], [jWallet.address, moved.pubkey, table.gameId, PROD_ORIGIN]);
+      assert.equal(parseWalletLinkChallenge(challenge.body?.text as string), null, "never a wallet-link text");
+      const other = testWallet("not-the-seat").signArbitrary(challenge.body?.text as string);
+      const wrong = await joiner.who.api("consent-key", { gameId: table.gameId, pubkey: moved.pubkey, nonce: challenge.body?.nonce, pubKey: other.pubKey, signature: other.signature });
+      assert.equal(wrong.body?.error, "invalid-proof", "another wallet's signature registers nothing");
+      const retry = await joiner.who.api("signing-key-challenge", { gameId: table.gameId, pubkey: moved.pubkey });
+      const signed = jWallet.signArbitrary(retry.body?.text as string);
+      const asLink = await joiner.who.api("wallet-link", { gameId: table.gameId, nonce: retry.body?.nonce, pubKey: signed.pubKey, signature: signed.signature, consentKey: moved.pubkey });
+      assert.notEqual(asLink.status, 200, "a signing-key nonce is not a wallet link");
+      const ok = await joiner.who.api("consent-key", { gameId: table.gameId, pubkey: moved.pubkey, nonce: retry.body?.nonce, pubKey: signed.pubKey, signature: signed.signature });
+      assert.equal(ok.status, 200, ok.text);
+      const replay = await joiner.who.api("consent-key", { gameId: table.gameId, pubkey: moved.pubkey, nonce: retry.body?.nonce, pubKey: other.pubKey, signature: other.signature });
+      assert.equal(replay.body?.error, "challenge-used", "single use");
       /* The wallet moves it on chain (the contract's own authorization). */
       assert.ok(world.chain.setConsentKey(chainGameId, jWallet.address, moved.pubkey).ok);
       await world.observe();
@@ -799,7 +827,7 @@ describe("ESCROW-4: reloads -- every stage is rebuilt from the server's truth on
     try {
       const { table, joiner } = await hostOpened(world);
       await linkWallet(joiner.who, table.gameId, testWallet("jo"), testConsentKey("jo"));
-      const { apiRequest, loginOnFreshBrowser } = await import("../rooms/testSupport");
+      const { loginOnFreshBrowser } = await import("../rooms/testSupport");
       /* PHASE 3 FINAL: the phone signs in with the username and password (its own session family). */
       const signedIn = await loginOnFreshBrowser(world.port, joiner.who.browser.username, joiner.who.browser.password);
       assert.equal(signedIn.answer.status, 200, signedIn.answer.text);

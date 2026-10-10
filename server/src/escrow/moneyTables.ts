@@ -200,14 +200,22 @@ export interface MoneyTablesDeps {
   readonly noDeadlineAck?: (gameId: string, playerId: string) => Promise<"not-required" | "acknowledged" | "missing" | "unknown" | "unenforceable">;
 }
 
-/** What authorizes a wallet link for `wallet` -- the session's grant, or (PHASE 3 FINAL) the account's own
- *  Authorization Wallet linking itself. */
-function linkAuthority(caller: MoneyCaller, wallet: string): "grant" | "authorization-wallet" | null {
+/** What authorizes a wallet link for `wallet` (recorded in the audit line; never null).
+ *
+ *  PHASE 4 (owner, one-action Ante): a signed-in player is never asked for the account password again in normal play.
+ *  A link needs (1) the request's own STANDING, profiled session (`moneyHttpApi`: a revoked or signed-out context never
+ *  reaches here), and (2) a FRESH ADR-036 signature by `wallet` itself over the single-use challenge this server minted
+ *  for exactly this session, family, recovery selector, game, seat and wallet. That signature IS the proof of
+ *  possession, so a "Confirm it's you" grant adds nothing a session thief would lack (the thief holds the same session).
+ *  Every money protection is the link decision's and the ledger's, unchanged: no second wallet once a deposit may be on
+ *  its way or has landed (`linkDecision`, `issue`'s admission / freeze checks), a standing link is replaced only on the
+ *  player's explicit `replace` (asked before Keplr signs), the seat must still be this principal's, and a deposit is
+ *  always signed in Keplr by the linked wallet. The grant and the Authorization Wallet are still recorded when present. */
+function linkAuthority(caller: MoneyCaller, wallet: string): "grant" | "authorization-wallet" | "wallet-proof" {
   if (caller.sensitive) return "grant";
   if (caller.authorizationWallet !== null && caller.authorizationWallet === wallet) return "authorization-wallet";
-  return null;
+  return "wallet-proof";
 }
-const CONFIRM_FIRST = "Confirm it's you with your password to link this wallet to your seat; then the wallet signs.";
 
 type Snapshot = Awaited<ReturnType<WalletTicketLedger["snapshot"]>>;
 type Grant = Snapshot["grants"][number];
@@ -324,6 +332,8 @@ const fromNow = (at: number, now: number): string => {
 
 export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
   const challenges = deps.challenges ?? createChallengeBook({ now: deps.now, appName: deps.appName });
+  /* PHASE 4: the signing-key texts, in their own book (a nonce of one route can never be taken by the other). */
+  const keyChallenges = createChallengeBook({ now: deps.now, appName: deps.appName, purpose: "signing-key" });
   const cache = new Map<string, TableCache>();
   const hints = new Map<string, Map<string, Hint>>();
   /** Join admissions signed per seat (`gameId\0playerId`), in memory (S-M2's budget). */
@@ -1485,8 +1495,7 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
     }
     const wallet = canonicalJunoWallet(body.wallet);
     if (wallet === null) return refusal(400, "bad-wallet", "That isn't a Juno wallet address.");
-    /* The grant, or the account's own Authorization Wallet (its fresh signature, next, is the proof). */
-    if (linkAuthority(caller, wallet) === null) return refusal(403, "reauth-required", CONFIRM_FIRST);
+    /* PHASE 4: no password grant -- the wallet's own fresh signature over this challenge is the proof (`linkAuthority`). */
     if (table.record.status !== "waiting" || dealtRecord(table.record)) return refusal(409, "wrong-state", "A wallet is linked before the game starts.");
     /* W2-M (AUD-20.14): before the wallet signs, say which wallet this seat's standing link would replace (the
        standing-link half of the link's `replace-required` test; the link's earlier refusals and its relink of an own
@@ -1628,7 +1637,6 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
   async function walletLink(caller: MoneyCaller, body: Record<string, unknown>): Promise<MoneyAnswer> {
     const down = serviceReady();
     if (down !== null) return down;
-    if (!caller.sensitive && caller.authorizationWallet === null) return refusal(403, "reauth-required", CONFIRM_FIRST);
     const table = tableFor(caller, body.gameId);
     if (!isTable(table)) return table;
     const restoring = restoreHeld(table.record);
@@ -1647,10 +1655,8 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
     if (taken.kind === "spent") return taken.signature === signature ? (taken.result as MoneyAnswer) : refusal(409, "challenge-used", "That link request was already used. Start the link again.");
     const entry = taken.entry;
     const nonce = entry.nonce;
-    /* Decided again at LINK time, for the wallet the challenge names (a grant that lapsed meanwhile, or an Authorization
-       Wallet replaced meanwhile, refuses). Not spent: the same signature may be sent again once authorized. */
+    /* PHASE 4: what authorized the link, for the audit line (the wallet's own signature, verified below, always). */
     const authority = linkAuthority(caller, entry.wallet);
-    if (authority === null) return refusal(403, "reauth-required", CONFIRM_FIRST);
     /* The nonce is spent with its answer -- unless the answer is "try again" (the chain or the table busy for a moment):
        then the same signed challenge may be sent again, and a lost answer is not replayed as that failure (S-L4). */
     const finish = (result: MoneyAnswer): MoneyAnswer => {
@@ -1701,7 +1707,7 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
           playerId: seat.player_id,
           wallet: entry.wallet,
           context: { principalId: caller.principalId, familyId: caller.familyId, recoverySelector: caller.recoverySelector },
-          reauthorized: authority !== null,
+          reauthorized: true,
           proof,
           consentKey,
           relinkFrom: grant.epoch,
@@ -1725,10 +1731,10 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
         playerId: seat.player_id,
         wallet: entry.wallet,
         context: { principalId: caller.principalId, familyId: caller.familyId, recoverySelector: caller.recoverySelector },
-        /* Always true here -- a link reaches this point only with an authority (a sensitive grant, or the account's own
-           Authorization Wallet), checked at the challenge and again above. The ledger keeps its own check as a backstop
-           against a caller that skipped it. */
-        reauthorized: authority !== null,
+        /* PHASE 4: always true here -- a link reaches this point only from a standing session with the wallet's own
+           verified signature over this session's challenge. The ledger keeps its flag as a backstop against a caller
+           that skipped both. */
+        reauthorized: true,
         proof,
         consentKey,
         relinkFrom: decision.relinkFrom,
@@ -1835,11 +1841,41 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
     return answer({ accepted: true }, 202);
   }
 
+  /** PHASE 4: the text the seat's OWN linked wallet signs to put this browser's signing key on the seat (a browser that
+   *  holds none: another device, cleared storage). It names the seat's newest grant's wallet, made by this account. */
+  async function signingKeyChallenge(caller: MoneyCaller, body: Record<string, unknown>): Promise<MoneyAnswer> {
+    const table = tableFor(caller, body.gameId);
+    if (!isTable(table)) return table;
+    const pubkey = typeof body.pubkey === "string" ? body.pubkey : "";
+    if (!CONSENT_KEY.test(pubkey)) return refusal(400, "bad-consent-key", "That isn't a valid signing key.");
+    const restoring = restoreHeld(table.record);
+    if (restoring !== null) return restoring;
+    let wallet: string | null = null;
+    try {
+      const grants = (await deps.tickets.snapshot(table.record.game_id)).grants.filter((grant) => grant.player_id === table.playerId).sort((a, b) => b.epoch - a.epoch);
+      const newest = grants[0];
+      if (newest !== undefined && newest.revoked_at === null && newest.issued_under.principal_id === caller.principalId) wallet = newest.wallet;
+    } catch {
+      return refusal(503, "unavailable", "The seat's wallet couldn't be read just now. Try again in a moment.");
+    }
+    if (wallet === null) return refusal(409, "link-first", "This seat has no standing wallet link made by your account. Link (or relink) the wallet first.");
+    const minted = keyChallenges.mint({
+      context: { sessionId: caller.sessionId, familyId: caller.familyId, recoverySelector: caller.recoverySelector, principalId: caller.principalId },
+      gameId: table.record.game_id,
+      playerId: table.playerId,
+      wallet,
+      site: caller.origin,
+      chainId: deps.pin.chain_id,
+      contract,
+      signingKey: pubkey,
+    });
+    return answer({ text: minted.text, nonce: minted.nonce, expiresAt: minted.expiresAt, wallet });
+  }
+
   async function consentKey(caller: MoneyCaller, body: Record<string, unknown>): Promise<MoneyAnswer> {
-    /* Unchanged by P3-ACCT: registering or moving a signing key outside a wallet link stays SENSITIVE. (The Ante registers
-       this browser's key through a wallet link -- a fresh proof by the wallet itself -- whenever this browser holds none,
-       so it never needs this route: `frontend/src/money/moneyActions.ts` anteNow.) */
-    if (!caller.sensitive) return refusal(403, "reauth-required", "Confirm it's you with your password to set up signing on this device.");
+    /* PHASE 4 (owner: no password in normal play): a key is registered on the seat's own wallet's FRESH signature over
+       this session's single-use `signing-key-challenge` text (the seat's linked wallet, this key, this game and seat).
+       A live "Confirm it's you" grant without a signature is still accepted (it already proved the account). */
     const table = tableFor(caller, body.gameId);
     if (!isTable(table)) return table;
     const pubkey = typeof body.pubkey === "string" ? body.pubkey : "";
@@ -1848,13 +1884,36 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
     if (restoring !== null) return restoring;
     const elsewhere = await notServedHere(table.record);
     if (elsewhere !== null) return elsewhere;
-    const registered = await deps.tickets.registerConsentKey({ gameId: table.record.game_id, playerId: table.playerId, principalId: caller.principalId, pubkey });
-    if (registered === "refused") return refusal(409, "link-first", "This seat has no standing wallet link made by your account. Link (or relink) the wallet first.");
+    let expectWallet: string | undefined;
+    let finish = (result: MoneyAnswer): MoneyAnswer => result;
+    if (body.nonce !== undefined || !caller.sensitive) {
+      const context = { sessionId: caller.sessionId, familyId: caller.familyId, recoverySelector: caller.recoverySelector, principalId: caller.principalId };
+      const signature = typeof body.signature === "string" ? body.signature : "";
+      const taken = keyChallenges.take(body.nonce, context, table.record.game_id);
+      if (taken.kind === "unknown") return refusal(403, "signature-required", "Approve this browser's signing key with your seat's wallet in Keplr.");
+      if (taken.kind === "spent") return taken.signature === signature ? (taken.result as MoneyAnswer) : refusal(409, "challenge-used", "That request was already used. Start again.");
+      const entry = taken.entry;
+      const nonce = entry.nonce;
+      /* Spent with its answer -- unless the answer is "try again" (503): then the same signature may be sent again. */
+      finish = (result: MoneyAnswer): MoneyAnswer => {
+        if (result.ok || result.status !== 503) keyChallenges.spend(nonce, signature, result);
+        return result;
+      };
+      if (entry.playerId !== table.playerId || entry.signingKey !== pubkey) return finish(refusal(409, "seat-changed", "Your seat or this browser's key changed. Start again."));
+      const verdict = verifyAdr036({ wallet: entry.wallet, text: entry.text, pubKeyBase64: typeof body.pubKey === "string" ? body.pubKey : "", signatureBase64: signature, now: deps.now() });
+      if (!verdict.ok) {
+        audit("money.signing-key-proof-refused", { game_id: table.record.game_id, why: verdict.why });
+        return finish(refusal(403, "invalid-proof", verdict.why === "wrong-wallet" ? "The signature came from another wallet than your seat's." : "The wallet's signature didn't check out. Nothing was registered."));
+      }
+      expectWallet = entry.wallet;
+    }
+    const registered = await deps.tickets.registerConsentKey({ gameId: table.record.game_id, playerId: table.playerId, principalId: caller.principalId, pubkey, ...(expectWallet !== undefined ? { expectWallet } : {}) });
+    if (registered === "refused") return finish(refusal(409, "link-first", "This seat has no standing wallet link made by your account. Link (or relink) the wallet first."));
     /* LIVE-5 L5-2 (F-L5-6): an UNCERTAIN ledger write is never reported as registered -- the next attempt re-reads. */
     if (registered !== "committed") return refusal(409, "conflict", "The seat's link changed meanwhile. Try again.");
-    audit("money.consent-key-registered", { game_id: table.record.game_id });
+    audit("money.consent-key-registered", { game_id: table.record.game_id, authority: expectWallet !== undefined ? "wallet-proof" : "grant" });
     soon(table.record.game_id);
-    return answer({ registered: true });
+    return finish(answer({ registered: true }));
   }
 
   /** The keys a seat's owner registered (every epoch of the seat), and its chain seat in the frozen roster. */
@@ -2169,6 +2228,7 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
       "join-admission": joinAdmission,
       "deposit-sent": depositSent,
       "consent-key": consentKey,
+      "signing-key-challenge": signingKeyChallenge,
       consent,
       annul,
       "escrow-details": escrowDetails,

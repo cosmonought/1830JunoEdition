@@ -115,6 +115,8 @@ export interface MoneyServer {
 }
 
 export interface MoneyServerOptions {
+  /** Dev harnesses: more allow-listed origins beside the test world's own (a real-browser page under its real host). */
+  readonly extraOrigins?: readonly string[];
   readonly enabled?: boolean;
   readonly pin?: typeof PIN;
   readonly minAnte?: string;
@@ -257,7 +259,7 @@ export async function moneyServer(options: MoneyServerOptions = {}): Promise<Mon
   const moneyFacts = createSettlementCoordinator({ store: financial, replay: () => ({ ok: false, reason: "not used" }), now: () => clock.now, warn: (line) => warnings.push(line), schedule: () => ({ cancel: () => undefined }) });
   await moneyFacts.load();
   const started = await startServer({
-    identity: { mode: "production", allowedOrigins: [PROD_ORIGIN], trustedProxyHops: 0, now: () => clock.now, service: identity },
+    identity: { mode: "production", allowedOrigins: [PROD_ORIGIN, ...(options.extraOrigins ?? [])], trustedProxyHops: 0, now: () => clock.now, service: identity },
     shuffle: IN_SEAT_ORDER,
     /* LIVE-4 (L4-2): this pool serves the fixture escrow (the pin its money tables are bound to). LIVE-4 (integration):
        as `start.ts` does, the ONE capability is the money serving's own, and the sessions read the same runtime chain

@@ -96,6 +96,7 @@ export type SessionApiPath =
   | "money/join-admission"
   | "money/deposit-sent"
   | "money/consent-key"
+  | "money/signing-key-challenge"
   | "money/consent"
   | "money/annul"
   | "money/escrow-details"

@@ -43,7 +43,9 @@ import {
   PASSWORD_MIN_LENGTH,
   accountDetails,
   changePassword,
+  mintAuthorization,
   profileErrorSentence,
+  recoverAccount,
   replaceAuthorizationWallet,
   replacementChallenge,
   signOutOtherDevices,
@@ -83,6 +85,9 @@ type View =
   /** Change the password (the current password and the new one). */
   | { kind: "password" }
   | { kind: "password-done"; signedOut: number }
+  /** PHASE 4: "Forgot current password?" while signed in -- the Authorization Wallet approves it in Keplr. */
+  | { kind: "forgot" }
+  | { kind: "forgot-done"; signedOut: number }
   /** PHASE 3 FINAL: change the Authorization Wallet. */
   | { kind: "replace"; state: Replace }
   /** ESCROW-3A: the server asked this session to confirm it's you before `then` runs. */
@@ -185,6 +190,51 @@ function MenuPanel({ port, name, otherSessions, onClose }: { port: SessionPort; 
     renewRoomLinks();
     setView({ kind: "password-done", signedOut: result.signedOut });
     refresh();
+  };
+
+  /* PHASE 4: "Forgot current password?" -- signed in, without the old password and without signing out first. The
+     account's Authorization Wallet signs the same RECOVER text as signed-out recovery (checked before Keplr signs: this
+     site, this account, that wallet); the server accepts it for THIS account only. This browser stays signed in on a
+     fresh session; every other device is signed out; seats, games, deposits and wallets are unchanged. */
+  const resetForgotten = async () => {
+    if (details === null) return;
+    if (Array.from(newPassword).length < PASSWORD_MIN_LENGTH) {
+      setError(profileErrorSentence({ ok: false, error: "bad-password", problem: "too-short" }));
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const wallet = await readKeplr();
+      if (wallet === null) return;
+      const authority = details.authorizationWallet.address;
+      if (wallet !== authority) {
+        setError(`Keplr is on ${shortWallet(wallet)}. Switch Keplr to your Authorization Wallet (${shortWallet(authority)}) and try again. Nothing was signed.`);
+        return;
+      }
+      const minted = await mintAuthorization({ purpose: "recover", username: details.username, wallet }, port);
+      if (!minted.ok) {
+        setError(profileErrorSentence(minted, "recover"));
+        return;
+      }
+      const signed = await signAuthorization(minted.minted.texts[0].text, { purpose: "RECOVER", account: details.username, signer: wallet, authorizationWallet: authority });
+      if (!signed.ok) {
+        setError(signed.reason);
+        return;
+      }
+      const chosen = newPassword;
+      setNewPassword("");
+      const result = await recoverAccount({ operation: minted.minted.operation, signed: signed.signed, newPassword: chosen }, port);
+      if (!result.ok) {
+        setError(profileErrorSentence(result, "recover"));
+        return;
+      }
+      renewRoomLinks();
+      setView({ kind: "forgot-done", signedOut: result.signedOut });
+      refresh();
+    } finally {
+      setBusy(false);
+    }
   };
 
   /* ---------------- "Change Authorization Wallet" ---------------- */
@@ -345,18 +395,36 @@ function MenuPanel({ port, name, otherSessions, onClose }: { port: SessionPort; 
             </button>
           ) : null}
           {details !== null ? (
-            <button
-              type="button"
-              style={styles.secondary}
-              onClick={() => {
-                setCurrentPassword("");
-                setNewPassword("");
-                go({ kind: "password" });
-              }}
-              data-testid="profile-menu-password"
-            >
-              Change password
-            </button>
+            <div style={menuStyles.section} data-testid="profile-menu-passwords">
+              <p style={menuStyles.sectionLabel}>Password</p>
+              <button
+                type="button"
+                style={styles.secondary}
+                onClick={() => {
+                  setCurrentPassword("");
+                  setNewPassword("");
+                  go({ kind: "password" });
+                }}
+                data-testid="profile-menu-password"
+              >
+                Change password
+              </button>
+              <button
+                type="button"
+                style={styles.secondary}
+                onClick={() => {
+                  setCurrentPassword("");
+                  setNewPassword("");
+                  go({ kind: "forgot" });
+                }}
+                data-testid="profile-menu-forgot"
+              >
+                Forgot current password?
+              </button>
+              <p style={menuStyles.facts} data-testid="profile-menu-password-note">
+                Change it if you know your current password. If you don't, your Authorization Wallet approves a new one in Keplr -- you stay signed in.
+              </p>
+            </div>
           ) : null}
           <button type="button" style={styles.secondary} onClick={confirmOthers} data-testid="profile-menu-others">
             Sign out other devices
@@ -440,9 +508,66 @@ function MenuPanel({ port, name, otherSessions, onClose }: { port: SessionPort; 
             {back}
           </div>
           <p style={styles.label} data-testid="profile-password-forgot-note">
-            Forgot your current password? Sign out, then use “Forgot password?” with your Authorization Wallet.
+            Don't know your current password?{" "}
+            <button
+              type="button"
+              style={menuStyles.linkButton}
+              onClick={() => {
+                setCurrentPassword("");
+                setNewPassword("");
+                go({ kind: "forgot" });
+              }}
+              data-testid="profile-password-to-forgot"
+            >
+              Reset it with your Authorization Wallet
+            </button>
           </p>
         </form>
+      ) : null}
+      {view.kind === "forgot" && details !== null ? (
+        <form
+          method="post"
+          style={styles.form}
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!busy) void resetForgotten();
+          }}
+          data-testid="profile-forgot-form"
+        >
+          <p style={styles.subheading}>Reset a forgotten password</p>
+          <p style={styles.text} data-testid="profile-forgot-explain">
+            You don't need your current password. Your Authorization Wallet ({shortWallet(details.authorizationWallet.address)}) approves the new one in Keplr -- a message, not a
+            transaction; nothing moves. You stay signed in here; every other device signed in to this account is signed out. Your games, seats and deposits don't change.
+          </p>
+          <label style={styles.label} htmlFor="profile-forgot-new">
+            New password (at least {PASSWORD_MIN_LENGTH} characters)
+          </label>
+          <input
+            id="profile-forgot-new"
+            name="new-password"
+            type="password"
+            autoComplete="new-password"
+            style={styles.input}
+            value={newPassword}
+            onChange={(event) => setNewPassword(event.target.value)}
+            data-testid="profile-forgot-new"
+          />
+          <div style={styles.row}>
+            <button type="submit" style={disabledLook(styles.primary, busy)} disabled={busy} data-testid="profile-forgot-save">
+              <KeplrMark />
+              {busy ? "Approve in Keplr…" : "Approve in Keplr and set password"}
+            </button>
+            {back}
+          </div>
+        </form>
+      ) : null}
+      {view.kind === "forgot-done" ? (
+        <>
+          <p style={styles.text} role="status" data-testid="profile-forgot-done">
+            New password set. {view.signedOut === 0 ? "No other devices were signed in." : `Signed out ${devices(view.signedOut)}.`} This device stays signed in.
+          </p>
+          <div style={styles.row}>{back}</div>
+        </>
       ) : null}
       {view.kind === "password-done" ? (
         <>
@@ -516,17 +641,18 @@ function MenuPanel({ port, name, otherSessions, onClose }: { port: SessionPort; 
       ) : null}
       {view.kind === "signout-confirm" ? (
         <>
-          <p style={styles.text}>Sign out this device? Your account and its seats are kept. To come back on this browser, log in again.</p>
+          <p style={styles.text}>Sign out this device? Your account, games, seats and deposits are kept. To come back on this browser, log in again.</p>
           {signingKeys > 0 ? (
             <>
+              {/* PHASE 4: plain words. These are key RECORDS this browser stored (it can't tell from them whether any table
+                  is still funded), so they are never called funded seats. */}
               <p style={styles.notice} data-testid="profile-signout-keys">
-                This browser holds the signing key{signingKeys === 1 ? "" : "s"} for {signingKeys} real-money seat{signingKeys === 1 ? "" : "s"}. Signing out ends the wallet links made here for
-                tables that haven't started (relink them free from another device, with the same wallet). Your deposits stay yours: payouts still arrive through each table's
-                challenge window, and another device can take over signing (“Use this device for signing”).
+                This browser also stores {signingKeys === 1 ? "a game signing key" : `${signingKeys} game signing keys`} it made when you anted. They let this browser approve game
+                results. Removing them is safe: your seat's wallet can approve a new key on any device, in Keplr, when one is needed.
               </p>
               <label style={styles.check}>
                 <input type="checkbox" checked={removeKeys} onChange={(event) => setRemoveKeys(event.target.checked)} data-testid="profile-signout-remove-keys" />
-                Remove this device's signing keys
+                Also remove this browser's game signing keys (recommended on a shared computer)
               </label>
             </>
           ) : null}
@@ -608,7 +734,9 @@ export function ProfileMenu({ port = sessionPort() }: { port?: SessionPort }): J
   );
 }
 
-const menuStyles: Record<"anchor" | "chip" | "create" | "panel" | "list" | "footer" | "facts" | "section" | "sectionLabel", React.CSSProperties> = {
+const menuStyles: Record<"anchor" | "chip" | "create" | "panel" | "list" | "footer" | "facts" | "section" | "sectionLabel" | "linkButton", React.CSSProperties> = {
+  /* PHASE 4: an inline text button ("Reset it with your Authorization Wallet"). */
+  linkButton: { background: "none", border: "none", padding: 0, font: "inherit", color: SANDBOX_TEXT, textDecoration: "underline", cursor: "pointer" },
   anchor: { position: "relative", display: "inline-flex", flexWrap: "wrap", gap: "8px" },
   chip: {
     fontSize: FONT_SIZE.small,

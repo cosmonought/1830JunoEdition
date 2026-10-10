@@ -213,18 +213,12 @@ describe("W2-M AUD-20.04: an ended Confirm-it's-you and an ended link request sa
     expect(linkRequestEndedSentence(T0 + 30_000, T0)).toMatch(/^The link request expired at/);
   });
 
-  it.each([
-    ["believed live (the server ended it early)", T0 + 120_000, /ended early on the server/],
-    ["believed until a past time (it lapsed)", T0 - 120_000, /expired at /],
-    ["never confirmed on this page", null, /^Confirm it's you first\.$/],
-  ] as const)("reauth-required, %s", async (_case, believed, said) => {
+  it("PHASE 4: no 'Confirm it's you' in normal play -- a stray reauth-required (an older server) is the server's sentence, with no password step", async () => {
     const services = testServices();
     installMoneyServicesForTests(services);
-    updateMoneySession({ confirmedUntil: believed });
     const port = scriptedPort();
     port.answer("money/wallet-challenge", 403, reauth);
-    expect(await linkWallet(ctx({ view: moneyView(), port, services }))).toEqual({ ok: false, reason: expect.stringMatching(said), needs: "confirm" });
-    expect(moneySession().confirmedUntil).toBeNull();
+    expect(await linkWallet(ctx({ view: moneyView(), port, services }))).toEqual({ ok: false, reason: "Confirm it's you first." });
   });
 
   it.each([

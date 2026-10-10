@@ -210,6 +210,69 @@ describe("LUDUM v1.2 auth: one account, one session, both sites (§15)", () => {
       await stopServer(server);
     }
   });
+  test("PHASE 4: Change password on Ludum -- Play's own handler: the current password, the policy; this browser keeps a fresh cookie, every other device is signed out, both sites see it", async () => {
+    const { server, port } = await ludumServer();
+    try {
+      const account = await accountBrowser(port, "gail", PASSWORD, "Gail");
+      const other = await ludumStart(port);
+      assert.equal((await auth(port, "sign-in", { cookie: other, body: { username: "gail", password: PASSWORD } })).status, 200);
+      const wrong = await auth(port, "password", { cookie: account.cookie, body: { currentPassword: "not the password", newPassword: "a brand new passphrase" } });
+      assert.equal(wrong.status, 403);
+      assert.equal(wrong.body?.error, "invalid-credential");
+      assert.equal(wrong.headers["set-cookie"], undefined);
+      const short = await auth(port, "password", { cookie: account.cookie, body: { currentPassword: PASSWORD, newPassword: "too short" } });
+      assert.equal(short.status, 400, "the same password policy");
+      const signedOut = await auth(port, "password", { body: { currentPassword: PASSWORD, newPassword: "a brand new passphrase" } });
+      assert.notEqual(signedOut.status, 200, "signed out: nothing to change");
+      const changed = await auth(port, "password", { cookie: account.cookie, body: { currentPassword: PASSWORD, newPassword: "a brand new passphrase" } });
+      assert.equal(changed.status, 200, changed.text);
+      assertCors(changed, "auth/password");
+      const fresh = assertSessionCookie(changed, "auth/password");
+      assert.equal((await ludumSession(port, fresh)).body?.signedIn, true, "this browser stays signed in (Ludum)");
+      assert.equal((await apiRequest(port, "/gs/api/account/me", { cookie: fresh, body: {} })).status, 200, "and on Play: one session");
+      assert.equal((await ludumSession(port, other)).body?.signedIn, false, "the other device is signed out");
+      const play = await apiRequest(port, "/gs/api/session", { body: {} });
+      const playCookie = cookieFromAnswer(play) as string;
+      assert.equal((await apiRequest(port, "/gs/api/account/login", { cookie: playCookie, body: { username: "gail", password: PASSWORD } })).status, 403, "the old password is dead on Play too");
+      const later = await ludumStart(port);
+      assert.equal((await auth(port, "sign-in", { cookie: later, body: { username: "gail", password: "a brand new passphrase" } })).status, 200);
+    } finally {
+      await stopServer(server);
+    }
+  });
+
+  test("PHASE 4: Forgot current password? on Ludum while SIGNED IN -- the Authorization Wallet's RECOVER proof for this account only; no old password, no sign-out first", async () => {
+    const { server, port } = await ludumServer();
+    try {
+      const account = await accountBrowser(port, "ivy", PASSWORD, "Ivy");
+      const someoneElse = await accountBrowser(port, "jon", PASSWORD, "Jon");
+      const otherDevice = await ludumStart(port);
+      assert.equal((await auth(port, "sign-in", { cookie: otherDevice, body: { username: "ivy", password: PASSWORD } })).status, 200);
+      const reset = async (wallet = account.wallet, username = "ivy") => {
+        const minted = await auth(port, "authorization", { cookie: account.cookie, body: { purpose: "recover", username, wallet: wallet.address } });
+        if (minted.status !== 200) return minted;
+        const text = (minted.body?.texts as Array<{ text: string }>)[0].text;
+        assert.match(text, /ludum\.example/, "the text names Ludum as the site");
+        return auth(port, "recover", { cookie: account.cookie, body: { operation: minted.body?.operation, ...wallet.sign(text), newPassword: "a brand new passphrase" } });
+      };
+      assert.equal((await reset(someoneElse.wallet, "jon")).status, 409, "never another account's");
+      const stranger = await reset(keplrAccount("not-ivys-wallet"));
+      assert.equal(stranger.status, 403);
+      assert.equal(stranger.headers["set-cookie"], undefined);
+      const done = await reset();
+      assert.equal(done.status, 200, done.text);
+      assertCors(done, "auth/recover");
+      const fresh = assertSessionCookie(done, "auth/recover");
+      assert.equal((await ludumSession(port, fresh)).body?.signedIn, true, "still signed in");
+      assert.equal((await ludumSession(port, otherDevice)).body?.signedIn, false, "every other device is signed out");
+      const later = await ludumStart(port);
+      assert.equal((await auth(port, "sign-in", { cookie: later, body: { username: "ivy", password: PASSWORD } })).status, 403, "the forgotten password is dead");
+      const again = await ludumStart(port);
+      assert.equal((await auth(port, "sign-in", { cookie: again, body: { username: "ivy", password: "a brand new passphrase" } })).status, 200);
+    } finally {
+      await stopServer(server);
+    }
+  });
 });
 
 describe("LUDUM v1.2 auth: the protections hold (§15)", () => {
@@ -268,11 +331,11 @@ describe("LUDUM v1.2 auth: the protections hold (§15)", () => {
     }
   });
 
-  test("only the seven actions exist: Play's password change, wallet replacement, sign-out-others and account/me are not under auth/*", async () => {
+  test("only the eight actions exist: wallet replacement, sign-out-others and account/me are not under auth/* (PHASE 4: password change is)", async () => {
     const { server, port } = await ludumServer();
     try {
       const account = await accountBrowser(port, "hana", PASSWORD, "Hana");
-      for (const action of ["password", "me", "authorization-wallet/challenge", "authorization-wallet/replace", "sign-out-others", "session", "login", "Sign-In", "sign-in/", "sign-in/x"]) {
+      for (const action of ["me", "authorization-wallet/challenge", "authorization-wallet/replace", "sign-out-others", "session", "login", "Sign-In", "sign-in/", "sign-in/x"]) {
         for (const method of ["OPTIONS", "POST"]) {
           const answer = await auth(port, action, { cookie: account.cookie, method, body: {} });
           assert.equal(answer.status, 404, `${method} auth/${action}`);

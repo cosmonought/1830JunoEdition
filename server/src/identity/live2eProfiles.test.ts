@@ -550,15 +550,16 @@ describe("LIVE-2E recovery (PHASE 3 FINAL: by the Authorization Wallet)", () => 
       // The new password signs in; the old one no longer does.
       assert.equal((await loginOnFreshBrowser(port, ann.username, NEW_PASSWORD)).answer.status, 200);
       assert.equal((await loginOnFreshBrowser(port, ann.username, ann.password)).answer.status, 403);
-      // Already-profiled browsers cannot recover (the RECOVER text is not minted), and nothing about them changes.
+      /* PHASE 4: "Forgot current password?" -- a browser signed in to THIS account may reset its password with the
+         Authorization Wallet (the same RECOVER text and proof); it stays signed in. Another profile's browser cannot. */
       const again = await recover(port, recovered, { username: ann.username, wallet: ann.wallet });
-      assert.deepEqual([again.status, again.body], [409, { error: "already-profiled" }]);
+      assert.equal(again.status, 200, JSON.stringify(again.body));
       const bea = await profiledBrowser(port, "Bea");
       const beaPrincipal = principalOf(server, bea.cookie);
       assert.equal((await recover(port, bea.cookie, { username: ann.username, wallet: ann.wallet })).status, 409, "a signed-in browser of another profile is refused too");
       assert.equal(principalOf(server, bea.cookie), beaPrincipal);
       assert.equal(((await session(port, bea.cookie)).body as { profile: { name: string } }).profile.name, "Bea", "Bea's browser is still Bea's");
-      assert.equal(server.identity.stats.accountRecoveries, 1);
+      assert.equal(server.identity.stats.accountRecoveries, 2); // PHASE 4: the signed-in reset above is the second
     } finally {
       await stopServer(server);
     }

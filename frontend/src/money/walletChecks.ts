@@ -28,6 +28,7 @@ import { Secp256k1, Secp256k1Signature } from "@cosmjs/crypto";
 import { fromHex } from "@cosmjs/encoding";
 
 import { parseWalletLinkChallenge, WALLET_LINK_TAG_V1, type WalletLinkChallengeFields } from "../gameEngine/escrow/walletLinkChallengeV1";
+import { parseSigningKeyChallenge, SIGNING_KEY_TAG_V1, type SigningKeyChallengeFields } from "../gameEngine/escrow/signingKeyChallengeV1";
 import { WALLET_EXECUTE, WALLET_MESSAGE_FUNDS, JUNO_ASYNC_PACES_SECS, JunoAbiError, type JunoDeadlineChoice, type WalletMessageKind } from "../gameEngine/escrow/junoWalletMessages";
 import { NO_DEADLINE_DISCLOSURE } from "../utils/clockProtocol";
 import { joinAdmissionDigestV1 } from "../gameEngine/escrow/junoJoinAdmissionV1";
@@ -78,6 +79,23 @@ export function checkLinkChallenge(text: string, expect: LinkExpectation): Check
   if (fields.playerId !== expect.playerId) return no("The link message names another seat, so it wasn't signed.");
   if (fields.wallet !== expect.wallet) return no("The link message names another wallet than the one Keplr is on, so it wasn't signed.");
   if (fields.expiresAt <= expect.now) return no("The link message has already expired. Start the link again.");
+  return yes(fields);
+}
+
+/** PHASE 4: the signing-key challenge, parsed, when it is exactly the v1 text for THIS seat, its wallet and THIS key
+ *  (else a sentence, and nothing signed). */
+export function checkSigningKeyChallenge(text: string, expect: LinkExpectation & { readonly signingKey: string }): Checked<SigningKeyChallengeFields> {
+  const fields = parseSigningKeyChallenge(text);
+  if (fields === null) return no(`The signing-key message isn't a ${SIGNING_KEY_TAG_V1} message, so it wasn't signed.`);
+  if (fields.appName !== expect.appName) return no("The signing-key message names another app, so it wasn't signed.");
+  if (fields.site !== expect.site) return no(`The signing-key message names another site (${fields.site}), so it wasn't signed.`);
+  if (fields.chainId !== expect.pin.chainId) return no(`The signing-key message names another network (${fields.chainId}), so it wasn't signed.`);
+  if (fields.contract !== expect.pin.contract) return no("The signing-key message names another escrow contract, so it wasn't signed.");
+  if (fields.gameId !== expect.gameId) return no("The signing-key message names another table, so it wasn't signed.");
+  if (fields.playerId !== expect.playerId) return no("The signing-key message names another seat, so it wasn't signed.");
+  if (fields.wallet !== expect.wallet) return no("The signing-key message names another wallet than your seat's, so it wasn't signed.");
+  if (fields.signingKey !== expect.signingKey) return no("The signing-key message names another key than this device's, so it wasn't signed.");
+  if (fields.expiresAt <= expect.now) return no("The signing-key message has already expired. Try again.");
   return yes(fields);
 }
 

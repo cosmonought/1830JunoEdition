@@ -28,7 +28,6 @@ import { payoutPreview } from "../gameEngine/settlementPreview";
 import type { GameStateResponse } from "../gameEngine/gameState";
 import { sha256Hex } from "../gameEngine/sha256";
 import { formatAmount, type MoneyDepositEntry, type RoomMoneyView } from "../utils/moneyProtocol";
-import { reauthenticateWithPassword } from "../utils/profileApi";
 import { sessionPort, type SessionPort } from "../utils/sessionBootstrap";
 import type { PinnedEscrowDeployment } from "./escrowDeployment";
 import { txBytesToBase64 } from "./keplrWallet";
@@ -38,12 +37,13 @@ import {
   joinAdmission,
   registerConsentKey,
   relayConsent,
+  signingKeyChallenge,
   submitAnnul,
   walletChallenge,
   walletLink,
   type MoneyFailure,
 } from "./moneyApi";
-import { ANTE_STATUS, linkRequestEndedSentence, reconfirmSentence, type DisputeRead } from "./moneyFlow";
+import { ANTE_STATUS, linkRequestEndedSentence, type DisputeRead } from "./moneyFlow";
 import { bumpLocal, moneyServices, moneySession, recordProofRenewed, updateMoneySession, type MoneyServices } from "./moneySession";
 import type { PendingWalletTx } from "./pendingTx";
 import { browserSameWalletAcks, SAME_WALLET_SENTENCE, sameWalletAccountKey } from "./sameWalletAck";
@@ -55,6 +55,7 @@ import {
   challengeMessage,
   challengeProblem,
   checkLinkChallenge,
+  checkSigningKeyChallenge,
   createGameMessage,
   deadlineChoiceFor,
   finalizeMessage,
@@ -73,7 +74,7 @@ import type { ClockOverdueView } from "../utils/clockProtocol";
 
 /** The step a refusal asks for before the action can run again. W2-M adds `reprove`: the server refused a deposit's
  *  approval for want of a fresh wallet proof (AUD-20.02). */
-export type OutcomeNeeds = "confirm" | "connect" | "replace" | "reprove" | "same-wallet";
+export type OutcomeNeeds = "connect" | "replace" | "reprove" | "same-wallet";
 
 export type ActionOutcome =
   | { readonly ok: true; readonly notice?: string }
@@ -90,15 +91,11 @@ export type ActionOutcome =
 const done = (notice?: string): ActionOutcome => ({ ok: true, ...(notice !== undefined ? { notice } : {}) });
 const refuse = (reason: string, needs?: OutcomeNeeds): ActionOutcome => ({ ok: false, reason, ...(needs !== undefined ? { needs } : {}) });
 
-/** A failure from the money routes, as an outcome: "Confirm it's you" when that is what the server asked for -- said
- *  specifically when this page believed it held the grant (W2-M, AUD-20.04: when it lapsed, or that the server ended
- *  it early), the server's own sentence otherwise; the free re-proof when a deposit's approval needs a fresh proof. */
+/** A failure from the money routes, as an outcome: the server's own sentence; the free re-proof when a deposit's
+ *  approval needs a fresh proof. PHASE 4 (owner): normal play never asks for the account password -- no money route
+ *  answers "Confirm it's you" any more (a wallet's own Keplr signature is the authority), so nothing here offers it. */
 function fromApi(failure: MoneyFailure, services?: MoneyServices): ActionOutcome {
-  if (failure.code === "reauth-required") {
-    const believed = moneySession().confirmedUntil;
-    updateMoneySession({ confirmedUntil: null });
-    return refuse(reconfirmSentence(believed, services?.now() ?? Date.now()) ?? failure.reason, "confirm");
-  }
+  void services;
   if (failure.code === "replace-required") return refuse(failure.reason, "replace");
   /* `link-first` answers a join approval whose seat has no usable proof (missing or older than the server accepts) or
      ticket: the cure for every one is the same free re-proof of the linked wallet. */
@@ -150,15 +147,6 @@ export async function connectWallet(services: MoneyServices = moneyServices()): 
   return done();
 }
 
-/** "Confirm it's you": the account's password goes to the server once (`/gs/api/profile/reauth`) and is dropped here. */
-export async function confirmItsYou(password: string, port: SessionPort = sessionPort(), now: () => number = () => Date.now()): Promise<ActionOutcome> {
-  const result = await reauthenticateWithPassword(password, port);
-  if (!result.ok) return refuse(result.error === "invalid-credential" ? "That password doesn't match this account. Check it and try again." : "The game server couldn't confirm it just now. Try again.");
-  /* Believe the grant for no longer than the server's window from THIS clock (the server has the last word). */
-  updateMoneySession({ confirmedUntil: Math.min(result.expiresAt, now() + 5 * 60 * 1000) });
-  return done();
-}
-
 /** The Keplr account now, re-read (and the session told), or the reason there isn't one. */
 async function currentAccount(services: MoneyServices, pin: PinnedEscrowDeployment): Promise<{ ok: true; address: string } | { ok: false; outcome: ActionOutcome }> {
   const account = await services.wallet.account(pin);
@@ -174,7 +162,29 @@ async function currentAccount(services: MoneyServices, pin: PinnedEscrowDeployme
     SIGNING KEYS
    ================================================================== */
 
-/** A signing key this browser holds AND the seat registered -- made, stored and registered now if needed. */
+/** PHASE 4: put `pubkey` (a key this browser made and stored) on the seat, authorized by the seat's OWN wallet signing
+ *  the server's single-use signing-key text in Keplr -- one Keplr approval, never a password. The text is checked
+ *  before Keplr is asked (this site, network, contract, table, seat, the seat's wallet and exactly this key). Null when
+ *  registered; the outcome to show otherwise. */
+async function registerKeyWithWallet(ctx: TableContext, services: MoneyServices, pin: PinnedEscrowDeployment, playerId: string, pubkey: string): Promise<ActionOutcome | null> {
+  const challenge = await signingKeyChallenge(ctx.gameId, pubkey, ctx.port);
+  if (!challenge.ok) return fromApi(challenge, services);
+  const wallet = challenge.value.wallet;
+  const site = ctx.site ?? (typeof window === "undefined" ? "" : window.location.origin);
+  const checked = checkSigningKeyChallenge(challenge.value.text, { appName: APP_NAME, site, pin, gameId: ctx.gameId, playerId, wallet, signingKey: pubkey, now: services.now() });
+  if (!checked.ok) return refuse(checked.reason);
+  const account = await currentAccount(services, pin);
+  if (!account.ok) return account.outcome;
+  if (account.address !== wallet) return refuse(`Switch Keplr to ${wallet} -- your seat's wallet -- so it can approve this device's signing key. Nothing was signed.`, "connect");
+  const signed = await services.wallet.signLink(pin, wallet, challenge.value.text);
+  if (!signed.ok) return refuse(signed.code === "rejected" ? "You declined in Keplr, so this device's signing key wasn't approved. Nothing moved." : signed.reason, signed.code === "wrong-account" ? "connect" : undefined);
+  const registered = await registerConsentKey(ctx.gameId, pubkey, ctx.port, { nonce: challenge.value.nonce, pubKey: signed.value.pubKey, signature: signed.value.signature });
+  if (!registered.ok) return fromApi(registered, services);
+  return null;
+}
+
+/** A signing key this browser holds AND the seat registered -- made, stored and registered now if needed (PHASE 4: the
+ *  seat's wallet approves it in Keplr; no password). */
 async function registeredLocalKey(ctx: TableContext, services: MoneyServices, pin: PinnedEscrowDeployment, wallet: string): Promise<{ ok: true; pubkey: string } | { ok: false; outcome: ActionOutcome }> {
   const you = ctx.view.you;
   if (you === null) return { ok: false, outcome: refuse("You don't have a seat at this table.") };
@@ -182,12 +192,12 @@ async function registeredLocalKey(ctx: TableContext, services: MoneyServices, pi
   for (const record of await services.keys.forSeat(ctx.gameId, you.playerId)) {
     if (registered.has(record.pubkey)) return { ok: true, pubkey: record.pubkey };
   }
-  /* None here: make one (stored before anything carries it), then register it -- sensitive. */
+  /* None here: make one (stored before anything carries it), then register it -- the seat's wallet approves it. */
   const made = await services.keys.create({ chainId: pin.chainId, contract: pin.contract, gameId: ctx.gameId, playerId: you.playerId, wallet });
   bumpLocal();
   if (!made.ok) return { ok: false, outcome: refuse(made.reason) };
-  const answer = await registerConsentKey(ctx.gameId, made.pubkey, ctx.port);
-  if (!answer.ok) return { ok: false, outcome: fromApi(answer, services) };
+  const refused = await registerKeyWithWallet(ctx, services, pin, you.playerId, made.pubkey);
+  if (refused !== null) return { ok: false, outcome: refused };
   return { ok: true, pubkey: made.pubkey };
 }
 
@@ -743,8 +753,8 @@ export async function moveSigningKeyHere(ctx: TableContext): Promise<ActionOutco
   const made = await services.keys.create({ chainId: pin.chainId, contract: pin.contract, gameId: ctx.gameId, playerId: you.playerId, wallet });
   bumpLocal();
   if (!made.ok) return refuse(made.reason);
-  const registered = await registerConsentKey(ctx.gameId, made.pubkey, ctx.port);
-  if (!registered.ok) return fromApi(registered, services);
+  const refused = await registerKeyWithWallet(ctx, services, pin, you.playerId, made.pubkey);
+  if (refused !== null) return refused;
   const message = setConsentKeyMessage(pin, ctx.view.escrow.chainGameId, made.pubkey);
   if (!message.ok) return refuse(message.reason);
   const sent = await signKeepSend(services, pin, { gameId: ctx.gameId, playerId: you.playerId, wallet }, message.value, ctx.port);

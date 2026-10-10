@@ -780,7 +780,7 @@ async function seatJoiner(world: MoneyServer, who: Player, code: string): Promis
 }
 
 describe("P3-ACCT the seat's wallet is the table's, never the account's (PHASE 3 FINAL)", () => {
-  test("a link authorized by the sign-in persists NOTHING -- the Authorization Wallet is unchanged and no profile wallet is recorded; the SAME game wallet at the next table needs the password again; only the Authorization Wallet links without it; the payout wallet is the seat's bound one", async () => {
+  test("a link persists NOTHING about the account -- the Authorization Wallet is unchanged and no profile wallet is recorded; PHASE 4: any wallet links on its own fresh signature (no password), a seat's wallet is replaced only when asked; the payout wallet is the seat's bound one", async () => {
     const world = await moneyServer();
     try {
       const host = await player(world, "Hana");
@@ -820,8 +820,8 @@ describe("P3-ACCT the seat's wallet is the table's, never the account's (PHASE 3
       const joSeat = fin?.roster?.roster.find((entry) => entry.payout_address === joWallet.address);
       assert.ok(joSeat !== undefined, `the roster pays the seat's linked wallet: ${JSON.stringify(fin?.roster?.roster)}`);
       assert.ok(!(fin?.roster?.roster ?? []).some((entry) => entry.payout_address === designated?.address), "never the Authorization Wallet by itself");
-      /* LATER (the sign-in's five minutes long gone): another table, the SAME game wallet -- it is not remembered: the
-         password again (P3-ACCT's persisted wallet linked here without it). */
+      /* LATER (the sign-in's five minutes long gone): another table, the SAME game wallet -- it is not remembered by the
+         account, and PHASE 4 (owner): it links on its own fresh signature, with no password. */
       world.advance(30 * 60_000);
       const host2 = await player(world, "Hugo");
       const table2 = await openMoneyTable(host2);
@@ -830,34 +830,27 @@ describe("P3-ACCT the seat's wallet is the table's, never the account's (PHASE 3
       await world.observe();
       await seatJoiner(world, jo, table2.code);
       const returning = await linkWallet(jo, table2.gameId, joWallet, testConsentKey("jo-2"), { confirm: false });
-      assert.deepEqual([returning.status, returning.body?.error], [403, "reauth-required"], "a game wallet a seat used before needs the password again");
-      /* The account's own Authorization Wallet links its seat with its fresh signature alone (linkAuthority). */
+      assert.equal(returning.status, 200, `PHASE 4: the wallet's own signature links it, no password: ${returning.text}`);
+      assert.deepEqual(world.identity.authorizationWallet(joPrincipal), designated, "still never the account's");
+      /* A DIFFERENT wallet on this seat (the Authorization Wallet, or any other) replaces the link only when the player
+         says so (W2-M, asked before Keplr signs) -- never silently, and still no password. */
       const authority = testWallet(`authorization/${jo.browser.username}`);
       assert.equal(authority.address, designated?.address);
-      const viaAuthority = await linkWallet(jo, table2.gameId, authority, testConsentKey("jo-auth"), { confirm: false });
-      assert.equal(viaAuthority.status, 200, `the Authorization Wallet links without the password: ${viaAuthority.text}`);
-      /* ANOTHER wallet without the password: refused before anything is signed (the challenge itself). */
-      const otherWallet = testWallet("jo-other");
-      const refused = await linkWallet(jo, table2.gameId, otherWallet, testConsentKey("jo-3"), { confirm: false, replace: true });
-      assert.deepEqual([refused.status, refused.body?.error], [403, "reauth-required"]);
-      /* With the password it is W2-M's replacement: asked to replace, then replaced -- and the account is unchanged. */
-      await jo.confirm();
-      const ask = await linkWallet(jo, table2.gameId, otherWallet, testConsentKey("jo-3"), { confirm: false });
+      const ask = await linkWallet(jo, table2.gameId, authority, testConsentKey("jo-auth"), { confirm: false });
       assert.equal(ask.body?.error, "replace-required", "W2-M: a different wallet replaces the seat's link only when asked to");
+      const viaAuthority = await linkWallet(jo, table2.gameId, authority, testConsentKey("jo-auth"), { confirm: false, replace: true });
+      assert.equal(viaAuthority.status, 200, viaAuthority.text);
+      const otherWallet = testWallet("jo-other");
       const replaced = await linkWallet(jo, table2.gameId, otherWallet, testConsentKey("jo-3"), { confirm: false, replace: true });
       assert.equal(replaced.status, 200, replaced.text);
       assert.deepEqual(world.identity.authorizationWallet(joPrincipal), designated, "the seat's replacement is not the account's");
       assert.deepEqual(world.identity.peekProfileOf(joPrincipal), profileBefore);
-      /* A stolen cookie (no password) cannot bring the game wallet back either: it never was the account's. */
-      world.advance(10 * 60_000);
-      const back = await linkWallet(jo, table2.gameId, joWallet, testConsentKey("jo-4"), { confirm: false, replace: true });
-      assert.equal(back.body?.error, "reauth-required");
     } finally {
       await world.close();
     }
   });
 
-  test("'Forget this wallet' is retired (410): there is nothing to forget -- once the sign-in's minutes are over, a game wallet the seat linked needs the password again; the Authorization Wallet does not", async () => {
+  test("'Forget this wallet' is retired (410): there is nothing to forget -- PHASE 4: past the sign-in's minutes, any wallet's challenge is still minted (its own signature, not a password, is what links it)", async () => {
     const world = await moneyServer();
     try {
       const host = await accountPlayer(world, "Hana");
@@ -869,7 +862,7 @@ describe("P3-ACCT the seat's wallet is the table's, never the account's (PHASE 3
       await host.confirm();
       assert.deepEqual((await apiRequest(world.port, "/gs/api/account/forget-wallet", { cookie: host.browser.cookie, body: {} })).body, { error: "retired" }, "with or without a confirmation");
       world.advance(10 * 60_000);
-      assert.equal((await host.api("wallet-challenge", { gameId: table.gameId, wallet: wallet.address })).body?.error, "reauth-required");
+      assert.equal((await host.api("wallet-challenge", { gameId: table.gameId, wallet: wallet.address })).status, 200);
       const authority = await host.api("wallet-challenge", { gameId: table.gameId, wallet: host.browser.wallet.address });
       assert.equal(authority.status, 200, authority.text);
     } finally {

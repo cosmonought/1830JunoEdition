@@ -22,7 +22,6 @@ import type { HashableLogEntry } from "../../gameEngine/logHash";
 import { formatAmount, shortWallet } from "../../utils/moneyProtocol";
 import type { RoomView } from "../../utils/roomProtocol";
 import type { SessionPort } from "../../utils/sessionBootstrap";
-import { ConfirmItsYou } from "../ConfirmItsYou";
 import { disputeConfirmSentence, disputeRecordLines, reviewSentence, type SettlementActionKind } from "../../money/moneyFlow";
 import type { MoneyServices } from "../../money/moneySession";
 import { useMoneyTable } from "../../money/useMoneyTable";
@@ -134,9 +133,6 @@ export function SettlementBand({ room, log = null, board = null, compact = false
         ) : null}
         {table.error !== null ? <span style={styles.error}>{table.error}</span> : null}
         {table.notice !== null ? <span style={styles.notice}>{table.notice}</span> : null}
-        {table.needs !== null && table.needs.kind === "confirm" ? (
-          <ConfirmItsYou purpose="To set up signing on this device" port={port} showOrigin testIdPrefix="money-strip-reauth" onConfirmed={(expiresAt) => table.confirmed(expiresAt)} onCancel={table.cancelNeeds} cancelLabel="Not now" />
-        ) : null}
       </span>
     );
   }
@@ -197,9 +193,6 @@ export function SettlementBand({ room, log = null, board = null, compact = false
             </button>
           ))}
         </div>
-      ) : null}
-      {table.needs !== null && table.needs.kind === "confirm" ? (
-        <ConfirmItsYou purpose="To set up signing on this device" port={port} showOrigin testIdPrefix="settlement-reauth" onConfirmed={(expiresAt) => table.confirmed(expiresAt)} onCancel={table.cancelNeeds} cancelLabel="Not now" />
       ) : null}
       {table.error !== null ? (
         <p style={styles.error} role="alert" data-testid="settlement-error">

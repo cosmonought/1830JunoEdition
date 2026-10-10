@@ -10,6 +10,7 @@ import React from "react";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 
+import { walletLinkChallengeText } from "../../gameEngine/escrow/walletLinkChallengeV1";
 import { MoneyPanel } from "./MoneyPanel";
 import { SettlementBand } from "./SettlementBand";
 import { GameOverModal } from "../GameOverModal";
@@ -99,14 +100,17 @@ describe("ESCROW-4: the money panel", () => {
     expect(byTestId("money-action-connect")).toBeNull();
   });
 
-  it("P3-ACCT: one Ante press -- Keplr connects, and only when the server asks (a NEW wallet) 'Confirm it's you' (this app, this site) with the PASSWORD; then the Ante carries on by itself", async () => {
+  it("PHASE 4: one Ante press -- Keplr connects and signs the link; NO password is ever asked (no 'Confirm it's you', no extra Play form)", async () => {
     const services = testServices();
     installMoneyServicesForTests(services);
     act(() => updateMoneySession({ wallet: "disconnected", address: null, confirmedUntil: null }));
     const port = scriptedPort();
-    port.answer("money/wallet-challenge", 403, { error: "reauth-required", reason: "Confirm it's you first." });
-    /* PHASE 3 FINAL: "Confirm it's you" is the password alone -- it no longer reads the account to choose a method. */
-    port.answer("profile/reauth", 200, { ok: true, expiresAt: T0 + 5 * 60 * 1000 });
+    port.answer("money/wallet-challenge", 200, {
+      ok: true,
+      nonce: "ab".repeat(16),
+      expiresAt: T0 + 300_000,
+      text: walletLinkChallengeText({ appName: "Project 18XX", site: window.location.origin, chainId: "uni-7", contract: TEST_CONTRACT, gameId: "g_table", playerId: "p-me", wallet: TEST_WALLET, nonce: "ab".repeat(16), expiresAt: T0 + 300_000 }),
+    });
     const view = moneyView({ escrow: { chainGameId: "7", state: "FUNDING", fundingDeadline: T0 + 3_600_000 } });
     await render(<MoneyPanel room={room(view)} onStart={() => undefined} services={services} port={port} />);
     expect(byTestId("money-headline")?.textContent).toMatch(/A real-money table: 1 JUNOX per seat/);
@@ -118,27 +122,11 @@ describe("ESCROW-4: the money panel", () => {
     expect(byTestId("money-compact-terms")?.querySelector('[data-testid="terms-link"]')?.textContent).toBe("Terms");
     await click(byTestId("money-action-ante"));
     expect(services.wallet.calls).toContain("connect");
-    expect(byTestId("money-reauth-origin")?.textContent).toMatch(/This is Project 18XX at http:\/\/localhost\. Only enter your password on this site\./);
-    expect(container.textContent).toContain("To use this wallet here, enter your password.");
-    const key = byTestId("money-reauth-key") as HTMLInputElement;
-    expect(key.type).toBe("password");
-    expect(byTestId("money-reauth-form")?.querySelectorAll("input")).toHaveLength(1);
-    expect(byTestId("money-reauth-form")?.textContent).not.toMatch(/recovery key/i);
-    act(() => {
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(key, "correct horse battery");
-      key.dispatchEvent(new Event("input", { bubbles: true }));
-    });
-    await click(byTestId("money-reauth-confirm"));
-    /* The password went once, in the POST body; the Ante then carried on by itself: a fresh challenge. */
-    expect(port.requests.map((request) => request.path)).toEqual(["money/wallet-challenge", "profile/reauth", "money/wallet-challenge"]);
-    expect(port.requests[1].body).toEqual({ password: "correct horse battery" });
-    expect(port.requests[2].body).toEqual({ gameId: "g_table", wallet: TEST_WALLET });
-    expect(byTestId("money-reauth-form")).toBeNull();
-    /* Nothing scripted for that challenge: the panel says the server didn't answer; Keplr was never asked to sign. */
-    expect(byTestId("money-error")?.textContent).toMatch(/didn't answer/);
-    expect(services.wallet.calls.some((call) => call.startsWith("signLink"))).toBe(false);
-    expect(container.innerHTML).not.toContain("correct horse battery");
-    act(() => updateMoneySession({ confirmedUntil: null }));
+    /* The wallet's own Keplr signature is the proof: Keplr was asked to sign the link text -- no password anywhere. */
+    expect(services.wallet.calls).toContain(`signLink:${TEST_WALLET}:18COSMOS/WALLET-LINK/v1`);
+    expect(container.querySelector('input[type="password"]')).toBeNull();
+    expect(container.textContent).not.toMatch(/Confirm it's you|enter your password/);
+    expect(port.requests.some((request) => request.path === "profile/reauth")).toBe(false);
   });
 
   it("a joiner's full terms show every term before the Ante (the compact line above them; Keplr shows the transaction)", async () => {
@@ -242,7 +230,9 @@ describe("ESCROW-4: the waiting room, the result, the profile menu", () => {
       await render(<ProfileMenu port={port} />);
       await click(byTestId("profile-chip"));
       await click(byTestId("profile-menu-signout"));
-      expect(byTestId("profile-signout-keys")?.textContent).toMatch(/holds the signing key for 1 real-money seat/);
+      /* PHASE 4: plain words -- stored key records, never called funded seats; removing them is safe. */
+      expect(byTestId("profile-signout-keys")?.textContent).toMatch(/stores a game signing key it made when you anted/);
+      expect(byTestId("profile-signout-keys")?.textContent).not.toMatch(/real-money seat/);
       expect((byTestId("profile-signout-remove-keys") as HTMLInputElement).checked).toBe(true);
       await click(byTestId("profile-signout-confirm"));
       expect(vault.records.size).toBe(0);

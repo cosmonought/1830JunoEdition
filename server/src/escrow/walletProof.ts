@@ -23,6 +23,7 @@
 import { createHash, randomBytes } from "crypto";
 
 import { adr036SignDocJson, walletLinkChallengeText, WALLET_LINK_TTL_MS } from "../../../frontend/src/gameEngine/escrow/walletLinkChallengeV1";
+import { signingKeyChallengeText, SIGNING_KEY_TTL_MS } from "../../../frontend/src/gameEngine/escrow/signingKeyChallengeV1";
 import { addressOfPublicKey, bech32Decode } from "./juno/cosmosTx";
 import { verifyDigest } from "./juno/secp256k1";
 import type { WalletLinkProof } from "./walletTickets";
@@ -47,6 +48,8 @@ interface ChallengeEntry {
   readonly gameId: string;
   readonly playerId: string;
   readonly wallet: string;
+  /** PHASE 4: a signing-key book's challenge names the consent key it registers (null in a link book). */
+  readonly signingKey: string | null;
   readonly text: string;
   readonly expiresAt: number;
   /** Set when the nonce is spent: the signature it was spent with, and what the link answered. */
@@ -116,7 +119,10 @@ export function verifyAdr036(input: { readonly wallet: string; readonly text: st
 }
 
 /** The in-memory challenge book: one open challenge per (session, game), single-use nonces, bounded. */
-export function createChallengeBook(options: { readonly now: () => number; readonly appName: string; readonly max?: number; readonly random?: (size: number) => Buffer }) {
+/** PHASE 4: a book mints ONE kind of text -- a wallet link (`walletLinkChallengeV1`) or a signing-key registration
+ *  (`signingKeyChallengeV1`). Two books, so a nonce of one can never be taken by the other's route. */
+export function createChallengeBook(options: { readonly now: () => number; readonly appName: string; readonly max?: number; readonly random?: (size: number) => Buffer; readonly purpose?: "link" | "signing-key" }) {
+  const purpose = options.purpose ?? "link";
   const byNonce = new Map<string, ChallengeEntry>();
   const openBySessionGame = new Map<string, string>();
   const max = options.max ?? 10_000;
@@ -141,16 +147,18 @@ export function createChallengeBook(options: { readonly now: () => number; reado
 
   return {
     /** Mint a challenge for this session, game, seat and wallet (replacing this session's open one for the game). */
-    mint(input: { readonly context: ChallengeContext; readonly gameId: string; readonly playerId: string; readonly wallet: string; readonly site: string; readonly chainId: string; readonly contract: string }): MintedChallenge {
+    mint(input: { readonly context: ChallengeContext; readonly gameId: string; readonly playerId: string; readonly wallet: string; readonly site: string; readonly chainId: string; readonly contract: string; readonly signingKey?: string }): MintedChallenge {
       prune();
       const now = options.now();
       const nonce = random(16).toString("hex");
-      const expiresAt = now + WALLET_LINK_TTL_MS;
-      const text = walletLinkChallengeText({ appName: options.appName, site: input.site, chainId: input.chainId, contract: input.contract, gameId: input.gameId, playerId: input.playerId, wallet: input.wallet, nonce, expiresAt });
+      const signingKey = purpose === "signing-key" ? input.signingKey ?? "" : null;
+      const expiresAt = now + (purpose === "signing-key" ? SIGNING_KEY_TTL_MS : WALLET_LINK_TTL_MS);
+      const common = { appName: options.appName, site: input.site, chainId: input.chainId, contract: input.contract, gameId: input.gameId, playerId: input.playerId, wallet: input.wallet, nonce, expiresAt };
+      const text = signingKey === null ? walletLinkChallengeText(common) : signingKeyChallengeText({ ...common, signingKey });
       const key = keyOf(input.context.sessionId, input.gameId);
       const previous = openBySessionGame.get(key);
       if (previous !== undefined && byNonce.get(previous)?.spent === null) byNonce.delete(previous);
-      byNonce.set(nonce, { nonce, context: input.context, gameId: input.gameId, playerId: input.playerId, wallet: input.wallet, text, expiresAt, spent: null });
+      byNonce.set(nonce, { nonce, context: input.context, gameId: input.gameId, playerId: input.playerId, wallet: input.wallet, signingKey, text, expiresAt, spent: null });
       openBySessionGame.set(key, nonce);
       return { nonce, text, expiresAt };
     },

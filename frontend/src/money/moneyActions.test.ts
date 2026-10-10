@@ -7,6 +7,7 @@
 // Route v12 R12-2 moved the rules engine to 12 (R12-3 certified it for settlement): this page's rules are the engine's.
 import { RULES_ENGINE_VERSION } from "../gameEngine/rulesVersion";
 import { walletLinkChallengeText } from "../gameEngine/escrow/walletLinkChallengeV1";
+import { signingKeyChallengeText } from "../gameEngine/escrow/signingKeyChallengeV1";
 import { joinAdmissionDigestV1 } from "../gameEngine/escrow/junoJoinAdmissionV1";
 import { variantsDigestV1 } from "../gameEngine/escrow/variantsDigest";
 import { resolveVariants } from "../gameEngine/gameVariants";
@@ -14,7 +15,7 @@ import { annulDigestV1, consentDigestV1 } from "../gameEngine/settlementPayload"
 import { Secp256k1, Secp256k1Signature } from "@cosmjs/crypto";
 import { fromHex, toHex } from "@cosmjs/encoding";
 import { createConsentKeys, memoryConsentKeyVault } from "./consentKeys";
-import { agreeToAnnul, approveDeposit, approvePayout, confirmItsYou, escrowExit, LANDED_WAIT_MS, linkWallet, moveSigningKeyHere, reconcilePending, resendPending, settleLandedDeposits, type TableContext } from "./moneyActions";
+import { agreeToAnnul, approveDeposit, approvePayout, escrowExit, LANDED_WAIT_MS, linkWallet, moveSigningKeyHere, reconcilePending, resendPending, settleLandedDeposits, type TableContext } from "./moneyActions";
 import { moneySession, installMoneyServicesForTests, updateMoneySession } from "./moneySession";
 import { LEADING_ZERO_KEY, LEADING_ZERO_VECTORS, linked, moneyView, scriptedPort, testKey, testServices, memoryStorage, TEST_CONTRACT, TEST_WALLET, TICKET, T0 } from "./moneyTestSupport";
 import type { ChainGameFacts } from "./walletChecks";
@@ -84,11 +85,11 @@ describe("ESCROW-4: link -- the challenge is read, then Keplr signs, then the li
     expect(moneySession().address).toBe(TEST_WALLET);
   });
 
-  it("the server's answers that need a step say which: Confirm it's you, or Replace", async () => {
+  it("PHASE 4: no money answer leads to a password -- a stray reauth-required (an older server) is a plain refusal, never a 'Confirm it's you' step", async () => {
     const services = testServices();
     const port = scriptedPort();
-    port.answer("money/wallet-challenge", 403, { error: "reauth-required", reason: "Confirm it's you first." }); // the server's own words (`server/src/escrow/moneyTables.ts`)
-    expect(await linkWallet(ctx({ view: moneyView(), port, services }))).toEqual({ ok: false, reason: expect.any(String), needs: "confirm" });
+    port.answer("money/wallet-challenge", 403, { error: "reauth-required", reason: "Confirm it's you first." });
+    expect(await linkWallet(ctx({ view: moneyView(), port, services }))).toEqual({ ok: false, reason: "Confirm it's you first." });
   });
 });
 
@@ -159,14 +160,46 @@ describe("ESCROW-4: a joiner's deposit -- admission and chain checked here; kept
     expect(services.pending.all()).toEqual([]);
   });
 
-  it("a deposit from a device whose key the seat never registered makes one, and asks 'Confirm it's you' to register it", async () => {
+  it("PHASE 4: a deposit from a device whose key the seat never registered makes one, and the SEAT'S WALLET approves it in Keplr (no password) -- then the deposit goes on", async () => {
     const services = testServices();
     const port = scriptedPort();
     const view = moneyView({ escrow: { chainGameId: "7", state: "FUNDING" }, you: linked([`03${"44".repeat(32)}`], { actions: ["deposit"] }) });
-    port.answer("money/consent-key", 403, { error: "reauth-required", reason: "Confirm it's you first." });
-    expect(await approveDeposit(ctx({ view, port, services }))).toEqual({ ok: false, reason: expect.stringMatching(/Confirm it's you/), needs: "confirm" });
+    services.wallet.game = chainFacts();
+    services.wallet.config = { ...services.wallet.config, admissionPubkey: (await testKey("admission")).pubkey };
+    port.answer("money/signing-key-challenge", 200, (body) => ({
+      ok: true,
+      wallet: TEST_WALLET,
+      nonce: "cd".repeat(16),
+      expiresAt: T0 + 300_000,
+      text: signingKeyChallengeText({ appName: "Project 18XX", site: SITE, chainId: "uni-7", contract: TEST_CONTRACT, gameId: "g_table", playerId: "p-me", wallet: TEST_WALLET, signingKey: String((body as { pubkey: string }).pubkey), nonce: "cd".repeat(16), expiresAt: T0 + 300_000 }),
+    }));
+    port.answer("money/consent-key", 200, { ok: true, registered: true });
+    port.answer("money/join-admission", 200, { ok: true, admission: await admission() });
+    port.answer("money/deposit-sent", 202, { ok: true, accepted: true });
+    expect(await approveDeposit(ctx({ view, port, services }))).toEqual({ ok: true, notice: "Sent — waiting for Juno." });
     expect(await services.keys.count()).toBe(1); // stored before anything could carry it
-    expect(services.wallet.signed).toEqual([]);
+    expect(services.wallet.calls).toContain(`signLink:${TEST_WALLET}:18COSMOS/SIGNING-KEY/v1`);
+    const registered = port.requests.find((request) => request.path === "money/consent-key");
+    expect(registered?.body).toMatchObject({ gameId: "g_table", nonce: "cd".repeat(16), pubKey: expect.any(String), signature: expect.any(String) });
+    expect(port.requests.some((request) => request.path === "profile/reauth")).toBe(false);
+    expect(services.wallet.signed.map((message) => message.kind)).toEqual(["join"]);
+  });
+
+  it("PHASE 4: a signing-key text that names another key than this device's is never signed", async () => {
+    const services = testServices();
+    const port = scriptedPort();
+    const view = moneyView({ escrow: { chainGameId: "7", state: "FUNDING" }, you: linked([`03${"44".repeat(32)}`], { actions: ["deposit"] }) });
+    services.wallet.game = chainFacts();
+    port.answer("money/signing-key-challenge", 200, {
+      ok: true,
+      wallet: TEST_WALLET,
+      nonce: "cd".repeat(16),
+      expiresAt: T0 + 300_000,
+      text: signingKeyChallengeText({ appName: "Project 18XX", site: SITE, chainId: "uni-7", contract: TEST_CONTRACT, gameId: "g_table", playerId: "p-me", wallet: TEST_WALLET, signingKey: `02${"55".repeat(32)}`, nonce: "cd".repeat(16), expiresAt: T0 + 300_000 }),
+    });
+    expect(await approveDeposit(ctx({ view, port, services }))).toEqual({ ok: false, reason: expect.stringMatching(/names another key than this device's/) });
+    expect(services.wallet.calls.some((call) => call.startsWith("signLink"))).toBe(false);
+    expect(port.requests.some((request) => request.path === "money/consent-key")).toBe(false);
   });
 });
 
@@ -355,31 +388,9 @@ describe("ESCROW-4 review fixes: a deposit Juno included is kept until the table
   });
 });
 
-describe("PHASE 3 FINAL: 'Confirm it's you' is the account's PASSWORD", () => {
-  it("sends the password once in the POST body; a wrong one is one sentence in password words; the grant is believed for no longer than five minutes from this clock", async () => {
-    installMoneyServicesForTests(testServices());
-    updateMoneySession({ confirmedUntil: null });
-    const port = scriptedPort();
-    port.answer("profile/reauth", 403, { error: "invalid-credential" });
-    expect(await confirmItsYou("not the password", port, () => T0)).toEqual({ ok: false, reason: "That password doesn't match this account. Check it and try again." });
-    expect(moneySession().confirmedUntil).toBeNull();
-    port.answer("profile/reauth", 503, { error: "unavailable" });
-    expect(await confirmItsYou("correct horse battery", port, () => T0)).toEqual({ ok: false, reason: "The game server couldn't confirm it just now. Try again." });
-    /* The server's window is longer than five minutes from this clock: this page believes five minutes, no more. */
-    port.answer("profile/reauth", 200, { ok: true, expiresAt: T0 + 60 * 60 * 1000 });
-    expect(await confirmItsYou("correct horse battery", port, () => T0)).toEqual({ ok: true });
-    expect(moneySession().confirmedUntil).toBe(T0 + 5 * 60 * 1000);
-    port.answer("profile/reauth", 200, { ok: true, expiresAt: T0 + 60_000 });
-    expect(await confirmItsYou("correct horse battery", port, () => T0)).toEqual({ ok: true });
-    expect(moneySession().confirmedUntil).toBe(T0 + 60_000);
-    expect(port.requests.map((request) => [request.path, request.body])).toEqual([
-      ["profile/reauth", { password: "not the password" }],
-      ["profile/reauth", { password: "correct horse battery" }],
-      ["profile/reauth", { password: "correct horse battery" }],
-      ["profile/reauth", { password: "correct horse battery" }],
-    ]);
-    /* An empty password is the wrong-password answer, with no request spent. */
-    expect(await confirmItsYou("", port, () => T0)).toEqual({ ok: false, reason: "That password doesn't match this account. Check it and try again." });
-    expect(port.requests).toHaveLength(4);
+describe("PHASE 4: normal play never asks for the account password", () => {
+  it("the money actions offer no 'Confirm it's you' at all", async () => {
+    const actions = await import("./moneyActions");
+    expect((actions as Record<string, unknown>).confirmItsYou).toBeUndefined();
   });
 });

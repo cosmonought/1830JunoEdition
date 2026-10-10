@@ -6,13 +6,15 @@
 //
 //   POST /gs/api/money/config            {}                                   whether real-money tables can be opened here,
 //                                                                              the pinned deployment, fee, minimum ante
-//   POST /gs/api/money/wallet-challenge  {gameId, wallet}                     SENSITIVE -> {text, nonce, expiresAt, replaces?, authorizationWallet?}
-//   POST /gs/api/money/wallet-link       {gameId, nonce, pubKey, signature,   SENSITIVE -> {mode, wallet, epoch, ticket}
+//   POST /gs/api/money/wallet-challenge  {gameId, wallet}                     -> {text, nonce, expiresAt, replaces?, authorizationWallet?}
+//   POST /gs/api/money/wallet-link       {gameId, nonce, pubKey, signature,   the wallet's own signature -> {mode, wallet, epoch, ticket}
 //                                         consentKey, replace?}
 //   POST /gs/api/money/join-admission    {gameId}                             the seat's Join admission (ESCROW-JOIN)
 //   POST /gs/api/money/deposit-sent      {gameId, kind, txHash, chainGameId?, a HINT (202); never financial truth
 //                                         timeoutHeight?}
-//   POST /gs/api/money/consent-key       {gameId, pubkey}                     SENSITIVE: register a (new) signing key
+//   POST /gs/api/money/signing-key-challenge {gameId, pubkey}                 PHASE 4: the text the seat's wallet signs for a key
+//   POST /gs/api/money/consent-key       {gameId, pubkey, nonce, pubKey,      register a (new) signing key: the seat's wallet's
+//                                         signature}                          signature (or a live "Confirm it's you" grant)
 //   POST /gs/api/money/consent           {gameId, signature}                  relay the seat's own CONSENT (not sensitive:
 //                                                                              the signature is the authority)
 //   POST /gs/api/money/annul             {gameId, signature}                  the seat's ANNUL signature (collected)
@@ -47,7 +49,8 @@ export const MONEY_ROUTES: Readonly<Record<string, Readonly<Record<string, Field
   "wallet-link": { gameId: { string: 64 }, nonce: { string: 64 }, pubKey: { string: 64 }, signature: { string: 128 }, consentKey: { string: 80 }, replace: "boolean" },
   "join-admission": { gameId: { string: 64 } },
   "deposit-sent": { gameId: { string: 64 }, kind: { string: 32 }, txHash: { string: 80 }, chainGameId: { string: 24 }, timeoutHeight: { string: 24 } },
-  "consent-key": { gameId: { string: 64 }, pubkey: { string: 80 } },
+  "consent-key": { gameId: { string: 64 }, pubkey: { string: 80 }, nonce: { string: 64 }, pubKey: { string: 64 }, signature: { string: 128 } },
+  "signing-key-challenge": { gameId: { string: 64 }, pubkey: { string: 80 } },
   consent: { gameId: { string: 64 }, signature: { string: 160 } },
   annul: { gameId: { string: 64 }, signature: { string: 160 } },
   "escrow-details": { gameId: { string: 64 } },

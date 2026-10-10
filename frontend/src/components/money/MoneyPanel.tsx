@@ -21,14 +21,13 @@ import React, { useState } from "react";
 import { feeOf, formatAmount, netOf, shortWallet, type RoomMoneyView } from "../../utils/moneyProtocol";
 import type { RoomView } from "../../utils/roomProtocol";
 import type { SessionPort } from "../../utils/sessionBootstrap";
-import { ConfirmItsYou } from "../ConfirmItsYou";
 import { explorerLink } from "../../money/escrowDeployment";
 import { amountText, FUNDING_STEPS, fundingStepIndex, startBlockerSentence, type FlowAction } from "../../money/moneyFlow";
 import { TermsLink } from "../InfoPages";
 import type { MoneyServices } from "../../money/moneySession";
 import { moneyServices } from "../../money/moneySession";
 import { formatMoneyTime } from "../../money/moneyTime";
-import { useMoneyTable, type MoneyActionKind, type MoneyTable } from "../../money/useMoneyTable";
+import { useMoneyTable, type MoneyTable } from "../../money/useMoneyTable";
 import { KeplrMark } from "./KeplrMark";
 import { SAME_WALLET_SENTENCE, SAME_WALLET_SWITCH_HINT, SAME_WALLET_TITLE } from "../../money/sameWalletAck";
 import { buttonStyle, moneyStyles as styles } from "./moneyStyles";
@@ -207,17 +206,6 @@ function CompactTerms({ money, wallet, clock }: { money: RoomMoneyView; wallet: 
   );
 }
 
-const CONFIRM_PURPOSE: Partial<Record<MoneyActionKind, string>> = {
-  ante: "To use this wallet here",
-  verify: "To use this wallet here",
-  link: "To link a wallet to this table",
-  relink: "To relink your deposit to your seat",
-  "replace-link": "To replace this seat's wallet",
-  "replace-confirmed": "To replace this seat's wallet",
-  reprove: "To prove your wallet again for this table",
-  approve: "To set up this device's signing key for your deposit",
-  "move-signing-key": "To set up signing on this device",
-};
 
 /* W2-K (OD-14(i)): the waiting room's keyboard focus ring (`.wr-columns button:focus-visible`) reaches this panel's
    buttons; its disclosure and its explorer link get the same ring here, so every stop in the panel shows focus the
@@ -315,19 +303,6 @@ export function MoneyPanelView({ room, table, services: svc, port, busy = false,
         </>
       )}
 
-      {table.needs !== null && table.needs.kind === "confirm" ? (
-        <div data-testid="money-confirm">
-          <ConfirmItsYou
-            purpose={CONFIRM_PURPOSE[table.needs.then ?? "link"] ?? "To continue"}
-            port={port}
-            showOrigin
-            testIdPrefix="money-reauth"
-            onConfirmed={(expiresAt) => table.confirmed(expiresAt)}
-            onCancel={table.cancelNeeds}
-            cancelLabel="Not now"
-          />
-        </div>
-      ) : null}
       {table.needs !== null && table.needs.kind === "replace" ? (
         <div style={styles.confirm} role="group" aria-label="Replace the linked wallet" data-testid="money-replace">
           {/* W2-M (AUD-20.03): asked BEFORE Keplr signs, so the replacement is one signature (or, when the server had

@@ -109,10 +109,9 @@ export interface MoneyTable {
   readonly proof: "aged" | "refused" | null;
   readonly notice: string | null;
   readonly error: string | null;
-  /** A step the player must take before the action can run: "Confirm it's you", or the wallet replacement question
-   *  (W2-M: asked BEFORE Keplr signs, naming the linked wallet and the one Keplr is on, when they are known). */
+  /** A step the player must take before the action can run: the wallet replacement question (W2-M: asked BEFORE Keplr
+   *  signs, naming the linked wallet and the one Keplr is on, when they are known). PHASE 4: never a password. */
   readonly needs:
-    | { readonly kind: "confirm"; readonly then: MoneyActionKind | null }
     | { readonly kind: "replace"; readonly from: string | null; readonly to: string | null; readonly again: boolean; readonly said: string | null }
     /** Owner ruling 2026-10-07: the wallet about to be bound is the account's Authorization Wallet -- warned once,
      *  allowed; `then` is the action the player pressed, run again once they continue. */
@@ -130,8 +129,6 @@ export interface MoneyTable {
   run(kind: MoneyActionKind): Promise<void>;
   openReview(): void;
   closeReview(): void;
-  /** "Confirm it's you" was granted: continue with what was asked. */
-  confirmed(expiresAt: number): Promise<void>;
   /** Owner ruling 2026-10-07: "Continue with this wallet" -- keep the account's acknowledgement, then run the pressed
    *  action again (never a wallet chosen for the player). */
   acknowledgeSameWallet(): Promise<void>;
@@ -368,7 +365,7 @@ export function useMoneyTable(input: MoneyTableInput): MoneyTable {
       if (ctx === null) return { ok: false, reason: "This table's money isn't known yet." };
       switch (kind) {
         case "confirm":
-          setNeeds({ kind: "confirm", then: null });
+          /* PHASE 4: there is no "Confirm it's you" in normal play; nothing to do. */
           return { ok: true };
         case "link":
         case "relink":
@@ -474,7 +471,7 @@ export function useMoneyTable(input: MoneyTableInput): MoneyTable {
         if (outcome.ok) {
           if (outcome.notice) setNotice(outcome.notice);
           /* "Change wallet" opens its question (the replacement); every other success closes any. */
-          if (kind !== "confirm" && kind !== "replace-link") setNeeds(null);
+          if (kind !== "replace-link") setNeeds(null);
           if (kind === "link" || kind === "relink" || kind === "reprove" || kind === "replace-confirmed") {
             setProofRefusedFor(null);
             if (kind === "replace-confirmed") {
@@ -500,8 +497,7 @@ export function useMoneyTable(input: MoneyTableInput): MoneyTable {
           setNeeds({ kind: "replace", from: null, to: replaceTo.current, again: true, said: outcome.reason });
         } else {
           setError(outcome.reason);
-          if (outcome.needs === "confirm") setNeeds({ kind: "confirm", then: kind });
-          else if (outcome.needs === "connect") updateMoneySession({ wallet: "disconnected", address: null });
+          if (outcome.needs === "connect") updateMoneySession({ wallet: "disconnected", address: null });
           else if (outcome.needs === "reprove") {
             const current = latest.current.view?.you?.link ?? null;
             setProofRefusedFor(current === null ? null : `${current.wallet}#${current.epoch}`);
@@ -520,19 +516,6 @@ export function useMoneyTable(input: MoneyTableInput): MoneyTable {
     [perform, services],
   );
 
-  /* Named apart from `seatFlow`'s `confirmed:` input above: the flow memo passes `confirmedNow` under that KEY and
-     never reads this binding, but `memoDeadZone.test.ts` matches names textually, so a later binding called
-     `confirmed` would read as a dead-zone read by that memo. The hook's result still calls it `confirmed`. */
-  const continueAfterConfirm = useCallback(
-    async (expiresAt: number) => {
-      updateMoneySession({ confirmedUntil: Math.min(expiresAt, services.now() + 5 * 60 * 1000) });
-      const then = needs !== null && needs.kind === "confirm" ? needs.then : null;
-      setNeeds(null);
-      setError(null);
-      if (then !== null) await run(then);
-    },
-    [needs, run, services],
-  );
 
   /* Owner ruling 2026-10-07: "Continue with this wallet" -- the account's acknowledgement is kept (`sameWalletAck.ts`:
      this account x this Authorization Wallet, on this browser), then the action the player pressed runs again. It
@@ -577,7 +560,6 @@ export function useMoneyTable(input: MoneyTableInput): MoneyTable {
     run,
     openReview: () => setReviewing(true),
     closeReview: () => setReviewing(false),
-    confirmed: continueAfterConfirm,
     acknowledgeSameWallet,
     disputeTerms,
     disputeRecord,

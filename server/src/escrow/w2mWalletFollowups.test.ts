@@ -174,18 +174,13 @@ describe("W2-M AUD-20.14: wallet-challenge names the wallet a link would replace
     }
   });
 
-  test("the hint is never a way in: no Confirm it's you, no challenge and no hint; another seat learns nothing of this seat's wallet", async () => {
+  test("the hint is never a way in: another seat learns nothing of this seat's wallet (PHASE 4: no password asked)", async () => {
     const world = await moneyServer();
     try {
       const { table, joiner } = await boundTable(world);
-      /* PHASE 3 FINAL: creating an account signs the browser in, and a sign-in counts as "Confirm it's you" for five
-         minutes -- past that, the bare challenge must ask for the password. */
+      /* PHASE 4 (owner): past the sign-in's 5-minute grant the challenge is still minted -- a link needs the wallet's own
+         signature, never a password. What the hint says is unchanged. */
       world.advance(6 * 60 * 1000);
-      const jo = testWallet("jo");
-      const bare = await joiner.who.api("wallet-challenge", { gameId: table.gameId, wallet: jo.address });
-      assert.equal(bare.status, 403);
-      assert.equal(bare.body?.replaces, undefined);
-      await joiner.who.confirm();
       /* Naming the HOST's wallet: the joiner's own seat stands on nothing, so the hint is null -- not the host's. */
       const probe = await joiner.who.api("wallet-challenge", { gameId: table.gameId, wallet: testWallet("host").address });
       assert.equal(probe.status, 200, probe.text);

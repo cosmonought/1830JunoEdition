@@ -162,7 +162,7 @@ describe("the profile menu (LIVE-2E)", () => {
     await render(<ProfileMenu port={server.port} />);
     await click(byTestId("profile-chip"));
     await click(buttonNamed("Sign out this device"));
-    expect(container.textContent).toContain("Your account and its seats are kept.");
+    expect(container.textContent).toContain("Your account, games, seats and deposits are kept.");
     expect(container.textContent).toContain("log in again");
     expect(container.textContent).not.toContain("recovery key");
     expect(reloads).toBe(0);
@@ -241,8 +241,8 @@ describe("the profile menu (LIVE-2E)", () => {
     await click(byTestId("profile-menu-password"));
     expect(byTestId<HTMLInputElement>("profile-current-secret")?.autocomplete).toBe("current-password");
     expect(byTestId<HTMLInputElement>("profile-changed-password")?.autocomplete).toBe("new-password");
-    /* A forgotten current password is not this form's business: it points to "Forgot password?" -- no key option. */
-    expect(byTestId("profile-password-forgot-note")?.textContent).toBe("Forgot your current password? Sign out, then use “Forgot password?” with your Authorization Wallet.");
+    /* PHASE 4: a forgotten current password is one press away, signed in -- the Authorization Wallet resets it. */
+    expect(byTestId("profile-password-forgot-note")?.textContent).toBe("Don't know your current password? Reset it with your Authorization Wallet");
     expect(byTestId("profile-password-use-key")).toBeNull();
     type(byTestId<HTMLInputElement>("profile-current-secret"), "the old passphrase");
     type(byTestId<HTMLInputElement>("profile-changed-password"), "too short");

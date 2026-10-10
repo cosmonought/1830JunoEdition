@@ -194,9 +194,18 @@ export async function depositSent(gameId: string, kind: MoneyHintKind, txHash: s
   return got.ok ? { ok: true, value: { accepted: got.value.accepted === true } } : got;
 }
 
-/** SENSITIVE: register a signing key this browser made (before its SetConsentKey, or before a deposit carries it). */
-export async function registerConsentKey(gameId: string, pubkey: string, port: SessionPort = sessionPort()): Promise<MoneyResult<{ readonly registered: boolean }>> {
-  const got = await post(port, "consent-key", { gameId, pubkey }, [200]);
+/** PHASE 4: the text the seat's own wallet signs to put this browser's signing key on the seat (no password). */
+export async function signingKeyChallenge(gameId: string, pubkey: string, port: SessionPort = sessionPort()): Promise<MoneyResult<{ readonly text: string; readonly nonce: string; readonly expiresAt: number; readonly wallet: string }>> {
+  const got = await post(port, "signing-key-challenge", { gameId, pubkey }, [200]);
+  if (!got.ok) return got;
+  const { text, nonce, expiresAt, wallet } = got.value;
+  return typeof text === "string" && typeof nonce === "string" && typeof expiresAt === "number" && typeof wallet === "string" ? { ok: true, value: { text, nonce, expiresAt, wallet } } : badAnswer();
+}
+
+/** Register a signing key this browser made (before its SetConsentKey, or before a deposit carries it). PHASE 4: with
+ *  the seat's wallet's signature over `signingKeyChallenge`'s text -- the server's authority, never a password. */
+export async function registerConsentKey(gameId: string, pubkey: string, port: SessionPort = sessionPort(), proof?: { readonly nonce: string; readonly pubKey: string; readonly signature: string }): Promise<MoneyResult<{ readonly registered: boolean }>> {
+  const got = await post(port, "consent-key", { gameId, pubkey, ...(proof !== undefined ? proof : {}) }, [200]);
   return got.ok ? { ok: true, value: { registered: got.value.registered === true } } : got;
 }
 
